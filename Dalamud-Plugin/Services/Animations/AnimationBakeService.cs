@@ -124,6 +124,54 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         }
     }
 
+    /// <summary>
+    /// Writes <paramref name="motion"/>, a motion from Blender on the clip's source skeleton, in place of the
+    /// clip's motion in <paramref name="template"/>: compressed as the clip was, every other binding untouched,
+    /// and verified by sampling it back. Returns the whole PAP. Nothing in game changes.
+    /// </summary>
+    public async Task<byte[]> ReplaceAsync(byte[] template, byte[] skeleton, AnimationClip clip, AnimationCapture capture, MotionClip motion,
+        string workDirectory, Action<string> status, CancellationToken token)
+    {
+        native.EnsureAvailable();
+        Session? session = null;
+        var path = Path.Combine(workDirectory, Guid.NewGuid().ToString("N") + ".hkx");
+        // A timeline edit with nothing to change: the template's own skeleton, no layers, no cuts.
+        var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "", false,
+            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline);
+        try
+        {
+            session = await framework.RunOnFrameworkThread(() =>
+            {
+                Check(token);
+                var created = new Session(native, template, skeleton, clip, request, path + ".motion");
+                active.Add(created); return created;
+            });
+            status("Checking the original animation round trip");
+            await framework.RunOnFrameworkThread(() => { Check(token); session.Save(path); });
+            var unchanged = await File.ReadAllBytesAsync(path, token);
+            await framework.RunOnFrameworkThread(() => { Check(token); session.ValidateUnchanged(unchanged); session.PrepareMotion(motion); });
+            status($"Building {clip.Name}");
+            // Managed work over every sample: off the framework thread, so the game keeps its frame rate.
+            await Task.Run(() => session.FillMotion(motion, token), token);
+            await framework.RunOnFrameworkThread(() => { Check(token); session.Build(); session.Save(path); });
+            var built = await File.ReadAllBytesAsync(path, token);
+            await framework.RunOnFrameworkThread(() => { Check(token); session.BeginValidation(built); });
+            var completed = false;
+            while (!completed)
+            {
+                token.ThrowIfCancellationRequested();
+                completed = await framework.RunOnTick(() => { Check(token); return session.ValidateBatch(token); }, delayTicks: 1);
+                status($"Verifying {clip.Name}: {session.ValidationProgress:P0}");
+            }
+            return new AnimationPap(template).ReplaceHavok(built);
+        }
+        finally
+        {
+            if (session != null && !disposed) await framework.RunOnFrameworkThread(() => { session.Dispose(); active.Remove(session); });
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     private unsafe sealed class Session : IDisposable
     {
         private readonly AnimationNative native;
@@ -432,6 +480,76 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 for (var b = 0; b < expected[f].Length; b++)
                     if (Quaternion.Dot(AnimationNative.Rotation(expected[f - 1][b]), AnimationNative.Rotation(expected[f][b])) < 0)
                         fixed (hkQsTransformf* p = &expected[f][b]) AnimationNative.SetRotation(p, -AnimationNative.Rotation(*p));
+        }
+
+        /// <summary>
+        /// Readies the session to write <paramref name="motion"/> instead of sampling the source (see
+        /// <see cref="ReplaceAsync"/>): the motion must be on the source skeleton, and a new length is refused
+        /// where a cut or stretch would be. Runs on the framework thread; <see cref="FillMotion"/> follows.
+        /// </summary>
+        public void PrepareMotion(MotionClip motion)
+        {
+            // Validation samples float tracks with the blend hint applied, which FillMotion can't predict for these yet.
+            if (AnimationBakeRules.AdditiveWithFloats(blendHint, floatSlots.Length))
+                throw new InvalidDataException("This animation adds to another and has float tracks, so its motion can't come from Blender yet.");
+            if (retarget != null || motion.Skeleton.Fingerprint != sourceDescription.Fingerprint || motion.Bones != sourceDescription.Bones.Length)
+                throw new InvalidDataException("The motion doesn't fit this animation's skeleton.");
+            if (floatSlots.Length > 0 && (motion.TrackFloats == null || motion.FloatTracks != floatSlots.Length))
+                throw new InvalidDataException("The motion's float tracks are missing.");
+            // Within a microsecond the clip keeps its own length exactly, which the metadata check compares.
+            var length = AnimationBakeRules.ReplacementDuration(motion.Duration, sourceDuration);
+            if (length != sourceDuration)
+            {
+                if (!AnimationPoseRules.ValidDuration(length)) throw new InvalidDataException("The new length is outside 1 frame to 10 minutes.");
+                if (sourceDuration <= 0) throw new InvalidDataException("This animation has no length to change.");
+                // Root motion and annotations are timed in seconds and have no writer here.
+                if (originalAnimation->ExtractedMotion.ptr != null)
+                    throw new InvalidDataException("This animation moves your character, so its length can't change.");
+                for (var i = 0; i < originalAnimation->AnnotationTracks.Length; i++)
+                    if (originalAnimation->AnnotationTracks[i].Annotations.Length > 0)
+                        throw new InvalidDataException("This animation has Havok annotations, so it can't change its length yet.");
+                // Validation compares against this copy of the source's metadata, so it must carry the new length too.
+                var metadataAnimation = arena.Alloc<AnimationNative.Interleaved>();
+                native.Initialize(metadataAnimation, originalAnimation);
+                metadataAnimation->Animation.Duration = length;
+                outputMetadata->Animation = new hkRefPtr<hkaAnimation> { ptr = &metadataAnimation->Animation };
+            }
+            if ((long)motion.Samples * (skeleton->Bones.Length * sizeof(hkQsTransformf) + skeleton->FloatSlots.Length * 8) > AnimationPap.MaxFileSize)
+                throw new InvalidDataException("This animation exceeds the bake memory limit.");
+            frames = motion.Samples;
+            duration = length;
+        }
+
+        /// <summary>
+        /// Takes <paramref name="motion"/>'s samples as what the build writes, and its float tracks; bones it moves
+        /// away from their reference pose that the clip didn't track get a track. Touches managed state only.
+        /// </summary>
+        public void FillMotion(MotionClip motion, CancellationToken token)
+        {
+            if (motion.Samples != frames) throw new InvalidOperationException("The motion must be prepared before it is filled in.");
+            expected.Clear();
+            expectedFloats.Clear();
+            rawFloats.Clear();
+            float[] references = sourceDescription.ReferenceFloats.IsDefault ? [] : sourceDescription.ReferenceFloats.ToArray();
+            for (var f = 0; f < frames; f++)
+            {
+                token.ThrowIfCancellationRequested();
+                var values = new hkQsTransformf[motion.Bones];
+                for (var b = 0; b < values.Length; b++)
+                {
+                    values[b] = ToHavok(motion.Get(f, b));
+                    AnimationNative.CheckTransform(values[b]);
+                }
+                expected.Add(values);
+                // Without a retarget the source's float slots are the output's.
+                var floats = references.ToArray();
+                for (var t = 0; t < floatSlots.Length; t++)
+                    floats[floatSlots[t]] = motion.TrackFloats![f * motion.FloatTracks + t];
+                rawFloats.Add(floats);
+                expectedFloats.Add(floats.ToArray());
+            }
+            foreach (var bone in AnimationBakeRules.ReplacementTracks(sourceTracks, motion))
+                affected.Add(bone);
         }
 
         /// <summary>The sampled motion as owned data, with each sample's float track values. Touches managed state only.</summary>

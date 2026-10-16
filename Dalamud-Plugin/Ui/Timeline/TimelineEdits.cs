@@ -103,6 +103,17 @@ internal static class TimelineEdits
     }
 
     /// <summary>
+    /// Puts a motion from Blender in place of the clip's. It already holds the layers and cuts the motion
+    /// was sent with, so they go; the clip takes its length, the events moving as <see cref="SetLength"/> moves them.
+    /// </summary>
+    public static TimelineDocument ReplaceMotion(TimelineDocument doc, MotionReplacement replacement, bool scaleEvents, TimelineDocument? loaded = null) =>
+        SetLength(doc with { Replacement = replacement, Motion = [], Cuts = null }, replacement.Frames, scaleEvents, loaded);
+
+    /// <summary>Goes back to the clip's own motion and its loaded length (Use the clip's motion).</summary>
+    public static TimelineDocument DropReplacement(TimelineDocument doc, bool scaleEvents, TimelineDocument? loaded = null) =>
+        doc.Replacement == null ? doc : SetLength(doc with { Replacement = null }, doc.SourceLength, scaleEvents, loaded);
+
+    /// <summary>
     /// Changes the length to <paramref name="frames"/>, clamped to the editor's limits. Motion clips
     /// that lasted the whole old length (give or take a frame) last the new one. With
     /// <paramref name="scaleEvents"/> every start and every non-zero duration scales with the length

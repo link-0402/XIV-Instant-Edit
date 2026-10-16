@@ -83,8 +83,17 @@ internal sealed record TimelineDocument(
     /// </summary>
     public MotionCuts? Cuts { get; init; }
 
-    /// <summary>The length of the motion the cuts are made in, in frames: the loaded length unless the cuts say otherwise.</summary>
-    public int MotionLength => Cuts?.Source ?? SourceLength;
+    /// <summary>
+    /// A motion brought in from Blender in place of the clip's own (Motion from Blender); null keeps the
+    /// clip's. The window makes it the motion everything else edits, previews and saves.
+    /// </summary>
+    public MotionReplacement? Replacement { get; init; }
+
+    /// <summary>
+    /// The length of the motion the cuts are made in, in frames: the loaded length unless the cuts say
+    /// otherwise, or a motion from Blender replaced it.
+    /// </summary>
+    public int MotionLength => Cuts?.Source ?? Replacement?.Frames ?? SourceLength;
 
     /// <summary>How many of the motion's frames the cuts keep; they play over <see cref="Length"/>.</summary>
     public int KeptFrames => Cuts?.Kept ?? MotionLength;

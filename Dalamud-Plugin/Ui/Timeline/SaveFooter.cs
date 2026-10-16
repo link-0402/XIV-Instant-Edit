@@ -340,7 +340,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair)
     {
         var clip = TimelineSession.ClipKey(loaded);
-        if (!AnimationBakeRules.KeepsLayersOverSave(document, repair))
+        // A motion from Blender saved without layers is the saved file's own motion: nothing to carry.
+        if (!AnimationBakeRules.KeepsLayersOverSave(document, repair) || document.Replacement != null && document.Motion.IsEmpty)
         {
             motionBase = null;
             motionCarry = null;

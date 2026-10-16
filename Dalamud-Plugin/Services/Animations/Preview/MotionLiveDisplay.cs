@@ -70,9 +70,23 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// it plays at in timeline frames (0 for the clip's own). Two are the same when they hold the same
     /// arrays and cuts, as an unchanged document's do.
     /// </summary>
-    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded, MotionCuts? Cuts = null, int Length = 0)
+    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded, MotionCuts? Cuts = null, int Length = 0);
+
+    /// <summary>
+    /// Whether the display swaps in a copy: when the edits change the motion, or when the motion they apply to
+    /// isn't the file the game plays (<paramref name="baseDiffers"/>, a motion from Blender), which shows only in a copy.
+    /// </summary>
+    internal static bool Copies(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, MotionCuts? cuts, int length, bool baseDiffers) =>
+        baseDiffers || MotionEvaluator.Changes(layers) || !excluded.IsDefaultOrEmpty || cuts is { Whole: false } || length != 0;
+
+    /// <summary>
+    /// Whether a playing binding's tracks and the decoded motion's agree as far as both go: a save keeps a clip's
+    /// tracks in order and adds the bones its layers moved after them, and a motion from Blender adds its own.
+    /// </summary>
+    internal static bool TracksFit(ReadOnlySpan<short> playing, ReadOnlySpan<short> decoded)
     {
-        public bool Changes => MotionEvaluator.Changes(Layers) || !Excluded.IsDefaultOrEmpty || Cuts is { Whole: false } || Length != 0;
+        var common = Math.Min(playing.Length, decoded.Length);
+        return playing[..common].SequenceEqual(decoded[..common]);
     }
 
     /// <summary>What a swapped control held before: the clip's own binding and track weights.</summary>
@@ -98,6 +112,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public required MotionClip Base { get; init; }
         /// <summary>The length a saved edit gave the clip's file, which may play instead (see <see cref="LengthFits"/>).</summary>
         public float? SavedDuration { get; init; }
+        /// <summary>The decoded motion isn't the file the game plays (a motion from Blender): a copy shows even without edits.</summary>
+        public bool BaseDiffers { get; init; }
         /// <summary>The edits to show; a new set is built as soon as the last build ends.</summary>
         public Edits Requested { get; set; } = new([], []);
         public Edits Shown { get; set; } = new([], []);
@@ -163,9 +179,10 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// cut by <paramref name="cuts"/> and played <paramref name="length"/> timeline frames long (0 for
     /// the clip's own), before the layers, as a save cuts it. <paramref name="savedDuration"/> is the
     /// length of the file the game plays when a saved edit gave it another than the decoded motion's.
+    /// <paramref name="baseDiffers"/> says the decoded motion isn't that file's at all (a motion from Blender).
     /// </summary>
     public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers,
-        ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0, float? savedDuration = null)
+        ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0, float? savedDuration = null, bool baseDiffers = false)
     {
         RequireFrameworkThread();
         Stop();
@@ -178,9 +195,12 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         session = new Session
         {
             ObjectIndex = actor.ObjectIndex, Address = actor.Address, GameObjectId = actor.GameObjectId,
-            Fingerprint = fingerprint, Base = decoded, SavedDuration = savedDuration,
+            Fingerprint = fingerprint, Base = decoded, SavedDuration = savedDuration, BaseDiffers = baseDiffers,
             Accepted = alsoAccepted.Append(fingerprint).Where(print => print.Length > 0).ToHashSet(StringComparer.Ordinal),
         };
+        // Shown is what the controls hold: the clip's own motion, which a motion from Blender never is.
+        if (baseDiffers)
+            session.Shown = new Edits(default, default, null, -1);
         Error = string.Empty;
         Show(layers, excluded, cuts, length);
         return true;
@@ -227,7 +247,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         if (session is not { } current || evaluation != null || current.Requested == current.Shown)
             return;
         var edits = current.Requested;
-        if (!edits.Changes)
+        if (!Copies(edits.Layers, edits.Excluded, edits.Cuts, edits.Length, current.BaseDiffers))
         {
             // Nothing to change: the clip shows its own motion.
             current.Shown = edits;
@@ -458,20 +478,17 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
 
     /// <summary>
     /// Whether a playing binding is the clip the decode read, or a save of it: the same blend hint,
-    /// float tracks and length (or <paramref name="saved"/>, a saved edit's), and tracks that begin with
-    /// the decoded ones (a save keeps a clip's tracks in order and adds the bones its layers moved after them).
+    /// float tracks and length (or <paramref name="saved"/>, a saved edit's), and tracks that agree with the
+    /// decoded ones as far as both go (see <see cref="TracksFit"/>).
     /// </summary>
     private static bool Fits(hkaAnimationBinding* binding, MotionClip decoded, float? saved)
     {
         var animation = binding->Animation.ptr;
         if (animation == null || binding->BlendHint.Storage != decoded.BlendHint ||
-            animation->NumberOfFloatTracks != decoded.FloatTracks || !LengthFits(animation->Duration, decoded.Duration, saved) ||
-            binding->TransformTrackToBoneIndices.Length < decoded.SourceTracks.Length)
+            animation->NumberOfFloatTracks != decoded.FloatTracks || !LengthFits(animation->Duration, decoded.Duration, saved))
             return false;
-        for (var i = 0; i < decoded.SourceTracks.Length; i++)
-            if (binding->TransformTrackToBoneIndices[i] != decoded.SourceTracks[i])
-                return false;
-        return true;
+        return TracksFit(new ReadOnlySpan<short>(binding->TransformTrackToBoneIndices.Data, binding->TransformTrackToBoneIndices.Length),
+            decoded.SourceTracks.AsSpan());
     }
 
     /// <summary>The built copy whose binding <paramref name="binding"/> is, if any.</summary>

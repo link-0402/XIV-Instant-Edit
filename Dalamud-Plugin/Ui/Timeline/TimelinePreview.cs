@@ -611,7 +611,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 if (!session.MotionDisplay.Start(actor, clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
                         decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
                         // Edited again, the game plays the saved file, as long as the edit made it.
-                        fresh.BaseMotion != null ? fresh.Clip.Duration : null))
+                        fresh.BaseMotion != null ? fresh.Clip.Duration : null,
+                        // The game plays the clip's own file; a motion from Blender shows only in a copy.
+                        baseDiffers: current.Document.Replacement != null))
                 {
                     var error = session.MotionDisplay.Error;
                     StopLive();

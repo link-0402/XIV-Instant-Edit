@@ -39,6 +39,7 @@ internal static class ChangelogCatalog
             Entry("Sounds that play across a cut can be cut with it, so music stays in step.", 1),
             Entry("See and change the file a sound or effect plays, such as a music library's sound/lolo.scd.", 1),
             Entry("Saved cuts and lengths stay editable: Edit again brings them back.", 1),
+            Entry("Send an animation's motion to Blender from the Timeline, edit it there, and bring it back. Saving puts it into the animation.", 1),
             Entry("Add sounds, facial expressions, lip sync, effects and props, and drag them where you want them.", 1),
             Entry("Import your own sounds (wav, ogg or scd) and effects (avfx). They are saved into the mod with the animation.", 1),
             Entry("Save as a new mod or replace the original. Undo works like the other animation edits.", 1),

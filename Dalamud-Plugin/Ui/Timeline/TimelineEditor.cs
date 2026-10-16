@@ -747,6 +747,13 @@ internal sealed class TimelineEditor
     /// <summary>Sets the length as one undo step, scaling the events when <see cref="ScaleEvents"/> is on.</summary>
     public bool SetLength(int frames) => !FixedLength && Commit(TimelineEdits.SetLength(Document, frames, ScaleEvents, loaded));
 
+    /// <summary>Puts a motion from Blender in place of the clip's, as one undo step (see <see cref="TimelineEdits.ReplaceMotion"/>).</summary>
+    public bool ReplaceMotion(MotionReplacement replacement) =>
+        !FixedLength && Commit(TimelineEdits.ReplaceMotion(Document, replacement, ScaleEvents, loaded));
+
+    /// <summary>Goes back to the clip's own motion, as one undo step.</summary>
+    public bool DropReplacement() => !FixedLength && Commit(TimelineEdits.DropReplacement(Document, ScaleEvents, loaded));
+
     // Cuts.
 
     /// <summary>Cuts the motion at the playhead, as one undo step.</summary>

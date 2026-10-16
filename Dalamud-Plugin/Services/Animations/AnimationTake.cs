@@ -153,6 +153,25 @@ internal static class AnimationTakeFormat
     }
 }
 
+/// <summary>Takes made from motion the plugin holds.</summary>
+internal static class AnimationTakes
+{
+    /// <summary>
+    /// A decoded clip as a take for Blender, such as the Timeline's motion as it plays it now: every bone of
+    /// its skeleton with its reference pose, at the clip's own samples.
+    /// </summary>
+    public static AnimationTake FromMotion(Motion.MotionClip motion, string name, IReadOnlyDictionary<string, string> facts)
+    {
+        var bones = motion.Skeleton.Bones.Select(b => new AnimationTakeBone(b.Name, b.Parent, b.Reference)).ToImmutableArray();
+        var times = Enumerable.Range(0, motion.Samples).Select(i => (double)motion.Time(i)).ToArray();
+        var samples = new float[(long)motion.Samples * bones.Length * AnimationTake.Stride];
+        for (var f = 0; f < motion.Samples; f++)
+            for (var b = 0; b < bones.Length; b++)
+                AnimationTake.Write(motion.Get(f, b).ToBone(), samples.AsSpan((f * bones.Length + b) * AnimationTake.Stride, AnimationTake.Stride));
+        return new AnimationTake(AnimationTake.AnimationKind, name, bones, times, samples, motion.Loops, facts);
+    }
+}
+
 /// <summary>Turns a recording's uneven frame times into samples at a fixed rate.</summary>
 internal static class AnimationTakeTiming
 {

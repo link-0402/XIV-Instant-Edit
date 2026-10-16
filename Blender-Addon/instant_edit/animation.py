@@ -82,6 +82,15 @@ class Take:
         return float(self.times[-1] - self.times[0])
 
 
+@dataclass(frozen=True)
+class GameSkeleton:
+    """A take's skeleton without its frames: what reading an animation back needs. `pose_bases` and
+    `game_from_bases` accept it or a `Take`."""
+    bones: tuple[str, ...]
+    parents: np.ndarray       # (bones,) parent index, -1 for roots
+    reference: np.ndarray     # (bones, 10) game reference pose, local to the parent
+
+
 class AnimationApplyError(Exception):
     """A take that is valid but cannot be applied to the current scene."""
 
@@ -127,6 +136,35 @@ def _transforms(values, count: int, what: str) -> np.ndarray:
     return array
 
 
+def parse_bones(bones) -> GameSkeleton:
+    """Validate a take header's bone list: names, parents listed before their children, reference
+    poses. Raises BridgeRequestError for bad input."""
+    if not isinstance(bones, list) or not 1 <= len(bones) <= MAX_BONES:
+        _reject("invalid_animation_bones", f"The animation must name between 1 and {MAX_BONES} bones.")
+    names, parents, reference = [], [], []
+    for index, bone in enumerate(bones):
+        if not isinstance(bone, dict):
+            _reject("invalid_animation_bones", "An animation bone entry is not an object.")
+        bone_name = bone.get("name")
+        parent = bone.get("parent")
+        values = bone.get("reference")
+        if not isinstance(bone_name, str) or not bone_name or len(bone_name) > 128:
+            _reject("invalid_animation_bones", "An animation bone has no valid name.")
+        if isinstance(parent, bool) or not isinstance(parent, int) or not -1 <= parent < index:
+            _reject("invalid_animation_hierarchy",
+                    f'Bone "{bone_name[:64]}" does not follow its parent in the animation skeleton.')
+        if (not isinstance(values, list) or len(values) != STRIDE
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values)):
+            _reject("invalid_animation_bones", f'Bone "{bone_name[:64]}" has no valid reference pose.')
+        names.append(bone_name)
+        parents.append(parent)
+        reference.append(values)
+    if len(set(names)) != len(names):
+        _reject("invalid_animation_bones", "The animation skeleton names a bone more than once.")
+    return GameSkeleton(tuple(names), np.asarray(parents, dtype=np.int64),
+                        _transforms(reference, len(names), "reference pose"))
+
+
 def parse_take(body) -> Take:
     """Validate a take received from the plugin. Raises BridgeRequestError for bad input."""
     view = memoryview(body)
@@ -162,29 +200,7 @@ def parse_take(body) -> Take:
     if not isinstance(key_scale, bool) or not isinstance(loop, bool):
         _reject("invalid_animation_options", "The animation options are not booleans.")
 
-    bones = header.get("bones")
-    if not isinstance(bones, list) or not 1 <= len(bones) <= MAX_BONES:
-        _reject("invalid_animation_bones", f"The animation must name between 1 and {MAX_BONES} bones.")
-    names, parents, reference = [], [], []
-    for index, bone in enumerate(bones):
-        if not isinstance(bone, dict):
-            _reject("invalid_animation_bones", "An animation bone entry is not an object.")
-        bone_name = bone.get("name")
-        parent = bone.get("parent")
-        values = bone.get("reference")
-        if not isinstance(bone_name, str) or not bone_name or len(bone_name) > 128:
-            _reject("invalid_animation_bones", "An animation bone has no valid name.")
-        if isinstance(parent, bool) or not isinstance(parent, int) or not -1 <= parent < index:
-            _reject("invalid_animation_hierarchy",
-                    f'Bone "{bone_name[:64]}" does not follow its parent in the animation skeleton.')
-        if (not isinstance(values, list) or len(values) != STRIDE
-                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values)):
-            _reject("invalid_animation_bones", f'Bone "{bone_name[:64]}" has no valid reference pose.')
-        names.append(bone_name)
-        parents.append(parent)
-        reference.append(values)
-    if len(set(names)) != len(names):
-        _reject("invalid_animation_bones", "The animation skeleton names a bone more than once.")
+    skeleton = parse_bones(header.get("bones"))
 
     times = header.get("times")
     if (not isinstance(times, list) or not times
@@ -198,7 +214,7 @@ def parse_take(body) -> Take:
 
     offset = 12 + header_length
     offset += (-offset) % 4
-    frames, count = len(times), len(names)
+    frames, count = len(times), len(skeleton.bones)
     expected = frames * count * STRIDE * 4
     if len(view) - offset != expected:
         _reject("animation_size_mismatch", "The animation data does not match its header.")
@@ -211,9 +227,9 @@ def parse_take(body) -> Take:
         key_scale=key_scale,
         loop=loop,
         plugin_version=plugin_version,
-        bones=tuple(names),
-        parents=np.asarray(parents, dtype=np.int64),
-        reference=_transforms(reference, count, "reference pose"),
+        bones=skeleton.bones,
+        parents=skeleton.parents,
+        reference=skeleton.reference,
         times=times,
         samples=samples,
         source=_source(header.get("source")),
@@ -496,6 +512,48 @@ def pose_bases(take: Take, samples: np.ndarray, armature_matrix, bones, key_scal
         yield np.linalg.inv(orientation) @ delta @ orientation, inherited
 
 
+def game_from_bases(skeleton, bases: np.ndarray, armature_matrix, bones, key_scale: bool = False) -> np.ndarray:
+    """The inverse of `pose_bases`: each bone's game transform relative to its matched ancestor
+    (model space without one) from its pose-bone bases.
+
+    ``bases`` are (bones, frames, 4, 4) in the order of ``bones``, which are `pose_bases`'s (rest
+    matrix, take bone index, matched ancestor index) tuples. Returns (frames, bones, 10) in that
+    order. Bones are worked through in take order, so an ancestor's game scale, which keyed scale
+    divides its children's positions by, is known before its children. As the send, positions are
+    put back only when some read scale leaves one: the send divides none when every sample's scale
+    is one, whatever the reference pose's scales."""
+    bases = np.asarray(bases, dtype=np.float64)
+    reference_model = _havok_model(skeleton.reference, skeleton.parents)
+    rest_model = _matrices(_rigid(reference_model))
+    armature_to_game = _armature_to_game(rest_model, bones, armature_matrix)
+    result = np.empty((bases.shape[1], len(bones), STRIDE))
+    for slot, (rest, bone, ancestor) in enumerate(bones):
+        if ancestor == skeleton.parents[bone]:
+            reference = skeleton.reference[bone]
+        elif ancestor < 0:
+            reference = reference_model[bone]
+        else:
+            reference = _relative(reference_model[ancestor], reference_model[bone])
+        orientation = np.eye(4)
+        orientation[:3, :3] = (np.linalg.inv(rest_model[bone]) @ armature_to_game
+                               @ np.asarray(rest, dtype=np.float64))[:3, :3]
+        location, rotation, scale = _decompose(orientation @ bases[slot] @ np.linalg.inv(orientation))
+        delta = np.concatenate((location, rotation[:, [1, 2, 3, 0]], scale), axis=1)
+        result[:, slot] = _compose(reference, delta)
+    if not key_scale or np.allclose(result[..., 7:10], 1.0, rtol=0.0, atol=SCALE_TOLERANCE):
+        return result
+    model_scales = {}
+    for slot in sorted(range(len(bones)), key=lambda s: bones[s][1]):
+        _rest, bone, ancestor = bones[slot]
+        pose = result[:, slot]
+        if ancestor >= 0:
+            inherited = _divide(model_scales[ancestor], reference_model[ancestor, 7:10], 1.0)
+            if not np.allclose(inherited, 1.0, rtol=0.0, atol=SCALE_TOLERANCE):
+                pose[:, 0:3] = pose[:, 0:3] * inherited
+        model_scales[bone] = pose[:, 7:10] if ancestor < 0 else model_scales[ancestor] * pose[:, 7:10]
+    return result
+
+
 def _scales_like_game(mode: str, inherited: np.ndarray) -> bool:
     """Whether a bone whose Inherit Scale is ``mode`` scales like the game's while Blender scales
     its parent by ``inherited`` (frames, 3). The game multiplies the parent's scale into the
@@ -621,6 +679,21 @@ def _rotation_channels(mode: str, quaternions: np.ndarray):
     return "rotation_euler", np.asarray(eulers)
 
 
+def match_bones(armature, names) -> list:
+    """The armature's bones the skeleton names: (bone, its index in ``names``, the index of its
+    nearest ancestor in the armature that is also named, or -1)."""
+    index = {name: position for position, name in enumerate(names)}
+    matched = []
+    for bone in armature.data.bones:
+        if bone.name not in index:
+            continue
+        ancestor = bone.parent
+        while ancestor is not None and ancestor.name not in index:
+            ancestor = ancestor.parent
+        matched.append((bone, index[bone.name], index[ancestor.name] if ancestor is not None else -1))
+    return matched
+
+
 def _unique_action_name(name: str) -> str:
     # Blender truncates names to 63 bytes; cut on a character boundary first.
     encoded = name.encode("utf-8")[:63]
@@ -641,15 +714,7 @@ def apply_take(take: Take, context=None) -> dict:
     if armature.mode == "EDIT":
         armature.update_from_editmode()
 
-    index = {name: position for position, name in enumerate(take.bones)}
-    matched = []
-    for bone in armature.data.bones:
-        if bone.name not in index:
-            continue
-        ancestor = bone.parent
-        while ancestor is not None and ancestor.name not in index:
-            ancestor = ancestor.parent
-        matched.append((bone, index[bone.name], index[ancestor.name] if ancestor is not None else -1))
+    matched = match_bones(armature, take.bones)
     if not matched:
         raise AnimationApplyError(
             "animation_no_matching_bones",
@@ -717,6 +782,10 @@ def apply_take(take: Take, context=None) -> dict:
         "frameRate": float(fps),
         "keyedScale": bool(take.key_scale),
         "source": dict(take.source),
+        # So a read back can tell the range was left alone and keep the length exactly.
+        "duration": float(take.duration),
+        "frameStart": int(frame_start),
+        "frameEnd": int(frame_end),
     }
     # A single pose leaves the scene's frame range as it is; its keys hold on every frame.
     if count > 1:

@@ -41,10 +41,15 @@ IMPORT_SKELETON_CAPABILITY = "instant-edit.import-skeleton.v1"
 # Imports may belong to a whole-character send that shares one armature (see character.py), and
 # animations may name that send's armature; /status reports how many imports are still pending.
 CHARACTER_IMPORT_CAPABILITY = "instant-edit.character-import.v1"
+# The plugin may read an armature's motion back (see animation_read.py).
+ANIMATION_READ_CAPABILITY = "instant-edit.animation-read.v1"
 MAX_ANIMATION_QUEUE_SIZE = 4
 # How long an animation request waits for Blender's main thread to key it, so the plugin
 # can report the result. Blender busy with a modal tool keeps the request queued instead.
 ANIMATION_APPLY_WAIT_SECONDS = 20
+# How long a read waits for Blender's main thread. The plugin gives up after two minutes; a read
+# that has not run by then is dropped instead of answering nobody.
+ANIMATION_READ_WAIT_SECONDS = 110
 
 # While the port is taken, for instance by another Blender, Blender tries it again this often.
 LISTENER_RETRY_SECONDS = 3.0
@@ -96,6 +101,7 @@ def _status_payload() -> dict:
             ANIMATION_IMPORT_CAPABILITY,
             IMPORT_SKELETON_CAPABILITY,
             CHARACTER_IMPORT_CAPABILITY,
+            ANIMATION_READ_CAPABILITY,
         ],
         # Imports queued or running: a character send waits for its models before its pose.
         "pendingImports": _import_queue.unfinished_tasks,
@@ -382,6 +388,9 @@ class _ImportHandler(BaseHTTPRequestHandler):
         if endpoint == "/animation":
             self._handle_animation()
             return
+        if endpoint == "/animation/read":
+            self._handle_animation_read()
+            return
         is_cache_settings = endpoint == "/settings/cache"
         if endpoint != "/import" and not is_cache_settings:
             self._respond(404, _failure(
@@ -600,6 +609,84 @@ class _ImportHandler(BaseHTTPRequestHandler):
             self._respond(422, job["failure"])
             return
         self._respond(200, {"ok": True, "queued": False, "applied": True, **job["result"]})
+
+    def _handle_animation_read(self) -> None:
+        """Have Blender's main thread read the armature's motion for the plugin, and return it."""
+        from .animation_read import MAX_REQUEST_SIZE, parse_read_request
+
+        try:
+            length_header = self.headers.get("Content-Length")
+            try:
+                length = int(length_header) if length_header is not None else -1
+            except ValueError:
+                length = -1
+            if length < 0:
+                status = 411 if length_header is None else 400
+                self._respond(status, _failure(
+                    status, "animation_read", "request_receipt", "content_length_invalid",
+                    "The read request has no valid Content-Length header.",
+                    "Update both XIV Instant Edit components and retry.",
+                    endpoint=self.path,
+                ))
+                return
+            if length > MAX_REQUEST_SIZE:
+                self._respond(413, _failure(
+                    413, "animation_read", "request_receipt", "request_body_too_large",
+                    f"The read request exceeds Blender's {MAX_REQUEST_SIZE // (1024 * 1024)} MiB limit.",
+                    "Update both XIV Instant Edit components and retry.",
+                    endpoint=self.path,
+                ))
+                return
+            body = self.rfile.read(length)
+            if len(body) != length:
+                self._respond(400, _failure(
+                    400, "animation_read", "request_receipt", "request_body_incomplete",
+                    "The connection ended before Blender received the complete read request.",
+                    "Read the animation again and check local security software if it happens repeatedly.",
+                    endpoint=self.path,
+                ))
+                return
+            request = parse_read_request(body)
+        except (socket.timeout, TimeoutError):
+            self._respond(408, _failure(
+                408, "animation_read", "request_receipt", "request_body_timeout",
+                "Blender timed out while receiving the read request.",
+                "Read the animation again and check for heavy system load or local filtering software.",
+                endpoint=self.path,
+            ))
+            return
+        except BridgeRequestError as error:
+            self._respond(400, _failure(
+                400, "animation_read", error.stage, error.code, error.cause, error.remedy,
+                endpoint=self.path, exception=error,
+            ))
+            return
+
+        job = {"read": request, "done": threading.Event(), "result": None, "body": None, "failure": None,
+               "abandoned": False}
+        try:
+            _animation_queue.put_nowait(job)
+        except Full:
+            self._respond(503, _failure(
+                503, "animation_read", "queueing", "animation_queue_full",
+                "Blender is still keying or reading earlier animations.",
+                "Wait until they finish, then read the animation again.",
+                endpoint=self.path,
+            ))
+            return
+        if not job["done"].wait(ANIMATION_READ_WAIT_SECONDS):
+            job["abandoned"] = True
+            self._respond(503, _failure(
+                503, "animation_read", "animation_processing", "animation_read_timeout",
+                "Blender took too long to read the animation.",
+                "Shorten the scene range or close heavy scenes, then try again.",
+                endpoint=self.path,
+            ))
+            return
+        if job["failure"] is not None:
+            self._respond(422, job["failure"])
+            return
+        self._respond_bytes(200, job["body"])
 
     @staticmethod
     def _validate_cache_settings(data) -> dict:
@@ -846,6 +933,13 @@ class _ImportHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _respond_bytes(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, format: str, *args) -> None:
         pass
 
@@ -974,6 +1068,9 @@ def process_animation_queue() -> None:
             job = _animation_queue.get_nowait()
         except Empty:
             return
+        if "read" in job:
+            _process_animation_read(job)
+            continue
         # Imported per job, not per poll: the animation module needs numpy.
         from .animation import AnimationApplyError, apply_take, summary
 
@@ -1003,6 +1100,43 @@ def process_animation_queue() -> None:
             _set_last_status("Animation failed: Blender encountered an unexpected error.")
         finally:
             job["done"].set()
+
+
+def _process_animation_read(job: dict) -> None:
+    """Read one armature's motion for the plugin. Runs on Blender's main thread."""
+    if job["abandoned"]:
+        # The plugin stopped waiting; reading now would only freeze Blender for nobody.
+        job["done"].set()
+        return
+    from .animation import AnimationApplyError
+    from .animation_read import read_motion
+
+    request = job["read"]
+    metadata = {
+        "pluginVersion": request.plugin_version or "unknown",
+        "bones": len(request.skeleton.bones),
+        "rate": request.rate,
+    }
+    try:
+        summary, body = read_motion(request)
+        job["result"], job["body"] = summary, body
+        _set_last_status(f'Motion read: "{summary["action"]}" from "{summary["armature"]}"')
+    except AnimationApplyError as error:
+        job["failure"] = _failure(
+            422, "animation_read", "animation_processing", error.code, error.cause, error.remedy,
+            endpoint="/animation/read", metadata=metadata,
+        )
+        _set_last_status(f"Motion read failed: {error.cause}")
+    except Exception as error:
+        job["failure"] = _failure(
+            500, "animation_read", "animation_processing", "animation_read_failed",
+            "Blender encountered an unexpected error while reading the animation.",
+            "Review the diagnostic report, then read the animation again.",
+            endpoint="/animation/read", exception=error, metadata=metadata,
+        )
+        _set_last_status("Motion read failed: Blender encountered an unexpected error.")
+    finally:
+        job["done"].set()
 
 
 def _run_queued_import(data: dict) -> None:
