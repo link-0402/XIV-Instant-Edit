@@ -5,8 +5,6 @@ straight into your editing software, and puts your changes straight back into yo
 importing, exporting or file juggling. Model editing uses a Blender add-on, and works on vanilla game files as well as
 Penumbra mods.
 
-![A sweater and jeans sent from the game to Blender, with the add-on's sidebar](docs/images/blender/overview.png)
-
 **The [wiki](https://github.com/link-0402/XIV-Instant-Edit/wiki) explains every feature step by step.**
 
 ## Features
