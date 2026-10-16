@@ -79,7 +79,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
         AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, AnimationRecorder recorder, IDataManager data,
         IFramework framework, ITextureProvider textures, IPluginLog log, GameSoundPlayer? soundPlayer = null)
-        : base("Timeline###XIVInstantEditTimeline")
+        : base("Timeline (Beta)###XIVInstantEditTimeline")
     {
         session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log);
         reader = new TimelineReader(session);
