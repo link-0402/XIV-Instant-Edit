@@ -231,7 +231,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
             {
                 GamePath    = PathNormalizer.GamePath(gamePath),
                 Option      = option.Serialize(),
-                Compression = _host.Configuration.DefaultCompression,
+                Compression = TextureCompression.Auto,
                 IsNew       = isNew,
             };
             Project.Sidecar.Replacements.Add(replacement);
@@ -425,10 +425,8 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     /// <summary>Adds a texture slot of a role to a material made here, at a texture path of its own.</summary>
     public void AddTextureSlot(string materialGamePath, MaterialSetup material, TextureType type)
     {
-        var slot = new TextureSlot { Type = type };
+        var slot = new TextureSlot { Type = type, Compression = TextureCompression.Auto };
         slot.Postfix = FreePostfix(materialGamePath, type, material, slot);
-        if (_host.Configuration.DefaultCompression != TextureCompression.None)
-            slot.Compression = _host.Configuration.DefaultCompression;
         material.Textures.Add(slot);
         TouchReplacements();
     }
@@ -473,7 +471,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
             {
                 GamePath    = PathNormalizer.GamePath(model.GamePath),
                 Option      = option.Serialize(),
-                Compression = _host.Configuration.DefaultCompression,
+                Compression = TextureCompression.Auto,
                 IsNew       = model.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared,
             };
             Project.Sidecar.Replacements.Add(replacement);
@@ -949,12 +947,11 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         Notify(files.Count > 0 ? $"{item.Name} and the {files.Count} file(s) added for it are taken back out." : $"{item.Name} is no longer listed.", Severity.Info);
     }
 
-    private void ApplyTextureDefaults(IEnumerable<TextureSlot> slots)
+    /// <summary>New slots start on Auto: compressed unless the check finds it would change how the texture looks.</summary>
+    private static void ApplyTextureDefaults(IEnumerable<TextureSlot> slots)
     {
-        var compression = _host.Configuration.DefaultCompression;
-        if (compression == TextureCompression.None) return;
         foreach (var slot in slots)
-            slot.Compression = compression;
+            slot.Compression = TextureCompression.Auto;
     }
 
     /// <summary>Records that a replacement's settings were edited in place (its compression), so the sidecar is written.</summary>
@@ -1083,6 +1080,7 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
             PluginDirectory   = _host.PluginDirectory,
             CacheDirectory    = _host.TextureCacheDirectory,
             ConvertTexture    = _host.PenumbraTextures.Available ? _host.PenumbraTextures.Convert : null,
+            CheckTexture      = _host.PenumbraTextures.Available ? _host.PenumbraTextures.ConvertChecked : null,
             Resolutions       = new Dictionary<string, ConflictChoice>(resolutions),
             Revision          = SetUpRevision,
             SourcePaths       = SourcePaths(),

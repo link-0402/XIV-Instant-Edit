@@ -22,7 +22,6 @@ namespace InstantEdit.Studio.Windows.Studio;
 /// </summary>
 internal sealed class ResourceInspector
 {
-    private static readonly string[] CompressionLabels = { "None", "BC3", "BC7", "BC5" };
     private const string ImageFilter = "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}";
 
     private readonly StudioHost _host;
@@ -319,14 +318,14 @@ internal sealed class ResourceInspector
         if (image)
         {
             Gui.Label("Format", "What the image is compressed to in the mod.");
-            int index = (int)replacement.Compression;
+            int index = TextureCompressionInfo.IndexOf(replacement.Compression);
             ImGui.SetNextItemWidth(Theme.S(140));
-            if (ImGui.Combo("##replcompression", ref index, CompressionLabels, CompressionLabels.Length))
+            if (ImGui.Combo("##replcompression", ref index, TextureCompressionInfo.Labels, TextureCompressionInfo.Labels.Length))
             {
-                replacement.Compression = (TextureCompression)index;
+                replacement.Compression = TextureCompressionInfo.Order[index];
                 _session.TouchReplacements();
             }
-            Gui.Tooltip("BC7 — the game's own choice, best quality, slow to compress.\nBC3 — far quicker, a little softer.\n" +
+            Gui.Tooltip("Auto — compressed, unless that would visibly change it. Then it stays uncompressed.\nBC7 — the game's own choice, best quality, slow to compress.\nBC3 — far quicker, a little softer.\n" +
                        "BC5 — red and green only (colour set / index textures).\nNone — uncompressed, four times the size in memory.");
         }
 

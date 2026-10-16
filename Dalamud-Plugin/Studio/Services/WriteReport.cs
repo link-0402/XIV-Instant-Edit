@@ -113,6 +113,9 @@ internal sealed class WriteRequest
     /// </summary>
     public TextureConversion? ConvertTexture { get; init; }
 
+    /// <summary>Penumbra's conversion for Auto, which encodes and checks a texture before it picks the format. Null leaves Auto textures uncompressed.</summary>
+    public InstantEdit.Services.TextureCompression.TexConvert? CheckTexture { get; init; }
+
     /// <summary>The user's answers for files changed both here and elsewhere, by <see cref="WriteConflict.Key"/>.</summary>
     public IReadOnlyDictionary<string, ConflictChoice> Resolutions { get; init; } = new Dictionary<string, ConflictChoice>();
 

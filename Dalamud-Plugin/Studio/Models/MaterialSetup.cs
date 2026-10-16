@@ -50,8 +50,9 @@ public class MaterialSetup
         {
             material.Textures.Add(new TextureSlot
             {
-                Type    = type,
-                Postfix = MaterialNaming.DefaultPostfix(type),
+                Type        = type,
+                Postfix     = MaterialNaming.DefaultPostfix(type),
+                Compression = TextureCompression.Auto,
             });
         }
         return material;

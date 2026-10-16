@@ -284,8 +284,6 @@ public sealed class SettingsWindow : Window
         DrawModBrowserSettings();
     }
 
-    private static readonly string[] CompressionLabels = ["None", "BC3", "BC7", "BC5"];
-
     /// <summary> The Mod Browser's library, mod windows and build window. </summary>
     private void DrawModBrowserSettings()
     {
@@ -307,16 +305,6 @@ public sealed class SettingsWindow : Window
             Save();
         }
         ImGui.Spacing();
-
-        var compression = (int)studio.DefaultCompression;
-        ImGui.SetNextItemWidth(Theme.Scaled(140));
-        if (ImGui.Combo("Compress new textures", ref compression, CompressionLabels, CompressionLabels.Length))
-        {
-            studio.DefaultCompression = (Studio.Models.TextureCompression)compression;
-            Save();
-        }
-        Widgets.HelpTip("What textures you add from now on start on. BC7 looks best but is slow on large images. " +
-                        "BC3 is much quicker. BC5 keeps only red and green, so pick it per texture. None keeps the raw pixels.");
 
         var scale = studio.TileScale;
         ImGui.SetNextItemWidth(Theme.Scaled(140));

@@ -114,6 +114,9 @@ internal sealed class BuildRequest
     /// managed code and far slower at BC7 than the native one Penumbra offers.
     /// </summary>
     public TextureConversion? ConvertTexture { get; init; }
+
+    /// <summary>Penumbra's conversion for Auto, which encodes and checks a texture before it picks the format. Null leaves Auto textures uncompressed.</summary>
+    public InstantEdit.Services.TextureCompression.TexConvert? CheckTexture { get; init; }
     public required ModMetaInfo Meta       { get; init; }
     public required List<ItemBuildRequest> Items { get; init; }
 

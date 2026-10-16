@@ -3,6 +3,7 @@ using InstantEdit.Services;
 using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio;
 using InstantEdit.Studio.Models.Project;
+using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Models.Resources;
 using InstantEdit.Studio.Services.Backups;
 using InstantEdit.Studio.Services.CleanUp;
@@ -11,6 +12,7 @@ using InstantEdit.Studio.Services.Resources;
 using InstantEdit.Ui;
 using Penumbra.Api.Enums;
 using static InstantEdit.TestSupport.Assertions;
+using StudioModels = InstantEdit.Studio.Models;
 
 /// <summary>Resizing and compressing a mod's textures: what is offered, what is ticked, and that nothing the check rejects is written.</summary>
 internal static partial class ModCleanUpScenarios
@@ -27,6 +29,8 @@ internal static partial class ModCleanUpScenarios
         TextureCleanUpStopsWhenTheBackupCantBeStored(testRoot);
         ATextureChangedSinceTheListIsLeftAlone(testRoot);
         KeepFormatIsRefusedForFormatsThatCantBeWritten();
+        AutoCompressionKeepsWhatTheCheckRejectsUncompressed(testRoot);
+        AutoCompressionReadsUsesFromTheMaterial();
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -290,5 +294,59 @@ internal static partial class ModCleanUpScenarios
         Require(TextureCleanUp.WhyNotFormat(bc2, TextureFormatChoice.Keep) is { Length: > 0 }, "a format the encoder can't write can't be kept");
         Require(TextureCleanUp.WhyNotFormat(bc2, TextureFormatChoice.Bc7) is null && TextureCleanUp.WhyNotFormat(bc7, TextureFormatChoice.Keep) is null,
             "it can be encoded into another format, and a writable format can be kept");
+    }
+
+    private static void AutoCompressionKeepsWhatTheCheckRejectsUncompressed(string testRoot)
+    {
+        var folder = Path.Combine(testRoot, "AutoCompression", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        string Image(string name, int size)
+        {
+            var path = Path.Combine(folder, name);
+            File.WriteAllBytes(path, Pattern(size, size, name.Length));
+            return path;
+        }
+
+        var image = Image("base.tex", 256);
+        var good = AutoCompression.Encode(image, [BaseUse], new FakeConverter().Convert, CancellationToken.None);
+        var index = AutoCompression.Encode(image, [IndexUse], new FakeConverter().Convert, CancellationToken.None);
+        Require(good is { Format: StudioModels.TextureCompression.Bc7, Kept.Length: 0 } && TextureCost.Read(good.Tex)!.Value.Format == TextureCost.Bc7 &&
+                index.Format == StudioModels.TextureCompression.Bc5 && AutoCompression.FormatOf(index.Tex) == StudioModels.TextureCompression.Bc5,
+            "Auto writes BC7, or BC5 for an index map, when the check passes");
+
+        var bad = AutoCompression.Encode(image, [BaseUse], new FakeConverter { Corrupt = true }.Convert, CancellationToken.None);
+        Require(bad is { Format: StudioModels.TextureCompression.None, Kept.Length: > 0 } && TextureCost.Read(bad.Tex)!.Value.Format == TextureCost.Bgra8 &&
+                AutoCompression.Describe("base.png", bad.Format, bad.Kept, string.Empty).Contains(bad.Kept, StringComparison.Ordinal),
+            "an encode the check rejects leaves the texture uncompressed, with the reason");
+
+        var small = AutoCompression.Encode(Image("small.tex", 64), [BaseUse], new FakeConverter().Convert, CancellationToken.None);
+        Require(small is { Format: StudioModels.TextureCompression.None, Kept.Length: > 0 }, "a texture too small to compress stays uncompressed");
+    }
+
+    private static void AutoCompressionReadsUsesFromTheMaterial()
+    {
+        var material = new MtrlInfo
+        {
+            ShaderPackageName = "character.shpk",
+            ShaderDataParsed = true,
+            MaterialFlags1 = (ushort)TextureUse.TranslucencyFlag,
+            Constants = { new MtrlConstant { Id = TextureUse.AlphaThresholdConstant, Offset = 4, Size = 4 } },
+            ShaderValues = new byte[4].Concat(BitConverter.GetBytes(0.3f)).ToArray(),
+        };
+        var normal = AutoCompression.UsesFor(StudioModels.TextureType.Normal, StudioModels.ShaderType.Character, material).Single();
+        Require(normal is { Role: TextureRole.Normal, ShaderPackage: "character.shpk", AlphaThreshold: 0.3f, Translucent: true, OpacityChannel: 2 },
+            "a slot's use takes the shader, threshold and translucency of its material");
+
+        var unknown = AutoCompression.UsesFor(StudioModels.TextureType.Normal, StudioModels.ShaderType.Hair, null).Single();
+        Require(unknown is { ShaderPackage: "hair.shpk", CutsOut: true, OpacityChannel: 3 },
+            "with no material yet, an opacity channel is checked as a cut-out");
+        Require(AutoCompression.UsesFor(StudioModels.TextureType.Index, StudioModels.ShaderType.Character, null).Single().Role == TextureRole.Index,
+            "an index slot is checked as an index map");
+
+        var hair = AutoCompression.UsesFor("chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_norm.tex", "hair.png").Single();
+        var gear = AutoCompression.UsesFor("chara/equipment/e0005/texture/v01_c0201e0005_top_id.tex", "id.png").Single();
+        Require(hair is { Role: TextureRole.Normal, ShaderPackage: "hair.shpk" } && gear is { Role: TextureRole.Index, ShaderPackage: "character.shpk" },
+            "a replaced texture is checked as its path and kind of model say");
+        Require(AutoCompression.KeyOf([BaseUse]) != AutoCompression.KeyOf([IndexUse]), "different uses are cached apart");
     }
 }

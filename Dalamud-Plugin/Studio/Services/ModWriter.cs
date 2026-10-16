@@ -6,6 +6,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Models.Project;
 using InstantEdit.Studio.Models.Resources;
@@ -352,19 +353,21 @@ internal sealed class ModWriter
     private static string Generated(string kind, byte[] bytes)
         => $"{kind}:{Convert.ToHexString(SHA256.HashData(bytes))[..32].ToLowerInvariant()}";
 
-    /// <summary>A texture made from an image (or a .tex taken as it is).</summary>
-    private static string TextureIntent(string source, TextureCompression compression)
-        => TextureSources.IsTex(source) ? Intent("copy", source) : Intent("tex", source, compression);
+    /// <summary>A texture made from an image (or a .tex taken as it is). Auto's result also depends on how the texture is read.</summary>
+    private static string TextureIntent(string source, TextureCompression compression, IReadOnlyList<TextureUse> uses)
+        => TextureSources.IsTex(source) ? Intent("copy", source)
+            : compression == TextureCompression.Auto ? Intent("tex", source, compression, AutoCompression.KeyOf(uses))
+            : Intent("tex", source, compression);
 
     /// <summary>A texture slot of a material made here: its placeholder, or its image.</summary>
-    private string SlotIntent(TextureSlot tex)
+    private string SlotIntent(TextureSlot tex, IReadOnlyList<TextureUse> uses)
     {
         if (!tex.UseWhiteDummy)
-            return TextureIntent(tex.SourcePath, tex.Compression);
+            return TextureIntent(tex.SourcePath, tex.Compression, uses);
 
         var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
         return option.IsGenerated
-            ? $"dummy:{TextureCache.KeyForGenerated("white", tex.WhiteDummySize, tex.Compression)}"
+            ? $"dummy:{TextureCache.KeyForGenerated("white", tex.WhiteDummySize, TextureCompressionInfo.ForPlaceholder(tex.Compression))}"
             : Intent("bundled", Path.Combine(_req.PluginDirectory, option.ResourcePath!));
     }
 
@@ -474,8 +477,9 @@ internal sealed class ModWriter
             }
 
             bool texture = ResourceKinds.IsTexturePath(gamePath);
+            var uses = texture && replacement.Compression == TextureCompression.Auto ? AutoCompression.UsesFor(gamePath, source) : Array.Empty<TextureUse>();
             var plan = Plan(gamePath, option, ReplacementRel(meta, gamePath, option),
-                texture ? TextureIntent(source, replacement.Compression) : Intent("copy", source), label, target);
+                texture ? TextureIntent(source, replacement.Compression, uses) : Intent("copy", source), label, target);
             if (!plan.NeedsContent)
                 continue;
 
@@ -489,12 +493,12 @@ internal sealed class ModWriter
             var where = option.IsDefault ? string.Empty : $" · {meta.OptionLabel(option)}";
             if (texture)
             {
-                if (!ConvertTexture(source, replacement.Compression, label, out var content, out var error, out bool cached))
+                if (!ConvertTexture(source, replacement.Compression, uses, label, out var content, out var error, out var detail))
                 {
                     Fail(plan, error);
                     continue;
                 }
-                Provide(plan, content, $"{how} from {DescribeTexture(source, replacement.Compression, cached)} → {plan.RelPath}{where}");
+                Provide(plan, content, $"{how} from {detail} → {plan.RelPath}{where}");
             }
             else
             {
@@ -662,6 +666,31 @@ internal sealed class ModWriter
         var label = Path.GetFileName(gamePath);
         var textures = new Dictionary<TextureType, string>();
 
+        // Found before the textures are made: Auto checks each one against how this material reads it.
+        MtrlInfo? template = null;
+        bool isPreset = false;
+        string from = string.Empty;
+        string? templateError = null;
+        bool clones = replacement.CloneGameMaterial || replacement.CloneModMaterial;
+        if (clones)
+        {
+            (template, from, templateError) = CloneTemplate(meta, replacement, option, gamePath);
+        }
+        else
+        {
+            var presetPath = MaterialPresetLibrary.FindPresetPath(mat.ShaderType, mat.Textures.Select(t => t.Type).ToHashSet());
+            if (presetPath != null && File.Exists(Path.Combine(_req.PluginDirectory, presetPath)))
+            {
+                template = MtrlReader.Read(File.ReadAllBytes(Path.Combine(_req.PluginDirectory, presetPath)));
+                isPreset = true;
+                from = $"preset ({ShaderInfo.DisplayName(mat.ShaderType)})";
+            }
+            else
+            {
+                templateError = $"no bundled preset for {ShaderInfo.DisplayName(mat.ShaderType)} with these textures";
+            }
+        }
+
         foreach (var tex in mat.Textures)
         {
             Checkpoint();
@@ -686,8 +715,9 @@ internal sealed class ModWriter
                 continue;
             }
 
-            var plan = Plan(texPath, option, ReplacementRel(meta, texPath, option), SlotIntent(tex), texLabel, target);
-            if (MakeTexture(plan, tex, $"{TextureTypeInfo.DisplayName(tex.Type)} for {label}, from "))
+            var uses = tex.Compression == TextureCompression.Auto ? AutoCompression.UsesFor(tex.Type, mat.ShaderType, template) : Array.Empty<TextureUse>();
+            var plan = Plan(texPath, option, ReplacementRel(meta, texPath, option), SlotIntent(tex, uses), texLabel, target);
+            if (MakeTexture(plan, tex, uses, $"{TextureTypeInfo.DisplayName(tex.Type)} for {label}, from "))
                 textures[tex.Type] = texPath;
         }
 
@@ -695,30 +725,6 @@ internal sealed class ModWriter
         {
             _report.Add(WriteOutcome.Skipped, label, gamePath, "none of its textures are in the mod yet", target);
             return;
-        }
-
-        MtrlInfo? template = null;
-        bool isPreset = false;
-        string from = string.Empty;
-        string? templateError = null;
-        bool clones = replacement.CloneGameMaterial || replacement.CloneModMaterial;
-        if (clones)
-        {
-            (template, from, templateError) = CloneTemplate(meta, replacement, option, gamePath);
-        }
-        else
-        {
-            var presetPath = MaterialPresetLibrary.FindPresetPath(mat.ShaderType, mat.Textures.Select(t => t.Type).ToHashSet());
-            if (presetPath != null && File.Exists(Path.Combine(_req.PluginDirectory, presetPath)))
-            {
-                template = MtrlReader.Read(File.ReadAllBytes(Path.Combine(_req.PluginDirectory, presetPath)));
-                isPreset = true;
-                from = $"preset ({ShaderInfo.DisplayName(mat.ShaderType)})";
-            }
-            else
-            {
-                templateError = $"no bundled preset for {ShaderInfo.DisplayName(mat.ShaderType)} with these textures";
-            }
         }
 
         var rel = ReplacementRel(meta, gamePath, option);
@@ -771,7 +777,7 @@ internal sealed class ModWriter
     /// Makes a planned texture from its slot, if the plan needs it: the placeholder, or the image
     /// converted. Returns whether the mod has the texture afterwards.
     /// </summary>
-    private bool MakeTexture(Planned plan, TextureSlot tex, string prefix = "")
+    private bool MakeTexture(Planned plan, TextureSlot tex, IReadOnlyList<TextureUse> uses, string prefix = "")
     {
         if (!plan.NeedsContent)
             return true;
@@ -787,13 +793,112 @@ internal sealed class ModWriter
         {
             if (!File.Exists(tex.SourcePath))
                 return Fail(plan, $"file not found ({tex.SourcePath})");
-            if (!ConvertTexture(tex.SourcePath, tex.Compression, plan.Label, out content, out var error, out bool cached))
+            if (!ConvertTexture(tex.SourcePath, tex.Compression, uses, plan.Label, out content, out var error, out detail))
                 return Fail(plan, error);
-            detail = DescribeTexture(tex.SourcePath, tex.Compression, cached);
         }
 
         Provide(plan, content, prefix + detail);
         return true;
+    }
+
+    /// <summary>Converts one image as <see cref="ConvertTexture(string, TextureCompression, string, out Content, out string, out bool)"/> does, or picks its format first for Auto; <paramref name="detail"/> is its report line.</summary>
+    private bool ConvertTexture(string sourcePath, TextureCompression compression, IReadOnlyList<TextureUse> uses, string label,
+        out Content content, out string error, out string detail)
+    {
+        if (compression == TextureCompression.Auto && !TextureSources.IsTex(sourcePath))
+            return AutoTexture(sourcePath, uses, label, out content, out error, out detail);
+
+        bool ok = ConvertTexture(sourcePath, compression, label, out content, out error, out bool cached);
+        detail = ok ? DescribeTexture(sourcePath, compression, cached) : string.Empty;
+        return ok;
+    }
+
+    /// <summary>
+    /// Auto: Penumbra encodes the image and the check Optimize textures uses decides whether the
+    /// compressed texture is written, or the uncompressed one (see <see cref="AutoCompression"/>).
+    /// Cached like any conversion, under how the texture is read as well. Without Penumbra, or when it
+    /// can't convert the image, the texture is written uncompressed, which loses nothing.
+    /// </summary>
+    private bool AutoTexture(string sourcePath, IReadOnlyList<TextureUse> uses, string label, out Content content, out string error, out string detail)
+    {
+        var name = Path.GetFileName(sourcePath);
+        string Uncompressed(string why, out Content plain, out string failure)
+        {
+            if (!ConvertTexture(sourcePath, TextureCompression.None, label, out plain, out failure, out bool reused))
+                return string.Empty;
+            return $"{name}, uncompressed (Auto: {why}){(reused ? " (converted before, reused)" : string.Empty)}";
+        }
+
+        if (_req.CheckTexture is not { } convert)
+        {
+            detail = Uncompressed("Penumbra isn't there to check compressing it", out content, out error);
+            return detail.Length > 0;
+        }
+
+        var key = TextureCache.KeyFor(sourcePath, TextureCompression.Auto, AutoCompression.KeyOf(uses));
+        if (_textures.PathOf(key) is { } hit)
+        {
+            content = Content.FromFile(hit);
+            error   = string.Empty;
+            detail  = AutoCompression.Describe(name, AutoCompression.FormatOf(ReadHead(hit)), string.Empty, " (converted before, reused)");
+            return true;
+        }
+
+        string? decoded = null;
+        try
+        {
+            var input = sourcePath;
+            if (TextureSources.NeedsDecoding(sourcePath))
+            {
+                decoded = TextureSources.DecodeToPng(sourcePath, out error);
+                if (decoded == null)
+                {
+                    content = null!;
+                    detail  = string.Empty;
+                    return false;
+                }
+                input = decoded;
+            }
+
+            _job.Report(new WriteProgress(_done - 1, _total, $"{label} — compressing and checking"));
+            var result = AutoCompression.Encode(input, uses, convert, _stop);
+            content = Keep(key, result.Tex);
+            error   = string.Empty;
+            detail  = AutoCompression.Describe(name, result.Format, result.Kept, string.Empty);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            StudioServices.Log.Information("[Studio] Penumbra did not encode {0} for Auto ({1}); writing it uncompressed", sourcePath, ex.Message);
+            detail = Uncompressed($"Penumbra couldn't encode it, {ex.Message}", out content, out error);
+            return detail.Length > 0;
+        }
+        finally
+        {
+            if (decoded != null)
+            {
+                try { File.Delete(decoded); } catch (Exception) { /* harmless */ }
+            }
+        }
+    }
+
+    /// <summary>The first bytes of a .tex, enough for its header.</summary>
+    private static byte[] ReadHead(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var head = new byte[TextureCost.HeaderSize];
+            return stream.Read(head, 0, head.Length) == head.Length ? head : Array.Empty<byte>();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Array.Empty<byte>();
+        }
     }
 
     /// <summary>
@@ -927,9 +1032,10 @@ internal sealed class ModWriter
 
         if (option.IsGenerated)
         {
-            var dummyKey = TextureCache.KeyForGenerated("white", tex.WhiteDummySize, tex.Compression);
+            var compression = TextureCompressionInfo.ForPlaceholder(tex.Compression);
+            var dummyKey = TextureCache.KeyForGenerated("white", tex.WhiteDummySize, compression);
             var cached = _textures.Get(dummyKey);
-            if (cached == null && TextureConverter.CreateWhiteDummy(tex.WhiteDummySize, tex.Compression, out cached, out error))
+            if (cached == null && TextureConverter.CreateWhiteDummy(tex.WhiteDummySize, compression, out cached, out error))
                 _textures.Store(dummyKey, cached);
 
             detail = $"white {tex.WhiteDummySize}x{tex.WhiteDummySize} dummy";

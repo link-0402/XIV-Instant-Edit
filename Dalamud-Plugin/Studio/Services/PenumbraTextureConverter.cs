@@ -67,4 +67,18 @@ internal sealed class PenumbraTextureConverter
             return $"{ex.GetType().Name}: {(ex.InnerException ?? ex).Message}";
         }
     }
+
+    /// <summary>
+    /// The conversion as <see cref="InstantEdit.Services.TextureCompression.TexConvert"/> takes it, for
+    /// Auto's encode-and-check: any of Penumbra's types, with or without mipmaps. Throws when it fails.
+    /// </summary>
+    public async System.Threading.Tasks.Task ConvertChecked(string input, string output, Penumbra.Api.Enums.TextureType type, bool mipMaps)
+    {
+        var work = StudioServices.Framework.RunOnTick(() =>
+            _ipc.ConvertTextureFile(input, output, (int)type, mipMaps)
+            ?? System.Threading.Tasks.Task.FromException(new IOException("Penumbra could not convert the texture.")));
+        if (await System.Threading.Tasks.Task.WhenAny(work, System.Threading.Tasks.Task.Delay(Timeout)).ConfigureAwait(false) != work)
+            throw new TimeoutException("Penumbra took too long to convert the texture.");
+        await work.ConfigureAwait(false);
+    }
 }

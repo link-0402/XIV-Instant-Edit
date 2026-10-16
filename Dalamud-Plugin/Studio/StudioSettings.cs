@@ -115,9 +115,7 @@ public sealed class StudioSettings
     public float MetaPaneHeight { get; set; } = 220;
 
     // ── Defaults for new content ─────────────────────────────────────────────
-
-    /// <summary>The compression new texture slots start on.</summary>
-    public TextureCompression DefaultCompression { get; set; } = TextureCompression.None;
+    // New texture slots always start on Auto (see TextureCompression.Auto).
 
     /// <summary>Whether texture thumbnails are shown in the library and the inspectors.</summary>
     public bool ShowThumbnails { get; set; } = true;
