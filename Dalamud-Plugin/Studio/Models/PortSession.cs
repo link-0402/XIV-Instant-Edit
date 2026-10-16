@@ -697,41 +697,42 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     /// </summary>
     public string ApplySimsExtraction(SimsPackageInspector.ExtractionResult extraction)
     {
+        var plan = new List<(TextureType Type, string Path, bool Folder)>();
+        if (extraction.DiffuseCount > 0 && Directory.Exists(extraction.DiffuseFolder))
+            plan.Add((TextureType.Diffuse, extraction.DiffuseFolder, true));
+        if (extraction.NormalFile != null && File.Exists(extraction.NormalFile))
+            plan.Add((TextureType.Normal, extraction.NormalFile, false));
+        if (extraction.SpecularFile != null && File.Exists(extraction.SpecularFile))
+            plan.Add((TextureType.Specular, extraction.SpecularFile, false));
+        return ApplyTextures(plan, "the extraction");
+    }
+
+    /// <summary>
+    /// Points the selected material's texture slots at files (see <see cref="Services.Stash.StashApply"/>),
+    /// adding slots it does not have yet. A folder goes in as a variant folder. Returns a message for
+    /// the window that asked.
+    /// </summary>
+    public string ApplyTextures(IReadOnlyList<(TextureType Type, string Path, bool Folder)> plan, string source)
+    {
         var mat = CurrentMaterial;
         if (mat == null)
             return "Select a material in the main window first.";
 
         var applied = new List<string>();
-
-        if (extraction.DiffuseCount > 0 && Directory.Exists(extraction.DiffuseFolder))
+        foreach (var (type, path, folder) in plan)
         {
-            var slot = GetOrAddTextureSlot(mat, TextureType.Diffuse);
-            slot.SourcePath    = extraction.DiffuseFolder;
-            slot.UseVariants   = true;
+            if (folder ? !Directory.Exists(path) : !File.Exists(path))
+                continue;
+            var slot = GetOrAddTextureSlot(mat, type);
+            slot.SourcePath    = path;
+            slot.UseVariants   = folder;
             slot.UseWhiteDummy = false;
-            applied.Add($"diffuse ({extraction.DiffuseCount} variant(s))");
-        }
-
-        if (extraction.NormalFile != null && File.Exists(extraction.NormalFile))
-        {
-            var slot = GetOrAddTextureSlot(mat, TextureType.Normal);
-            slot.SourcePath    = extraction.NormalFile;
-            slot.UseVariants   = false;
-            slot.UseWhiteDummy = false;
-            applied.Add("normal");
-        }
-
-        if (extraction.SpecularFile != null && File.Exists(extraction.SpecularFile))
-        {
-            var slot = GetOrAddTextureSlot(mat, TextureType.Specular);
-            slot.SourcePath    = extraction.SpecularFile;
-            slot.UseVariants   = false;
-            slot.UseWhiteDummy = false;
-            applied.Add("specular");
+            var label = TextureTypeInfo.Labels[(int)type].ToLowerInvariant();
+            applied.Add(folder ? $"{label} ({Services.Stash.StashFolders.CountImages(path)} variant(s))" : label);
         }
 
         if (applied.Count == 0)
-            return "Nothing to apply — the extraction produced no diffuse, normal or specular textures.";
+            return $"Nothing to apply: {source} has no diffuse, normal, mask or specular textures.";
 
         MarkDirty();
         var message = $"Applied {string.Join(", ", applied)} to material \"{mat.Name}\".";

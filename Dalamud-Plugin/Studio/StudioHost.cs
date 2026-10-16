@@ -23,7 +23,7 @@ internal sealed class StudioHost : IDisposable
     private readonly Action _openSettings;
     private readonly WindowSystem _windows = new("InstantEditStudio");
     private readonly BuildWindow _buildWindow;
-    private readonly SimsImportWindow _simsWindow;
+    private readonly PackageImportWindow _importWindow;
 
     /// <summary>Open mod windows by mod folder path.</summary>
     private readonly Dictionary<string, ModWindow> _open = new(StringComparer.OrdinalIgnoreCase);
@@ -121,9 +121,9 @@ internal sealed class StudioHost : IDisposable
         Fonts.Initialize(pi.UiBuilder);
 
         _buildWindow = new BuildWindow(this, Thumbnails);
-        _simsWindow  = new SimsImportWindow(this, Thumbnails);
+        _importWindow = new PackageImportWindow(this, Thumbnails);
         _windows.AddWindow(_buildWindow);
-        _windows.AddWindow(_simsWindow);
+        _windows.AddWindow(_importWindow);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -208,7 +208,7 @@ internal sealed class StudioHost : IDisposable
         _buildWindow.BringToFront();
     }
 
-    public void ToggleSimsImport() => _simsWindow.Toggle();
+    public void TogglePackageImport() => _importWindow.Toggle();
 
     public void OpenSettings() => _openSettings();
 
@@ -339,7 +339,7 @@ internal sealed class StudioHost : IDisposable
 
         _windows.RemoveAllWindows();
         _buildWindow.Dispose();
-        _simsWindow.Dispose();
+        _importWindow.Dispose();
         PenumbraIpc.Dispose();
         Thumbnails.Dispose();
         Fonts.Dispose();
