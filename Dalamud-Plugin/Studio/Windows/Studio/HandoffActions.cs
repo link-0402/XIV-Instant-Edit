@@ -47,6 +47,7 @@ internal sealed class HandoffActions
             ResourceKind.Model     => 0,
             ResourceKind.Texture   => 1,
             ResourceKind.Animation => 2,
+            ResourceKind.Material  => 3,
             _                      => -1,
         };
         if (kind < 0)
@@ -56,6 +57,7 @@ internal sealed class HandoffActions
         {
             0 => (FontAwesomeIcon.Pen, "Edit this model in Blender"),
             1 => (FontAwesomeIcon.PaintBrush, "Edit this texture in your image editor"),
+            3 => (FontAwesomeIcon.Palette, "Open in the Material editor"),
             _ => (FontAwesomeIcon.Pen, "Send this animation to Blender"),
         };
 
@@ -72,6 +74,7 @@ internal sealed class HandoffActions
         {
             0 => new HandoffAction(icon, label, handoff.ModelBlock(row), () => Start(() => handoff.EditModel(row, mod))),
             1 => new HandoffAction(icon, label, handoff.TextureBlock(row), () => Start(() => handoff.EditTexture(row, mod))),
+            3 => new HandoffAction(icon, label, handoff.MaterialBlock(row), () => Start(() => handoff.EditMaterial(row, mod))),
             _ => new HandoffAction(icon, label, handoff.AnimationBlock(row), () => Start(() => handoff.SendAnimation(row, _owner))),
         };
     }

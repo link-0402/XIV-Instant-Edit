@@ -26,6 +26,11 @@ internal interface IModHandoff
 
     void EditTexture(ResourceView row, ActorView mod);
 
+    /// <summary>Why the row's material can't open in the Material window, or null when it can.</summary>
+    string? MaterialBlock(ResourceView row);
+
+    void EditMaterial(ResourceView row, ActorView mod);
+
     /// <summary>Why the row's animation can't go to Blender, or null when it can.</summary>
     string? AnimationBlock(ResourceView row);
 
