@@ -76,7 +76,7 @@ internal sealed class LibraryView
             _library.RefreshInstalled();
 
         ImGui.Spacing();
-        ImGui.TextColored(Theme.Muted, "Build a new mod by porting gear from another game, or open any mod from your Penumbra library to see what it is made of and change any of it.");
+        ImGui.TextColored(Theme.Muted, "Build a new mod from your own files, or open any mod from your Penumbra library to see what it is made of and change any of it.");
         ImGui.Spacing();
 
         DrawActions(penumbra);
@@ -128,7 +128,7 @@ internal sealed class LibraryView
             Title     = packed > 0 ? "Continue building" : "Build a new mod",
             Subtitle  = packed > 0
                 ? $"{(string.IsNullOrWhiteSpace(cfg.ModName) ? "Your modpack" : cfg.ModName)} · {packed} item(s)"
-                : "Port gear or a character feature from another game",
+                : "Gear, features, weapons or animations from your own files",
             Detail    = "Set it up from your own files, then build it into Penumbra",
             Icon      = FontAwesomeIcon.Hammer,
             IconColor = Theme.Accent,

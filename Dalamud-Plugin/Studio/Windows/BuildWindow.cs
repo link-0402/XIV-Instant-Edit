@@ -8,8 +8,8 @@ using InstantEdit.Studio.Windows.UI;
 namespace InstantEdit.Studio.Windows;
 
 /// <summary>
-/// The modpack being built: a new mod made by porting gear or character features from another
-/// game, set up from your own files and built into Penumbra in one go (see <see cref="BuildScreen"/>).
+/// The modpack being built: a new mod for gear, character features, weapons or animations, set up
+/// from your own files and built into Penumbra in one go (see <see cref="BuildScreen"/>).
 /// The modpack is kept in the settings while the window is closed.
 /// </summary>
 internal sealed class BuildWindow : Window, IDisposable

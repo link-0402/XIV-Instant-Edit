@@ -190,7 +190,7 @@ internal sealed class PackOverview
             _session.MarkDirty();
         }
         if (string.IsNullOrEmpty(description))
-            Gui.Tooltip($"Empty: \"Port of {_session.ModName}\" is used.");
+            Gui.Tooltip("Empty: the mod has no description.");
 
         string author = cfg.ModAuthor, version = cfg.ModVersion, website = cfg.ModWebsite;
         bool changed = false;

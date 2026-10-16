@@ -11,7 +11,8 @@ using InstantEdit.Studio.Windows.UI;
 namespace InstantEdit.Studio.Windows.Build;
 
 /// <summary>
-/// Build mode: a new mod made by porting gear or character features from another game. Laid out
+/// Build mode: a new mod made from your own files, for gear, character features, weapons or
+/// animations. Laid out
 /// like Edit mode — three regions under a toolbar, above a status bar:
 ///   left   – the mod the modpack builds, then every item in the pack, one tile each;
 ///   middle – a view switcher (Overview · Set-up · Add from game · Build) and the active view;
@@ -63,7 +64,7 @@ internal sealed class BuildScreen
     {
         (StageId.ModInfo, "Overview",      FontAwesomeIcon.BoxOpen, "The mod the modpack builds, and everything in it at a glance."),
         (StageId.Details, "Set-up",        FontAwesomeIcon.Sitemap, "The item picked on the left, as a tree: drop your files on its tiles."),
-        (StageId.Browse,  "Add from game", FontAwesomeIcon.Tshirt,  "Find gear or a character feature to port onto, and add it to the modpack."),
+        (StageId.Browse,  "Add from game", FontAwesomeIcon.Tshirt,  "Find what your files replace, and add it to the modpack."),
         (StageId.Build,   "Build",         FontAwesomeIcon.Hammer,  "Build the mod into Penumbra's mod folder, and see what was written."),
     };
 
@@ -116,21 +117,21 @@ internal sealed class BuildScreen
         }
         ImGui.SameLine();
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Faint, "port gear or a feature from another game, then build it into Penumbra");
+        ImGui.TextColored(Theme.Faint, "set up gear, features, weapons or animations, then build them into Penumbra");
 
-        float buttons = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.FileImport, "Import Sims 4 package")
-                      + Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.File, "New mod")
+        float buttons = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.FileImport, "Import package")
+                      + Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.File, "Start over")
                       + ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X * 2;
         Gui.AlignRight(buttons);
-        if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Import Sims 4 package",
-                "Pulls meshes and textures out of a Sims 4 .package and lays them out for the material editor."))
+        if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Import package",
+                "Pulls models and textures out of a Sims 4 .package or a Unity .unitypackage."))
             _host.ToggleSimsImport();
 
         ImGui.SameLine();
         bool empty = _session.Items.Count == 0 && string.IsNullOrWhiteSpace(_session.ModName);
         using (Gui.Disabled(empty || _builds.IsRunning))
         {
-            if (Gui.IconTextButton(FontAwesomeIcon.File, "New mod",
+            if (Gui.IconTextButton(FontAwesomeIcon.File, "Start over",
                     empty
                         ? "The modpack is already empty."
                         : "Starts over with an empty modpack, for a mod of its own. The mod built before stays in Penumbra as it is."))

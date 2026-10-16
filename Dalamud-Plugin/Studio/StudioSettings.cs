@@ -60,7 +60,7 @@ public sealed class StudioSettings
     /// <summary>User-edited mod name for the whole pack. Falls back to an auto-generated name when empty.</summary>
     public string ModName { get; set; } = string.Empty;
 
-    /// <summary>Description of the whole pack; empty falls back to "Port of {mod name}".</summary>
+    /// <summary>Description of the whole pack; empty is written as empty.</summary>
     public string ModDescription { get; set; } = string.Empty;
 
     /// <summary>

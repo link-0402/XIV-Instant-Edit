@@ -102,7 +102,7 @@ internal static class PortValidator
         // A feature port replaces a vanilla file; an id the game does not have replaces nothing.
         if (subject is FeatureSubject feature && !gameData.GetNativeRaces(subject).Contains(feature.Race))
             issues.Add(new(Severity.Error, itemTarget,
-                $"The game has no {subject.DisplayName} — there is nothing for this port to replace."));
+                $"The game has no {subject.DisplayName} — there is nothing for this item to replace."));
 
         bool hasModels = item.Models.Any(m => !string.IsNullOrWhiteSpace(m.SourcePath) || m.UseVariants || m.UseDummy) || subject.MultiRace && item.Models.Count > 0;
         if (!hasModels && item.Materials.Count == 0)
@@ -419,7 +419,7 @@ internal static class PortValidator
                 : string.Join(", ", shared.Select(x => x.Model.DisplayName));
             issues.Add(new(Severity.Info, new Target(TargetKind.Item, item.Key),
                 $"{subject.DisplayName}: its materials are written under {under} — that is where the game looks them up " +
-                $"for {forWhom}, so every race sharing them sees this port."));
+                $"for {forWhom}, so every race sharing them sees this mod."));
         }
         var byPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         for (int m = 0; m < item.Materials.Count; m++)

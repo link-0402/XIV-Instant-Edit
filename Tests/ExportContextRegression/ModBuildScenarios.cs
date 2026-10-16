@@ -18,7 +18,8 @@ internal static class ModBuildScenarios
         ExistingFolderIsRefused(root);              // writers-1/-2
         LeftoversAreRemoved(root);
         MetaIsReplacedWhole(root);
-        VariantNamesAreBuildWide();                // writers-3
+        EmptyDescriptionStaysEmpty(root);
+        VariantNamesAreBuildWide();              // writers-3
         MaterialLinksFollowTheirMaterials();        // models-1
         SamePathInAnotherOptionIsNoConflict();      // models-3
         FolderNamesWindowsCanStore();               // writers-7
@@ -71,6 +72,15 @@ internal static class ModBuildScenarios
         Require((string?)meta["Name"] == "Meta Mod" && meta["DefaultData"]?["Files"]?["chara/x.tex"] != null,
             "meta.json is written whole");
         Require(!File.Exists(Path.Combine(mod, "meta.json.tmp")), "no temp file is left beside meta.json");
+    }
+
+    private static void EmptyDescriptionStaysEmpty(string root)
+    {
+        var mod = Path.Combine(root, "No Description");
+        Directory.CreateDirectory(mod);
+        ModMetaWriter.Write(mod, "No Description", new ModCarrier(), Array.Empty<ModGroupOut>(), new ModMetaInfo { Description = "" });
+        var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "meta.json")))!;
+        Require((string?)meta["Description"] == "", "an empty pack description is written empty, not as \"Port of ...\"");
     }
 
     private static void VariantNamesAreBuildWide()

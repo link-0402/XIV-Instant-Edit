@@ -113,7 +113,7 @@ internal sealed class ModelInspector
                 _dyeVariants[item.Key] = dyes = _host.GameData.GetImcOverridesForcingV1(g.Item.Slot, g.Item.ModelId)?.Count ?? 0;
             Gui.Label("Dye variants");
             ImGui.TextUnformatted(dyes > 0 ? dyes.ToString() : "—");
-            Gui.Tooltip("Each variant gets an Imc override pointing it at your material, so the port shows whichever one is equipped.");
+            Gui.Tooltip("Each variant gets an Imc override pointing it at your material, so the mod shows whichever one is equipped.");
         }
 
         DrawVanillaMaterials(item);
@@ -226,7 +226,7 @@ internal sealed class ModelInspector
                 0 => "One .mdl file, copied in as the default.",
                 1 => "Several .mdl files \u2014 each becomes one option of a group in the mod, named after the file.",
                 _ => "No file of your own: the build generates this race's model from its vanilla skeleton, "
-                   + "with one empty mesh part per material. Enough to load the port in game, and a starting point to model over.",
+                   + "with one empty mesh part per material. Enough to load the mod in game, and a starting point to model over.",
             });
         }
 
