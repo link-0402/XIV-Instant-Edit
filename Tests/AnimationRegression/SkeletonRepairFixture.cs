@@ -124,6 +124,28 @@ internal static class SkeletonRepairFixture
         var closestRepair = AnimationSkeletonIndex.Rank(channels with { ReferenceBones = source.Bones.Length + 1 }, [candidate], source, game);
         check(closestRepair is { State: SkeletonResolutionState.Incompatible, Selected: null } && closestRepair.Candidates.IsEmpty,
             "an incompatible reference pose cannot be offered as a repair source that the decoder will reject");
+        // YAS's Posing variant has General Usage's bones with other IVCS toe and genital rests; a
+        // bake sampled on it freezes those rests into the output, so it is never picked or offered.
+        SkeletonCandidate In(SkeletonCandidate c, string file, string? relative = null) =>
+            c with { Source = c.Source with { Resource = c.Source.Resource with { ResolvedPath = file, RelativePath = relative ?? file } } };
+        check(AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\YAS\Yet Another Skeleton\Posing\chara\human\c0801\skeleton\base\b0001\skl_c0801b0001.sklb", "")) &&
+              AnimationSkeletonIndex.IsPosingFile(new(game, "synced.sklb", "", RelativePath: "files/posing/skl.sklb")) &&
+              !AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\YAS\Yet Another Skeleton\Animation_General Usage\chara\skl_c0801b0001.sklb", "")) &&
+              !AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\Some mod\Posing.sklb", "")),
+            "a posing skeleton is one in a folder named Posing, not a file of that name");
+        var posingFile = In(other, @"G:\Penumbra\YAS\Posing\skl.sklb");
+        var leftOut = AnimationSkeletonIndex.Rank(channels, [posingFile, candidate], source, game);
+        check(leftOut is { State: SkeletonResolutionState.Matched } && leftOut.Selected!.Skeleton.Fingerprint == source.Fingerprint &&
+              leftOut.Candidates.All(c => c.Skeleton.Fingerprint != "different"),
+            "a posing skeleton is neither picked nor offered when another skeleton fits as well");
+        var syncedCopy = In(other, @"G:\Penumbra\Someone@World\skl.sklb");
+        check(AnimationSkeletonIndex.Rank(channels, [syncedCopy, candidate], source, game,
+                posing: AnimationSkeletonIndex.PosingSkeletons([posingFile])).Selected?.Skeleton.Fingerprint == source.Fingerprint,
+            "a byte-identical copy of a posing skeleton outside its Posing folder is left out too");
+        check(AnimationSkeletonIndex.Rank(channels, [posingFile, candidate], source, game, AnimationSkeletonIndex.SelectionId(posingFile)).Selected?.Skeleton.Fingerprint == source.Fingerprint,
+            "an earlier choice of a posing skeleton falls back to the skeleton that fits");
+        check(AnimationSkeletonIndex.Rank(channels, [posingFile], source, game).Selected?.Skeleton.Fingerprint == "different",
+            "a posing skeleton is still used when no other skeleton fits");
         check(AnimationSkeletonIndex.Rank(channels, [candidate, other], source, game, "removed").State == SkeletonResolutionState.Ambiguous,
             "changed source fingerprints invalidate a previous manual selection");
         var changedBytes = candidate with { Source = candidate.Source with { Resource = candidate.Source.Resource with { Hash = "changed-content" } } };
@@ -176,6 +198,18 @@ internal static class SkeletonRepairFixture
         check(standards.Select(s => s.Standard).SequenceEqual([SkeletonStandard.Vanilla, SkeletonStandard.Ivcs, SkeletonStandard.IvcsYas]) &&
               standards[0].Skeleton == rigs.Game && standards[1].Skeleton == rigs.Ivcs && standards[2].Skeleton == rigs.Yas && standards[2].Origin == "yas.sklb",
             "standards are the game's skeleton and the main IVCS and YAS layouts mapped to the live path; the all-in-one rig is none");
+        var yasPosing = rigs.Yas with { Fingerprint = "yas-posing" };
+        var posingStandards = AnimationSkeletonIndex.Standards(rigs.Game, [
+            Mapped(yasPosing, @"A mod\Posing\skl.sklb"),
+            Mapped(yasPosing, @"B mod\Posing\skl.sklb"),
+            Mapped(yasPosing, @"Someone@World\skl.sklb"),
+            Mapped(rigs.Yas, @"Z mod\Animation_General Usage\skl.sklb"),
+        ], live);
+        check(posingStandards.Last() is { Standard: SkeletonStandard.IvcsYas } yasStandard && yasStandard.Skeleton == rigs.Yas,
+            "the IVCS + YAS standard is never the Posing variant, though more files and earlier paths hold it");
+        check(AnimationSkeletonIndex.Standards(rigs.Game, [Mapped(yasPosing, @"A mod\Posing\skl.sklb")], live)
+                .All(s => s.Standard != SkeletonStandard.IvcsYas),
+            "with only the Posing variant found there is no IVCS + YAS standard to repair onto");
         check(AnimationSkeletonIndex.Standards(null, [Mapped(rigs.Ivcs, "ivcs.sklb")], live).IsEmpty &&
               AnimationSkeletonIndex.Standards(rigs.Game, [], live).Single().Standard == SkeletonStandard.Vanilla,
             "without the game's own skeleton there is no standard; without mods there is only the game's");

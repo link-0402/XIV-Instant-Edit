@@ -40,7 +40,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             {
                 Check(token);
                 validateRuntime();
-                var created = new Session(native, source, skeleton, clip, request, path + ".motion");
+                var created = new Session(native, source, skeleton, clip, request, path + ".motion", keepReferenceChannels: true);
                 active.Add(created); return created;
             });
             status("Checking the original animation round trip");
@@ -179,6 +179,11 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private AnimationNative.Document? doc, skeletonDoc, verification;
         private AnimationNative.Sampler? sampler, rawSampler, verifySampler;
         private AnimationNative.Sampler? targetSampler;
+        // The source sampled again on a copy of its skeleton with a perturbed reference pose, and which bones'
+        // channels follow the reference (see AnimationReferenceChannels): a bake only, of a quantized or
+        // predictive clip.
+        private AnimationNative.Sampler? referenceSampler;
+        private readonly AnimationReferenceChannels? referenceChannels;
         private hkaAnimationBinding* outputMetadata;
         private readonly AnimationRetarget? retarget;
         private readonly SkeletonDescription sourceDescription = null!, targetDescription = null!;
@@ -215,7 +220,12 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         public float Progress => (float)frame / frames;
         public float ValidationProgress => (float)validationFrame / frames;
 
-        public Session(AnimationNative native, byte[] papBytes, byte[] sklb, AnimationClip clip, AnimationBakeRequest request, string motionPath)
+        /// <param name="keepReferenceChannels">
+        /// Whether the build leaves channels that follow the skeleton's reference pose trackless; a bake sets it.
+        /// A decode or a motion from Blender has no use for the second sampling it takes.
+        /// </param>
+        public Session(AnimationNative native, byte[] papBytes, byte[] sklb, AnimationClip clip, AnimationBakeRequest request, string motionPath,
+            bool keepReferenceChannels = false)
         {
             this.native = native; this.clip = clip; this.request = request;
             originalPrints = []; originalMotionPrints = []; this.motionPath = motionPath;
@@ -262,6 +272,12 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 var rawBinding = arena.BorrowBinding(originalBinding);
                 rawBinding->BlendHint.Storage = 0;
                 rawSampler = new AnimationNative.Sampler(sourceSkeleton, rawBinding);
+                if (keepReferenceChannels && AnimationReferenceChannels.Applies(originalAnimation->Type))
+                {
+                    var perturbed = AnimationSkeleton.Materialize(AnimationReferenceChannels.Perturbed(sourceDescription), arena);
+                    referenceSampler = new AnimationNative.Sampler(perturbed, arena.BorrowBinding(originalBinding));
+                    referenceChannels = new AnimationReferenceChannels(sourceDescription.Bones.Length);
+                }
                 outputMetadata = arena.BorrowBinding(originalBinding);
                 if (retarget != null)
                 {
@@ -358,6 +374,13 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 token.ThrowIfCancellationRequested();
                 sampler!.Sample(SourceTime(frame)); rawSampler!.Sample(SourceTime(frame));
                 var sourceValues = new ReadOnlySpan<hkQsTransformf>(sampler.Transforms, sampler.BoneCount).ToArray();
+                if (referenceChannels != null)
+                {
+                    referenceSampler!.Sample(SourceTime(frame));
+                    referenceChannels.Observe(sourceValues, new(sampler.Skeleton->ReferencePose.Data, sampler.BoneCount),
+                        new(referenceSampler.Transforms, referenceSampler.BoneCount),
+                        new(referenceSampler.Skeleton->ReferencePose.Data, referenceSampler.BoneCount));
+                }
                 var mappedValues = retarget == null ? sourceValues : retarget.Map(sourceValues.Select(AnimationSkeleton.Transform).ToArray())
                     .Select(AnimationSkeleton.Transform).ToArray();
                 targetSampler!.SetPose(mappedValues);
@@ -592,6 +615,13 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             var tracks = new List<short>(retarget?.MapTracks(sourceTracks) ?? sourceTracks);
             if (tracks.Distinct().Count() != tracks.Count) throw new InvalidDataException("Duplicate track bindings are unsupported.");
             tracks.AddRange(affected.Order().Where(i => !tracks.Contains((short)i)).Select(i => (short)i));
+            // Channels the source left to the skeleton's reference pose stay trackless, so they follow
+            // whatever skeleton plays the clip, as the source did, rather than freezing at the rest pose
+            // of the skeleton sampled here. A bone an edit moved, or one with stored parts, keeps its track.
+            if (referenceChannels != null)
+                AnimationReferenceChannels.Drop(tracks, expected,
+                    new ReadOnlySpan<hkQsTransformf>(skeleton->ReferencePose.Data, skeleton->Bones.Length),
+                    referenceChannels.Followers.Select(b => retarget?.BoneMap[b] ?? b));
             // Bones the animation never moved get no track, repair included: a track per
             // bone of the target skeleton would bind bones no animation should drive.
             // Unticked bones get no track at all, whatever added them above, so nothing
@@ -632,6 +662,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             binding->Animation = new hkRefPtr<hkaAnimation> { ptr = final };
             // Release samplers before redirecting pointers in the resource graph.
             rawSampler!.Dispose(); rawSampler = null; sampler!.Dispose(); sampler = null;
+            referenceSampler?.Dispose(); referenceSampler = null;
             doc!.Container->Animations[clip.BindingIndex] = new hkRefPtr<hkaAnimation> { ptr = final };
             doc.Container->Bindings[clip.BindingIndex] = new hkRefPtr<hkaAnimationBinding> { ptr = binding };
             replaced = true;
@@ -677,6 +708,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         {
             verifySampler?.Dispose(); verifySampler = null; verification?.Dispose(); verification = null;
             rawSampler?.Dispose(); rawSampler = null; sampler?.Dispose(); sampler = null;
+            referenceSampler?.Dispose(); referenceSampler = null;
             targetSampler?.Dispose(); targetSampler = null;
             if (replaced && doc != null)
             {
