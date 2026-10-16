@@ -8,7 +8,7 @@ namespace InstantEdit.Studio.Services;
 
 internal enum BuildOutcome { Ok, Skipped, Failed }
 
-internal enum BuildCategory { Model, Texture, Variant, Material, Meta }
+internal enum BuildCategory { Model, Texture, Variant, Material, Meta, Animation }
 
 /// <summary>
 /// One file (or one attempted file) the build produced. <see cref="SubjectKey"/>/<see cref="ItemName"/>
@@ -80,6 +80,9 @@ internal sealed class ItemBuildRequest
     /// </summary>
     public IReadOnlyDictionary<string, (string GamePath, MtrlInfo Material)?> VanillaTemplates { get; init; }
         = new Dictionary<string, (string GamePath, MtrlInfo Material)?>();
+
+    /// <summary>An animation item's files, each at its game path (planned on the render thread with the PAP load table); null for other items.</summary>
+    public IReadOnlyList<Animation.AnimationFilePlan>? AnimationFiles { get; init; }
 }
 
 /// <summary>

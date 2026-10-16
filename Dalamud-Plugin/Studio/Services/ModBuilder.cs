@@ -308,6 +308,11 @@ internal sealed class ModBuilder
     private void RunItem(ItemBuildRequest item, string modPath, BuildReport report, HashSet<string> writtenMaterials, CancellationToken ct)
     {
         var subject = item.Subject;
+        if (subject is AnimationSubject)
+        {
+            RunAnimationItem(item, modPath, report, ct);
+            return;
+        }
 
         // What this item has to claim in the Eqdp tables, merged per race and per place: the model
         // bit for every race a model is written for, and the material bit for the base race its
@@ -502,6 +507,15 @@ internal sealed class ModBuilder
     // Progress
     // ─────────────────────────────────────────────────────────────────────────
 
+    /// <summary>An animation item's files, copied as they are to every path planned for them, into the item's place.</summary>
+    private void RunAnimationItem(ItemBuildRequest item, string modPath, BuildReport report, CancellationToken ct)
+    {
+        var written = Animation.AnimationFileWriter.Write(item.AnimationFiles ?? Array.Empty<Animation.AnimationFilePlan>(), modPath,
+            gamePath => RelFor(item.Option, gamePath), report, new Target(TargetKind.Item, item.Subject.Key), Step, ct);
+        foreach (var (gamePath, rel) in written)
+            Place(item.Option, gamePath, rel);
+    }
+
     private void Step(string current)
     {
         _job.Report(new BuildProgress(_done, _total, current));
@@ -514,6 +528,7 @@ internal sealed class ModBuilder
         int steps = 1; // meta.json
         foreach (var item in _req.Items)
         {
+            steps += item.AnimationFiles?.Count ?? 0;
             steps += item.ModelMaterialSlots.Count * item.MaterialRaces.Count;
             foreach (var model in item.Models)
                 steps += model.UseVariants && !model.UseDummy ? Math.Max(1, model.VariantPaths.Count) : 1;

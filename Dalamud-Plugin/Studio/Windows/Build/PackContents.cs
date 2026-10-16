@@ -235,7 +235,7 @@ internal sealed class PackContents
             Indent    = indent,
             Title     = subject.DisplayName,
             Subtitle  = $"{subject.KindLabel} · {subject.IdDisplay}",
-            Detail    = $"{item.Models.Count} race model(s) · {item.Materials.Count} material(s)",
+            Detail    = item.Summary(withTextures: false),
             Icon      = GameIcons.Glyph(subject),
             IconColor = item.HasWork ? Theme.Accent : Theme.Muted,
             DrawThumb = icon != 0 ? side => GameIcons.Draw(icon, side) : null,

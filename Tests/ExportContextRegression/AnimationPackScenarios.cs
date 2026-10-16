@@ -24,6 +24,55 @@ internal static class AnimationPackScenarios
         OldSettingsHaveNoAnimations();
         AnimationSubjectKeys();
         TimelineRefsSayWhatCanBeReplaced();
+        AnimationFileCheckReadsMagic(root);
+        AnimationItemIsCopiedToEveryPath(root);
+    }
+
+    private static void AnimationFileCheckReadsMagic(string root)
+    {
+        var pap = Path.Combine(root, "good.pap");
+        var tmb = Path.Combine(root, "good.tmb");
+        var junk = Path.Combine(root, "junk.pap");
+        File.WriteAllBytes(pap, "pap \u0001\u0002"u8.ToArray());
+        File.WriteAllBytes(tmb, "TMLB\u0001\u0002"u8.ToArray());
+        File.WriteAllBytes(junk, "RIFF\u0001\u0002"u8.ToArray());
+        Require(AnimationFileCheck.Problem(pap, tmb: false) == null, "a file starting with \"pap \" is a PAP");
+        Require(AnimationFileCheck.Problem(tmb, tmb: true) == null, "a file starting with TMLB is a TMB");
+        Require(AnimationFileCheck.Problem(junk, tmb: false) == "Not a .pap file.", "anything else is not a PAP");
+        Require(AnimationFileCheck.Problem(pap, tmb: true) == "Not a .tmb file.", "a PAP is not a TMB");
+        Require(AnimationFileCheck.Problem(Path.Combine(root, "missing.pap"), tmb: false) == "File not found.", "a missing file says so");
+    }
+
+    private static void AnimationItemIsCopiedToEveryPath(string root)
+    {
+        var source = Path.Combine(root, "joy.pap");
+        var bytes = "pap \u0001\u0002\u0003"u8.ToArray();
+        File.WriteAllBytes(source, bytes);
+        var modRoot = Path.Combine(root, "mods");
+        Directory.CreateDirectory(modRoot);
+
+        var target = new AnimationTarget(0x2000_0010, "Joy", 0, "/joy", new[] { new AnimationTimelineRef(3, "emote/joy", "joy", true, null) });
+        var plans = new[]
+        {
+            new AnimationFilePlan(source, "chara/human/c0101/animation/a0001/bt_common/emote/joy.pap", new[] { "0101" }),
+            new AnimationFilePlan(source, "chara/human/c0201/animation/a0001/bt_common/emote/joy.pap", new[] { "0201" }),
+        };
+        var mod = Path.Combine(modRoot, "Joy Mod");
+        var report = new InstantEdit.Studio.Services.BuildReport { ModName = "Joy Mod", ModPath = mod, ItemsSummary = target.Name };
+        var withMissing = plans.Append(new AnimationFilePlan(Path.Combine(root, "gone.pap"), "chara/human/c0301/animation/a0001/bt_common/emote/joy.pap", new[] { "0301" })).ToList();
+        var steps = 0;
+        var written = AnimationFileWriter.Write(withMissing, mod, gamePath => $"Option/{gamePath}", report,
+            new Target(TargetKind.Item, target.Key), _ => steps++, CancellationToken.None);
+
+        foreach (var plan in plans)
+        {
+            var file = Path.Combine(mod, "Option", plan.GamePath.Replace('/', Path.DirectorySeparatorChar));
+            Require(File.Exists(file) && File.ReadAllBytes(file).SequenceEqual(bytes), $"{plan.GamePath} holds the dropped file, in the item's place");
+        }
+        Require(written.Select(w => w.GamePath).SequenceEqual(plans.Select(p => p.GamePath)) && written.All(w => w.Rel.StartsWith("Option/", StringComparison.Ordinal)),
+            "every copied file is returned with its path in the mod, for meta.json");
+        Require(report.Failed == 1 && report.Entries.Single(e => e.Outcome == InstantEdit.Studio.Services.BuildOutcome.Failed).Detail == "file not found" && steps == 3,
+            "a source that is gone is reported as failed, and every plan is a progress step");
     }
 
     private static void TimelineRefsSayWhatCanBeReplaced()

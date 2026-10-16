@@ -99,6 +99,13 @@ internal static class PortValidator
         var subject = item.Subject;
         var itemTarget = new Target(TargetKind.Item, item.Key);
 
+        if (item.Animation is { } animation)
+        {
+            ValidateAnimation(item, animation, itemTarget, issues);
+            ValidateAcrossItems(item, WrittenFiles(session, item, gameData), writtenBy, writtenPaths, issues);
+            return;
+        }
+
         // A feature port replaces a vanilla file; an id the game does not have replaces nothing.
         if (subject is FeatureSubject feature && !gameData.GetNativeRaces(subject).Contains(feature.Race))
             issues.Add(new(Severity.Error, itemTarget,
@@ -120,6 +127,23 @@ internal static class PortValidator
         ValidateMaterials(item, gameData, templates, images, issues);
         ValidateWrittenMaterials(item, session, gameData, issues);
         ValidateAcrossItems(item, WrittenFiles(session, item, gameData), writtenBy, writtenPaths, issues);
+    }
+
+    /// <summary>An animation item: something to write, and every file it names is the kind its row takes.</summary>
+    private static void ValidateAnimation(PortItem item, AnimationSetup animation, Target itemTarget, List<PortIssue> issues)
+    {
+        if (!animation.HasWork)
+        {
+            issues.Add(new(Severity.Warning, itemTarget, $"{item.Subject.DisplayName}: drop a .pap on at least one animation."));
+            return;
+        }
+        foreach (var timeline in animation.Timelines)
+        {
+            if (!string.IsNullOrWhiteSpace(timeline.PapSource) && Animation.AnimationFileCheck.Problem(timeline.PapSource, tmb: false) is { } pap)
+                issues.Add(new(Severity.Error, itemTarget, $"{item.Subject.DisplayName} / {timeline.Label} .pap: {pap}"));
+            if (!string.IsNullOrWhiteSpace(timeline.TmbSource) && Animation.AnimationFileCheck.Problem(timeline.TmbSource, tmb: true) is { } tmb)
+                issues.Add(new(Severity.Error, itemTarget, $"{item.Subject.DisplayName} / {timeline.Label} .tmb: {tmb}"));
+        }
     }
 
     private static void ValidateModels(PortItem item, GameDataService gameData, ModelFileCache models, List<PortIssue> issues)
@@ -455,6 +479,13 @@ internal static class PortValidator
     {
         var subject = item.Subject;
         var files = new List<(string Place, string Path, Target Target)>();
+
+        if (item.Animation is { } animation)
+        {
+            foreach (var plan in session.AnimationPlan(animation))
+                files.Add((session.PlaceOf(item), plan.GamePath, new Target(TargetKind.Item, item.Key)));
+            return files;
+        }
 
         for (int i = 0; i < item.Models.Count; i++)
         {

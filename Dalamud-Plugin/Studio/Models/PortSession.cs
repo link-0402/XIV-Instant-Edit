@@ -792,6 +792,20 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         foreach (var source in Items)
         {
             var subject   = source.Subject;
+            if (source.Animation is { } animation)
+            {
+                items.Add(new ItemBuildRequest
+                {
+                    Option             = PlaceOf(source),
+                    Subject            = subject,
+                    Models             = new List<RaceModelEntry>(),
+                    Materials          = new List<MaterialSetup>(),
+                    ModelMaterialSlots = new List<ModelMaterialSlot>(),
+                    NativeRaces        = new HashSet<RaceGender>(),
+                    AnimationFiles     = AnimationPlan(animation),
+                });
+                continue;
+            }
             var models    = source.Models.Select(x => x.Clone()).ToList();
             var materials = source.Materials.Select(x => x.Clone()).ToList();
 
@@ -926,6 +940,13 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             Groups = Groups.Select(g => g.Clone()).ToList(),
         };
     }
+
+    /// <summary>Where an animation item's files go for every race it is written for (see <see cref="Services.Animation.AnimationPathPlanner"/>).</summary>
+    public IReadOnlyList<Services.Animation.AnimationFilePlan> AnimationPlan(AnimationSetup animation)
+        => Services.Animation.AnimationPathPlanner.Plan(animation, AllRaceCodes, _host.GameData.PapResolver());
+
+    /// <summary>Every playable race's code, in the order the race lists show them.</summary>
+    public static IReadOnlyList<string> AllRaceCodes { get; } = RaceInfo.AllRaces.Select(r => r.RaceCode).ToList();
 
     private Guid GetOrCreateModId()
     {

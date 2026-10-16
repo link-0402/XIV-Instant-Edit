@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace InstantEdit.Studio.Models;
 
@@ -31,6 +32,18 @@ internal sealed class PortItem
         for (int i = 0; i < Materials.Count; i++)
             slots.Add(new ModelMaterialSlot { MaterialIndex = i });
         return slots;
+    }
+
+    /// <summary>One line on what is set up: models and materials (and textures), or an animation's timelines and files.</summary>
+    public string Summary(bool withTextures)
+    {
+        if (Animation is { } animation)
+        {
+            int files = animation.Timelines.Sum(t => (string.IsNullOrWhiteSpace(t.PapSource) ? 0 : 1) + (string.IsNullOrWhiteSpace(t.TmbSource) ? 0 : 1));
+            return $"{animation.Timelines.Count} animation(s) · {files} file(s)";
+        }
+        var text = $"{Models.Count} {(Subject.HasRaces ? "race model(s)" : "model(s)")} · {Materials.Count} material(s)";
+        return withTextures ? $"{text} · {Materials.Sum(m => m.Textures.Count)} texture(s)" : text;
     }
 
     /// <summary>Whether anything would be built for this item.</summary>
