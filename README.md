@@ -15,12 +15,12 @@ Penumbra mods.
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
 - **Substance Painter**: paint directly on any model with the exact textures you're currently using and save your edits back to the game with just one click. "Paint my Skin" under quick actions sends your entire character with your configured small clothes body, letting you easily create custom skin, tattoo and makeup mods.\
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
-- **Animations**: the listener finds what your character plays; open it in the timeline, or load any emote, idle,
-  sit, movement track or expression onto your GPose character from there. Edit its length, sounds, expressions,
-  lip sync, effects and props, with a preview in GPose. Change how it moves with bone layers, shown live on your
-  character in GPose, from LivePose adjustments, .livepose and .pose files, your posed character or other
-  animations. Give bones back to physics, repair the skeleton when you save, and send animations or a recorded live
-  pose to Blender.
+- **Animations**: the listener finds the animation your character currently plays. Open them in the timeline, or load any emote, idle,\
+  sit, movement track or expression onto your GPose character from there. Edit the animations length, sounds, expressions,\
+  lip sync, effects and props, with a preview in GPose. Change how the animation moves your character through bone layers, shown live on your\
+  character in GPose, from LivePose adjustments, .livepose and .pose files, your posed character or other\
+  animations. Give bones back to physics, repair the skeleton when you save, and send animations or a recorded live\
+  pose to Blender.\
   [Editing](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Animations) ·
   [Timeline](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-the-Timeline) ·
   [In Blender](https://github.com/link-0402/XIV-Instant-Edit/wiki/Animations-in-Blender)
