@@ -40,6 +40,8 @@ internal sealed partial class AnimationEditService : IDisposable
     /// <summary>Whether the most recent operation of any kind ended in an error.</summary>
     public bool LastFailed { get; private set; }
     public bool CanReapplyOffsets => offsetBackup != null;
+    /// <summary>How many days edit records are kept (Settings > Cache).</summary>
+    public int RecordDays => (int)Math.Round(journals.CurrentRetention.TotalDays);
     public void StartObservation() => Observer.Start();
     public void StopObservation() => Observer.Stop();
 
@@ -58,10 +60,10 @@ internal sealed partial class AnimationEditService : IDisposable
         var recoveryRoot = pi.ConfigDirectory.FullName;
         try { AnimationJournalStore.ImportLegacy(TextureFiles.CacheRootFor(configuration.TextureCacheDirectory), recoveryRoot); }
         catch (Exception error) { log.Warning(error, "Could not move animation recovery records out of the cache."); }
-        journals = new AnimationJournalStore(recoveryRoot, message => log.Warning("{Message}", message));
+        journals = new AnimationJournalStore(recoveryRoot, message => log.Warning("{Message}", message), () => configuration.CacheRetention);
         recovery = journals.Load().ToImmutableArray();
         offsetBackup = journals.LoadOffsetBackup();
-        commits = new AnimationCommitService(animationMods, resources, new ModelBackupStore(recoveryRoot), journals, backups);
+        commits = new AnimationCommitService(animationMods, resources, new ModelBackupStore(recoveryRoot, () => configuration.CacheRetention), journals, backups);
         baker = new AnimationBakeService(native, framework);
         skeletons = new AnimationSkeletonIndex(animationMods, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
         Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log);

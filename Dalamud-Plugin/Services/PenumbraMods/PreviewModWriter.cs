@@ -44,6 +44,9 @@ internal sealed class PreviewModWriter
         _redrawObject = ipc.RedrawObject;
     }
 
+    /// <summary> How many days the backups of written mod files are kept (Settings > Cache). </summary>
+    public int BackupDays => _backups.RetentionDays;
+
     /// <summary> Preview mods, and the mods holding fixes to game files, win over the mods they patch. </summary>
     internal const int PreviewModPriority = 1_000_000;
 

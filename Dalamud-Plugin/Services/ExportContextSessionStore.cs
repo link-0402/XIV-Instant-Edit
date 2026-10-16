@@ -11,6 +11,7 @@ public sealed class ExportContextSessionStore
 {
     private const string Schema = "instant-edit.context-session";
     private const int Version = 1;
+    /// <summary>How long inactive contexts are kept unless the store is given the Settings value.</summary>
     public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
 
     private sealed record StoredUpsert(
@@ -41,6 +42,10 @@ public sealed class ExportContextSessionStore
     private readonly Dictionary<string, StoredUpsert> _sessionUpserts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, StoredTombstone> _sessionTombstones = new(StringComparer.Ordinal);
     private readonly DateTimeOffset _createdAtUtc;
+    private readonly Func<TimeSpan>? _retention;
+
+    /// <summary>The days set in Settings, or <see cref="Retention"/>.</summary>
+    public TimeSpan CurrentRetention => _retention?.Invoke() ?? Retention;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -53,8 +58,10 @@ public sealed class ExportContextSessionStore
         string configDirectory,
         string sessionId,
         Action<string, Exception?>? log = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        Func<TimeSpan>? retention = null)
     {
+        _retention = retention;
         if (string.IsNullOrWhiteSpace(configDirectory))
             throw new ArgumentException("A plugin configuration directory is required.", nameof(configDirectory));
         if (!Guid.TryParseExact(sessionId, "N", out _))
@@ -134,7 +141,7 @@ public sealed class ExportContextSessionStore
         {
             Directory.CreateDirectory(_directory);
             var current = now ?? DateTimeOffset.UtcNow;
-            var cutoff = current - Retention;
+            var cutoff = current - CurrentRetention;
             var events = new List<(DateTimeOffset Timestamp, int Kind, PersistedExportContext? Context, string Id)>();
 
             foreach (var path in Directory.EnumerateFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
@@ -190,7 +197,7 @@ public sealed class ExportContextSessionStore
         {
             Directory.CreateDirectory(_directory);
             var current = now ?? DateTimeOffset.UtcNow;
-            var cutoff = current - Retention;
+            var cutoff = current - CurrentRetention;
             var next = contexts.ToDictionary(item => item.ContextId, StringComparer.Ordinal);
 
             foreach (var expired in next.Where(pair => pair.Value.LastTouchedAtUtc < cutoff)
@@ -255,7 +262,7 @@ public sealed class ExportContextSessionStore
 
     private void Cleanup(DateTimeOffset now)
     {
-        var cutoff = now - Retention;
+        var cutoff = now - CurrentRetention;
         foreach (var path in Directory.EnumerateFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
         {
             if (string.Equals(path, _sessionPath, StringComparison.OrdinalIgnoreCase))

@@ -61,7 +61,7 @@ internal sealed partial class ModBackupStore
     public const string FolderName = "mod-backups";
     public const string JournalName = "ModBackups.json";
 
-    /// <summary>How long the automatic cache clean-up keeps an operation's backups.</summary>
+    /// <summary>How long the automatic cache clean-up keeps an operation's backups by default (Settings can keep them longer).</summary>
     public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
@@ -202,16 +202,18 @@ internal sealed partial class ModBackupStore
     }
 
     /// <summary>
-    /// Forgets operations older than <see cref="Retention"/> and deletes the copies nothing still
-    /// listed needs, when they are older than that too. Nothing is deleted while the journal couldn't be read.
+    /// Forgets operations older than <paramref name="retention"/> (default <see cref="Retention"/>) and deletes
+    /// the copies nothing still listed needs, when they are older than that too. Nothing is deleted while the
+    /// journal couldn't be read.
     /// </summary>
-    public void Expire(DateTime now, string cacheRoot)
+    public void Expire(DateTime now, string cacheRoot, TimeSpan? retention = null)
     {
+        var keep = retention ?? Retention;
         lock (_lock)
         {
             if (LoadError.Length > 0)
                 return;
-            var removed = _journal.Entries.RemoveAll(entry => now - entry.At > Retention);
+            var removed = _journal.Entries.RemoveAll(entry => now - entry.At > keep);
             if (removed > 0)
                 Save();
 
@@ -227,7 +229,7 @@ internal sealed partial class ModBackupStore
                     continue;
                 try
                 {
-                    if (now - File.GetLastWriteTimeUtc(copy) > Retention)
+                    if (now - File.GetLastWriteTimeUtc(copy) > keep)
                         File.Delete(copy);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

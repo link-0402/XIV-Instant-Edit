@@ -66,11 +66,11 @@ internal sealed class GameFileExportService(GameFileBrowserService browser, Mode
 
     /// <summary>
     /// Automatic cleanup of the exports in the cache folder <paramref name="cacheRoot"/>: removes the
-    /// files no export has written for <see cref="GameExportPaths.CacheRetention"/>. Skipped while an
-    /// export runs (the next cleanup gets them), and blocks exports while it runs. Throws when the
-    /// folder isn't a valid Instant Edit cache.
+    /// files no export has written for <paramref name="retention"/> (default <see cref="GameExportPaths.CacheRetention"/>).
+    /// Skipped while an export runs (the next cleanup gets them), and blocks exports while it runs. Throws
+    /// when the folder isn't a valid Instant Edit cache.
     /// </summary>
-    public (int Files, long Bytes) CleanCache(string cacheRoot)
+    public (int Files, long Bytes) CleanCache(string cacheRoot, TimeSpan? retention = null)
     {
         var folder = GameExportPaths.CacheExportFolder(cacheRoot);
         if (!Directory.Exists(folder))
@@ -85,7 +85,7 @@ internal sealed class GameFileExportService(GameFileBrowserService browser, Mode
         }
         try
         {
-            return GameExportPaths.Clean(folder, DateTime.UtcNow - GameExportPaths.CacheRetention, cleanup.Token);
+            return GameExportPaths.Clean(folder, DateTime.UtcNow - (retention ?? GameExportPaths.CacheRetention), cleanup.Token);
         }
         finally
         {

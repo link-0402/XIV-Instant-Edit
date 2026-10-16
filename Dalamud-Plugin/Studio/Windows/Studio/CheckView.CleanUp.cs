@@ -165,7 +165,7 @@ internal sealed partial class CheckView
     {
         if (_session.Project is not { } project)
             return;
-        Gui.HintWrapped("What fixes and clean-up changed in this mod, for a week. Restoring puts back the files that still hold what the change left; files changed since are left alone.");
+        Gui.HintWrapped("What fixes and clean-up changed in this mod, kept as long as Settings > Cache says. Restoring puts back the files that still hold what the change left; files changed since are left alone.");
         if (_host.Backups.LoadError is { Length: > 0 } error)
             ImGui.TextColored(Theme.Warn, error);
         var entries = _host.Backups.For(project.FolderPath, project.Meta.Identifier ?? Guid.Empty);

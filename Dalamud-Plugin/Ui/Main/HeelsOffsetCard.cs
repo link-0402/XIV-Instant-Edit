@@ -91,7 +91,7 @@ internal sealed class HeelsOffsetCard
 
         if (result.Written)
         {
-            HeelsText(Theme.Success, $"Wrote {result.Plan.Attribute} into the model{Replacing(measurement)}. The old file is backed up for a week.");
+            HeelsText(Theme.Success, $"Wrote {result.Plan.Attribute} into the model{Replacing(measurement)}. The old file is backed up for {_config.CacheRetentionDays} days.");
             using (ImRaii.Disabled(service.Busy))
             {
                 if (ImGui.SmallButton("Undo##quick-heels-undo"))

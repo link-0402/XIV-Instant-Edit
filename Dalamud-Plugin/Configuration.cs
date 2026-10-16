@@ -44,6 +44,22 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary>Automatically remove stale model cache jobs and inactive texture sessions.</summary>
     public bool AutomaticCacheCleanup { get; set; } = true;
 
+    public const int MinCacheCleanupDays = 7;
+    public const int MaxCacheCleanupDays = 90;
+
+    /// <summary>
+    /// Days backups (model, texture-optimize, mod clean-up), Game Files exports in the cache folder,
+    /// export contexts and animation edit records are kept (<see cref="MinCacheCleanupDays"/> to <see cref="MaxCacheCleanupDays"/>).
+    /// </summary>
+    public int CacheCleanupDays { get; set; } = MinCacheCleanupDays;
+
+    /// <summary> <see cref="CacheCleanupDays"/>, clamped to its range. </summary>
+    public int CacheRetentionDays => Math.Clamp(CacheCleanupDays, MinCacheCleanupDays, MaxCacheCleanupDays);
+
+    public TimeSpan CacheRetention => TimeSpan.FromDays(CacheRetentionDays);
+    public bool ShouldSerializeCacheRetention() => false;
+    public bool ShouldSerializeCacheRetentionDays() => false;
+
     /// <summary>
     /// Legacy cache root written by the first texture-edit implementation. It is
     /// read once during migration and is not written back to plugin settings.

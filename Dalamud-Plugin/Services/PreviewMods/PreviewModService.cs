@@ -4,7 +4,7 @@ namespace InstantEdit.Services.PreviewMods;
 
 /// <summary> What applying a preview wrote, with follow-up warnings. </summary>
 internal sealed record PreviewApplyResult(IReadOnlyList<string> WrittenMods, int ModFiles, string? FixMod, int GameFiles, IReadOnlyList<string> Warnings,
-    int NewFiles = 0)
+    int NewFiles = 0, int BackupDays = 7)
 {
     /// <summary> "&lt;applied&gt;: wrote 2 files into A, B (backups kept for 7 days); put 1 game file in the mod X." </summary>
     public string Describe(string applied)
@@ -12,11 +12,11 @@ internal sealed record PreviewApplyResult(IReadOnlyList<string> WrittenMods, int
         var parts = new List<string>();
         if (ModFiles > 0 && NewFiles > 0)
             parts.Add($"wrote {ModFiles} file{(ModFiles == 1 ? "" : "s")} and added {NewFiles} new file{(NewFiles == 1 ? "" : "s")} in " +
-                      $"{string.Join(", ", WrittenMods)} (backups kept for 7 days)");
+                      $"{string.Join(", ", WrittenMods)} (backups kept for {BackupDays} days)");
         else if (NewFiles > 0)
             parts.Add($"added {NewFiles} new file{(NewFiles == 1 ? "" : "s")} to {string.Join(", ", WrittenMods)}");
         else if (ModFiles > 0)
-            parts.Add($"wrote {ModFiles} file{(ModFiles == 1 ? "" : "s")} into {string.Join(", ", WrittenMods)} (backups kept for 7 days)");
+            parts.Add($"wrote {ModFiles} file{(ModFiles == 1 ? "" : "s")} into {string.Join(", ", WrittenMods)} (backups kept for {BackupDays} days)");
         if (FixMod is not null)
             parts.Add($"put {GameFiles} game file{(GameFiles == 1 ? "" : "s")} in the mod {FixMod}");
         return parts.Count == 0 ? "Nothing needed writing; the preview is removed." : applied + ": " + string.Join("; ", parts) + ".";
@@ -88,7 +88,7 @@ internal sealed class PreviewModService(PreviewModWriter writer)
         if (delete is not null)
             warnings.Add(delete);
         return new PreviewApplyResult(modWrites.Select(w => w.Source.ModName).Concat(additions.Select(a => a.Material.ModName)).Distinct().ToList(),
-            modWrites.Count, fixMod, gameFiles.Count, warnings, additions.Count);
+            modWrites.Count, fixMod, gameFiles.Count, warnings, additions.Count, writer.BackupDays);
     }
 
     /// <summary> Backups of the mod files among <paramref name="sources"/>, grouped by when they were made (one group per apply), newest first. </summary>

@@ -690,6 +690,12 @@ internal static partial class TextureEditScenarios
 
     private static async Task CacheCleanupAsync(string root)
     {
+        Check(new Configuration().CacheRetention == TimeSpan.FromDays(7) &&
+              new Configuration { CacheCleanupDays = 3 }.CacheRetentionDays == Configuration.MinCacheCleanupDays &&
+              new Configuration { CacheCleanupDays = 30 }.CacheRetentionDays == 30 &&
+              new Configuration { CacheCleanupDays = 365 }.CacheRetention == TimeSpan.FromDays(Configuration.MaxCacheCleanupDays),
+            "cache cleanup keeps files 7 days by default, settable from 7 to 90");
+
         using (var f = new Fixture(Path.Combine(root, "stale"), (uint)TexFile.TextureFormat.BC7))
         {
             await f.Service.StartAsync(f.Request, false);

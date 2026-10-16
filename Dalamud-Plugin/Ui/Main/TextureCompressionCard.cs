@@ -20,7 +20,7 @@ internal sealed class TextureCompressionCard
     private string _compressionMessage = string.Empty;
     private IReadOnlyList<string> _compressionDetails = [];
     // The totals lines, worked out again only when the list of compressed textures or the cleanup setting changes.
-    private (IReadOnlyList<CompressedTexture>? Entries, IReadOnlyList<RefitGroup>? Refits, bool Cleanup, string Totals, string Backups) _compressionTotals;
+    private (IReadOnlyList<CompressedTexture>? Entries, IReadOnlyList<RefitGroup>? Refits, bool Cleanup, int Days, string Totals, string Backups) _compressionTotals;
     private (string? Directory, bool InTemp) _compressionCacheInTemp;
 
     public TextureCompressionCard(Configuration config, IPluginLog log, UiNotifications notifications, CancellationToken lifetime)
@@ -31,7 +31,7 @@ internal sealed class TextureCompressionCard
         _lifetime = lifetime;
         Card = new QuickAction("texture-compression", FontAwesomeIcon.CompressArrowsAlt, "Optimize textures",
             "Automatically optimize your character's textures shortly after they load. Every compression is checked for visual quality impact " +
-            "Originals are backed up for a week and can be easily restored for the current appearance.",
+            "Originals are backed up and can be easily restored for the current appearance.",
             DrawTextureCompressionAction,
             () =>
             {
@@ -107,9 +107,11 @@ internal sealed class TextureCompressionCard
         var entries = service.Backups.Compressed;
         var refits = service.Backups.Refits;
         var cleanup = _config.AutomaticCacheCleanup;
-        if (!ReferenceEquals(entries, _compressionTotals.Entries) || !ReferenceEquals(refits, _compressionTotals.Refits) || cleanup != _compressionTotals.Cleanup)
-            _compressionTotals = (entries, refits, cleanup, TextureCompressionViews.Totals(entries, refits),
-                TextureCompressionViews.Backups(service.Backups.BackupTotals(), cleanup));
+        var days = _config.CacheRetentionDays;
+        if (!ReferenceEquals(entries, _compressionTotals.Entries) || !ReferenceEquals(refits, _compressionTotals.Refits)
+            || cleanup != _compressionTotals.Cleanup || days != _compressionTotals.Days)
+            _compressionTotals = (entries, refits, cleanup, days, TextureCompressionViews.Totals(entries, refits),
+                TextureCompressionViews.Backups(service.Backups.BackupTotals(), cleanup, days));
         Widgets.MutedWrapped(_compressionTotals.Totals);
         if (service.LastRun is { } run)
             DrawCompressionRun(run);

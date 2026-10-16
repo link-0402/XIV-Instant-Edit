@@ -159,7 +159,7 @@ internal sealed class GameFileExportDialog
             ImGui.SetTooltip($"Export to the folder in Instant Edit's cache: {defaultFolder}");
         if (defaultFolder.Length > 0 && InFolder(_gameExportRoot, defaultFolder))
             Widgets.Hint(_config.AutomaticCacheCleanup
-                ? $"In Instant Edit's cache: automatic cache cleanup removes files here that no export has written for {GameExportPaths.CacheRetention.TotalDays:0} days."
+                ? $"In Instant Edit's cache: automatic cache cleanup removes files here that no export has written for {_config.CacheRetentionDays} days."
                 : "In Instant Edit's cache. Automatic cache cleanup is off in Settings, so files here are kept.");
 
         ImGui.Spacing();
