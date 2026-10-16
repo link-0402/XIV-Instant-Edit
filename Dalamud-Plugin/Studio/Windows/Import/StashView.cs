@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using InstantEdit.Studio.Models;
@@ -13,8 +14,9 @@ using InstantEdit.Studio.Windows.UI;
 namespace InstantEdit.Studio.Windows.Import;
 
 /// <summary>
-/// The import window's file stash: every extraction under the output folder on the left, and the
-/// picked one's files on the right, by kind and, for textures, by purpose. Every row drags onto a
+/// The import window's file stash: every extraction under the output folder, and every folder of
+/// loose files the user opened, on the left; the picked one's files on the right, by kind and, for
+/// textures, by purpose. Every row drags onto a
 /// texture or model tile of the build window or a mod window; a material's textures can also be
 /// put into the build window's selected material in one go.
 /// </summary>
@@ -38,9 +40,15 @@ internal sealed class StashView
     private readonly TextureThumbnailCache _thumbnails;
 
     private IReadOnlyList<string> _folders = Array.Empty<string>();
-    private string _listedFrom = string.Empty;
+    private IReadOnlyList<string> _opened = Array.Empty<string>();
+
+    /// <summary>Lists the output folder once its path has stopped changing, not on every keystroke in its field.</summary>
+    private readonly SettledInput _listing = new(TimeSpan.FromMilliseconds(400));
     private string? _folder;
     private StashManifest? _manifest;
+
+    /// <summary>A folder without stash.json being scanned off the render thread; an opened folder can hold thousands of files.</summary>
+    private Task<StashManifest?>? _scan;
     private StashKind _tab = StashKind.Texture;
     private string _search = string.Empty;
     private string? _pendingRemove;
@@ -56,23 +64,55 @@ internal sealed class StashView
     /// <summary>The extraction shown, or null.</summary>
     public string? Folder => _folder;
 
-    /// <summary>Whether the output folder holds any extraction (listed again when asked).</summary>
-    public bool HasExtractions(string outputDir)
+    /// <summary>Whether the stash has anything to show: an extraction in the output folder, or an opened folder.</summary>
+    public bool HasFolders(string outputDir)
     {
         EnsureListed(outputDir);
-        return _folders.Count > 0;
+        return _folders.Count > 0 || _opened.Count > 0;
     }
 
     /// <summary>Shows <paramref name="folder"/>, read again from disk.</summary>
     public void Show(string folder)
     {
         _folder = folder;
-        _manifest = StashManifest.Read(folder) ?? SafeScan(folder);
-        _listedFrom = string.Empty;   // the list may have gained it
+        _manifest = StashManifest.Read(folder);
+        _scan = _manifest == null ? Task.Run(() => SafeScan(folder)) : null;
+        _listing.Invalidate();   // the list may have gained it
         _message = string.Empty;
         _exists.Clear();
         _imageCounts.Clear();
         _thumbnails.ForgetMemoryEntries();
+        PickTab();
+    }
+
+    /// <summary>Adds a folder of loose files to the stash and shows it. Returns why it wasn't added, or null.</summary>
+    public string? OpenFolder(string folder)
+    {
+        var cfg = _host.Configuration;
+        var problem = StashFolders.AddOpened(cfg.StashOpenedFolders, folder);
+        if (problem != null)
+        {
+            _message = problem;
+            return problem;
+        }
+        cfg.Save();
+        Show(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)));
+        return null;
+    }
+
+    /// <summary>Asks for a folder of loose files to open in the stash; <paramref name="opened"/> runs once it is shown.</summary>
+    public void BrowseFolder(Action? opened = null)
+    {
+        Gui.Dialogs.OpenFolderDialog("Open a folder in the stash", (ok, path) =>
+        {
+            if (ok && OpenFolder(path) == null)
+                opened?.Invoke();
+        });
+    }
+
+    /// <summary>The tab to land on: the current one if this folder has anything for it, else textures or models.</summary>
+    private void PickTab()
+    {
         if (_manifest != null && _manifest.Entries.All(e => e.Kind != _tab) && !(_tab == StashKind.Material && _manifest.Materials.Count > 0))
             _tab = _manifest.Entries.Any(e => e.Kind == StashKind.Texture) ? StashKind.Texture : StashKind.Model;
     }
@@ -80,8 +120,16 @@ internal sealed class StashView
     public void Draw(string outputDir)
     {
         EnsureListed(outputDir);
-        if (_folder == null && _folders.Count > 0)
-            Show(_folders[0]);
+        if (_folder == null && (_folders.Count > 0 || _opened.Count > 0))
+            Show(_folders.Count > 0 ? _folders[0] : _opened[0]);
+        if (_scan is { IsCompleted: true } scan)
+        {
+            _scan = null;
+            _manifest = scan.IsCompletedSuccessfully ? scan.Result : null;
+            if (_manifest == null)
+                _message = "This folder could not be read.";
+            PickTab();
+        }
 
         float listW = Theme.S(230);
         if (ImGui.BeginChild("##StashFolders", new Vector2(listW, -1), true))
@@ -97,16 +145,21 @@ internal sealed class StashView
 
     private void EnsureListed(string outputDir)
     {
-        if (_listedFrom == outputDir)
+        if (!_listing.Due(outputDir, DateTime.UtcNow))
             return;
-        _listedFrom = outputDir;
         _folders = StashFolders.ListExtractions(outputDir);
+        _opened = StashFolders.Opened(_host.Configuration.StashOpenedFolders)
+            .Where(f => !_folders.Contains(f, StringComparer.OrdinalIgnoreCase))
+            .ToList();
         if (_folder != null && !Directory.Exists(_folder))
         {
             _folder = null;
             _manifest = null;
+            _scan = null;
         }
     }
+
+    private bool IsOpened(string folder) => _opened.Contains(folder, StringComparer.OrdinalIgnoreCase);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Extractions
@@ -116,34 +169,72 @@ internal sealed class StashView
     {
         Gui.Hint($"{_folders.Count} extraction(s)");
         ImGui.SameLine();
-        Gui.AlignRight(ImGui.GetFrameHeight());
-        if (Gui.IconButton(FontAwesomeIcon.Sync, "StashRefresh", "List the output folder again"))
-            _listedFrom = string.Empty;
+        float button = ImGui.GetFrameHeight();
+        Gui.AlignRight(button * 2 + ImGui.GetStyle().ItemSpacing.X);
+        if (Gui.IconButton(FontAwesomeIcon.FolderPlus, "StashOpenFolder", "Open a folder of loose files (textures, models, materials) in the stash. Nothing is written into it."))
+            BrowseFolder();
+        ImGui.SameLine();
+        if (Gui.IconButton(FontAwesomeIcon.Sync, "StashRefresh", "List the folders again and re-read the one shown"))
+        {
+            _listing.Invalidate();
+            if (_folder != null)
+                Show(_folder);
+        }
         ImGui.Separator();
 
-        if (_folders.Count == 0)
-        {
-            Gui.HintWrapped("Nothing extracted yet. Import a package to fill the stash.");
-            return;
-        }
+        if (_folders.Count == 0 && _opened.Count == 0)
+            Gui.HintWrapped("Nothing here yet. Import a package, or open or drop a folder of files.");
 
         foreach (var folder in _folders)
+            DrawFolderRow(folder, opened: false);
+
+        if (_opened.Count > 0)
         {
-            ImGui.PushID(folder);
-            bool selected = string.Equals(folder, _folder, StringComparison.OrdinalIgnoreCase);
-            float trash = ImGui.GetFrameHeight();
-            if (ImGui.Selectable(Path.GetFileName(folder), selected, ImGuiSelectableFlags.None,
-                    new Vector2(ImGui.GetContentRegionAvail().X - trash - ImGui.GetStyle().ItemSpacing.X, 0)) && !selected)
-                Show(folder);
-            Gui.Tooltip(folder);
-            ImGui.SameLine();
-            if (Gui.IconButton(FontAwesomeIcon.Trash, "remove", "Remove this extraction's folder", danger: true))
-            {
-                _pendingRemove = folder;
-                _openRemove = true;
-            }
-            ImGui.PopID();
+            ImGui.Spacing();
+            Gui.Hint($"{_opened.Count} opened folder(s)");
+            ImGui.Separator();
+            foreach (var folder in _opened)
+                DrawFolderRow(folder, opened: true);
         }
+
+        // Folders dropped from Explorer anywhere on the list are opened in the stash.
+        ImGui.Dummy(new Vector2(ImGui.GetContentRegionAvail().X, Math.Max(ImGui.GetContentRegionAvail().Y, button)));
+        if (FileDrop.Target(p => p.Folders.Count > 0 && p.Files.Count == 0 ? null : "Drop folders to open them in the stash.", out var dropped))
+            foreach (var folder in dropped.Folders)
+                OpenFolder(folder);
+    }
+
+    private void DrawFolderRow(string folder, bool opened)
+    {
+        ImGui.PushID(folder);
+        bool selected = string.Equals(folder, _folder, StringComparison.OrdinalIgnoreCase);
+        float trash = ImGui.GetFrameHeight();
+        if (ImGui.Selectable(Path.GetFileName(folder), selected, ImGuiSelectableFlags.None,
+                new Vector2(ImGui.GetContentRegionAvail().X - trash - ImGui.GetStyle().ItemSpacing.X, 0)) && !selected)
+            Show(folder);
+        Gui.Tooltip(folder);
+        ImGui.SameLine();
+        if (opened)
+        {
+            if (Gui.IconButton(FontAwesomeIcon.Times, "forget", "Take out of the stash. The folder and its files are not touched."))
+            {
+                StashFolders.Forget(_host.Configuration.StashOpenedFolders, folder);
+                _host.Configuration.Save();
+                if (selected)
+                {
+                    _folder = null;
+                    _manifest = null;
+                    _scan = null;
+                }
+                _listing.Invalidate();
+            }
+        }
+        else if (Gui.IconButton(FontAwesomeIcon.Trash, "remove", "Remove this extraction's folder", danger: true))
+        {
+            _pendingRemove = folder;
+            _openRemove = true;
+        }
+        ImGui.PopID();
     }
 
     private void DrawRemovePopup(string outputDir)
@@ -168,7 +259,7 @@ internal sealed class StashView
                 _manifest = null;
             }
             _pendingRemove = null;
-            _listedFrom = string.Empty;
+            _listing.Invalidate();
         }, danger: true);
     }
 
@@ -178,9 +269,16 @@ internal sealed class StashView
 
     private void DrawFiles()
     {
+        if (_folder != null && _scan != null)
+        {
+            Gui.Icon(FontAwesomeIcon.Spinner, Theme.Accent);
+            ImGui.SameLine();
+            ImGui.TextColored(Theme.Accent, $"Reading {Path.GetFileName(_folder)}");
+            return;
+        }
         if (_folder == null || _manifest == null)
         {
-            Gui.HintWrapped(string.IsNullOrEmpty(_message) ? "Pick an extraction on the left." : _message);
+            Gui.HintWrapped(string.IsNullOrEmpty(_message) ? "Pick a folder on the left." : _message);
             return;
         }
 
@@ -212,13 +310,15 @@ internal sealed class StashView
         {
             "unity" => "from a Unity package",
             "sims"  => "from a Sims 4 package",
-            _       => "files in this folder",
+            _       => IsOpened(folder) ? "an opened folder; nothing is written into it" : "files in this folder",
         });
         Gui.AlignRight(ImGui.GetFrameHeight());
         if (Gui.IconButton(FontAwesomeIcon.FolderOpen, "StashReveal", "Show in Explorer"))
             Reveal(folder);
 
         ImGui.TextColored(Theme.Accent, "Drag any row onto a texture or model tile in the build window, or in a mod window.");
+        if (manifest.Truncated)
+            ImGui.TextColored(Theme.Warn, $"This folder holds more than {StashManifest.MaxScanFiles} files; only the first {StashManifest.MaxScanFiles} are listed.");
         if (!string.IsNullOrEmpty(_message))
             Gui.Hint(_message);
     }

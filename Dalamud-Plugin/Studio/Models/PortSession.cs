@@ -95,14 +95,26 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         if (!_host.GameData.IsItemCacheReady) return false;
 
         var cfg = _host.Configuration;
+        // Animation items resolve from the emote list, read on a worker: wait for it here rather
+        // than blocking the frame inside FromKey.
+        var animations = _host.GameData.AnimationScanStatus;
+        if (!ModpackLoading.CanResolve(cfg.ModpackItems, animations))
+            return false;
+
         var folded = new List<string>();
         bool pruned = false;
+        int unreadable = 0;
 
         foreach (var key in cfg.ModpackItems.ToList())
         {
             var subject = PortSubject.FromKey(key, _host.GameData);
             if (subject == null)
             {
+                if (!ModpackLoading.IsGone(key, animations))
+                {
+                    unreadable++;   // stays saved; it comes back once the emote list can be read
+                    continue;
+                }
                 cfg.ModpackItems.Remove(key);
                 pruned = true;
                 continue;
@@ -128,6 +140,9 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             Notify("Mesh slots are now the materials themselves. Materials no slot used were kept and will now be written too — " +
                    string.Join("; ", folded), Severity.Warning);
         }
+        if (unreadable > 0)
+            Notify($"The game's emote list could not be read, so {unreadable} animation item(s) are left out for now. " +
+                   "Their set-ups are kept and come back the next time the plugin loads.", Severity.Warning);
         Revision++;
         return true;
     }

@@ -116,12 +116,30 @@ internal static class UnityPackageReader
     /// <summary>
     /// Writes the ticked textures and models under <paramref name="outputDir"/>/&lt;package name&gt;,
     /// keeping their project layout minus the leading Assets/. A path that would land outside that
-    /// folder is refused and reported.
+    /// folder is refused and reported. A run that stops or fails leaves nothing behind, and an
+    /// earlier extraction of the package it would have replaced is kept (see <see cref="Stash.ExtractionFolder"/>).
     /// </summary>
     public static UnityExtraction Extract(UnityScanResult scan, string outputDir, Action<string> progress, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        var root = ClaimFolder(outputDir, PathNormalizer.SafeSegment(scan.PackageName), scan.PackagePath);
+        var source = Path.GetFullPath(scan.PackagePath);
+        var claim = Stash.ExtractionFolder.Claim(outputDir, PathNormalizer.SafeSegment(scan.PackageName), folder => IsOwnRun(folder, source));
+        bool finished = false;
+        try
+        {
+            var extraction = Write(scan, claim.Path, progress, ct);
+            finished = true;
+            return extraction;
+        }
+        finally
+        {
+            if (finished) claim.Finish();
+            else          claim.Abandon();
+        }
+    }
+
+    private static UnityExtraction Write(UnityScanResult scan, string root, Action<string> progress, CancellationToken ct)
+    {
         var result = new UnityExtraction { RootFolder = root };
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
@@ -170,8 +188,8 @@ internal static class UnityPackageReader
         }
         finally
         {
-            // Written even when the run stops part-way: the next run of this package then knows
-            // every file here is its own and replaces them.
+            // Written whatever happened: without them the next run of this package would take the
+            // folder for someone else's. (A run that stops is removed whole by Extract.)
             foreach (var refused in result.Refused)
                 report.AppendLine($"refused  {refused} (its path leads outside the output folder)");
             try
@@ -188,23 +206,11 @@ internal static class UnityPackageReader
     }
 
     /// <summary>
-    /// The folder a run writes into: <c>outputDir/name</c> when it is new or holds only an earlier
-    /// extraction of this same package (whose files are deleted), else the first free
-    /// <c>name_2</c>, <c>name_3</c>, and so on. Files someone else put there are never touched.
+    /// Whether <paramref name="folder"/> holds nothing but an earlier extraction of <paramref name="source"/>:
+    /// its stash.json names that package and lists every file there. Files someone else put there
+    /// make it another's folder, which is never touched.
     /// </summary>
-    private static string ClaimFolder(string outputDir, string name, string packagePath)
-    {
-        var source = Path.GetFullPath(packagePath);
-        for (int n = 1; n < 1000; n++)
-        {
-            var folder = Path.GetFullPath(Path.Combine(outputDir, n == 1 ? name : $"{name}_{n}"));
-            if (!Directory.Exists(folder) || TryReuse(folder, source))
-                return folder;
-        }
-        throw new IOException($"No free output folder for {name} in {outputDir}.");
-    }
-
-    private static bool TryReuse(string folder, string source)
+    private static bool IsOwnRun(string folder, string source)
     {
         try
         {
@@ -226,9 +232,6 @@ internal static class UnityPackageReader
             foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
                 if (!owned.Contains(Path.GetFullPath(file)))
                     return false;
-            foreach (var file in owned)
-                if (File.Exists(file))
-                    File.Delete(file);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)

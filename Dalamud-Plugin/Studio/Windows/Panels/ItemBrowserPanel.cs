@@ -95,7 +95,16 @@ internal sealed class ItemBrowserPanel
         }
 
         if (!_loaded)
+        {
+            // The last pick may be an animation, which resolves from the emote list read on a worker.
+            if (!ModpackLoading.CanResolve(new[] { _host.Configuration.LastItemRowId }, _host.GameData.AnimationScanStatus))
+            {
+                Gui.SectionHeader("Replace");
+                Waiting("Reading the game's emotes");
+                return;
+            }
             FirstLoad();
+        }
 
         Gui.SectionHeader("Browse the game", _session is PortSession
             ? "Press + on anything, or drag it onto the modpack list on the left, to add it. Set-ups are saved per item, so removing and re-adding one keeps its work."

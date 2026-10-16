@@ -320,7 +320,7 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
         {
             foreach (var name in GetVanillaMaterialNames(subject, reference.Value))
             {
-                var found = TryReadMaterial(subject.VanillaMaterialPath(name, reference.Value));
+                var found = TryReadVanillaMaterial(subject, name, reference.Value);
                 if (found != null)
                     return found;
             }
@@ -345,7 +345,7 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
             var name = MaterialNaming.SanitizeFileName(referenced.TrimStart('/'));
             var setup = new MaterialSetup { Name = name, ShaderType = subject.Kind is SubjectKind.Gear or SubjectKind.Weapon ? ShaderType.Character : ShaderType.Hair };
 
-            var mtrl = TryReadMaterial(subject.VanillaMaterialPath(referenced, race));
+            var mtrl = TryReadVanillaMaterial(subject, referenced, race);
             if (mtrl != null)
             {
                 var info = mtrl.Value.Material;
@@ -357,6 +357,15 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
             result.Add(setup);
         }
         return result;
+    }
+
+    /// <summary>The vanilla material a vanilla model references, from the first of the subject's places that has it.</summary>
+    private (string GamePath, MtrlInfo Material)? TryReadVanillaMaterial(PortSubject subject, string referencedName, RaceGender race)
+    {
+        foreach (var path in subject.VanillaMaterialPaths(referencedName, race))
+            if (TryReadMaterial(path) is { } found)
+                return found;
+        return null;
     }
 
     private (string GamePath, MtrlInfo Material)? TryReadMaterial(string path)
@@ -749,6 +758,18 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
     {
         var scan = StartAnimationScan();
         return scan.IsCompletedSuccessfully ? (emotes ? scan.Result.Emotes : scan.Result.Others) : null;
+    }
+
+    /// <summary>How far reading the emote list has got; asking starts it.</summary>
+    internal AnimationScanState AnimationScanStatus
+    {
+        get
+        {
+            var scan = StartAnimationScan();
+            return !scan.IsCompleted ? AnimationScanState.Pending
+                 : scan.IsCompletedSuccessfully ? AnimationScanState.Ready
+                 : AnimationScanState.Failed;
+        }
     }
 
     /// <summary>The emote or timeline a saved key names, or null. Waits for the sheets to be read if they are not yet.</summary>

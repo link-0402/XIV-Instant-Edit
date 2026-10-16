@@ -203,7 +203,7 @@ internal sealed class ItemSetupView
         if (!_host.GameData.GetNativeRaces(subject).Contains(model.RaceGender))
             badges.Add(subject is GearSubject
                 ? new Badge("override", Theme.Accent, "This race has no model by default — an Eqdp override is added so the game uses this one.")
-                : new Badge("no vanilla", Theme.Warn, $"This race does not ship this {subject.KindLabel.ToLowerInvariant()}, so the game may never ask for the file."));
+                : new Badge("no vanilla", Theme.Warn, subject.NoVanillaModelHint));
         if (model.UseVariants && !model.UseDummy)
             badges.With(_session.VariantGroupOf(model) is { } group ? new Badge(group.Name, Theme.Accent, $"Each file becomes an option of {group.Name}.") : null);
         else

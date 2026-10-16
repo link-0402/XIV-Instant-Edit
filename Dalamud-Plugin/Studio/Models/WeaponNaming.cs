@@ -27,6 +27,18 @@ internal static class WeaponNaming
     public static string VanillaMaterialGamePath(ushort id, ushort body, ushort variant, string name)
         => $"{Folder(id, body)}/material/v{variant:D4}/{MaterialNaming.SanitizeFileName(name)}.mtrl";
 
+    /// <summary>
+    /// Where to look for a vanilla material: the variant's own folder, then v0001. Which folder a
+    /// variant reads is its IMC entry's material id, and most variants share v0001, so the variant's
+    /// folder often doesn't exist. A variant of 0 counts as 1.
+    /// </summary>
+    public static System.Collections.Generic.IReadOnlyList<string> VanillaMaterialCandidates(ushort id, ushort body, ushort variant, string name)
+    {
+        var own = VanillaMaterialGamePath(id, body, System.Math.Max(variant, (ushort)1), name);
+        var shared = VanillaMaterialGamePath(id, body, 1, name);
+        return own == shared ? new[] { own } : new[] { own, shared };
+    }
+
     public static string TextureFolder(ushort id, ushort body) => $"{Folder(id, body)}/texture";
 
     public static string TextureGamePath(ushort id, ushort body, string name)

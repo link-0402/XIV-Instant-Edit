@@ -5,7 +5,7 @@ using System.Linq;
 
 namespace InstantEdit.Studio.Services.Stash;
 
-/// <summary>The extraction folders under the importer's output folder: listing, counting and removing them.</summary>
+/// <summary>The stash's folders: extractions under the importer's output folder (listed, counted, removed) and folders the user opened.</summary>
 internal static class StashFolders
 {
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -56,6 +56,41 @@ internal static class StashFolders
         try { return Directory.GetLastWriteTimeUtc(folder); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return DateTime.MinValue; }
     }
+
+    // ── Opened folders ───────────────────────────────────────────────────────
+    // Folders of loose files the user opened in the stash (a VRChat avatar's raw resources, say).
+    // They are only remembered: the stash never writes into them or deletes them.
+
+    /// <summary>Remembers <paramref name="folder"/> in <paramref name="saved"/> by its full path. Returns why it wasn't, or null.</summary>
+    public static string? AddOpened(List<string> saved, string folder)
+    {
+        string full;
+        try
+        {
+            full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+            if (!Directory.Exists(full))
+                return "That folder isn't there.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return ex.Message;
+        }
+        if (string.Equals(Path.TrimEndingDirectorySeparator(Path.GetPathRoot(full) ?? ""), full, StringComparison.OrdinalIgnoreCase))
+            return "Pick a folder, not a whole drive.";
+        if (!saved.Contains(full, StringComparer.OrdinalIgnoreCase))
+            saved.Add(full);
+        return null;
+    }
+
+    /// <summary>The remembered folders that are still there, in the order they were opened.</summary>
+    public static IReadOnlyList<string> Opened(IEnumerable<string> saved)
+        => saved.Where(f => { try { return Directory.Exists(f); } catch (Exception) { return false; } })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+    /// <summary>Forgets an opened folder. Its files are not touched.</summary>
+    public static void Forget(List<string> saved, string folder)
+        => saved.RemoveAll(f => string.Equals(Path.TrimEndingDirectorySeparator(f), Path.TrimEndingDirectorySeparator(folder), StringComparison.OrdinalIgnoreCase));
 
     /// <summary>How many images sit directly in <paramref name="folder"/> (a folder of variants).</summary>
     public static int CountImages(string folder)

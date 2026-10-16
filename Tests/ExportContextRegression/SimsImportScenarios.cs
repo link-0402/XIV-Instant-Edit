@@ -293,8 +293,18 @@ internal static class SimsImportScenarios
             var diffuse = Directory.GetFiles(output, "*.png", SearchOption.AllDirectories);
             Require(error is OperationCanceledException && diffuse.Length < 3,
                 $"an extraction stops between files when cancelled ({error?.GetType().Name}, {diffuse.Length} written)");
-            Require(Directory.GetFiles(output, "*", SearchOption.AllDirectories).Any(f => !f.EndsWith(".png", StringComparison.OrdinalIgnoreCase)),
-                "what it wrote is still recorded as its own");
+            Require(!Directory.Exists(Path.Combine(output, "swatches")), "a stopped first extraction leaves no half-written folder");
+        }
+
+        var kept = SimsPackageInspector.Extract(scan, output);
+        var files = Directory.GetFiles(kept.RootFolder, "*", SearchOption.AllDirectories).Length;
+        using (var cts = new CancellationTokenSource())
+        {
+            int calls = 0;
+            try { SimsPackageInspector.Extract(scan, output, progress: _ => { if (++calls == 1) cts.Cancel(); }, cancel: cts.Token); }
+            catch (OperationCanceledException) { }
+            Require(Directory.GetFiles(kept.RootFolder, "*", SearchOption.AllDirectories).Length == files && Directory.GetDirectories(output).Length == 1,
+                "stopping a re-extraction keeps the earlier one whole, with nothing left beside it");
         }
     }
 

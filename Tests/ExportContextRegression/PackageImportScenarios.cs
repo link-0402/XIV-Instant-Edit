@@ -39,6 +39,120 @@ internal static class PackageImportScenarios
         StashApplyMapsPurposes(root);
         ExtractionsAreListedNewestFirst(root);
         RemoveStaysInsideTheOutputFolder(root);
+
+        StoppedReExtractKeepsTheEarlierOne(root);
+        StoppedFirstExtractLeavesNothing(root);
+        TypedFolderIsListedOnceSettled();
+        OpenedFolderReadsUnityMetadata(root);
+        FolderScanStopsAtItsCap(root);
+        OpenedFoldersAreRememberedNotDeleted(root);
+    }
+
+    private static void StoppedReExtractKeepsTheEarlierOne(string root)
+    {
+        var output = Path.Combine(root, "stop-again-out");
+        var package = BasicPackage(root, "keep");
+        var scan = UnityPackageReader.Scan(package, _ => { }, CancellationToken.None);
+        var first = UnityPackageReader.Extract(scan, output, _ => { }, CancellationToken.None);
+        var before = Directory.GetFiles(first.RootFolder, "*", SearchOption.AllDirectories).Select(Path.GetFileName).Order().ToList();
+
+        using var cts = new CancellationTokenSource();
+        Exception? error = null;
+        try { UnityPackageReader.Extract(scan, output, _ => cts.Cancel(), cts.Token); }
+        catch (Exception ex) { error = ex; }
+        var after = Directory.GetFiles(first.RootFolder, "*", SearchOption.AllDirectories).Select(Path.GetFileName).Order().ToList();
+        Require(error is OperationCanceledException, $"the second run stops ({error?.GetType().Name})");
+        Require(after.SequenceEqual(before), $"stopping a re-extraction keeps every file of the earlier one ({string.Join(", ", after)})");
+        Require(Directory.GetDirectories(output).Select(Path.GetFileName).SequenceEqual(new[] { "keep" }),
+            "no half-written or set-aside folder is left beside it");
+
+        var again = UnityPackageReader.Extract(scan, output, _ => { }, CancellationToken.None);
+        Require(again.RootFolder == first.RootFolder && Directory.GetDirectories(output).Length == 1,
+            "a finished re-extraction still replaces the earlier one in its folder");
+    }
+
+    private static void StoppedFirstExtractLeavesNothing(string root)
+    {
+        var output = Path.Combine(root, "stop-first-out");
+        var scan = UnityPackageReader.Scan(BasicPackage(root, "never"), _ => { }, CancellationToken.None);
+        using var cts = new CancellationTokenSource();
+        try { UnityPackageReader.Extract(scan, output, _ => cts.Cancel(), cts.Token); }
+        catch (OperationCanceledException) { }
+        Require(!Directory.Exists(Path.Combine(output, "never")), "a stopped first extraction leaves no half-written folder");
+    }
+
+    private static void TypedFolderIsListedOnceSettled()
+    {
+        var settle = new SettledInput(TimeSpan.FromMilliseconds(400));
+        var t0 = new DateTime(2026, 10, 16, 12, 0, 0, DateTimeKind.Utc);
+        Require(settle.Due(@"C:\a", t0), "the first value is acted on at once");
+        Require(!settle.Due(@"C:\a", t0.AddSeconds(5)), "an unchanged value isn't acted on again");
+        Require(!settle.Due(@"C:\ab", t0.AddSeconds(6)) && !settle.Due(@"C:\abc", t0.AddSeconds(6.1)) && !settle.Due(@"C:\abc", t0.AddSeconds(6.3)),
+            "a folder being typed isn't listed on every keystroke");
+        Require(settle.Due(@"C:\abc", t0.AddSeconds(6.6)) && !settle.Due(@"C:\abc", t0.AddSeconds(7)),
+            "once typing has stopped for the delay it is listed, once");
+        settle.Invalidate();
+        Require(settle.Due(@"C:\abc", t0.AddSeconds(7.1)), "asked to list again, it does so at once");
+    }
+
+    private static void OpenedFolderReadsUnityMetadata(string root)
+    {
+        // A VRChat avatar's raw resources: textures and materials with Unity's .meta files beside them.
+        var folder = Path.Combine(root, "raw-avatar");
+        Directory.CreateDirectory(Path.Combine(folder, "Textures"));
+        Directory.CreateDirectory(Path.Combine(folder, "Materials"));
+        Directory.CreateDirectory(Path.Combine(folder, "FBX"));
+        Directory.CreateDirectory(Path.Combine(folder, ".git"));
+        File.WriteAllBytes(Path.Combine(folder, "Textures", "body_d.png"), PngBytes);
+        File.WriteAllText(Path.Combine(folder, "Textures", "body_d.png.meta"), TextureMeta(GuidTex, 0));
+        File.WriteAllBytes(Path.Combine(folder, "Textures", "tex2.png"), PngBytes);
+        File.WriteAllText(Path.Combine(folder, "Textures", "tex2.png.meta"), TextureMeta(GuidNormal, 1));
+        File.WriteAllText(Path.Combine(folder, "Materials", "skin.mat"), MaterialText("Skin", GuidTex, GuidNormal));
+        File.WriteAllText(Path.Combine(folder, "Materials", "skin.mat.meta"), $"fileFormatVersion: 2\nguid: {GuidMat}\nNativeFormatImporter:\n");
+        File.WriteAllText(Path.Combine(folder, "Outfit.prefab"), $"      objectReference: {{fileID: 2100000, guid: {GuidMat}, type: 2}}\n");
+        File.WriteAllBytes(Path.Combine(folder, "FBX", "m.fbx"), new byte[] { 9 });
+        File.WriteAllBytes(Path.Combine(folder, ".git", "x.png"), PngBytes);
+
+        var manifest = StashManifest.Scan(folder);
+        Require(manifest.Entries.All(e => !e.Path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)), "Unity's .meta files are read, not listed");
+        Require(manifest.Entries.All(e => !e.Path.StartsWith(".git", StringComparison.Ordinal)), "hidden folders are left out");
+        var normal = manifest.Entries.FirstOrDefault(e => e.Path == "Textures/tex2.png");
+        Require(normal is { Purpose: TexturePurpose.Normal }, $"a texture a material uses as its bump map is a normal map, whatever its name ({normal?.Purpose})");
+        Require(normal!.Groups.Contains("Skin") && normal.Groups.Contains("Outfit"), "a texture is grouped under its material and the prefab using it");
+        var skin = manifest.Materials.SingleOrDefault(m => m.Name == "Skin");
+        Require(skin != null && skin.Textures[TexturePurpose.Diffuse] == "Textures/body_d.png" && skin.Textures[TexturePurpose.Normal] == "Textures/tex2.png",
+            "a folder's Unity materials are listed with their textures by purpose");
+        Require(manifest.Entries.Any(e => e.Path == "FBX/m.fbx" && e.NeedsConversion), "its models are listed too");
+    }
+
+    private static void FolderScanStopsAtItsCap(string root)
+    {
+        var folder = Path.Combine(root, "big-folder");
+        Directory.CreateDirectory(folder);
+        for (int i = 0; i < 5; i++)
+            File.WriteAllBytes(Path.Combine(folder, $"t{i}.png"), PngBytes);
+        var capped = StashManifest.Scan(folder, maxFiles: 3);
+        Require(capped.Entries.Count == 3 && capped.Truncated, "a folder scan stops at its cap and says so");
+        Require(!StashManifest.Scan(folder).Truncated, "a folder under the cap is listed whole");
+    }
+
+    private static void OpenedFoldersAreRememberedNotDeleted(string root)
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(root, "opened", "Avatar Files")).FullName;
+        File.WriteAllBytes(Path.Combine(folder, "a.png"), PngBytes);
+        var saved = new List<string>();
+        Require(StashFolders.AddOpened(saved, folder + Path.DirectorySeparatorChar) == null && saved.SequenceEqual(new[] { folder }),
+            "an opened folder is remembered by its full path");
+        Require(StashFolders.AddOpened(saved, folder.ToUpperInvariant()) == null && saved.Count == 1, "opening it again keeps one entry");
+        Require(StashFolders.AddOpened(saved, Path.Combine(root, "opened", "missing")) != null && saved.Count == 1, "a folder that isn't there is refused");
+        Require(StashFolders.AddOpened(saved, Path.GetPathRoot(folder)!) != null, "a whole drive is refused");
+
+        var gone = Path.Combine(root, "opened", "gone");
+        saved.Add(gone);
+        Require(StashFolders.Opened(saved).SequenceEqual(new[] { folder }), "opened folders that are gone aren't listed");
+        StashFolders.Forget(saved, folder);
+        Require(!saved.Contains(folder, StringComparer.OrdinalIgnoreCase) && File.Exists(Path.Combine(folder, "a.png")),
+            "taking a folder out of the stash forgets it and never deletes its files");
     }
 
     private static void ExtractionsAreListedNewestFirst(string root)
