@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 namespace InstantEdit.Services.GameFiles;
 
 /// <summary>The kinds of vanilla model the Game Files browser lists.</summary>
-internal enum GameFileCategory { Hair, Face, Tail, Ears, Body, Equipment, Accessory, Weapon }
+internal enum GameFileCategory { Hair, Face, Tail, Ears, Equipment, Accessory, Weapon }
 
 /// <summary>
 /// A vanilla model file by the IDs its game path is built from. <paramref name="Race"/> is the
@@ -27,12 +27,9 @@ internal static partial class GameModelPaths
     public static readonly ImmutableArray<string> EquipmentSlots = ["met", "top", "glv", "dwn", "sho"];
     public static readonly ImmutableArray<string> AccessorySlots = ["ear", "nek", "wrs", "rir", "ril"];
 
-    /// <summary>The suffixes body models use; the game has no body headgear.</summary>
-    public static readonly ImmutableArray<string> BodySlots = ["top", "glv", "dwn", "sho"];
-
     public static readonly ImmutableArray<GameFileCategory> Categories = [.. Enum.GetValues<GameFileCategory>()];
 
-    [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/obj/(?<folder>hair|face|tail|zear|body)/(?<letter>[hftzb])(?<id>\d{4})/model/c\k<race>\k<letter>\k<id>_(?<slot>[a-z]{3})\.mdl$",
+    [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/obj/(?<folder>hair|face|tail|zear)/(?<letter>[hftz])(?<id>\d{4})/model/c\k<race>\k<letter>\k<id>_(?<slot>[a-z]{3})\.mdl$",
         RegexOptions.CultureInvariant)]
     private static partial Regex HumanModel();
 
@@ -50,7 +47,6 @@ internal static partial class GameModelPaths
         GameFileCategory.Face => 'f',
         GameFileCategory.Tail => 't',
         GameFileCategory.Ears => 'z',
-        GameFileCategory.Body => 'b',
         GameFileCategory.Equipment => 'e',
         GameFileCategory.Accessory => 'a',
         _ => 'w',
@@ -61,11 +57,10 @@ internal static partial class GameModelPaths
         GameFileCategory.Hair => "hair",
         GameFileCategory.Face => "face",
         GameFileCategory.Tail => "tail",
-        GameFileCategory.Ears => "zear",
-        _ => "body",
+        _ => "zear",
     };
 
-    /// <summary>The one suffix of a character part's model files; body models have four.</summary>
+    /// <summary>The one suffix of a character part's model files.</summary>
     public static string? PartSlot(GameFileCategory category) => category switch
     {
         GameFileCategory.Hair => "hir",
@@ -78,7 +73,6 @@ internal static partial class GameModelPaths
     /// <summary>The slots a category's model files can have.</summary>
     public static ImmutableArray<string> Slots(GameFileCategory category) => category switch
     {
-        GameFileCategory.Body => BodySlots,
         GameFileCategory.Equipment => EquipmentSlots,
         GameFileCategory.Accessory => AccessorySlots,
         GameFileCategory.Weapon => [""],
@@ -134,8 +128,7 @@ internal static partial class GameModelPaths
                 "hair" => GameFileCategory.Hair,
                 "face" => GameFileCategory.Face,
                 "tail" => GameFileCategory.Tail,
-                "zear" => GameFileCategory.Ears,
-                _ => GameFileCategory.Body,
+                _ => GameFileCategory.Ears,
             };
             var slot = human.Groups["slot"].Value;
             if (human.Groups["letter"].Value[0] != Letter(category) || !Slots(category).Contains(slot)) return null;
@@ -159,7 +152,6 @@ internal static partial class GameModelPaths
         GameFileCategory.Face => "Faces",
         GameFileCategory.Tail => "Tails",
         GameFileCategory.Ears => "Viera ears",
-        GameFileCategory.Body => "Bodies",
         GameFileCategory.Equipment => "Equipment",
         GameFileCategory.Accessory => "Accessories",
         _ => "Weapons",
