@@ -106,7 +106,7 @@ public sealed class Plugin : IDalamudPlugin
         IReadOnlyList<Models.PersistedExportContext> persistedContexts = _config.ExportContexts;
         try
         {
-            _contextStore = new ExportContextSessionStore(configDirectory, pluginInstanceId, logStoreWarning);
+            _contextStore = new ExportContextSessionStore(configDirectory, pluginInstanceId, logStoreWarning, retention: () => _config.CacheRetention);
             var stored = _contextStore.Load();
             persistedContexts = stored
                 .Concat(_config.ExportContexts)
@@ -129,7 +129,7 @@ public sealed class Plugin : IDalamudPlugin
         // timeline preview, live bone layers, recording the posed character), so the windows must
         // open and stay open in GPose; a window that isn't open shows nothing either way.
         pi.UiBuilder.DisableGposeUiHide = true;
-        _backups   = new ModelBackupStore(storageRoot);
+        _backups   = new ModelBackupStore(storageRoot, () => _config.CacheRetention);
         var estEntries = new EstEntryStore(configDirectory);
         _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups, estEntries);
         // One attributor serves the On Screen snapshot and the Edit/material-preview flows,
@@ -159,7 +159,8 @@ public sealed class Plugin : IDalamudPlugin
                     _pi.SavePluginConfig(_config);
                 }
             },
-            _backups);
+            _backups,
+            () => _config.CacheRetention);
         _blender   = new BlenderClient(log, _contexts);
         _textures = new TextureEditService(_penumbra.Textures, _config, storageRoot, _backups,
             (error, message) => log.Warning(error, message));
@@ -266,12 +267,12 @@ public sealed class Plugin : IDalamudPlugin
         if (pi.IsDev)
             _bridgeTools = new Services.Testing.BridgeTools(pi, framework, log, _config, _contexts, _backups, estEntries, _physicsWindow);
         // Automatic cache cleanup also removes old exports from the cache's export folder, and the
-        // originals of textures optimized more than a week ago.
+        // backups of optimized textures and cleaned-up mods, after the days set in Settings.
         _textures.AdditionalCacheCleanup = () =>
         {
             _compression.ExpireBackups();
-            _studio?.Backups.Expire(DateTime.UtcNow, TextureFiles.CacheRootFor(_config.TextureCacheDirectory));
-            var (files, bytes) = _gameExport.CleanCache(TextureFiles.CacheRootFor(_config.TextureCacheDirectory));
+            _studio?.Backups.Expire(DateTime.UtcNow, TextureFiles.CacheRootFor(_config.TextureCacheDirectory), _config.CacheRetention);
+            var (files, bytes) = _gameExport.CleanCache(TextureFiles.CacheRootFor(_config.TextureCacheDirectory), _config.CacheRetention);
             if (files > 0)
                 _log.Information($"Cache cleanup removed {files:N0} old Game Files export files ({bytes / (double)(1L << 20):0.0} MB).");
         };

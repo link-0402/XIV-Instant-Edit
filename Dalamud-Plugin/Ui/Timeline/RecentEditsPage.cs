@@ -8,7 +8,7 @@ using InstantEdit.Services.Animations;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Edits page: every animation edit of the last week, newest first, with Undo, Edit again for a
+/// The Edits page: every animation edit of the days kept (Settings > Cache), newest first, with Undo, Edit again for a
 /// save with bone layers, and putting back the LivePose offsets an old LivePose bake cleared.
 /// </summary>
 /// <param name="loading">Whether the timeline is being read.</param>
@@ -77,7 +77,7 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
         }
         if (journals.IsEmpty)
         {
-            Widgets.HintWrapped("No animation edits in the last 7 days.");
+            Widgets.HintWrapped($"No animation edits in the last {service.RecordDays} days.");
             return;
         }
         Widgets.HintWrapped("Undo puts an edit's files back, even after a restart.");

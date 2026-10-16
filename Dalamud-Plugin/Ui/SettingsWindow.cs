@@ -183,12 +183,24 @@ public sealed class SettingsWindow : Window
         var automaticCleanup = _config.AutomaticCacheCleanup;
         if (Toggle("Automatic cache cleanup", ref automaticCleanup,
                 "Completed model cache jobs and inactive texture-edit sessions older than 24 hours are removed, and Game Files " +
-                "exports in the cache folder after 7 days. Active sessions and unsaved texture edits are kept."))
+                "exports and backups in the cache folder after the days set below. Active sessions and unsaved texture edits are kept."))
         {
             _config.AutomaticCacheCleanup = automaticCleanup;
             Save();
             SynchronizeCache();
         }
+        // Model backups, export links and animation edits expire even with the cleanup off, so the days stay settable.
+        var cleanupDays = _config.CacheRetentionDays;
+        ImGui.SetNextItemWidth(Theme.Scaled(220));
+        if (ImGui.SliderInt("Keep for##cache-cleanup-days", ref cleanupDays, Configuration.MinCacheCleanupDays,
+                Configuration.MaxCacheCleanupDays, "%d days", ImGuiSliderFlags.AlwaysClamp))
+            _config.CacheCleanupDays = Math.Clamp(cleanupDays, Configuration.MinCacheCleanupDays, Configuration.MaxCacheCleanupDays);
+        // Saved once the slider is let go, not for every day dragged past.
+        if (ImGui.IsItemDeactivatedAfterEdit())
+            Save();
+        Widgets.HintWrapped("All backups, Game Files exports, links between exports and their mods, and Timeline edits " +
+                            $"(Undo), {Configuration.MinCacheCleanupDays} to {Configuration.MaxCacheCleanupDays} days. " +
+                            "With automatic cache cleanup off, backups and exports in the cache folder are kept.");
 
         Divider();
         Widgets.SectionHeader("Skeleton library", "animations");

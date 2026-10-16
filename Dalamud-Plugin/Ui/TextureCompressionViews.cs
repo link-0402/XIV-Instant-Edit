@@ -63,11 +63,11 @@ internal static class TextureCompressionViews
         => shrunk == 0 ? string.Empty : string.Create(CultureInfo.InvariantCulture, $" ({shrunk:N0} of one color, shrunk to {SingleColor.Size} × {SingleColor.Size})");
 
     /// <summary> The originals the backup folder holds, each shared copy once, and how long they stay. </summary>
-    public static string Backups((int Files, long Bytes) totals, bool automaticCleanup)
+    public static string Backups((int Files, long Bytes) totals, bool automaticCleanup, int keptDays)
         => totals.Files == 0
             ? string.Empty
             : automaticCleanup
-                ? string.Create(CultureInfo.InvariantCulture, $"Backups: {Bytes(totals.Bytes)}, kept for {TextureBackupStore.Retention.TotalDays:0} days.")
+                ? string.Create(CultureInfo.InvariantCulture, $"Backups: {Bytes(totals.Bytes)}, kept for {keptDays} days.")
                 : $"Backups: {Bytes(totals.Bytes)}, kept until restored (automatic cache cleanup is off).";
 
     /// <summary> The last run's result, when it optimized something. </summary>

@@ -117,6 +117,22 @@ internal static class PreviewModScenarios
                 "Neck seam fix applied: wrote 2 files into Skin, Face (backups kept for 7 days); put 1 game file in the mod Neck Seam Fix - A." &&
                 new PreviewApplyResult([], 0, null, 0, []).Describe("Neck seam fix applied") == "Nothing needed writing; the preview is removed.",
             "preview mods: applying reports what it wrote the way the neck seam always has");
+        Require(new PreviewApplyResult(["Skin"], 1, null, 0, [], BackupDays: 30).Describe("Applied") ==
+                "Applied: wrote 1 file into Skin (backups kept for 30 days).",
+            "preview mods: the apply message names the backup days set in Settings");
+
+        var keptRoot = Path.Combine(folder, "kept-backups");
+        var keptFile = Path.Combine(folder, "kept.mtrl");
+        File.WriteAllBytes(keptFile, [1, 2, 3]);
+        var days = TimeSpan.FromDays(30);
+        var kept = new ModelBackupStore(keptRoot, () => days);
+        var keptBackup = kept.Create(keptFile, "Skin", "chara/x/kept.mtrl");
+        kept.Cleanup(DateTimeOffset.UtcNow + TimeSpan.FromDays(10));
+        var keptLonger = File.Exists(keptBackup);
+        days = TimeSpan.FromDays(7);
+        kept.Cleanup(DateTimeOffset.UtcNow + TimeSpan.FromDays(10));
+        Require(keptLonger && !File.Exists(keptBackup) && kept.RetentionDays == 7,
+            "model backups: kept for the days set in Settings, read again at every cleanup");
         Require(PreviewModWriter.UniqueModName("", _ => false, "Skin Seam Fix") == "Skin Seam Fix" &&
                 PreviewModWriter.UniqueModName("Skin Seam Preview - A", name => name == "Skin Seam Preview - A") == "Skin Seam Preview - A (2)",
             "preview mods: new mod names fall back to the feature's name and are made unique");

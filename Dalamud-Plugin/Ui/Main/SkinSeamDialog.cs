@@ -18,6 +18,7 @@ internal sealed class SkinSeamDialog
 {
     private const string NeckSeamDialog = "Skin seams##neck-seam";
     private readonly OnScreenService _onScreen;
+    private readonly Configuration _config;
     private readonly IPluginLog _log;
     private readonly StatusFeed _feed;
     private readonly CancellationToken _lifetime;
@@ -62,9 +63,10 @@ internal sealed class SkinSeamDialog
         public float BandCm = NeckSeamFixer.DefaultBand * 100;
     }
 
-    public SkinSeamDialog(OnScreenService onScreen, IPluginLog log, StatusFeed feed, CancellationToken lifetime)
+    public SkinSeamDialog(OnScreenService onScreen, Configuration config, IPluginLog log, StatusFeed feed, CancellationToken lifetime)
     {
         _onScreen = onScreen;
+        _config = config;
         _log = log;
         _feed = feed;
         _lifetime = lifetime;
@@ -428,7 +430,7 @@ internal sealed class SkinSeamDialog
             }
             else
             {
-                Widgets.SectionHeader("Apply the fix", "backups are kept for 7 days");
+                Widgets.SectionHeader("Apply the fix", $"backups are kept for {_config.CacheRetentionDays} days");
                 foreach (var line in NeckSeamViews.ApplyLines(preview))
                     Widgets.MutedWrapped("• " + line);
                 if (NeckSeamViews.ModelWarning(preview) is { } models)
@@ -459,7 +461,7 @@ internal sealed class SkinSeamDialog
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader($"Restore backups ({groups.Count})###skin-seam-backups"))
             return;
-        Widgets.HintWrapped("Backups of the files this check reads, made when a fix or another edit changed them, and kept for 7 days. Restoring a row puts " +
+        Widgets.HintWrapped($"Backups of the files this check reads, made when a fix or another edit changed them, and kept for {_config.CacheRetentionDays} days. Restoring a row puts " +
                             "its files back as they were just before that time. The files it replaces are backed up first, so a restore can be undone the same way.");
         if (groups.Count == 0)
         {

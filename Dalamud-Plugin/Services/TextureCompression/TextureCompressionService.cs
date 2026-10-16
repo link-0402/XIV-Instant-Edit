@@ -1095,7 +1095,7 @@ internal sealed class TextureCompressionService : IDisposable
 
     /// <summary>
     /// Part of the automatic cache cleanup: forgets originals backed up more than
-    /// <see cref="TextureBackupStore.Retention"/> ago and deletes their copies. Skipped while a run or
+    /// <see cref="Configuration.CacheCleanupDays"/> ago and deletes their copies. Skipped while a run or
     /// a restore is busy; the next cleanup catches up.
     /// </summary>
     public void ExpireBackups()
@@ -1113,10 +1113,10 @@ internal sealed class TextureCompressionService : IDisposable
             {
                 cacheRoot = null;
             }
-            var (forgotten, strays) = Backups.Expire(cacheRoot, DateTimeOffset.UtcNow - TextureBackupStore.Retention);
+            var (forgotten, strays) = Backups.Expire(cacheRoot, DateTimeOffset.UtcNow - _config.CacheRetention);
             if (forgotten > 0 || strays > 0)
                 _log.Information($"Cache cleanup removed the originals of {forgotten:N0} optimized files and {strays:N0} stray copies, older than " +
-                                 $"{TextureBackupStore.Retention.TotalDays:0} days.");
+                                 $"{_config.CacheRetentionDays} days.");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

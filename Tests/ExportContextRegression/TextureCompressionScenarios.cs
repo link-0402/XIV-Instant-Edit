@@ -719,11 +719,11 @@ internal static class TextureCompressionScenarios
             TextureCompressionViews.Status(CompressionPhase.Off, ""), TextureCompressionViews.Status(CompressionPhase.Watching, ""),
             TextureCompressionViews.Status(CompressionPhase.Waiting, ""), TextureCompressionViews.Status(CompressionPhase.Checking, ""),
             TextureCompressionViews.Totals([], []), TextureCompressionViews.Totals([Entry(4L << 20, 1L << 20), Entry(4L << 20, 1L << 20)], []),
-            TextureCompressionViews.Backups((2, 8L << 20), true), TextureCompressionViews.LastRun(run), TextureCompressionViews.Kept(run),
+            TextureCompressionViews.Backups((2, 8L << 20), true, 7), TextureCompressionViews.LastRun(run), TextureCompressionViews.Kept(run),
             TextureCompressionViews.Restored(new CompressionRestore(3, ["M: y.tex"], ["M: z.tex: gone"], [])),
             TextureCompressionViews.Totals([Entry(4L << 20, 1L << 20), Entry(5L << 20, 1L << 20, true)], []),
             TextureCompressionViews.LastRun(run with { Shrunk = 1 }),
-            TextureCompressionViews.Backups((2, 8L << 20), false), TextureCompressionViews.LeftRestored(run with { Restored = ["a.tex", "b.tex"] }),
+            TextureCompressionViews.Backups((2, 8L << 20), false, 7), TextureCompressionViews.LeftRestored(run with { Restored = ["a.tex", "b.tex"] }),
             TextureCompressionViews.Restored(new CompressionRestore(0, [], [], [])),
         };
         Require(TextureCompressionViews.Status(CompressionPhase.Compressing, "Optimizing 1 of 2: a.tex") == "Optimizing 1 of 2: a.tex" &&
@@ -734,7 +734,7 @@ internal static class TextureCompressionScenarios
             "texture optimization card: status, totals, kept textures and restoring read as sentences");
         Require(texts[6] == "Backups: 8.00 MiB, kept for 7 days." && texts[12].Contains("automatic cache cleanup is off", StringComparison.Ordinal) &&
                 texts[13] == "2 restored files are skipped. Hover for which." &&
-                TextureCompressionViews.LeftRestored(run) == string.Empty,
+                TextureCompressionViews.Backups((2, 8L << 20), true, 30) == "Backups: 8.00 MiB, kept for 30 days." &&                TextureCompressionViews.LeftRestored(run) == string.Empty,
             "texture optimization card: how long originals stay, and the worn files left as restored");
         Require(texts[10] == "2 textures optimized (1 of one color, shrunk to 32 × 32) so far, 7.00 MiB smaller in total." &&
                 texts[11].StartsWith("Last run: 2 textures optimized (1 of one color, shrunk to 32 × 32), 6.00 MiB smaller, ", StringComparison.Ordinal) &&

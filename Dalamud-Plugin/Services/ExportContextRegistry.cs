@@ -53,6 +53,8 @@ public sealed class ExportContextRegistry : IDisposable
     // since leaving them out of a save records them as deleted.
     private readonly List<PersistedExportContext> _unloadable = [];
     private readonly ModelBackupStore? _backups;
+    // How long an inactive context is kept: the days set in Settings, or ExportContextSessionStore.Retention.
+    private readonly Func<TimeSpan>? _retention;
     private static readonly TimeSpan ReceiptRetention = TimeSpan.FromDays(1);
     private const int MaxCompletedReceiptsPerContext = 128;
     private bool _disposed;
@@ -61,7 +63,8 @@ public sealed class ExportContextRegistry : IDisposable
         string pluginInstanceId,
         IEnumerable<PersistedExportContext>? persisted = null,
         Action<IReadOnlyList<PersistedExportContext>>? persist = null,
-        ModelBackupStore? backups = null)
+        ModelBackupStore? backups = null,
+        Func<TimeSpan>? retention = null)
     {
         if (string.IsNullOrWhiteSpace(pluginInstanceId))
             throw new ArgumentException("A plugin instance id is required.", nameof(pluginInstanceId));
@@ -69,6 +72,7 @@ public sealed class ExportContextRegistry : IDisposable
         PluginInstanceId = pluginInstanceId;
         _persist = persist;
         _backups = backups;
+        _retention = retention;
 
         if (persisted is not null)
         {
@@ -992,7 +996,7 @@ public sealed class ExportContextRegistry : IDisposable
             List<PersistedExportContext> snapshot;
             lock (_lock)
             {
-                var cutoff = DateTimeOffset.UtcNow - ExportContextSessionStore.Retention;
+                var cutoff = DateTimeOffset.UtcNow - (_retention?.Invoke() ?? ExportContextSessionStore.Retention);
                 foreach (var expired in _contexts
                              .Where(pair => pair.Value.Context.LastTouchedAtUtc < cutoff)
                              .Select(pair => pair.Key).ToArray())

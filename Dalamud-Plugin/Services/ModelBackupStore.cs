@@ -14,15 +14,23 @@ public sealed record ManagedBackup(string TargetId, string Name, DateTimeOffset 
 /// <summary>Plugin-owned backup history, isolated from Penumbra mod folders.</summary>
 public sealed partial class ModelBackupStore
 {
+    /// <summary>How long backups are kept unless the store is given the Settings value.</summary>
     public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
     private readonly string _root;
+    private readonly Func<TimeSpan>? _retention;
 
-    public ModelBackupStore(string configDirectory)
+    public ModelBackupStore(string configDirectory, Func<TimeSpan>? retention = null)
     {
+        _retention = retention;
         _root = Path.Combine(Path.GetFullPath(configDirectory), "Backups");
         Directory.CreateDirectory(_root);
         Cleanup();
     }
+
+    /// <summary>How long backups are kept: the days set in Settings, or <see cref="Retention"/>.</summary>
+    public TimeSpan CurrentRetention => _retention?.Invoke() ?? Retention;
+
+    public int RetentionDays => (int)Math.Round(CurrentRetention.TotalDays);
 
     public ManagedBackupTarget Describe(string modDirectory, string targetRelativePath)
     {
@@ -186,7 +194,7 @@ public sealed partial class ModelBackupStore
     {
         if (!Directory.Exists(_root))
             return;
-        var cutoff = (now ?? DateTimeOffset.UtcNow) - Retention;
+        var cutoff = (now ?? DateTimeOffset.UtcNow) - CurrentRetention;
         foreach (var directory in Directory.EnumerateDirectories(_root))
         {
             if (!TargetIdRegex().IsMatch(Path.GetFileName(directory)) ||

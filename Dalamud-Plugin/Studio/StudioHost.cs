@@ -74,7 +74,7 @@ internal sealed class StudioHost : IDisposable
     /// <summary>Instant Edit's hand-offs (Blender, the texture editor) for the files of an open mod; set by the main window.</summary>
     public IModHandoff? Handoff { get; set; }
 
-    /// <summary>Backups of the files clean-up and repairs change, kept in the cache folder for a week.</summary>
+    /// <summary>Backups of the files clean-up and repairs change, kept in the cache folder for the days set in Settings > Cache.</summary>
     public Services.Backups.ModBackupStore Backups { get; }
 
     /// <summary>Penumbra reading a mod again, for repairs and clean-up.</summary>

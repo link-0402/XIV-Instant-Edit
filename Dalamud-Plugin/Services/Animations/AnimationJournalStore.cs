@@ -5,15 +5,18 @@ namespace InstantEdit.Services.Animations;
 
 internal sealed class AnimationJournalStore
 {
+    /// <summary>How long edit records are kept unless the store is given the Settings value.</summary>
     public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, IncludeFields = true };
     private readonly string root;
     private readonly Action<string>? warn;
+    private readonly Func<TimeSpan>? retention;
     private string OffsetBackupPath => Path.Combine(root, "livepose-offset-backup.json");
-    public AnimationJournalStore(string configDirectory, Action<string>? warn = null)
+    public AnimationJournalStore(string configDirectory, Action<string>? warn = null, Func<TimeSpan>? retention = null)
     {
         root = Path.Combine(Path.GetFullPath(configDirectory), "AnimationEdits");
         this.warn = warn;
+        this.retention = retention;
         TextureFiles.EnsureLocalPath(root);
         Directory.CreateDirectory(root);
         Cleanup();
@@ -55,9 +58,12 @@ internal sealed class AnimationJournalStore
             }
         }
     }
+    /// <summary>The days set in Settings, or <see cref="Retention"/>.</summary>
+    public TimeSpan CurrentRetention => retention?.Invoke() ?? Retention;
+
     public void Cleanup(DateTime? now = null)
     {
-        var cutoff = (now ?? DateTime.UtcNow) - Retention;
+        var cutoff = (now ?? DateTime.UtcNow) - CurrentRetention;
         foreach (var dir in Directory.EnumerateDirectories(root))
         {
             if (!Guid.TryParseExact(Path.GetFileName(dir), "N", out _)) continue;
