@@ -132,7 +132,7 @@ internal static class PortValidator
         {
             var model = item.Models[i];
             var target = new Target(TargetKind.Model, item.Key, i);
-            var who = $"{subject.DisplayName} / {model.RaceGender.DisplayName}";
+            var who = subject.HasRaces ? $"{subject.DisplayName} / {model.RaceGender.DisplayName}" : subject.DisplayName;
 
             if (native != null && !native.Contains(model.RaceGender))
                 issues.Add(new(Severity.Warning, target,

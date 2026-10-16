@@ -25,13 +25,19 @@ internal sealed class ItemBrowserPanel
 {
     private static readonly TimeSpan SearchDelay = TimeSpan.FromMilliseconds(150);
 
-    private static readonly SubjectKind[] Kinds = { SubjectKind.Gear, SubjectKind.Hair, SubjectKind.Face, SubjectKind.Tail, SubjectKind.Ear };
-    private static readonly string[] KindLabels = { "Gear", "Hair", "Face", "Tail", "Ears" };
+    /// <summary>Weapons are offered in Build mode only: Edit mode's mods are opened from their game files, which it lists by gear and feature.</summary>
+    private readonly SubjectKind[] _kinds;
+    private readonly string[] _kindLabels;
 
     private readonly StudioHost _host;
     private readonly IItemShelf _session;
 
     private SubjectKind _kind;
+
+    // ── Weapons ──────────────────────────────────────────────────────────────
+    private string[] _weaponCategories = { "All weapons" };
+    private int _weaponCategory;
+    private List<WeaponModel> _filteredWeapons = new();
 
     // ── Gear ─────────────────────────────────────────────────────────────────
     private readonly EquipSlot[] _allSlots = SlotInfo.AllSlots.ToArray();
@@ -59,8 +65,15 @@ internal sealed class ItemBrowserPanel
         _session = session;
         _slotLabels = _allSlots.Select(s => SlotInfo.DisplayLabelMap[s]).ToArray();
 
+        bool build = session is PortSession;
+        _kinds = build
+            ? new[] { SubjectKind.Gear, SubjectKind.Weapon, SubjectKind.Hair, SubjectKind.Face, SubjectKind.Tail, SubjectKind.Ear }
+            : new[] { SubjectKind.Gear, SubjectKind.Hair, SubjectKind.Face, SubjectKind.Tail, SubjectKind.Ear };
+        _kindLabels = _kinds.Select(KindTab).ToArray();
+
         var cfg = host.Configuration;
-        _kind        = Kinds[Math.Clamp(cfg.LastBrowserKind, 0, Kinds.Length - 1)];
+        // Saved as the kind itself; older settings saved the tab index, which matched the kinds then.
+        _kind        = Array.IndexOf(_kinds, (SubjectKind)cfg.LastBrowserKind) >= 0 ? (SubjectKind)cfg.LastBrowserKind : SubjectKind.Gear;
         _slotIndex   = Math.Clamp(cfg.LastSlotIndex, 0, _allSlots.Length - 1);
         _search      = cfg.LastItemSearch;
         _featureRace = cfg.LastFeatureRace;
@@ -79,12 +92,17 @@ internal sealed class ItemBrowserPanel
             FirstLoad();
 
         Gui.SectionHeader("Browse the game", _session is PortSession
-            ? "Press + on gear or a feature, or drag it onto the modpack list on the left, to add it. Set-ups are saved per item, so removing and re-adding one keeps its work."
+            ? "Press + on anything, or drag it onto the modpack list on the left, to add it. Set-ups are saved per item, so removing and re-adding one keeps its work."
             : $"Press + on gear or a feature, or drag it onto the list on the left, to add it to the {_session.ShelfName}: its game files are listed there, ready for files of your own.");
         DrawKindSwitch();
         ImGui.Spacing();
 
-        bool listReady = _kind == SubjectKind.Gear ? DrawGearFilters() : DrawFeatureFilters();
+        bool listReady = _kind switch
+        {
+            SubjectKind.Gear   => DrawGearFilters(),
+            SubjectKind.Weapon => DrawWeaponFilters(),
+            _                  => DrawFeatureFilters(),
+        };
         if (!listReady)
             return;
 
@@ -95,13 +113,21 @@ internal sealed class ItemBrowserPanel
 
         if (ImGui.BeginChild("##SubjectList", new Vector2(-1, -footerH), true))
         {
-            if (_kind == SubjectKind.Gear) DrawGearList();
-            else                           DrawFeatureList();
+            switch (_kind)
+            {
+                case SubjectKind.Gear:   DrawGearList();    break;
+                case SubjectKind.Weapon: DrawWeaponList();  break;
+                default:                 DrawFeatureList(); break;
+            }
         }
         ImGui.EndChild();
 
-        int shown = _kind == SubjectKind.Gear ? _filtered.Count : _featureIds.Count;
-        int total = _kind == SubjectKind.Gear ? _allItems.Count : AllIdsForRace().Count;
+        var (shown, total) = _kind switch
+        {
+            SubjectKind.Gear   => (_filtered.Count, _allItems.Count),
+            SubjectKind.Weapon => (_filteredWeapons.Count, WeaponsInCategory().Count()),
+            _                  => (_featureIds.Count, AllIdsForRace().Count),
+        };
         Gui.Hint(shown == total ? $"{total} {Noun(total)}" : $"{shown} of {total} {Noun(total)}");
         ImGui.SameLine();
         var inPack = $"{_session.ShelfCount} in the {_session.ShelfName}";
@@ -117,7 +143,20 @@ internal sealed class ItemBrowserPanel
     /// <summary>The subject of the last clicked tile, for the browser's inspector.</summary>
     public PortSubject? Highlighted { get; private set; }
 
-    private string Noun(int n) => _kind == SubjectKind.Gear ? "items" : $"{FeatureNaming.KindLabel(_kind).ToLowerInvariant()} ids";
+    private string Noun(int n) => _kind switch
+    {
+        SubjectKind.Gear   => "items",
+        SubjectKind.Weapon => "weapon models",
+        _                  => $"{FeatureNaming.KindLabel(_kind).ToLowerInvariant()} ids",
+    };
+
+    private static string KindTab(SubjectKind kind) => kind switch
+    {
+        SubjectKind.Gear   => "Gear",
+        SubjectKind.Weapon => "Weapons",
+        SubjectKind.Ear    => "Ears",
+        _                  => FeatureNaming.KindLabel(kind),
+    };
 
     private static void Waiting(string text)
     {
@@ -133,17 +172,17 @@ internal sealed class ItemBrowserPanel
     private void DrawKindSwitch()
     {
         float spacing = ImGui.GetStyle().ItemSpacing.X * 0.5f;
-        float w = (ImGui.GetContentRegionAvail().X - spacing * (Kinds.Length - 1)) / Kinds.Length;
+        float w = (ImGui.GetContentRegionAvail().X - spacing * (_kinds.Length - 1)) / _kinds.Length;
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(spacing, ImGui.GetStyle().ItemSpacing.Y));
-        for (int i = 0; i < Kinds.Length; i++)
+        for (int i = 0; i < _kinds.Length; i++)
         {
             if (i > 0) ImGui.SameLine();
-            bool active = _kind == Kinds[i];
+            bool active = _kind == _kinds[i];
             ImGui.PushStyleColor(ImGuiCol.Button, active ? Theme.Accent with { W = 0.45f } : Theme.Band);
             ImGui.PushStyleColor(ImGuiCol.Text,   active ? new Vector4(1, 1, 1, 1) : Theme.Muted);
-            if (ImGui.Button($"{KindLabels[i]}##kind", new Vector2(w, 0)) && !active)
+            if (ImGui.Button($"{_kindLabels[i]}##kind", new Vector2(w, 0)) && !active)
             {
-                _kind = Kinds[i];
+                _kind = _kinds[i];
                 Reload();
                 SaveBrowserState();
             }
@@ -161,6 +200,15 @@ internal sealed class ItemBrowserPanel
             SaveBrowserState();
         }
         Gui.Tooltip("Equipment slot");
+        return true;
+    }
+
+    private bool DrawWeaponFilters()
+    {
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.Combo("##WeaponCategory", ref _weaponCategory, _weaponCategories, _weaponCategories.Length))
+            ApplyFilter();
+        Gui.Tooltip("Weapon class");
         return true;
     }
 
@@ -210,7 +258,7 @@ internal sealed class ItemBrowserPanel
 
     private void DrawSearchRow()
     {
-        var hint = _kind == SubjectKind.Gear ? "Search name or model id" : "Search id";
+        var hint = _kind is SubjectKind.Gear or SubjectKind.Weapon ? "Search name or model id" : "Search id";
         ImGui.SetNextItemWidth(-(ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X));
         if (ImGui.InputTextWithHint("##Search", hint, ref _search, 256))
         {
@@ -254,6 +302,26 @@ internal sealed class ItemBrowserPanel
             DrawTile(item.RowId, item.Name, $"{SlotInfo.DisplayLabelMap[item.Slot]} · {item.ModelIdDisplay}", _session.HasWork(item.RowId),
                 () => new GearSubject(item), item.Icon,
                 $"{item.Name}\nModel {item.ModelIdDisplay}");
+        });
+    }
+
+    private void DrawWeaponList()
+    {
+        if (_filteredWeapons.Count == 0)
+        {
+            Gui.Hint(_configuredOnly ? "(no set-up weapons here)" : "(no weapons match)");
+            return;
+        }
+
+        int selected = _scrollToSelection ? _filteredWeapons.FindIndex(w => new WeaponSubject(w).Key == SelectedKey) : -1;
+        DrawTiles(_filteredWeapons.Count, selected, i =>
+        {
+            var weapon = _filteredWeapons[i];
+            var subject = new WeaponSubject(weapon);
+            DrawTile(subject.Key, subject.DisplayName,
+                $"{(weapon.Category.Length > 0 ? weapon.Category : "Weapon")} · {weapon.IdDisplay}{(weapon.OffHand ? " · off hand" : "")}",
+                _session.HasWork(subject.Key), () => subject, weapon.Icon,
+                $"{subject.DisplayName}\n{subject.ModelGamePath(default)}");
         });
     }
 
@@ -327,7 +395,7 @@ internal sealed class ItemBrowserPanel
             Title       = name,
             TitleColor  = configured && !inPack ? Theme.Accent : null,
             Subtitle    = subtitle,
-            Icon        = _kind == SubjectKind.Gear ? FontAwesomeIcon.Tshirt : FontAwesomeIcon.User,
+            Icon        = _kind switch { SubjectKind.Gear => FontAwesomeIcon.Tshirt, SubjectKind.Weapon => FontAwesomeIcon.ShieldAlt, _ => FontAwesomeIcon.User },
             IconColor   = inPack ? Theme.Good : Theme.Muted,
             DrawThumb   = icon != 0 ? side => GameIcons.Draw(icon, side) : null,
             Badges      = badges,
@@ -366,6 +434,9 @@ internal sealed class ItemBrowserPanel
                 _kind = feature.Kind;
                 _featureRace = feature.Race.RaceCode;
                 break;
+            case WeaponSubject when Array.IndexOf(_kinds, SubjectKind.Weapon) >= 0:
+                _kind = SubjectKind.Weapon;
+                break;
         }
 
         Reload();
@@ -376,7 +447,22 @@ internal sealed class ItemBrowserPanel
     {
         if (_kind == SubjectKind.Gear)
             _allItems = _host.GameData.GetAllItemsForSlot(_allSlots[_slotIndex]);
+        else if (_kind == SubjectKind.Weapon)
+        {
+            var categories = _host.GameData.GetWeapons().Select(w => w.Category).Where(c => c.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
+            _weaponCategories = new[] { "All weapons" }.Concat(categories).ToArray();
+            _weaponCategory = Math.Clamp(_weaponCategory, 0, _weaponCategories.Length - 1);
+        }
         ApplyFilter();
+    }
+
+    private IEnumerable<WeaponModel> WeaponsInCategory()
+    {
+        var all = _host.GameData.GetWeapons();
+        return _weaponCategory <= 0 || _weaponCategory >= _weaponCategories.Length
+            ? all
+            : all.Where(w => string.Equals(w.Category, _weaponCategories[_weaponCategory], StringComparison.OrdinalIgnoreCase));
     }
 
     private RaceGender? CurrentRace()
@@ -398,6 +484,19 @@ internal sealed class ItemBrowserPanel
     {
         var cfg = _host.Configuration;
         var q = _search.Trim();
+
+        if (_kind == SubjectKind.Weapon)
+        {
+            IEnumerable<WeaponModel> weapons = WeaponsInCategory();
+            if (_configuredOnly)
+                weapons = weapons.Where(w => _session.HasWork(new WeaponSubject(w).Key));
+            if (q.Length > 0)
+                weapons = weapons.Where(w => w.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                          || w.IdDisplay.Contains(q, StringComparison.OrdinalIgnoreCase))
+                                 .OrderBy(w => w.Name.StartsWith(q, StringComparison.OrdinalIgnoreCase) ? 0 : 1);
+            _filteredWeapons = weapons.ToList();
+            return;
+        }
 
         if (_kind != SubjectKind.Gear)
         {
@@ -439,7 +538,7 @@ internal sealed class ItemBrowserPanel
     private void SaveBrowserState()
     {
         var cfg = _host.Configuration;
-        cfg.LastBrowserKind = Array.IndexOf(Kinds, _kind);
+        cfg.LastBrowserKind = (int)_kind;
         cfg.LastSlotIndex   = _slotIndex;
         cfg.LastItemSearch  = _search;
         cfg.LastFeatureRace = _featureRace;

@@ -221,6 +221,9 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
         return result;
     }
 
+    /// <summary>The race a weapon's single model row is kept under; weapons ignore it when building paths.</summary>
+    internal static RaceGender WeaponRace => RaceInfo.BaseFor(PlayerGender.Male);
+
     /// <summary>
     /// Races that ship their own vanilla model for this subject. Gear: races with their own
     /// model for the item. Hair and other features: races that have this id at all.
@@ -230,7 +233,12 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
         if (subject is GearSubject gear)
             return GetNativeModelRaces(gear.Item.Slot, gear.Item.ModelId);
 
-        var feature = (FeatureSubject)subject;
+        // A weapon has one model for everyone, kept under the placeholder race its model row uses.
+        if (subject is WeaponSubject weapon)
+            return Exists(weapon.ModelGamePath(default)) ? new HashSet<RaceGender> { WeaponRace } : new HashSet<RaceGender>();
+
+        if (subject is not FeatureSubject feature)
+            return new HashSet<RaceGender>();
         var key = (feature.Kind, feature.Id);
         lock (_featureNativeRaces)
         {
@@ -335,7 +343,7 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
         foreach (var referenced in names)
         {
             var name = MaterialNaming.SanitizeFileName(referenced.TrimStart('/'));
-            var setup = new MaterialSetup { Name = name, ShaderType = subject.Kind == SubjectKind.Gear ? ShaderType.Character : ShaderType.Hair };
+            var setup = new MaterialSetup { Name = name, ShaderType = subject.Kind is SubjectKind.Gear or SubjectKind.Weapon ? ShaderType.Character : ShaderType.Hair };
 
             var mtrl = TryReadMaterial(subject.VanillaMaterialPath(referenced, race));
             if (mtrl != null)
@@ -431,7 +439,8 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
                 ? modelRace
                 : RaceInfo.BaseFor(modelRace.Gender);
 
-        var feature = (FeatureSubject)subject;
+        if (subject is not FeatureSubject feature)
+            return modelRace;   // weapons: one race-shared set
         var key = (feature.Kind, feature.Id, modelRace.RaceCode);
         lock (_materialRaces)
         {
@@ -477,6 +486,8 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
     /// </summary>
     internal IReadOnlyList<RaceGender?> MaterialRaces(PortSubject subject, IReadOnlyList<RaceModelEntry> models)
     {
+        if (!subject.HasRaces)
+            return subject.MaterialRaces(models);
         if (models.Count == 0)
             return subject.BaseRace is { } baseRace
                 ? new RaceGender?[] { MaterialRaceFor(subject, baseRace) }
@@ -649,6 +660,7 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
     {
         var bySlot   = new Dictionary<EquipSlot, List<GameItem>>();
         var byRowId  = new Dictionary<uint, GameItem>();
+        var weapons  = new List<WeaponModel>();
 
         try
         {
@@ -664,6 +676,7 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
                 var primaryId = (ushort)(row.ModelMain & 0xFFFF);
                 if (primaryId == 0) continue;
 
+                if (AddWeapon(row, name, weapons)) continue;
                 if (!TryGetEquipSlot(row, out var slot, out var isAcc)) continue;
 
                 var variant = (ushort)((row.ModelMain >> 16) & 0xFFFF);
@@ -706,12 +719,118 @@ public sealed class GameDataService : IItemNames, Check.IItemVariants
             names.Add((item.Name, item.Slot));
         }
 
+        weapons.Sort((a, b) =>
+        {
+            int c = string.Compare(a.Category, b.Category, StringComparison.OrdinalIgnoreCase);
+            return c != 0 ? c : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        });
+        _weapons      = weapons;
+        _weaponsByKey = weapons.GroupBy(w => (w.RowId, w.OffHand)).ToDictionary(g => g.Key, g => g.First());
         _itemsByRowId = byRowId;
         _itemsBySet   = bySet;
         _cacheCount   = byRowId.Count;
         _itemsBySlot  = bySlot;   // published last: readers treat non-null as "fully built"
-        _log.Information("[Studio] Item cache built: {0} equipment/accessory items", _cacheCount);
+        _log.Information("[Studio] Item cache built: {0} equipment/accessory items, {1} weapon models", _cacheCount, weapons.Count);
         return bySlot;
+    }
+
+    // ── Weapons ──────────────────────────────────────────────────────────────
+
+    private IReadOnlyList<WeaponModel> _weapons = Array.Empty<WeaponModel>();
+    private Dictionary<(uint RowId, bool OffHand), WeaponModel> _weaponsByKey = new();
+
+    /// <summary>Every weapon model, one per hand an item shows a model in, sorted by class then name. Built with the item cache.</summary>
+    internal IReadOnlyList<WeaponModel> GetWeapons()
+    {
+        GetItemCache();
+        return _weapons;
+    }
+
+    /// <summary>The weapon model of an item's main or off hand, or null.</summary>
+    internal WeaponModel? GetWeapon(uint rowId, bool offHand)
+    {
+        GetItemCache();
+        return _weaponsByKey.TryGetValue((rowId, offHand), out var weapon) ? weapon : null;
+    }
+
+    /// <summary>
+    /// Adds a weapon item's models (main hand, and the off hand where it has a model of its own)
+    /// and returns true; false for anything that is not a weapon. Shields and other off-hand-only
+    /// items show their main model in the off hand.
+    /// </summary>
+    private static bool AddWeapon(Item row, string name, List<WeaponModel> weapons)
+    {
+        try
+        {
+            if (row.EquipSlotCategory.RowId == 0)
+                return false;
+            var category = row.EquipSlotCategory.Value;
+            if (category.MainHand <= 0 && category.OffHand <= 0)
+                return false;
+
+            string label;
+            try { label = row.ItemUICategory.RowId != 0 ? row.ItemUICategory.Value.Name.ToString() : string.Empty; }
+            catch (Exception) { label = string.Empty; }
+
+            static WeaponModel? Model(Item row, string name, string label, ulong model, bool offHand)
+            {
+                var id = (ushort)model;
+                return id == 0 ? null : new WeaponModel(row.RowId, name, row.Icon, label, id, (ushort)(model >> 16), (ushort)(model >> 32), offHand);
+            }
+
+            if (Model(row, name, label, row.ModelMain, offHand: category.MainHand <= 0) is { } main)
+                weapons.Add(main);
+            if (category.MainHand > 0 && Model(row, name, label, row.ModelSub, offHand: true) is { } off)
+                weapons.Add(off);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The weapon's IMC overrides, one per variant, each forcing the variant's material back to the
+    /// v0001 folder the build writes while keeping every other field (see <see cref="GetImcOverridesForcingV1"/>).
+    /// Null when the IMC file can't be read.
+    /// </summary>
+    internal List<ModImcOverride>? GetWeaponImcOverridesForcingV1(WeaponModel weapon)
+    {
+        var path = WeaponNaming.ImcGamePath(weapon.Id, weapon.Body);
+        try
+        {
+            var imc = _data.GetFile<ImcFile>(path);
+            if (imc == null) return null;
+            var parts = imc.GetParts();
+            if (parts.Length == 0) return null;
+
+            var part = parts[0];
+            var overrides = new List<ModImcOverride>(imc.Count);
+            for (int v = 1; v <= imc.Count; v++)
+            {
+                var entry = part.Variants[v - 1];
+                overrides.Add(new ModImcOverride
+                {
+                    Object              = weapon.OffHand ? ImcObject.OffHand : ImcObject.MainHand,
+                    SetId               = weapon.Id,
+                    SecondaryId         = weapon.Body,
+                    Variant             = (byte)v,
+                    DecalId             = entry.DecalId,
+                    VfxId               = entry.VfxId,
+                    MaterialAnimationId = entry.MaterialAnimationId,
+                    AttributeMask       = entry.AttributeMask,
+                    // Lumina's SoundId keeps the raw high bits; see GetImcOverridesForcingV1.
+                    SoundId             = (byte)(entry.SoundId >> 10),
+                });
+            }
+            return overrides;
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "[Studio] Failed to read IMC file {0}", path);
+            return null;
+        }
     }
 
     // ── Item names by model and variant (for mod checks) ─────────────────────

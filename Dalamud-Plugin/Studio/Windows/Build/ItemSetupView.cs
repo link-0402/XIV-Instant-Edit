@@ -120,8 +120,8 @@ internal sealed class ItemSetupView
             Id        = "header",
             Title     = subject.DisplayName,
             Subtitle  = $"{subject.KindLabel} · {subject.IdDisplay}",
-            Detail    = $"{item.Models.Count} race model(s) · {item.Materials.Count} material(s) · {textures} texture(s)",
-            Icon      = subject.Kind == SubjectKind.Gear ? FontAwesomeIcon.Tshirt : FontAwesomeIcon.User,
+            Detail    = $"{item.Models.Count} {(subject.HasRaces ? "race model(s)" : "model(s)")} · {item.Materials.Count} material(s) · {textures} texture(s)",
+            Icon      = GameIcons.Glyph(subject),
             IconColor = Theme.Accent,
             DrawThumb = icon != 0 ? side => GameIcons.Draw(icon, side) : null,
             Badges    = badges,
@@ -212,7 +212,7 @@ internal sealed class ItemSetupView
 
         var actions = new List<TileAction>
         {
-            new(FontAwesomeIcon.FolderOpen, "Pick the .mdl this race is made from", () => _editor.BrowseModel(model)),
+            new(FontAwesomeIcon.FolderOpen, subject.HasRaces ? "Pick the .mdl this race is made from" : "Pick the .mdl", () => _editor.BrowseModel(model)),
         };
         if (subject.MultiRace && !PortSession.IsBaseRace(item, model.RaceGender))
             actions.Add(new TileAction(FontAwesomeIcon.Trash, "Remove this race (the file on disk is not touched)",
@@ -224,7 +224,7 @@ internal sealed class ItemSetupView
         var result = Tile.Draw(new TileSpec
         {
             Id            = $"model{index}",
-            Title         = model.RaceGender.DisplayName,
+            Title         = subject.HasRaces ? model.RaceGender.DisplayName : "Model",
             Subtitle      = text,
             SubtitleColor = color,
             Detail        = model.UseDummy || model.UseVariants || string.IsNullOrWhiteSpace(model.SourcePath)

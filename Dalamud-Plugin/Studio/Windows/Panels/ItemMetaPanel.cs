@@ -42,6 +42,10 @@ internal sealed class ItemMetaPanel
         {
             DrawEst(item, hair);
         }
+        else if (item.Subject is WeaponSubject)
+        {
+            Gui.HintWrapped("Weapons need no metadata here. Their IMC variants are pointed at your material automatically.");
+        }
         else
         {
             Gui.Hint($"A {item.Subject.KindLabel.ToLowerInvariant()} needs no metadata — its files replace the game's directly.");

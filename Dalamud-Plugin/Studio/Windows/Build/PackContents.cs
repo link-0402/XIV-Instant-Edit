@@ -236,7 +236,7 @@ internal sealed class PackContents
             Title     = subject.DisplayName,
             Subtitle  = $"{subject.KindLabel} · {subject.IdDisplay}",
             Detail    = $"{item.Models.Count} race model(s) · {item.Materials.Count} material(s)",
-            Icon      = subject.Kind == SubjectKind.Gear ? FontAwesomeIcon.Tshirt : FontAwesomeIcon.User,
+            Icon      = GameIcons.Glyph(subject),
             IconColor = item.HasWork ? Theme.Accent : Theme.Muted,
             DrawThumb = icon != 0 ? side => GameIcons.Draw(icon, side) : null,
             Badges    = badges,

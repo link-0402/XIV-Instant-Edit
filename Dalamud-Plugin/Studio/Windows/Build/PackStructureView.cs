@@ -208,7 +208,7 @@ internal sealed class PackStructureView
             Detail    = placed.File,
             Icon      = placed.Kind switch
             {
-                PlacedKind.Item     => item.Subject.Kind == SubjectKind.Gear ? FontAwesomeIcon.Tshirt : FontAwesomeIcon.User,
+                PlacedKind.Item     => GameIcons.Glyph(item.Subject),
                 PlacedKind.Model    => FontAwesomeIcon.Cube,
                 PlacedKind.Material => FontAwesomeIcon.Palette,
                 _                   => placed.Target.Kind == TargetKind.Model ? FontAwesomeIcon.Cube : FontAwesomeIcon.Image,
