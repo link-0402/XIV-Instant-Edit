@@ -1,3 +1,4 @@
+using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services.Stash;
 using InstantEdit.Studio.Services.Unity;
 using static InstantEdit.TestSupport.Assertions;
@@ -34,6 +35,64 @@ internal static class PackageImportScenarios
         ManifestRoundTrips(root);
         LegacyFolderIsScanned(root);
         ReExtractReplacesManifest(root);
+
+        StashApplyMapsPurposes(root);
+        ExtractionsAreListedNewestFirst(root);
+        RemoveStaysInsideTheOutputFolder(root);
+    }
+
+    private static void ExtractionsAreListedNewestFirst(string root)
+    {
+        var output = Path.Combine(root, "listing");
+        var older = Directory.CreateDirectory(Path.Combine(output, "older")).FullName;
+        var newer = Directory.CreateDirectory(Path.Combine(output, "newer")).FullName;
+        Directory.CreateDirectory(Path.Combine(output, "empty"));
+        File.WriteAllBytes(Path.Combine(older, "a.png"), PngBytes);
+        File.WriteAllBytes(Path.Combine(newer, "b.png"), PngBytes);
+        File.WriteAllBytes(Path.Combine(newer, "c.png"), PngBytes);
+        File.WriteAllText(Path.Combine(newer, "notes.txt"), "x");
+        Directory.SetLastWriteTimeUtc(older, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        Directory.SetLastWriteTimeUtc(newer, new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        var listed = StashFolders.ListExtractions(output);
+        Require(listed.Select(Path.GetFileName).SequenceEqual(new[] { "newer", "older" }), "extractions are listed newest first; empty folders are left out");
+        Require(StashFolders.CountImages(newer) == 2, "a folder's images are counted, other files not");
+        Require(StashFolders.ListExtractions(Path.Combine(root, "missing")).Count == 0, "a missing output folder lists nothing");
+    }
+
+    private static void RemoveStaysInsideTheOutputFolder(string root)
+    {
+        var output = Path.Combine(root, "removal");
+        var inside = Directory.CreateDirectory(Path.Combine(output, "pkg")).FullName;
+        File.WriteAllBytes(Path.Combine(inside, "a.png"), PngBytes);
+        var outside = Directory.CreateDirectory(Path.Combine(root, "removal-sibling")).FullName;
+
+        Require(StashFolders.Remove(output, outside) != null && Directory.Exists(outside), "a folder outside the output folder is never removed");
+        Require(StashFolders.Remove(output, output) != null && Directory.Exists(output), "the output folder itself is never removed");
+        Require(StashFolders.Remove(output, inside) == null && !Directory.Exists(inside), "an extraction inside the output folder is removed");
+    }
+
+    private static void StashApplyMapsPurposes(string root)
+    {
+        var folder = Path.Combine(root, "apply");
+        Directory.CreateDirectory(Path.Combine(folder, "swatches"));
+        var textures = new Dictionary<TexturePurpose, string>
+        {
+            [TexturePurpose.Diffuse] = Path.Combine(folder, "d.png"), [TexturePurpose.Normal] = Path.Combine(folder, "n.png"),
+            [TexturePurpose.Mask] = Path.Combine(folder, "m.png"), [TexturePurpose.Occlusion] = Path.Combine(folder, "ao.png"),
+        };
+        var withMask = StashApply.Plan(textures, new[] { TextureType.Diffuse, TextureType.Normal, TextureType.Mask });
+        Require(withMask.Select(r => r.Type).SequenceEqual(new[] { TextureType.Diffuse, TextureType.Normal, TextureType.Mask }),
+            "diffuse, normal and mask go to their own slots; occlusion has none");
+        Require(withMask.All(r => !r.Folder) && withMask[1].Path == textures[TexturePurpose.Normal], "single files go in as single textures");
+
+        var noMask = StashApply.Plan(textures, new[] { TextureType.Diffuse, TextureType.Specular });
+        Require(noMask.Any(r => r.Type == TextureType.Specular && r.Path == textures[TexturePurpose.Mask]) && noMask.All(r => r.Type != TextureType.Mask),
+            "a mask goes to the specular slot of a material without a mask slot");
+
+        var folderDiffuse = StashApply.Plan(new Dictionary<TexturePurpose, string> { [TexturePurpose.Diffuse] = Path.Combine(folder, "swatches") },
+            new[] { TextureType.Diffuse });
+        Require(folderDiffuse.Single() is { Type: TextureType.Diffuse, Folder: true }, "a folder of diffuse swatches goes in as variants");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

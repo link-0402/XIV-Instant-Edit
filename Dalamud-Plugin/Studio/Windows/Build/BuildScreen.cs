@@ -125,7 +125,7 @@ internal sealed class BuildScreen
         Gui.AlignRight(buttons);
         if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Import package",
                 "Pulls models and textures out of a Sims 4 .package or a Unity .unitypackage."))
-            _host.ToggleSimsImport();
+            _host.TogglePackageImport();
 
         ImGui.SameLine();
         bool empty = _session.Items.Count == 0 && string.IsNullOrWhiteSpace(_session.ModName);

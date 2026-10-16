@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
@@ -12,39 +11,41 @@ using Dalamud.Interface.Windowing;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Sims;
 using InstantEdit.Studio.Services.Stash;
+using InstantEdit.Studio.Services.Unity;
+using InstantEdit.Studio.Windows.Import;
 using InstantEdit.Studio.Windows.UI;
 
 namespace InstantEdit.Studio.Windows;
 
 /// <summary>
-/// Imports a Sims 4 .package: lists the meshes and textures it carries, lets the user
-/// choose which detail levels to take and untick anything unwanted, then extracts the
-/// rest into the folder layout the material editor consumes — a folder of diffuse
-/// swatches to point a variant slot at, and single files for the other roles. Every
-/// extracted file and folder can then be dragged onto a texture or model input of Build
-/// mode, or onto a tile in Edit mode.
+/// Imports a Sims 4 .package or a Unity .unitypackage, then serves as the file stash.
 ///
-/// Scanning and extraction both run off the render thread. A package can run to
-/// hundreds of megabytes, and decoding its textures on the draw call would stall the
-/// game. The worker only returns its result and publishes a progress line; everything
-/// else is applied here on the render thread once the task has finished.
+/// A scan lists what the package holds; the user unticks what they don't want and extracts the
+/// rest into a folder of its own under the output folder (the cache's package-imports by
+/// default). A Sims package comes out in the layout the material editor consumes (a folder of
+/// diffuse swatches, single files for the other roles); a Unity package keeps its project layout.
+/// Either way the window then shows the stash: every extraction, its files by kind and purpose,
+/// each one draggable onto a texture or model tile of the build window or a mod window.
+///
+/// Scanning and extraction run off the render thread: a package can run to hundreds of
+/// megabytes. The worker only returns its result and publishes a progress line; everything else
+/// is applied here on the render thread once the task has finished.
 /// </summary>
-public sealed class SimsImportWindow : Window, IDisposable
+public sealed class PackageImportWindow : Window, IDisposable
 {
     private readonly StudioHost _host;
     private readonly TextureThumbnailCache _thumbnails;
+    private readonly StashView _stash;
 
     private string _packagePath = string.Empty;
     private string _outputDir   = string.Empty;
 
+    /// <summary>Whether the stash is shown rather than the import steps.</summary>
+    private bool _showStash;
+
+    // ── Sims ─────────────────────────────────────────────────────────────────
     private SimsScanResult? _scan;
     private SimsPackageInspector.ExtractionResult? _extraction;
-
-    /// <summary>One draggable entry of the extraction result list.</summary>
-    private sealed record ResultRow(string Label, string Detail, DroppedPaths Paths, string? Preview, bool PreviewIsFolder,
-        bool IsModel, bool NeedsConversion, bool Indented);
-
-    private List<ResultRow> _results = new();
 
     /// <summary>Whether to halve textures whose used content sits in one half.</summary>
     private bool _cropHalf = true;
@@ -56,6 +57,11 @@ public sealed class SimsImportWindow : Window, IDisposable
 
     private Task<SimsScanResult>? _scanTask;
     private Task<SimsPackageInspector.ExtractionResult>? _extractTask;
+
+    // ── Unity ────────────────────────────────────────────────────────────────
+    private UnityScanResult? _unityScan;
+    private Task<UnityScanResult>? _unityScanTask;
+    private Task<UnityExtraction>? _unityExtractTask;
 
     /// <summary>Stops the scan or extraction under way: the Stop button, closing the window, or the plugin going away.</summary>
     private CancellationTokenSource? _cts;
@@ -72,13 +78,17 @@ public sealed class SimsImportWindow : Window, IDisposable
         "Unknown", "Diffuse", "Normal", "Specular", "Shadow", "Emission", "Region map",
     };
 
-    internal SimsImportWindow(StudioHost host, TextureThumbnailCache thumbnails) : base("Import Sims 4 Package###StudioSimsImport")
+    private static readonly string[] UnityTickOptions = { "Textures and models", "Textures only", "Models only", "Nothing" };
+    private int _unityTick;
+
+    internal PackageImportWindow(StudioHost host, TextureThumbnailCache thumbnails) : base("Import Package###StudioSimsImport")
     {
-        _host     = host;
+        _host       = host;
         _thumbnails = thumbnails;
-        Size          = new Vector2(900, 660);
+        _stash      = new StashView(host, thumbnails);
+        Size          = new Vector2(960, 700);
         SizeCondition = ImGuiCond.FirstUseEver;
-        SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(620, 420) };
+        SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(680, 440) };
 
         var cfg = host.Configuration;
         _packagePath = cfg.LastSimsPackagePath;
@@ -99,6 +109,13 @@ public sealed class SimsImportWindow : Window, IDisposable
         _thumbnails.ForgetMemoryEntries();
     }
 
+    /// <summary>Opened: the stash when something was extracted before, so its files are a click away.</summary>
+    public override void OnOpen()
+    {
+        if (!Busy && _scan == null && _unityScan == null)
+            _showStash = _stash.HasExtractions(_outputDir);
+    }
+
     /// <summary>Closed: what runs is stopped, and whatever it would still have found is dropped.</summary>
     public override void OnClose() => StopWork();
 
@@ -109,8 +126,10 @@ public sealed class SimsImportWindow : Window, IDisposable
         _cts = null;
         if (Busy)
             _status = "Stopped.";
-        _scanTask    = null;
-        _extractTask = null;
+        _scanTask         = null;
+        _extractTask      = null;
+        _unityScanTask    = null;
+        _unityExtractTask = null;
     }
 
     /// <summary>A token for new work; whatever ran before is stopped first.</summary>
@@ -122,7 +141,11 @@ public sealed class SimsImportWindow : Window, IDisposable
         return _cts.Token;
     }
 
-    private bool Busy => _scanTask is { IsCompleted: false } || _extractTask is { IsCompleted: false };
+    private bool Busy => _scanTask is { IsCompleted: false } || _extractTask is { IsCompleted: false }
+                      || _unityScanTask is { IsCompleted: false } || _unityExtractTask is { IsCompleted: false };
+
+    private static bool IsUnity(string path) => Path.GetExtension(path).Equals(".unitypackage", StringComparison.OrdinalIgnoreCase);
+    private static bool IsPackage(string path) => IsUnity(path) || Path.GetExtension(path).Equals(".package", StringComparison.OrdinalIgnoreCase);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Draw
@@ -130,8 +153,16 @@ public sealed class SimsImportWindow : Window, IDisposable
 
     public override void Draw()
     {
+        FileDrop.BeginExternalSource();
         CollectFinishedWork();
         bool busy = Busy;
+
+        if (_showStash && !busy)
+        {
+            DrawStashBar();
+            _stash.Draw(_outputDir);
+            return;
+        }
 
         DrawSource(busy);
         DrawStatus(busy);
@@ -139,19 +170,54 @@ public sealed class SimsImportWindow : Window, IDisposable
 
         DrawOptions(busy);
 
-        float footerH = _extraction != null
-            ? ImGui.GetFrameHeightWithSpacing() * 6 + ResultListHeight
-            : ImGui.GetFrameHeightWithSpacing() * 1.5f;
-        if (ImGui.BeginChild("##SimsAssets", new Vector2(-1, -footerH), true))
-            DrawAssetList(busy);
+        float footerH = ImGui.GetFrameHeightWithSpacing() * 1.5f;
+        if (ImGui.BeginChild("##PackageAssets", new Vector2(-1, -footerH), true))
+        {
+            if (_unityScan != null) DrawUnityAssets(busy, _unityScan);
+            else                    DrawAssetList(busy);
+        }
         ImGui.EndChild();
 
         DrawActions(busy);
     }
 
+    /// <summary>The stash's top line: back to importing, and the Sims shortcut for the extraction just made.</summary>
+    private void DrawStashBar()
+    {
+        if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Import a package", "Scan and extract another .package or .unitypackage."))
+            _showStash = false;
+
+        if (_extraction != null && string.Equals(_stash.Folder, _extraction.RootFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            ImGui.SameLine();
+            bool canApply = _extraction.DiffuseCount > 0 || _extraction.NormalFile != null || _extraction.SpecularFile != null;
+            var target = _host.Pack.CurrentMaterial;
+            using (Gui.Disabled(!canApply || target == null))
+            {
+                var label = target != null ? $"Apply all to \"{target.Name}\"" : "Apply all to the selected material";
+                if (Gui.IconTextButton(FontAwesomeIcon.ArrowRight, label,
+                        target == null
+                            ? "Select a material in the build window's Set-up view first."
+                            : "Points that material at this extraction: the diffuse folder as a variant group, and the normal and specular images as single textures."))
+                {
+                    _applyMessage = _host.Pack.ApplySimsExtraction(_extraction);
+                    _host.OpenBuild();
+                    _host.Pack.GoToStage(Models.StageId.Details);
+                }
+            }
+        }
+        if (!string.IsNullOrEmpty(_applyMessage))
+        {
+            ImGui.SameLine();
+            ImGui.AlignTextToFramePadding();
+            Gui.Hint(_applyMessage);
+        }
+        ImGui.Spacing();
+    }
+
     private void DrawSource(bool busy)
     {
-        Gui.SectionHeader("1  Package", "Pick a .package and scan it. Nothing is written until you extract.");
+        Gui.SectionHeader("1  Package", "Pick a Sims 4 .package or a Unity .unitypackage and scan it. Nothing is written until you extract.");
 
         using (Gui.Disabled(busy))
         {
@@ -159,17 +225,30 @@ public sealed class SimsImportWindow : Window, IDisposable
             // so an in-progress path does not write the config file on every keystroke.
             Gui.Label("Package");
             float scanW = Theme.S(110);
-            Gui.PathPicker("SimsPackage", ref _packagePath, "path to a .package file", PathKind.File, "Sims 4 packages{.package}",
+            Gui.PathPicker("PackagePath", ref _packagePath, "path to a .package or .unitypackage file", PathKind.File,
+                "Packages{.package,.unitypackage}",
                 picked => { _packagePath = picked; SaveSettings(); }, reserveRight: scanW + ImGui.GetStyle().ItemSpacing.X);
+            if (FileDrop.Target(p => p.Files.Count == 1 && p.Folders.Count == 0 && IsPackage(p.Files[0]) ? null : "Drop one .package or .unitypackage file.",
+                    out var dropped))
+            {
+                _packagePath = dropped.Files[0];
+                StartScan();
+            }
 
             ImGui.SameLine();
-            if (Gui.PrimaryButton(FontAwesomeIcon.Search, "Scan", scanW, "Reads the package and lists its meshes and textures."))
+            if (Gui.PrimaryButton(FontAwesomeIcon.Search, "Scan", scanW, "Reads the package and lists what it holds."))
                 StartScan();
 
-            Gui.Label("Output", "A subfolder named after the package is created here, holding model/ and textures/.");
-            Gui.PathPicker("SimsOutput", ref _outputDir, "folder the extracted files go into", PathKind.Folder, "",
+            Gui.Label("Output", "A subfolder named after the package is created here.");
+            Gui.PathPicker("PackageOutput", ref _outputDir, "folder the extracted files go into", PathKind.Folder, "",
                 picked => { _outputDir = picked; SaveSettings(); },
-                "A subfolder named after the package is created here, holding model/ and textures/.");
+                "A subfolder named after the package is created here.");
+
+            if (_stash.HasExtractions(_outputDir))
+            {
+                if (Gui.IconTextButton(FontAwesomeIcon.BoxOpen, "Open the stash", "Every package extracted into the output folder, ready to drag from."))
+                    _showStash = true;
+            }
         }
     }
 
@@ -181,7 +260,7 @@ public sealed class SimsImportWindow : Window, IDisposable
             ImGui.SameLine();
             ImGui.TextColored(Theme.Accent, _progress);
             ImGui.SameLine();
-            if (ImGui.SmallButton("Stop##SimsStop"))
+            if (ImGui.SmallButton("Stop##PackageStop"))
                 StopWork();
         }
         else if (!string.IsNullOrEmpty(_errorMessage))
@@ -197,13 +276,23 @@ public sealed class SimsImportWindow : Window, IDisposable
     }
 
     /// <summary>
-    /// Detail-level picker and half-crop toggle. The LOD dropdown only re-ticks the mesh
-    /// rows, so an individual tick changed afterwards is still respected — it is a bulk
-    /// selection, not a filter that hides anything.
+    /// Sims: the detail-level picker and half-crop toggle. The LOD dropdown only re-ticks the mesh
+    /// rows, so an individual tick changed afterwards is still respected. Unity: a bulk tick.
     /// </summary>
     private void DrawOptions(bool busy)
     {
         Gui.SectionHeader("2  Choose what to extract");
+        if (_unityScan != null)
+        {
+            using (Gui.Disabled(busy))
+            {
+                if (Gui.LabeledCombo("Tick", "##UnityTick", ref _unityTick, UnityTickOptions,
+                        "Ticks rows in bulk; single rows can still be changed below. Materials and prefabs are read to sort the textures, never written.", Theme.S(220)))
+                    ApplyUnityTick(_unityScan);
+            }
+            ImGui.Spacing();
+            return;
+        }
         if (_scan == null)
             return;
 
@@ -227,7 +316,7 @@ public sealed class SimsImportWindow : Window, IDisposable
         {
             Gui.Icon(FontAwesomeIcon.ExclamationTriangle, Theme.Warn);
             ImGui.SameLine();
-            ImGui.TextColored(Theme.Warn, "No CAS part could be read, so texture roles are guesses from the resource type — check them.");
+            ImGui.TextColored(Theme.Warn, "No CAS part could be read, so texture roles are guesses from the resource type. Check them.");
         }
         ImGui.Spacing();
     }
@@ -243,7 +332,7 @@ public sealed class SimsImportWindow : Window, IDisposable
         Gui.Label("Half crop");
         if (!crop.Crops)
         {
-            Gui.Hint("not available — the meshes use both halves of the texture sheet");
+            Gui.Hint("not available: the meshes use both halves of the texture sheet");
             Gui.Tooltip("Sims sheets are often twice as tall as they need to be, with one half empty. " +
                        "That can only be cropped away when every mesh sits inside a single half.");
             return;
@@ -259,7 +348,7 @@ public sealed class SimsImportWindow : Window, IDisposable
 
     /// <summary>
     /// Rebuilds the picker for whatever levels the scan actually found and points it at
-    /// the selection the scan already made — LOD 0 where there is one, everything
+    /// the selection the scan already made: LOD 0 where there is one, everything
     /// otherwise. The scan owns that decision; this only reflects it, so the dropdown
     /// and the ticks cannot disagree on the first frame.
     /// </summary>
@@ -293,6 +382,18 @@ public sealed class SimsImportWindow : Window, IDisposable
             asset.Selected = wanted == null || asset.LodLevel == wanted;
     }
 
+    private void ApplyUnityTick(UnityScanResult scan)
+    {
+        foreach (var asset in scan.Assets.Where(a => a.Extractable))
+            asset.Selected = _unityTick switch
+            {
+                0 => true,
+                1 => asset.Kind == UnityAssetKind.Texture,
+                2 => asset.Kind == UnityAssetKind.Model,
+                _ => false,
+            };
+    }
+
     private void DrawAssetList(bool busy)
     {
         if (_scan == null)
@@ -300,7 +401,7 @@ public sealed class SimsImportWindow : Window, IDisposable
             ImGui.Spacing();
             Gui.Icon(FontAwesomeIcon.Box, Theme.Muted);
             ImGui.SameLine();
-            Gui.Hint("Pick a .package file and hit Scan.");
+            Gui.Hint("Pick or drop a .package or .unitypackage file and hit Scan.");
             return;
         }
 
@@ -379,7 +480,7 @@ public sealed class SimsImportWindow : Window, IDisposable
                 asset.Role = (SimsTextureRole)roleIndex;
             Gui.Tooltip(asset.RoleFromCasPart
                 ? "Role taken from the CAS part that references this texture."
-                : "No CAS part referenced this texture — the role was guessed from its resource type. Change it if the preview says otherwise.");
+                : "No CAS part referenced this texture, so the role was guessed from its resource type. Change it if the preview says otherwise.");
         }
 
         // Size / counts
@@ -403,189 +504,114 @@ public sealed class SimsImportWindow : Window, IDisposable
         ImGui.PopID();
     }
 
+    private void DrawUnityAssets(bool busy, UnityScanResult scan)
+    {
+        if (scan.Assets.Count == 0)
+        {
+            Gui.Hint("(this package holds no assets)");
+            return;
+        }
+
+        using (Gui.Disabled(busy))
+        {
+            if (!ImGui.BeginTable("##UnityAssetTable", 5,
+                    ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY | ImGuiTableFlags.PadOuterX,
+                    new Vector2(-1, -1)))
+                return;
+
+            ImGui.TableSetupScrollFreeze(0, 1);
+            ImGui.TableSetupColumn("",        ImGuiTableColumnFlags.WidthFixed, Theme.S(26));
+            ImGui.TableSetupColumn("Preview", ImGuiTableColumnFlags.WidthFixed, Theme.S(64));
+            ImGui.TableSetupColumn("Kind",    ImGuiTableColumnFlags.WidthFixed, Theme.S(90));
+            ImGui.TableSetupColumn("Size",    ImGuiTableColumnFlags.WidthFixed, Theme.S(90));
+            ImGui.TableSetupColumn("Path",    ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableHeadersRow();
+
+            var clipper = ImGui.ImGuiListClipper();
+            try
+            {
+                clipper.Begin(scan.Assets.Count, Theme.S(60));
+                while (clipper.Step())
+                    for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+                        DrawUnityRow(scan.Assets[i], i);
+                clipper.End();
+            }
+            finally
+            {
+                clipper.Destroy();
+            }
+            ImGui.EndTable();
+        }
+    }
+
+    private void DrawUnityRow(UnityAsset asset, int index)
+    {
+        ImGui.TableNextRow(ImGuiTableRowFlags.None, Theme.S(60));
+        ImGui.PushID(index);
+
+        ImGui.TableNextColumn();
+        using (Gui.Disabled(!asset.Extractable))
+        {
+            bool selected = asset.Selected && asset.Extractable;
+            if (ImGui.Checkbox("##Sel", ref selected))
+                asset.Selected = selected;
+        }
+        if (!asset.Extractable)
+            Gui.Tooltip(asset.Kind is UnityAssetKind.Material or UnityAssetKind.Prefab
+                ? "Read to sort the textures, not written."
+                : "Not something the game or the build window can use.");
+
+        ImGui.TableNextColumn();
+        if (asset.PreviewPng != null)
+            _thumbnails.DrawPng($"unity:{asset.Guid}", asset.PreviewPng, Theme.S(56));
+        else
+            Gui.Icon(asset.Kind == UnityAssetKind.Model ? FontAwesomeIcon.Cube : FontAwesomeIcon.File, Theme.Muted);
+
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(asset.Kind switch
+        {
+            UnityAssetKind.Texture   => asset.TextureType == 1 ? "normal map" : "texture",
+            UnityAssetKind.Model     => "model",
+            UnityAssetKind.Material  => "material",
+            UnityAssetKind.Prefab    => "prefab",
+            UnityAssetKind.Animation => "animation",
+            _                        => "other",
+        });
+
+        ImGui.TableNextColumn();
+        Gui.Hint(FormatSize(asset.Size));
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(asset.Extractable ? Theme.Muted : Theme.Faint, asset.PackagePath);
+
+        ImGui.PopID();
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        >= 1024 * 1024 => $"{bytes / (1024.0 * 1024):0.0} MB",
+        >= 1024        => $"{bytes / 1024.0:0} KB",
+        _              => $"{bytes} B",
+    };
+
     private void DrawActions(bool busy)
     {
-        int selected = _scan?.Assets.Count(a => a.Selected) ?? 0;
+        int selected = _unityScan != null
+            ? _unityScan.Assets.Count(a => a.Selected && a.Extractable)
+            : _scan?.Assets.Count(a => a.Selected) ?? 0;
+        int total = _unityScan?.Assets.Count(a => a.Extractable) ?? _scan?.Assets.Count ?? 0;
 
-        using (Gui.Disabled(busy || _scan == null || selected == 0))
+        using (Gui.Disabled(busy || selected == 0))
         {
-            if (Gui.PrimaryButton(FontAwesomeIcon.FileExport, "Extract", Theme.S(140), "Writes the ticked assets into the output folder."))
+            if (Gui.PrimaryButton(FontAwesomeIcon.FileExport, "Extract", Theme.S(140), "Writes the ticked files into the output folder, then opens the stash."))
                 StartExtract();
         }
 
-        if (_scan != null)
+        if (_scan != null || _unityScan != null)
         {
             ImGui.SameLine();
             ImGui.AlignTextToFramePadding();
-            Gui.Hint($"{selected} of {_scan.Assets.Count} selected");
-        }
-
-        if (_extraction == null)
-            return;
-
-        ImGui.Spacing();
-        Gui.SectionHeader("3  Use the result");
-
-        bool clean = _extraction.Failed == 0;
-        Gui.Icon(clean ? FontAwesomeIcon.CheckCircle : FontAwesomeIcon.ExclamationTriangle, clean ? Theme.Good : Theme.Bad);
-        ImGui.SameLine();
-        ImGui.TextColored(clean ? Theme.Good : Theme.Bad, $"{_extraction.Extracted} file(s) written, {_extraction.Failed} failed.");
-        if (_extraction.Crop.Crops)
-        {
-            ImGui.SameLine();
-            Gui.Hint($"· cropped to the {_extraction.Crop.Describe()}, UV0 rescaled to match");
-        }
-
-        Gui.LabeledValue("Folder", _extraction.RootFolder, "Also holds extract-report.txt with the full log of this run.");
-
-        ImGui.Spacing();
-        Gui.Icon(FontAwesomeIcon.HandPointer, Theme.Accent);
-        ImGui.SameLine();
-        ImGui.TextColored(Theme.Accent, "Drag any row onto a texture or model tile in the build window's Set-up, or in a mod window.");
-        DrawResultList();
-
-        bool canApply = _extraction.DiffuseCount > 0 || _extraction.NormalFile != null || _extraction.SpecularFile != null;
-        var target = _host.Pack.CurrentMaterial;
-        using (Gui.Disabled(!canApply || target == null))
-        {
-            var label = target != null ? $"Apply all to \"{target.Name}\"" : "Apply all to selected material";
-            if (Gui.IconTextButton(FontAwesomeIcon.ArrowRight, label,
-                    target == null
-                        ? "Select a material in the build window's Set-up view first."
-                        : "Shortcut: points that material at these files — the diffuse folder as a variant group, and the normal / specular images as single textures."))
-            {
-                _applyMessage = _host.Pack.ApplySimsExtraction(_extraction);
-                _host.OpenBuild();
-                _host.Pack.GoToStage(Models.StageId.Details);
-            }
-        }
-
-        if (!string.IsNullOrEmpty(_applyMessage))
-        {
-            ImGui.SameLine();
-            ImGui.AlignTextToFramePadding();
-            Gui.Hint(_applyMessage);
-        }
-    }
-
-    private static float ResultListHeight => Theme.S(200);
-
-    /// <summary>
-    /// Everything the extraction wrote, one draggable row each: the diffuse folder (drops as a
-    /// variant folder) and its swatches, the other textures, and the model files.
-    /// </summary>
-    private void DrawResultList()
-    {
-        if (!ImGui.BeginTable("##SimsResults", 3, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.ScrollY
-                                                 | ImGuiTableFlags.PadOuterX, new Vector2(-1, ResultListHeight)))
-            return;
-
-        float thumb = ImGui.GetFrameHeight() * 1.4f;
-        ImGui.TableSetupColumn("##thumb", ImGuiTableColumnFlags.WidthFixed, thumb);
-        ImGui.TableSetupColumn("##name",  ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("##act",   ImGuiTableColumnFlags.WidthFixed, ImGui.GetFrameHeight());
-
-        if (_results.Count == 0)
-        {
-            ImGui.TableNextRow();
-            ImGui.TableNextColumn();
-            ImGui.TableNextColumn();
-            Gui.Hint("(nothing usable was written)");
-        }
-
-        for (int i = 0; i < _results.Count; i++)
-        {
-            var row = _results[i];
-            ImGui.PushID(i);
-            ImGui.TableNextRow();
-
-            ImGui.TableNextColumn();
-            if (row.Preview != null)
-                _thumbnails.Draw(new Models.TextureSlot { SourcePath = row.Preview, UseVariants = row.PreviewIsFolder }, thumb);
-            else
-                Gui.Icon(row.IsModel ? FontAwesomeIcon.Cube : FontAwesomeIcon.File, row.NeedsConversion ? Theme.Warn : Theme.Muted);
-
-            ImGui.TableNextColumn();
-            if (row.Indented) ImGui.Indent(Theme.S(14));
-            ImGui.Selectable($"{row.Label}##row", false, ImGuiSelectableFlags.None, new Vector2(0, 0));
-            FileDrop.Source(row.Paths, row.Label);
-            if (ImGui.IsItemHovered() && !ImGui.IsMouseDragging(ImGuiMouseButton.Left))
-                ImGui.SetTooltip($"{string.Join("\n", row.Paths.Folders.Concat(row.Paths.Files))}\n\nDrag onto an input in the main window.");
-            ImGui.SameLine();
-            ImGui.TextColored(row.NeedsConversion ? Theme.Warn : Theme.Faint, row.Detail);
-            if (row.Indented) ImGui.Unindent(Theme.S(14));
-
-            ImGui.TableNextColumn();
-            if (Gui.IconButton(FontAwesomeIcon.FolderOpen, "reveal", "Show in Explorer"))
-                Reveal(row.Paths.Folders.Concat(row.Paths.Files).First());
-
-            ImGui.PopID();
-        }
-
-        ImGui.EndTable();
-    }
-
-    private static List<ResultRow> BuildResultRows(SimsPackageInspector.ExtractionResult result)
-    {
-        var rows = new List<ResultRow>();
-        var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        // Only what this run wrote; the folders are never listed, so nothing else in them shows up.
-        var written = result.WrittenFiles.Where(File.Exists).ToList();
-        IEnumerable<string> In(string folder) => written.Where(f =>
-            string.Equals(Path.GetDirectoryName(f), folder, StringComparison.OrdinalIgnoreCase));
-
-        var swatches = In(result.DiffuseFolder).Where(FileDrop.IsImage).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
-        if (swatches.Count > 0)
-        {
-            rows.Add(new ResultRow("Diffuse swatches", $"folder · {swatches.Count} image(s) → a variant group",
-                DroppedPaths.Folder(result.DiffuseFolder), result.DiffuseFolder, true, false, false, false));
-            foreach (var file in swatches)
-            {
-                listed.Add(file);
-                rows.Add(new ResultRow(Path.GetFileName(file), "one swatch", DroppedPaths.File(file), file, false, false, false, true));
-            }
-        }
-
-        void AddTexture(string? file, string role)
-        {
-            if (file == null || !File.Exists(file) || !listed.Add(file)) return;
-            rows.Add(new ResultRow(Path.GetFileName(file), role, DroppedPaths.File(file), file, false, false, false, false));
-        }
-
-        AddTexture(result.NormalFile, "normal");
-        AddTexture(result.SpecularFile, "specular");
-
-        var texturesRoot = Path.Combine(result.RootFolder, "textures") + Path.DirectorySeparatorChar;
-        foreach (var file in written.Where(f => f.StartsWith(texturesRoot, StringComparison.OrdinalIgnoreCase))
-                     .Where(FileDrop.IsImage).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
-            AddTexture(file, Path.GetFileName(Path.GetDirectoryName(file)) ?? "texture");
-
-        foreach (var file in In(result.ModelFolder).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
-        {
-            bool mdl = FileDrop.IsModel(file);
-            bool mesh = mdl || Path.GetExtension(file).ToLowerInvariant() is ".glb" or ".gltf" or ".fbx" or ".obj";
-            if (!mesh) continue;
-            rows.Add(new ResultRow(Path.GetFileName(file),
-                mdl ? "model" : "needs converting to .mdl in Blender first",
-                DroppedPaths.File(file), null, false, true, !mdl, false));
-        }
-
-        return rows;
-    }
-
-    private static void Reveal(string path)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo("explorer.exe", Directory.Exists(path) ? $"\"{path}\"" : $"/select,\"{path}\"")
-            {
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception ex)
-        {
-            StudioServices.Log.Warning(ex, "[Studio] Could not open Explorer at {0}", path);
+            Gui.Hint($"{selected} of {total} selected");
         }
     }
 
@@ -603,9 +629,9 @@ public sealed class SimsImportWindow : Window, IDisposable
 
     private void StartScan()
     {
-        if (string.IsNullOrWhiteSpace(_packagePath) || !File.Exists(_packagePath))
+        if (string.IsNullOrWhiteSpace(_packagePath) || !File.Exists(_packagePath) || !IsPackage(_packagePath))
         {
-            _errorMessage = "Pick a .package file first.";
+            _errorMessage = "Pick a .package or .unitypackage file first.";
             return;
         }
 
@@ -613,23 +639,24 @@ public sealed class SimsImportWindow : Window, IDisposable
 
         _thumbnails.ForgetMemoryEntries();
         _scan         = null;
+        _unityScan    = null;
         _extraction   = null;
         _errorMessage = string.Empty;
         _applyMessage = string.Empty;
         _status       = string.Empty;
         _progress     = "Opening package";
+        _showStash    = false;
 
         var path = _packagePath;
         var cancel = NewWork();
-        _scanTask = Task.Run(() => SimsPackageInspector.Scan(path, s => _progress = s, cancel), cancel);
+        if (IsUnity(path))
+            _unityScanTask = Task.Run(() => UnityPackageReader.Scan(path, s => _progress = s, cancel), cancel);
+        else
+            _scanTask = Task.Run(() => SimsPackageInspector.Scan(path, s => _progress = s, cancel), cancel);
     }
 
     private void StartExtract()
     {
-        var scan = _scan;
-        if (scan == null)
-            return;
-
         if (string.IsNullOrWhiteSpace(_outputDir))
         {
             _errorMessage = "Pick an output folder first.";
@@ -645,9 +672,16 @@ public sealed class SimsImportWindow : Window, IDisposable
         _progress     = "Extracting";
 
         var outputDir = _outputDir;
-        var crop = _cropHalf ? scan.SuggestedCrop : SimsHalfCrop.None;
         var cancel = NewWork();
-        _extractTask = Task.Run(() => SimsPackageInspector.Extract(scan, outputDir, crop, s => _progress = s, cancel), cancel);
+        if (_unityScan is { } unity)
+        {
+            _unityExtractTask = Task.Run(() => UnityPackageReader.Extract(unity, outputDir, s => _progress = s, cancel), cancel);
+        }
+        else if (_scan is { } scan)
+        {
+            var crop = _cropHalf ? scan.SuggestedCrop : SimsHalfCrop.None;
+            _extractTask = Task.Run(() => SimsPackageInspector.Extract(scan, outputDir, crop, s => _progress = s, cancel), cancel);
+        }
     }
 
     private static bool Stopped(Task task)
@@ -678,6 +712,29 @@ public sealed class SimsImportWindow : Window, IDisposable
             }
         }
 
+        if (_unityScanTask is { IsCompleted: true } unityScanTask)
+        {
+            _unityScanTask = null;
+            if (Stopped(unityScanTask))
+                _status = "Stopped.";
+            else if (unityScanTask.IsCompletedSuccessfully)
+            {
+                var scan = unityScanTask.Result;
+                _unityScan = scan;
+                _unityTick = 0;
+                _status = $"Found {scan.Assets.Count(a => a.Kind == UnityAssetKind.Texture)} texture(s), " +
+                          $"{scan.Assets.Count(a => a.Kind == UnityAssetKind.Model)} model(s) and {scan.Materials.Count} material(s).";
+                if (scan.Warnings.Count > 0)
+                    StudioServices.Log.Information("[Studio] Unity scan warnings for {0}:\n  {1}", scan.PackagePath, string.Join("\n  ", scan.Warnings));
+            }
+            else
+            {
+                var ex = unityScanTask.Exception?.GetBaseException();
+                StudioServices.Log.Warning(ex, "[Studio] Failed to scan Unity package {0}", _packagePath);
+                _errorMessage = $"Could not read this package: {ex?.Message}";
+            }
+        }
+
         if (_extractTask is { IsCompleted: true } extractTask)
         {
             _extractTask = null;
@@ -687,10 +744,10 @@ public sealed class SimsImportWindow : Window, IDisposable
             {
                 var result = extractTask.Result;
                 _extraction = result;
-                _results    = BuildResultRows(result);
-                _status     = $"Done — {result.Extracted} file(s) written to {result.RootFolder}";
+                _status     = $"Done: {result.Extracted} file(s) written, {result.Failed} failed.";
                 StudioServices.Log.Information("[Studio] Sims extraction: {0} written, {1} failed, into {2}",
                     result.Extracted, result.Failed, result.RootFolder);
+                OpenStash(result.RootFolder);
             }
             else
             {
@@ -699,5 +756,32 @@ public sealed class SimsImportWindow : Window, IDisposable
                 _errorMessage = $"Extraction failed: {ex?.Message}";
             }
         }
+
+        if (_unityExtractTask is { IsCompleted: true } unityExtractTask)
+        {
+            _unityExtractTask = null;
+            if (Stopped(unityExtractTask))
+                _status = "Stopped.";
+            else if (unityExtractTask.IsCompletedSuccessfully)
+            {
+                var result = unityExtractTask.Result;
+                _status = $"Done: {result.WrittenFiles.Count} file(s) written, {result.Failed} failed, {result.Refused.Count} refused.";
+                StudioServices.Log.Information("[Studio] Unity extraction: {0} written, {1} failed, {2} refused, into {3}",
+                    result.WrittenFiles.Count, result.Failed, result.Refused.Count, result.RootFolder);
+                OpenStash(result.RootFolder);
+            }
+            else
+            {
+                var ex = unityExtractTask.Exception?.GetBaseException();
+                StudioServices.Log.Warning(ex, "[Studio] Failed to extract Unity package into {0}", _outputDir);
+                _errorMessage = $"Extraction failed: {ex?.Message}";
+            }
+        }
+    }
+
+    private void OpenStash(string folder)
+    {
+        _stash.Show(folder);
+        _showStash = true;
     }
 }
