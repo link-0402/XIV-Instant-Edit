@@ -9,11 +9,10 @@ Penumbra mods.
 
 ## Features
 
-- **Models in Blender**: send any on-screen or modded model to Blender with one click, then Quick Export it back in
-  place, into another mod option, a new mod or a mashup of several mods. Imports come with the game's skeleton.
+- **Models in Blender**: send any model on your character (or minions, mounts, summons) to Blender with one click, then export it back in place, into another mod option, a new mod or a mashup of several mods. Imports come with the game's skeleton.\
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-a-Model-in-Blender)
-- **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including saving texture variants and directly setting them up as as Penumbra\
-  options. [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
+- **Textures**: edit textures in Photoshop, GIMP, Krita, Paint.NET or any TGA editor, including saving texture variants and directly setting them up as as Penumbra option groups. \
+  [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Editing-Textures)
 - **Substance Painter**: paint directly on any model with the exact textures you're currently using and save your edits back to the game with just one click. "Paint my Skin" under quick actions sends your entire character with your configured small clothes body, letting you easily create custom skin, tattoo and makeup mods.\
   [Guide](https://github.com/link-0402/XIV-Instant-Edit/wiki/Painting-in-Substance-Painter)
 - **Animations**: the listener finds what your character plays; open it in the timeline, or load any emote, idle,
