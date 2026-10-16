@@ -15,7 +15,7 @@ internal sealed class GameFilesTab
 
     private static readonly (string Header, GameFileCategory[] Categories)[] GameFileGroups =
     [
-        ("Character", [GameFileCategory.Hair, GameFileCategory.Face, GameFileCategory.Tail, GameFileCategory.Ears, GameFileCategory.Body]),
+        ("Character", [GameFileCategory.Hair, GameFileCategory.Face, GameFileCategory.Tail, GameFileCategory.Ears]),
         ("Gear", [GameFileCategory.Equipment, GameFileCategory.Accessory]),
         ("Weapons", [GameFileCategory.Weapon]),
     ];
@@ -395,7 +395,7 @@ internal sealed class GameFilesTab
             ImGui.TextColored(names.PlayerModel(entry.Id) ? Theme.Text : Theme.Muted, GameRaces.Label(entry.Id.Race));
         ImGui.TableSetColumnIndex(3);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, entry.Id.Category is GameFileCategory.Equipment or GameFileCategory.Accessory or GameFileCategory.Body
+        ImGui.TextColored(Theme.Muted, entry.Id.Category is GameFileCategory.Equipment or GameFileCategory.Accessory
             ? $"{entry.Id.IdLabel} {entry.Id.Slot}"
             : entry.Id.IdLabel);
         ImGui.TableSetColumnIndex(4);
@@ -483,7 +483,6 @@ internal sealed class GameFilesTab
             GameFileCategory.Face => $"Face {id.Id}",
             GameFileCategory.Tail => $"Tail {id.Id}",
             GameFileCategory.Ears => $"Ears {id.Id}",
-            GameFileCategory.Body => $"Body {id.Id} ({GameModelPaths.SlotLabel(id.Slot).ToLowerInvariant()})",
             GameFileCategory.Weapon => $"Weapon {id.Id}, body {id.SecondaryId}",
             _ => $"{GameModelPaths.SlotLabel(id.Slot)} {id.Id}",
         };

@@ -216,13 +216,12 @@ internal static class GameFileScenarios
             (new(GameFileCategory.Face, 104, 202, 0, "fac"), "chara/human/c0104/obj/face/f0202/model/c0104f0202_fac.mdl"),
             (new(GameFileCategory.Tail, 1401, 5, 0, "til"), "chara/human/c1401/obj/tail/t0005/model/c1401t0005_til.mdl"),
             (new(GameFileCategory.Ears, 1801, 4, 0, "zer"), "chara/human/c1801/obj/zear/z0004/model/c1801z0004_zer.mdl"),
-            (new(GameFileCategory.Body, 9104, 1, 0, "glv"), "chara/human/c9104/obj/body/b0001/model/c9104b0001_glv.mdl"),
             (new(Equipment, 201, 6016, 0, "top"), "chara/equipment/e6016/model/c0201e6016_top.mdl"),
             (new(GameFileCategory.Accessory, 101, 1, 0, "ril"), "chara/accessory/a0001/model/c0101a0001_ril.mdl"),
             (new(Weapon, 0, 101, 1, ""), "chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl"),
         };
         Require(samples.All(sample => GameModelPaths.ModelPath(sample.Id) == sample.Path && GameModelPaths.Parse(sample.Path) == sample.Id),
-            "every category's model path is built from its IDs and parsed back to them, NPC races included");
+            "every category's model path is built from its IDs and parsed back to them");
         Require(GameModelPaths.Parse(@"CHARA\human\c0101\obj\hair\h0113\model\c0101h0113_hir.mdl") == samples[0].Id &&
                 GameModelPaths.Parse("/chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl") == samples[^1].Id,
             "model paths parse regardless of slashes and case");
@@ -244,11 +243,11 @@ internal static class GameFileScenarios
         ];
         Require(rejected.All(path => GameModelPaths.Parse(path) is null),
             "paths whose folders, IDs or slots disagree, climb folders or aren't v1 models are not models");
-        Require(GameModelPaths.ImcPath(samples[5].Id) == "chara/equipment/e6016/e6016.imc" &&
-                GameModelPaths.ImcPath(samples[6].Id) == "chara/accessory/a0001/a0001.imc" &&
+        Require(GameModelPaths.ImcPath(samples[4].Id) == "chara/equipment/e6016/e6016.imc" &&
+                GameModelPaths.ImcPath(samples[5].Id) == "chara/accessory/a0001/a0001.imc" &&
                 GameModelPaths.ImcPath(samples[^1].Id) == "chara/weapon/w0101/obj/body/b0001/b0001.imc" &&
                 GameModelPaths.ImcPath(samples[0].Id) is null &&
-                GameModelPaths.ImcPart(samples[5].Id) == 1 && GameModelPaths.ImcPart(samples[6].Id) == 4 &&
+                GameModelPaths.ImcPart(samples[4].Id) == 1 && GameModelPaths.ImcPart(samples[5].Id) == 4 &&
                 GameModelPaths.ImcPart(samples[^1].Id) == 0 && GameModelPaths.ImcPart(samples[0].Id) == -1,
             "gear and weapons name their IMC file and part; character parts have none");
         Require(samples[^1].Id.IdLabel == "w0101b0001" && samples[0].Id.IdLabel == "h0113" && samples[3].Id.IdLabel == "z0004" &&
