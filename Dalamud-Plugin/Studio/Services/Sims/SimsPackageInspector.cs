@@ -410,6 +410,9 @@ public static class SimsPackageInspector
         /// <summary>Every file this run wrote, report included; the result list is built from these.</summary>
         public List<string> WrittenFiles = new();
 
+        /// <summary>Every texture written, with the role and CAS part it was written for; the stash sorts by these.</summary>
+        public List<(string File, SimsTextureRole Role, string Part)> Textures = new();
+
         /// <summary>Every file this run created or started to, failed ones included; goes into the manifest.</summary>
         internal readonly List<string> OwnedFiles = new();
 
@@ -510,6 +513,10 @@ public static class SimsPackageInspector
             result.Report = report.ToString();
             var reportPath = Path.Combine(root, "extract-report.txt");
             WriteOwned(result, reportPath, () => File.WriteAllText(reportPath, result.Report));
+
+            // What the import window's stash lists; owned like the rest, so the next run replaces it.
+            var stashPath = Path.Combine(root, Stash.StashManifest.FileName);
+            WriteOwned(result, stashPath, () => Stash.StashManifest.ForSims(scan.PackagePath, result).Write(root));
         }
         finally
         {
@@ -684,6 +691,7 @@ public static class SimsPackageInspector
 
         var png = decoded.ToPng();
         WriteOwned(result, path, () => File.WriteAllBytes(path, png));
+        result.Textures.Add((path, asset.Role, asset.PartName));
 
         switch (asset.Role)
         {

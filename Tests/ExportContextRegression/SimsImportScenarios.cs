@@ -235,8 +235,9 @@ internal static class SimsImportScenarios
         Require(scan.Textures.Count(t => t.Role == SimsTextureRole.Diffuse && t.Selected) == 3, "the fixture package scans as three diffuse swatches");
 
         var first = SimsPackageInspector.Extract(scan, output);
-        Require(Directory.GetFiles(first.DiffuseFolder).Length == 3 && first.WrittenFiles.Count == 4,
-            "the first extraction writes three swatches and its report");
+        Require(Directory.GetFiles(first.DiffuseFolder).Length == 3 && first.WrittenFiles.Count == 5 &&
+                first.WrittenFiles.Any(f => Path.GetFileName(f) == "stash.json"),
+            "the first extraction writes three swatches, its report and its stash.json");
 
         scan.Textures.Skip(1).ToList().ForEach(t => t.Selected = false);
         var second = SimsPackageInspector.Extract(scan, output);
