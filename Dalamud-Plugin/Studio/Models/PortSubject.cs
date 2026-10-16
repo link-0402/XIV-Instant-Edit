@@ -6,7 +6,7 @@ using InstantEdit.Studio.Services;
 namespace InstantEdit.Studio.Models;
 
 /// <summary>What an item of the modpack replaces.</summary>
-public enum SubjectKind { Gear, Hair, Face, Tail, Ear, Weapon }
+public enum SubjectKind { Gear, Hair, Face, Tail, Ear, Weapon, Animation }
 
 /// <summary>What a saved item key names, by its top bits (see <see cref="PortSubject.KeyTag"/>).</summary>
 public enum KeyTagKind { Gear, OffHand, Emote, Timeline, Feature, Unknown }
@@ -107,6 +107,43 @@ internal abstract class PortSubject
                 return null;
         }
     }
+}
+
+/// <summary>
+/// An emote or another animation timeline. It has no models or materials: its item carries an
+/// <see cref="AnimationSetup"/> instead, whose files go to each race's path (see
+/// <see cref="Services.Animation.AnimationPathPlanner"/>). The path members below are never asked.
+/// </summary>
+internal sealed class AnimationSubject : PortSubject
+{
+    public const uint EmoteTag    = 0x2000_0000;
+    public const uint TimelineTag = 0x2100_0000;
+
+    public AnimationSubject(AnimationTarget target) => Target = target;
+
+    public AnimationTarget Target { get; }
+
+    public override uint        Key         => Target.Key;
+    public override SubjectKind Kind        => SubjectKind.Animation;
+    public override string      DisplayName => Target.Name;
+    public override string      IdDisplay   => Target.Command.Length > 0 ? Target.Command : Target.Timelines.FirstOrDefault()?.Key ?? string.Empty;
+    public override bool        MultiRace   => false;
+    public override RaceGender? BaseRace    => null;
+    public override bool        UsesEqdp    => false;
+    public override bool        UsesImc     => false;
+    public override bool        HasRaces    => false;
+    public override string      KindLabel   => "Animation";
+
+    private static readonly IReadOnlyList<RaceGender?> None = Array.Empty<RaceGender?>();
+
+    public override string ModelGamePath(RaceGender rg) => string.Empty;
+    public override string MaterialGamePath(string materialName, RaceGender? race) => string.Empty;
+    public override string TextureGamePath(string textureName) => string.Empty;
+    public override string MaterialFolder(RaceGender? race) => string.Empty;
+    public override string TextureFolder => string.Empty;
+    public override string DefaultMaterialName(int letter, RaceGender? race = null) => string.Empty;
+    public override IReadOnlyList<RaceGender?> MaterialRaces(IReadOnlyList<RaceModelEntry> models) => None;
+    public override string VanillaMaterialPath(string referencedName, RaceGender race) => string.Empty;
 }
 
 /// <summary>

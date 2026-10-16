@@ -21,6 +21,9 @@ internal sealed class PortItem
     /// <summary>Penumbra metadata overrides for this item (EQP, EST); empty means "as the game ships it".</summary>
     public ItemMeta Meta { get; set; } = new();
 
+    /// <summary>An animation item's files and races; null for every other kind of item.</summary>
+    public AnimationSetup? Animation { get; set; }
+
     /// <summary>One mesh slot per material, in order — the saved format and the builder still speak in slots.</summary>
     public List<ModelMaterialSlot> IdentitySlots()
     {
@@ -31,5 +34,6 @@ internal sealed class PortItem
     }
 
     /// <summary>Whether anything would be built for this item.</summary>
-    public bool HasWork => Materials.Count > 0 || Models.Exists(m => !string.IsNullOrWhiteSpace(m.SourcePath) || m.UseVariants || m.UseDummy);
+    public bool HasWork => Materials.Count > 0 || Models.Exists(m => !string.IsNullOrWhiteSpace(m.SourcePath) || m.UseVariants || m.UseDummy)
+                        || Animation is { HasWork: true };
 }

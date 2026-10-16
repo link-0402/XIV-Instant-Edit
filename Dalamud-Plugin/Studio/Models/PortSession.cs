@@ -152,6 +152,14 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         item.Materials = MeshSlotFolding.Fold(materials, slots, out unused);
         item.Meta = cfg.MetaByItem.TryGetValue(key, out var meta) ? meta.Clone() : new ItemMeta();
 
+        if (subject is AnimationSubject animation)
+        {
+            item.Animation = cfg.AnimationsByItem.TryGetValue(key, out var saved) ? saved.Clone() : AnimationSetup.For(animation.Target);
+            item.Models.Clear();
+            item.Materials.Clear();
+            return item;
+        }
+
         EnsureFixedModel(item);
         SortModels(item);
         return item;
@@ -233,6 +241,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             cfg.MaterialsByItem.Remove(key);
             cfg.ModelMaterialSlotsByItem.Remove(key);
             cfg.MetaByItem.Remove(key);
+            cfg.AnimationsByItem.Remove(key);
         }
         Items.Clear();
         cfg.ModpackItems.Clear();
@@ -963,6 +972,8 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             cfg.ModelMaterialSlotsByItem[item.Key] = item.IdentitySlots();
             if (item.Meta.IsEmpty) cfg.MetaByItem.Remove(item.Key);
             else                   cfg.MetaByItem[item.Key] = item.Meta.Clone();
+            if (item.Animation != null)
+                cfg.AnimationsByItem[item.Key] = item.Animation.Clone();
         }
         cfg.ModName        = ModName;
         cfg.ModDescription = ModDescription;

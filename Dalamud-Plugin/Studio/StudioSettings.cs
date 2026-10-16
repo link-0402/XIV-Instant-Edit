@@ -48,6 +48,9 @@ public sealed class StudioSettings
     /// <summary>Penumbra metadata overrides (EQP, EST) keyed by item row ID.</summary>
     public Dictionary<uint, ItemMeta> MetaByItem { get; set; } = new();
 
+    /// <summary>Animation items' files and races, keyed by their emote or timeline key.</summary>
+    public Dictionary<uint, AnimationSetup> AnimationsByItem { get; set; } = new();
+
     /// <summary>Subject keys included in the modpack currently being built, in display/build order.</summary>
     public List<uint> ModpackItems { get; set; } = new();
 
@@ -154,7 +157,8 @@ public sealed class StudioSettings
     /// <summary>Whether an item has any saved models or materials, regardless of modpack membership.</summary>
     public bool HasWork(uint key)
         => (MaterialsByItem.TryGetValue(key, out var m) && m.Count > 0)
-        || (ModelsByItem.TryGetValue(key, out var r) && r.Any(x => !string.IsNullOrWhiteSpace(x.SourcePath) || x.UseVariants || x.UseDummy));
+        || (ModelsByItem.TryGetValue(key, out var r) && r.Any(x => !string.IsNullOrWhiteSpace(x.SourcePath) || x.UseVariants || x.UseDummy))
+        || (AnimationsByItem.TryGetValue(key, out var a) && a.HasWork);
 
     /// <summary>Puts a folder at the top of the recent list.</summary>
     public void TouchRecent(string folder)
