@@ -36,6 +36,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private BonesPage bonesPage = BonesPage.Map;
     private bool swapSides;
     private string boneSearch = string.Empty;
+    // Whether Make symmetrical would copy anything, for the selection it was worked out for.
+    private (SkeletonDescription Skeleton, MotionSide From, string[] Chosen, bool Copies)? symmetrical;
 
     /// <summary>The Bones window's whole content; called from its draw.</summary>
     public void Draw()
@@ -232,7 +234,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         var bones = skeleton.Bones.Select(bone => bone.Name).ToArray();
         if (layer != null)
         {
-            string[] changed = [.. bones.Where(bone => PoseEdits.Changes(layer, bone))];
+            var targets = posing.SymmetryTargets(layer, skeleton);
+            string[] changed = [.. bones.Where(bone => PoseEdits.Changes(layer, bone, targets))];
             using (ImRaii.Disabled(changed.Length == 0))
             {
                 if (ImGui.MenuItem("Bones this layer changes"))
@@ -331,9 +334,10 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             Widgets.HintWrapped("This skeleton has none of the map's bones. Pick them under All bones.");
         }
 
+        var targets = posing.SymmetryTargets(layer, skeleton);
         foreach (var dot in dots)
         {
-            var state = BonePosing.StateOf(dot.Bone, layer, frame, animated);
+            var state = BonePosing.StateOf(dot.Bone, layer, frame, animated, targets);
             var colour = ImGui.GetColorU32(BonePosing.StateColour(state, layer));
             var selected = posing.Selection.Contains(dot.Bone);
             var isPrimary = selected && string.Equals(posing.Selection.Primary, dot.Bone, StringComparison.Ordinal);
@@ -352,7 +356,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
 
         if (hover != null)
         {
-            ImGui.SetTooltip($"{AnimationPresentation.BoneName(hover)}\n{BonePosing.StateText(BonePosing.StateOf(hover, layer, frame, animated), layer)}");
+            ImGui.SetTooltip($"{AnimationPresentation.BoneName(hover)}\n{BonePosing.StateText(BonePosing.StateOf(hover, layer, frame, animated, targets), layer)}");
             if (clicked)
                 posing.ClickBone(hover, skeleton);
         }
@@ -405,7 +409,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGuiTreeNodeFlags flags)
     {
         var name = skeleton.Bones[bone].Name;
-        var state = BonePosing.StateOf(name, layer, frame, animated);
+        var state = BonePosing.StateOf(name, layer, frame, animated, posing.SymmetryTargets(layer, skeleton));
         if (posing.Selection.Contains(name))
             flags |= ImGuiTreeNodeFlags.Selected;
         bool open;
@@ -423,6 +427,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private void DrawBonesPanel(TimelineEditor current, AnimationTimelineSource loaded, MotionLayer? layer, SkeletonDescription skeleton)
     {
         var readOnly = session.ReadOnly;
+        DrawMakeSymmetrical(current, skeleton, readOnly);
         if (layer == null)
         {
             Widgets.MutedWrapped("Select a bone layer in the timeline to pose its bones, or add one over the whole clip:");
@@ -446,6 +451,12 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.Spacing();
         if (layer.Kind == MotionLayerKind.Amplitude)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, false);
+        else if (layer.Kind == MotionLayerKind.Symmetry)
+        {
+            if (posing.Selection.Primary is { } primary && posing.SymmetryTargets(layer, skeleton)?.Contains(primary) == true)
+                Widgets.HintWrapped("Copied from the other side. Add an Offset layer above this one to adjust it.");
+            boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, false);
+        }
         else
             boneEditor.Draw(current, layer, skeleton, loaded, readOnly, true);
         if (layer.Kind == MotionLayerKind.Pose)
@@ -455,6 +466,34 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             ImGui.Spacing();
             poseSources.Draw(current, layer, skeleton, loaded, readOnly);
         }
+    }
+
+    /// <summary>
+    /// Make symmetrical: a symmetry layer over the whole clip for the selected bones, copying the side the
+    /// primary bone is on (the left for a bone in the middle). Needs a selected bone with a twin.
+    /// </summary>
+    private void DrawMakeSymmetrical(TimelineEditor current, SkeletonDescription skeleton, bool readOnly)
+    {
+        var index = posing.BoneTree(skeleton).Index;
+        string[] chosen = [.. posing.Selection.Bones.Where(index.ContainsKey)];
+        var from = posing.Selection.Primary is { } primary && MotionMirror.Side(primary) == 'r' ? MotionSide.Right : MotionSide.Left;
+        // A middle bone counts when something below it has a twin, as the chest does for the arms.
+        // Worked out again only when the selection changes, not every frame.
+        if (symmetrical is not { } known || !ReferenceEquals(known.Skeleton, skeleton) || known.From != from || !known.Chosen.SequenceEqual(chosen))
+        {
+            var copies = chosen.Length > 0 && !MotionSymmetry.Plan(skeleton,
+                new MotionLayer("m0", MotionLayerKind.Symmetry, "", 0, 1, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear, [.. chosen], From: from)).Pairs.IsEmpty;
+            known = (skeleton, from, chosen, copies);
+            symmetrical = known;
+        }
+        using (ImRaii.Disabled(readOnly || !known.Copies))
+        {
+            if (ImGui.Button("Make symmetrical"))
+                current.AddSymmetry(chosen, from);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Add a layer that copies the selected side onto the other, mirrored. A bone in the middle copies its left side.");
+        ImGui.Spacing();
     }
 
     /// <summary> In the Bones window: undo and redo, and the arrows step the playhead. </summary>

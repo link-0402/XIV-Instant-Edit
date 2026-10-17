@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Text.RegularExpressions;
+using InstantEdit.Services.Animations.Motion;
 
 namespace InstantEdit.Ui.Pose;
 
@@ -150,11 +151,10 @@ internal static class PoseMap
     public static string Resource(PoseSection section) => $"InstantEdit.Pose.{section.Image}.png";
 
     /// <summary>The bone on the other side: _r for _l and back. Null for a bone in the middle.</summary>
-    public static string? Mirror(string bone) =>
-        bone.Length > 2 && bone[^2] == '_' ? bone[^1] switch { 'l' => bone[..^1] + "r", 'r' => bone[..^1] + "l", _ => null } : null;
+    public static string? Mirror(string bone) => MotionMirror.Twin(bone);
 
     /// <summary>Which side a bone is on: 'l', 'r', or '\0' in the middle.</summary>
-    public static char Side(string bone) => Mirror(bone) == null ? '\0' : bone[^1];
+    public static char Side(string bone) => MotionMirror.Side(bone);
 
     /// <summary>
     /// Where a section's bones sit on its picture, in pixels: every spot and, on a mirrored picture, its

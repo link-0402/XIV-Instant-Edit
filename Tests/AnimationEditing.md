@@ -1467,3 +1467,41 @@ Blender add-on the plugin accepts, with the listener running.
   timeline is unchanged.
 - [ ] 9 With Key bone scale off, send, scale a bone in Blender (keyed) and read it back: the line under
   the toolbar ends with "Its scale was left out: Key bone scale was off when it was sent."
+
+## Symmetry layer (pending)
+
+A bone layer that makes picked bones copy their twins on the other side, mirrored, on every frame.
+Spec: docs/superpowers/specs/2026-10-17-symmetry-layer-design.md. Test clip: Unholy Idle C Adjusted -
+Idle 4, option Standing idle 4 (pose04_loop).
+
+- [ ] 1 Open Standing idle 4 in the Timeline, select the left shoulder in the Bones window and press
+  Make symmetrical. A "Symmetry (Left → Right)" layer appears over the whole clip and is selected; the
+  panel says how many bones it copies.
+- [ ] 2 In GPose with Live on, the right hand rests on the chest like the left, and keeps moving with
+  the idle. Right-arm dots in the Bones window and the overlay take the layer's colour; their tooltip
+  says "Copied from the other side."
+- [ ] 3 Switch Copy from to Right: the left arm now copies the right, and the layer is renamed
+  "Symmetry (Right → Left)". Switch back.
+- [ ] 4 Add an Offset layer above it and turn the right hand: the copy is adjusted. The gizmo is off
+  while the Symmetry layer is selected.
+- [ ] 5 Save in place: the saved file plays the same, and the loop does not pop where it starts over.
+  Undo the save.
+- [ ] 6 Save again, then Edit again: the Symmetry layer comes back with its side, bones and blend.
+- [ ] 7 Pick the chest with Copy from Left: the arms mirror and the breasts still move with physics.
+
+## Loop and startup into a new mod (pending)
+
+A Timeline save to a new mod takes the other half of a loop and its startup along, unchanged, when the
+collection gives both from the same mod.
+
+- [ ] 1 Open a loop whose startup comes from the same mod (Standing idle 4 with Unholy Idle C Adjusted -
+  Idle 4 on). Choose Create new mod: the footer says "Its startup goes into the new mod too." Save, then
+  check in Penumbra that the new mod has both pose04_loop.pap and pose04_start.pap.
+- [ ] 2 Turn the original mod off and redraw: the idle starts with the mod's own startup, then the edited
+  loop.
+- [ ] 3 Open the startup instead (its row under the loop) and save it to a new mod: the footer says "Its
+  loop goes into the new mod too.", and the new mod has both files, the loop unchanged.
+- [ ] 4 A loop whose startup comes from another mod or the game (Standing idle 3 here: its startup is from
+  "A2 on Idle 3"): no footer line, and the new mod has the loop only.
+- [ ] 5 Replace in-place: no footer line, and only the edited file changes.
+- [ ] 6 Undo the new-mod save from Recent edits: the new mod is gone with both files.

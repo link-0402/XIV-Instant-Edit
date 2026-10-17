@@ -34,9 +34,13 @@ internal static class PoseEdits
         MotionEdits.KeyIndex(layer, frame) is var at and >= 0 && layer.Keys[at].Bones.ContainsKey(bone);
 
     /// <summary>Whether any key of the layer has <paramref name="bone"/>, or for an amplitude whether it is limited to it.</summary>
-    public static bool Changes(MotionLayer layer, string bone) => layer.Kind == MotionLayerKind.Amplitude
-        ? layer.Bones.Contains(bone)
-        : layer.Keys.Any(key => key.Bones.ContainsKey(bone));
+    public static bool Changes(MotionLayer layer, string bone, IReadOnlySet<string>? symmetryTargets = null) => layer.Kind switch
+    {
+        MotionLayerKind.Amplitude => layer.Bones.Contains(bone),
+        // A symmetry layer's bones come from the skeleton (BonePosing.SymmetryTargets).
+        MotionLayerKind.Symmetry => symmetryTargets?.Contains(bone) == true,
+        _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),
+    };
 
     /// <summary>
     /// The selected bones an edit turns, moves and scales: the primary bone and every other selected bone
@@ -331,30 +335,19 @@ internal static class PoseEdits
     }
 
     /// <summary>The nearest bone above both <paramref name="a"/> and <paramref name="b"/>; -1 when they share none.</summary>
-    public static int CommonAncestor(SkeletonDescription skeleton, int a, int b)
-    {
-        var above = new HashSet<int>();
-        for (var bone = skeleton.Bones[a].Parent; bone >= 0; bone = skeleton.Bones[bone].Parent)
-            above.Add(bone);
-        for (var bone = skeleton.Bones[b].Parent; bone >= 0; bone = skeleton.Bones[bone].Parent)
-            if (above.Contains(bone))
-                return bone;
-        return -1;
-    }
+    public static int CommonAncestor(SkeletonDescription skeleton, int a, int b) => MotionMirror.CommonAncestor(skeleton, a, b);
 
     /// <summary>A rotation mirrored across the character's middle at rest (its YZ plane): turns about X stay, about Y and Z reverse.</summary>
-    public static Quaternion MirrorRotation(Quaternion rotation) => new(rotation.X, -rotation.Y, -rotation.Z, rotation.W);
+    public static Quaternion MirrorRotation(Quaternion rotation) => MotionMirror.Rotation(rotation);
 
     /// <summary>A position or move mirrored across the character's middle at rest.</summary>
-    public static Vector3 MirrorPosition(Vector3 position) => new(-position.X, position.Y, position.Z);
+    public static Vector3 MirrorPosition(Vector3 position) => MotionMirror.Position(position);
 
     /// <summary>A turn in character space mirrored across the middle of a body turned <paramref name="body"/> from rest.</summary>
-    public static Quaternion MirrorRotation(Quaternion rotation, Quaternion body) =>
-        Quaternion.Normalize(body * MirrorRotation(Quaternion.Inverse(body) * rotation * body) * Quaternion.Inverse(body));
+    public static Quaternion MirrorRotation(Quaternion rotation, Quaternion body) => MotionMirror.Rotation(rotation, body);
 
     /// <summary>A move in character space mirrored across the middle of a body turned <paramref name="body"/> from rest.</summary>
-    public static Vector3 MirrorPosition(Vector3 position, Quaternion body) =>
-        Vector3.Transform(MirrorPosition(Vector3.Transform(position, Quaternion.Inverse(body))), body);
+    public static Vector3 MirrorPosition(Vector3 position, Quaternion body) => MotionMirror.Position(position, body);
 
     /// <summary>
     /// An offset for the twin of a bone: the bone's turn as the character makes it (the bone's rotation in

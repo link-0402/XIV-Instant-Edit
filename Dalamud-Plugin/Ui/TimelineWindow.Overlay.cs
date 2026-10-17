@@ -95,6 +95,7 @@ public sealed partial class TimelineWindow
         var toClip = modelView * camera.Projection;
         var (index, _) = BoneTree(skeleton);
         var animated = AnimatedBones(clip);
+        var targets = SymmetryTargets(layer, skeleton);
 
         var count = skeleton.Bones.Length;
         if (dotAt.Length != count)
@@ -105,7 +106,7 @@ public sealed partial class TimelineWindow
         for (var b = 0; b < count; b++)
         {
             var name = skeleton.Bones[b].Name;
-            dotShown[b] = (PoseMap.Placed.Contains(name) || selection.Contains(name) || layer != null && PoseEdits.Changes(layer, name)) &&
+            dotShown[b] = (PoseMap.Placed.Contains(name) || selection.Contains(name) || layer != null && PoseEdits.Changes(layer, name, targets)) &&
                           actorPose.Index.TryGetValue(name, out var at) &&
                           PoseGizmo.Project(actorPose.Positions[at], toClip, viewport.Pos, viewport.Size, out dotAt[b]);
         }
@@ -141,7 +142,7 @@ public sealed partial class TimelineWindow
         // The game must not take the click as well.
         ImGui.SetNextFrameWantCaptureMouse(true);
         var bone = skeleton.Bones[hover].Name;
-        ImGui.SetTooltip($"{AnimationPresentation.BoneName(bone)}\n{StateText(StateOf(bone, layer, frame, animated), layer)}");
+        ImGui.SetTooltip($"{AnimationPresentation.BoneName(bone)}\n{StateText(StateOf(bone, layer, frame, animated, SymmetryTargets(layer, skeleton)), layer)}");
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
             ClickBone(bone, skeleton);
     }
@@ -181,7 +182,7 @@ public sealed partial class TimelineWindow
                 continue;
             var name = skeleton.Bones[b].Name;
             var at = dotAt[b];
-            var state = StateOf(name, layer, frame, animated);
+            var state = StateOf(name, layer, frame, animated, SymmetryTargets(layer, skeleton));
             var colour = ImGui.GetColorU32(StateColour(state, layer));
             drawList.AddCircleFilled(at, radius + Theme.Scaled(1.5f), shadow);
             drawList.AddCircleFilled(at, radius, ImGui.GetColorU32(selection.Contains(name)
@@ -290,7 +291,7 @@ public sealed partial class TimelineWindow
     private ImGuizmoOperation? GizmoOperation(MotionLayer layer, int frame, out string? reason)
     {
         reason = null;
-        if (layer.Kind == MotionLayerKind.Amplitude || frame < layer.Start || frame > layer.End || ReadOnly)
+        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry || frame < layer.Start || frame > layer.End || ReadOnly)
             return null;
         if (!layer.Enabled)
         {

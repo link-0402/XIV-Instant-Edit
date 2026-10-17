@@ -22,6 +22,59 @@ internal static class MotionEditsFixture
         Gestures(check);
         BoneRows(check);
         Views(check);
+        Symmetry(check);
+    }
+
+    private static void Symmetry(Action<bool, string> check)
+    {
+        var added = MotionEdits.Add(Empty(30), MotionLayerKind.Symmetry, 0, 30, out var key, out _);
+        var layer = MotionEdits.Find(added, key)!;
+        check(layer.Name == "Symmetry (Left → Right)" && layer.Components == PoseComponents.Rotation && layer.Amount == 1 && layer.From == MotionSide.Left &&
+              MotionEdits.KindName(MotionLayerKind.Symmetry) == "Symmetry" && MotionEdits.MaxAmount(MotionLayerKind.Symmetry) == 1,
+            "a new symmetry layer copies turns from the left at full blend");
+        var flipped = MotionEdits.SetFrom(added, key, MotionSide.Right);
+        check(MotionEdits.Find(flipped, key) is { From: MotionSide.Right, Name: "Symmetry (Right → Left)" },
+            "flipping the side renames a layer that kept its default name");
+        var named = MotionEdits.Replace(added, layer with { Name = "Hands" });
+        check(MotionEdits.Find(MotionEdits.SetFrom(named, key, MotionSide.Right), key) is { From: MotionSide.Right, Name: "Hands" },
+            "flipping keeps a name the user gave");
+        check(ReferenceEquals(MotionEdits.SetFrom(added, key, MotionSide.Left), added), "setting the side it already has changes nothing");
+        check(ReferenceEquals(MotionEdits.SetKey(added, key, 5, "j_sako_l", Turn(10)), added), "keys are never added to a symmetry layer");
+
+        var made = MotionEdits.AddSymmetry(Empty(30), ["j_sako_l", "j_sako_l", ""], MotionSide.Right, out var madeKey, out var error);
+        check(error == null && MotionEdits.Find(made, madeKey) is { Kind: MotionLayerKind.Symmetry, From: MotionSide.Right, Start: 0, End: 30 } symmetric &&
+              symmetric.Bones.SequenceEqual(["j_sako_l"]) && symmetric.Name == "Symmetry (Right → Left)",
+            "Make symmetrical adds one whole-clip layer with the picked bones and side");
+        var refused = MotionEdits.AddSymmetry(Empty(30), [], MotionSide.Left, out _, out error);
+        check(refused.Motion.IsEmpty && error == "Select a bone with a twin on the other side.", "Make symmetrical needs a bone");
+        var editor = new TimelineEditor(Empty(30));
+        check(editor.AddSymmetry(["j_sako_l"], MotionSide.Left) && editor.Document.Motion is [{ Kind: MotionLayerKind.Symmetry } only] &&
+              editor.SelectedLayer == only.Key && editor.LastError == null,
+            "Make symmetrical selects the layer it adds");
+        check(!editor.AddSymmetry([], MotionSide.Left) && editor.Document.Motion.Length == 1 && editor.LastError == "Select a bone with a twin on the other side.",
+            "Make symmetrical without a bone says why and adds nothing");
+
+        // The clip animates the left custom bone only; copying it gives the right one a track no standard skeleton has.
+        static BoneTransform Rest() => new(Vector3.Zero, Quaternion.Identity, Vector3.One);
+        var game = new SkeletonDescription("game", "game-print", [new("n_root", -1, 0, Rest()), new("j_kubi", 0, 0, Rest())], [], [], []);
+        var skeleton = new SkeletonDescription("made", "made-print", [.. game.Bones, new("j_custom_l", 1, 0, Rest()), new("j_custom_r", 1, 0, Rest())], [], [], []);
+        var candidate = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Game, new AnimationResource("chara/a.pap", "a.pap", "hash")), skeleton, 0, "");
+        var clip = new AnimationClip("chara/a.pap", "loop", 0, 0, 1, "s.sklb",
+            Resolution: new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, TrackBones: [1, 2],
+                Standards: [new StandardSkeleton(SkeletonStandard.Vanilla, game, "game")]));
+        var copying = MotionEdits.AddSymmetry(Empty(30), ["j_custom_l"], MotionSide.Left, out _, out _);
+        check(TimelineWindowViews.LayerBonesWarning(copying, clip) is { } warning && warning.Contains("j_custom_r", StringComparison.Ordinal),
+            "a symmetry layer giving a non-standard bone a track warns like a keyed one");
+        // Both custom bones tracked, so leaving the right one out is itself allowed.
+        var bothTracked = clip with { Resolution = clip.Resolution! with { TrackBones = [1, 2, 3] } };
+        check(TimelineWindowViews.BonesProblem(Empty(30) with { ExcludedBones = ["j_custom_r"] }, bothTracked, null) == null &&
+              TimelineWindowViews.BonesProblem(copying with { ExcludedBones = ["j_custom_r"] }, bothTracked, null) is { } problem &&
+              problem.StartsWith("Bone layers move", StringComparison.Ordinal) && problem.Contains("j_custom_r", StringComparison.Ordinal),
+            "a symmetry layer copying onto a bone left out of the save refuses to save, as a keyed layer does");
+        check(!MotionEdits.Same(copying.Motion[0], copying.Motion[0] with { From = MotionSide.Right }),
+            "a layer copying the other side is a different layer");
+        check(TimelineWindowViews.LayerContent(copying.Motion[0]) == "From the left · 1 bone",
+            "a symmetry layer's tooltip says which side it copies and how many bones were picked");
     }
 
     private static void Views(Action<bool, string> check)

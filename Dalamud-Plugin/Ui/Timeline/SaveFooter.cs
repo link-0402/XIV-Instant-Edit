@@ -113,6 +113,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             ImGui.SameLine(0, Theme.Scaled(16));
             ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(380), Math.Max(Theme.Scaled(120), ImGui.GetContentRegionAvail().X - Theme.Scaled(90))));
             ImGui.InputText("Mod name", ref modName, 128);
+            if (AnimationBakeRules.CompanionClip(loaded.Capture, loaded.Startup, loaded.Resource, destination) != null)
+                Widgets.HintWrapped(AnimationBakeRules.CompanionNote(loaded.Startup));
         }
         // An expression's face keeps its own skeleton and every bone.
         if (!loaded.Standalone)

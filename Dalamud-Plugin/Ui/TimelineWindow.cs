@@ -182,7 +182,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame) => posing.MotionPose(loaded, frame);
     private List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc) =>
         posing.Targets(layer, frame, skeleton, loaded, doc);
-    private static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated) => BonePosing.StateOf(bone, layer, frame, animated);
+    private static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated, IReadOnlySet<string>? symmetryTargets) =>
+        BonePosing.StateOf(bone, layer, frame, animated, symmetryTargets);
+    private IReadOnlySet<string>? SymmetryTargets(MotionLayer? layer, SkeletonDescription skeleton) => posing.SymmetryTargets(layer, skeleton);
     private static string StateText(BoneState state, MotionLayer? layer) => BonePosing.StateText(state, layer);
     private static Vector4 StateColour(BoneState state, MotionLayer? layer) => BonePosing.StateColour(state, layer);
     private static bool IsBelow(SkeletonDescription skeleton, int bone, int ancestor) => BonePosing.IsBelow(skeleton, bone, ancestor);

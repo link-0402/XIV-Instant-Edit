@@ -12,6 +12,15 @@ internal enum MotionLayerKind : byte
     Amplitude,
     /// <summary>Blends bones toward the poses its keys hold.</summary>
     Pose,
+    /// <summary>Makes bones copy their twins on the other side, mirrored.</summary>
+    Symmetry,
+}
+
+/// <summary>A side of the body, for the side a symmetry layer copies. Saved as numbers.</summary>
+internal enum MotionSide : byte
+{
+    Left,
+    Right,
 }
 
 /// <summary>
@@ -125,12 +134,14 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 /// One bone layer of an animation. It changes the motion from <paramref name="Start"/> to
 /// <paramref name="End"/> (timeline frames), easing in over <paramref name="FadeIn"/> frames and
 /// out over <paramref name="FadeOut"/>. <paramref name="Amount"/> is an offset's strength, an
-/// amplitude's factor (1 changes nothing, 0 holds the average pose) or a pose's blend weight.
+/// amplitude's factor (1 changes nothing, 0 holds the average pose), a pose's blend weight or a
+/// symmetry's blend toward the other side's motion.
 /// <paramref name="Components"/> are the parts of a transform it changes. <paramref name="Bones"/>
 /// limits it to these bones; empty means every bone its keys name, or for an amplitude every bone.
 /// <paramref name="Interpolation"/> is how bones go from a key without an ease of its own to the next.
 /// Layers apply in their document's order, each to the motion the ones before it made.
 /// </summary>
+/// <param name="From">For a symmetry layer, the side whose motion is copied; other kinds ignore it.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -145,7 +156,8 @@ internal sealed record MotionLayer(
     MotionInterpolation Interpolation,
     ImmutableArray<string> Bones = default,
     ImmutableArray<MotionKey> Keys = default,
-    bool Enabled = true)
+    bool Enabled = true,
+    MotionSide From = MotionSide.Left)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;

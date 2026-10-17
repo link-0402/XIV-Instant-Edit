@@ -481,7 +481,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         {
             if (!EditsMotion) return;
             if (expected.Count != frames) throw new InvalidOperationException("The animation must be sampled before its bone layers apply.");
-            var clip = new MotionClip(targetDescription, duration, frames) { Loops = this.clip.IsLoop };
+            var clip = AnimationBakeRules.LayerClip(targetDescription, duration, frames, this.clip.IsLoop,
+                retarget == null ? sourceTracks : retarget.MapTracks(sourceTracks));
             for (var f = 0; f < frames; f++)
                 for (var b = 0; b < expected[f].Length; b++)
                     clip.Set(f, b, FromHavok(expected[f][b]));

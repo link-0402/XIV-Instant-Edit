@@ -56,6 +56,9 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             ImGui.SetTooltip(layer.Enabled ? "On. Untick to see and save the motion without it." : "Off. Tick to apply it again.");
         Widgets.HintWrapped(TimelineWindowViews.LayerKindHint(layer.Kind));
         ImGui.Spacing();
+        if (layer.Kind == MotionLayerKind.Symmetry)
+            using (ImRaii.Disabled(readOnly))
+                DrawFrom(current, layer);
 
         using (var facts = ImRaii.Table("##layer-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
@@ -71,7 +74,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                     FrameField(current, layer, "Fade out", "##layer-fade-out", layer.FadeOut, fade => layer with { FadeOut = fade });
                     DrawAmount(current, layer);
                     DrawComponents(current, layer);
-                    if (layer.Kind != MotionLayerKind.Amplitude)
+                    if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry))
                         DrawInterpolation(current, layer);
                 }
             }
@@ -84,6 +87,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             Widgets.HintWrapped(session.Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
         else if (layer.Kind == MotionLayerKind.Amplitude)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
+        else if (layer.Kind == MotionLayerKind.Symmetry)
+            boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, true);
         else
         {
             boneEditor.DrawPicker(skeleton, layer);
@@ -142,8 +147,25 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             {
                 MotionLayerKind.Offset => "How much of the keyed offsets applies. Ctrl+click to type.",
                 MotionLayerKind.Amplitude => "100% keeps the motion. Less calms it toward the average pose, more exaggerates it. Ctrl+click to type.",
+                MotionLayerKind.Symmetry => "How far the bones blend toward the other side's motion. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
+    }
+
+    /// <summary> A symmetry layer's side: the one whose motion the other side copies. </summary>
+    private static void DrawFrom(TimelineEditor current, MotionLayer layer)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Copy from");
+        foreach (var side in new[] { MotionSide.Left, MotionSide.Right })
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            if (ImGui.RadioButton(side == MotionSide.Left ? "Left##from-left" : "Right##from-right", layer.From == side))
+                current.Commit(MotionEdits.SetFrom(current.Document, layer.Key, side));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("The side whose motion is copied.");
+        }
+        ImGui.Spacing();
     }
 
     private static void DrawComponents(TimelineEditor current, MotionLayer layer)

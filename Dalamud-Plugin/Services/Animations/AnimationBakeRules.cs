@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
@@ -8,6 +9,54 @@ namespace InstantEdit.Services.Animations;
 /// <summary>What a bake request changes. No Dalamud dependencies.</summary>
 internal static class AnimationBakeRules
 {
+    /// <summary>
+    /// The other clip of a loop and its startup that a timeline save to a new mod carries along unchanged:
+    /// the startup when <paramref name="edited"/> is the loop, the loop when it is the startup (<paramref name="startup"/>),
+    /// as long as the collection gives both from the same mod and they are separate files. Without it the new
+    /// mod would pair the edited clip with the game's own other half once the original mod is off. Null when
+    /// nothing comes along: saving in place, a clip without a startup, or one half from the game or another mod.
+    /// </summary>
+    public static string? CompanionClip(AnimationCapture capture, bool startup, AnimationResource edited, AnimationDestination destination)
+    {
+        if (destination != AnimationDestination.NewMod || capture.Startup is null || edited.ModDirectory is not { } mod)
+            return null;
+        var other = startup ? capture.Clip.GamePath : capture.Startup.GamePath;
+        if (string.Equals(other, edited.GamePath, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var source = capture.Sources.FirstOrDefault(resource => string.Equals(resource.GamePath, other, StringComparison.OrdinalIgnoreCase));
+        return SameMod(source, mod) ? other : null;
+    }
+
+    /// <summary>The save footer's line when <see cref="CompanionClip"/> brings the other clip; <paramref name="startup"/> is whether the startup is edited.</summary>
+    public static string CompanionNote(bool startup) => startup ? "Its loop goes into the new mod too." : "Its startup goes into the new mod too.";
+
+    /// <summary>
+    /// <paramref name="outputs"/> with <paramref name="companion"/>'s file as the save read it (in
+    /// <paramref name="manifest"/>), unchanged. Throws when it no longer comes from <paramref name="edited"/>'s mod,
+    /// as the edited clip's own save refuses a changed source.
+    /// </summary>
+    public static ImmutableDictionary<string, byte[]> WithCompanion(ImmutableDictionary<string, byte[]> outputs, AnimationDependencyManifest manifest,
+        AnimationResource edited, string? companion)
+    {
+        if (companion == null)
+            return outputs;
+        var source = manifest.Resources.FirstOrDefault(resource => string.Equals(resource.GamePath, companion, StringComparison.OrdinalIgnoreCase));
+        if (edited.ModDirectory is not { } mod || !SameMod(source, mod) || !manifest.Files.TryGetValue(companion, out var bytes))
+            throw new IOException("The loop and its startup no longer come from the same mod. Open the timeline again.");
+        return outputs.SetItem(companion, bytes);
+    }
+
+    private static bool SameMod(AnimationResource? resource, string mod) =>
+        resource?.ModDirectory is { } other && string.Equals(other, mod, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The clip a save applies bone layers to, empty for its samples: on the output skeleton, carrying
+    /// the bones the clip has tracks for (<paramref name="tracks"/>, on that skeleton) as Live's decoded
+    /// clip does, so symmetry layers leave the same trackless bones to physics in both.
+    /// </summary>
+    public static MotionClip LayerClip(SkeletonDescription skeleton, float duration, int frames, bool loops, IEnumerable<short> tracks) =>
+        new(skeleton, duration, frames) { Loops = loops, SourceTracks = [.. tracks] };
+
     /// <summary>
     /// Whether the bake retargets onto a standard skeleton: a skeleton repair, or a timeline save
     /// that names one to repair onto.

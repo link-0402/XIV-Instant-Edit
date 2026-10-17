@@ -27,6 +27,9 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     private (SkeletonDescription Skeleton, Dictionary<string, int> Index, int[][] Children)? boneTree;
     // The bones the clip moves, for one skeleton match.
     private (SkeletonResolution? Resolution, HashSet<string> Bones)? animatedBones;
+    // The selected symmetry layer's targets on the skeleton they were found on.
+    private (MotionLayer Layer, SkeletonDescription Skeleton, TimelineDocument? Doc, MotionClip? Decoded, SymmetryPlan Plan, string? Problem,
+        HashSet<string> Bones)? symmetryTargets;
     // The clip's own pose at one frame, local and in model space, while the decode and the frame stay.
     private (MotionClip Clip, int Frame, MotionTransform[] Local, MotionTransform[] Model)? motionPose;
     // The bones' frames for one document, layer, frame and decode.
@@ -91,13 +94,48 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         return bones.Count == 0 ? null : bones;
     }
 
-    public static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated)
+    /// <summary>The bones a symmetry layer copies onto, by name; null for any other layer.</summary>
+    public IReadOnlySet<string>? SymmetryTargets(MotionLayer? layer, SkeletonDescription skeleton) =>
+        layer is { Kind: MotionLayerKind.Symmetry } ? Symmetry(layer, skeleton).Bones : null;
+
+    /// <summary>
+    /// What a symmetry layer copies on <paramref name="skeleton"/>, as Live and the save do: pairs the clip
+    /// doesn't track and no earlier layer moves are left to physics once the motion is read. Worked out
+    /// once per layer, document, skeleton and decode rather than every frame: its plan, or why it has none
+    /// (a picked bone the skeleton lacks).
+    /// </summary>
+    public (SymmetryPlan Plan, string? Problem, IReadOnlySet<string> Bones) Symmetry(MotionLayer layer, SkeletonDescription skeleton)
+    {
+        var decoded = decode.Decoded is { } clip && clip.Skeleton.Fingerprint == skeleton.Fingerprint ? clip : null;
+        var doc = session.Editor?.Document;
+        if (symmetryTargets is { } cached && ReferenceEquals(cached.Layer, layer) && ReferenceEquals(cached.Skeleton, skeleton) &&
+            ReferenceEquals(cached.Doc, doc) && ReferenceEquals(cached.Decoded, decoded))
+            return (cached.Plan, cached.Problem, cached.Bones);
+        SymmetryPlan plan;
+        string? problem = null;
+        try
+        {
+            IReadOnlyList<MotionLayer> layers = doc?.Motion is { IsDefault: false } motion ? motion : [layer];
+            var at = Math.Max(0, layers.ToList().FindIndex(other => other.Key == layer.Key));
+            plan = MotionSymmetry.Plan(skeleton, layer, MotionSymmetry.Animated(skeleton, decoded?.SourceTracks, layers, at));
+        }
+        catch (InvalidDataException e)
+        {
+            plan = SymmetryPlan.Empty;
+            problem = e.Message;
+        }
+        var bones = plan.Pairs.Select(pair => skeleton.Bones[pair.Target].Name).ToHashSet(StringComparer.Ordinal);
+        symmetryTargets = (layer, skeleton, doc, decoded, plan, problem, bones);
+        return (plan, problem, bones);
+    }
+
+    public static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated, IReadOnlySet<string>? symmetryTargets = null)
     {
         if (layer != null)
         {
-            if (layer.Kind != MotionLayerKind.Amplitude && PoseEdits.Keyed(layer, bone, frame))
+            if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry) && PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
-            if (PoseEdits.Changes(layer, bone))
+            if (PoseEdits.Changes(layer, bone, symmetryTargets))
                 return BoneState.Changed;
         }
         return animated == null || animated.Contains(bone) ? BoneState.Animated : BoneState.Still;
@@ -106,7 +144,12 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     public static string StateText(BoneState state, MotionLayer? layer) => state switch
     {
         BoneState.Keyed => "Keyed here in this layer.",
-        BoneState.Changed => layer?.Kind == MotionLayerKind.Amplitude ? "This layer scales its movement." : "This layer changes it.",
+        BoneState.Changed => layer?.Kind switch
+        {
+            MotionLayerKind.Amplitude => "This layer scales its movement.",
+            MotionLayerKind.Symmetry => "Copied from the other side.",
+            _ => "This layer changes it.",
+        },
         BoneState.Animated => "The clip moves it.",
         _ => "The clip doesn't move it.",
     };
@@ -196,8 +239,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         {
             var loop = LoopFrames(loaded, doc);
             var end = MotionEnd(loaded, doc);
-            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame, loop, end);
-            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end);
+            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame, loop, end, clip.SourceTracks);
+            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end, clip.SourceTracks);
         }
         catch (InvalidDataException)
         {
