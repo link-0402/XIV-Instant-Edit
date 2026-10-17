@@ -8,7 +8,7 @@ using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui.Material;
 
-/// <summary>The Textures section: one card per slot with its thumbnail, path and sampling, and adding or removing slots.</summary>
+/// <summary>The Textures section: one card per slot with its thumbnail and path, and adding or removing slots.</summary>
 internal sealed partial class MaterialWindow
 {
     private const uint NormalSampler = 0x0C5EC1F1;
@@ -89,7 +89,6 @@ internal sealed partial class MaterialWindow
         using var id = ImRaii.PushId($"slot-{index}");
         ImGui.Separator();
         var thumb = Theme.Scaled(56);
-        var start = ImGui.GetCursorPosX();
         DrawThumbnail(slot.Path, thumb);
         ImGui.SameLine(0, Theme.Gap);
         using (ImRaii.Group())
@@ -131,41 +130,6 @@ internal sealed partial class MaterialWindow
                 ? $"The game path. The character loads it from:\n{file}"
                 : "The game path. No mod replaces it for the character.");
         }
-
-        using (ImRaii.Disabled(!doc.Editable))
-        {
-            ImGui.SetCursorPosX(start);
-            var dx11 = slot.Dx11;
-            if (ImGui.Checkbox("DX11##dx11", ref dx11))
-                _ = current.Apply(d => d.WithSlot(index, slot with { Dx11 = dx11 }), "DX11 texture");
-            Tip("The game asks for the texture's DX11 file (its name starts with --).");
-            ImGui.SameLine(0, Theme.Gap * 2);
-            DrawWrap(current, index, slot, "Across", slot.WrapU, wrap => slot.WithWrap(wrap, slot.WrapV));
-            ImGui.SameLine(0, Theme.Gap);
-            DrawWrap(current, index, slot, "Down", slot.WrapV, wrap => slot.WithWrap(slot.WrapU, wrap));
-            ImGui.SameLine(0, Theme.Gap * 2);
-            var bias = slot.LodBias;
-            ImGui.SetNextItemWidth(-1);
-            var changed = ImGui.SliderFloat("##lod", ref bias, -8f, 7.98f, "Blur %.2f");
-            Track(current, changed, d => d.WithSlot(index, d.Slots[index].WithLodBias(bias)), "Texture blur");
-            Tip("Below 0 is sharper, above 0 blurrier.");
-        }
-    }
-
-    private static void DrawWrap(MaterialSession current, int index, MaterialSlot slot, string label, int wrap, Func<int, MaterialSlot> with)
-    {
-        ImGui.SetNextItemWidth(Theme.Scaled(84));
-        using (var combo = ImRaii.Combo($"##wrap-{label}", ShaderLabels.WrapModes[Math.Clamp(wrap, 0, 3)]))
-        {
-            if (combo.Success)
-                for (var mode = 0; mode < ShaderLabels.WrapModes.Length; mode++)
-                    if (ImGui.Selectable(ShaderLabels.WrapModes[mode], mode == wrap) && mode != wrap)
-                    {
-                        var chosen = with(mode);
-                        _ = current.Apply(d => d.WithSlot(index, chosen), "Texture wrap");
-                    }
-        }
-        Tip($"How the texture repeats {label.ToLowerInvariant()}.");
     }
 
     private void DrawThumbnail(string path, float size)
