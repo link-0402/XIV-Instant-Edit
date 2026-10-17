@@ -148,35 +148,28 @@ internal sealed unsafe class LiveMaterial : IDisposable
         LastWrite = $"flags 0x{flags:X8}";
     }
 
-    public void SetSamplerFlags(uint samplerCrc, uint settings)
+    /// <summary>Sets a texture's sampler flags; false when a bound material's shader has no such sampler, so only a reload shows it.</summary>
+    public bool SetSamplerFlags(uint samplerCrc, uint settings)
     {
+        var landed = true;
         foreach (var address in Materials())
         {
             var material = (RenderMaterial*)address;
+            // A loaded material's textures carry the package's sampler id, not the CRC the file names them by.
+            if (SamplerId((KernelShaderPackage*)TargetOf(address).ShaderPackage, samplerCrc) is not { } id)
+            {
+                Warn($"The loaded shader has no sampler 0x{samplerCrc:X8}; a reload shows its wrap mode.");
+                landed = false;
+                continue;
+            }
             for (var i = 0; i < material->TextureCount; i++)
-                if (material->Textures[i].Id == samplerCrc)
+                if (material->Textures[i].Id == id)
                     material->Textures[i].SamplerFlags = (settings & SamplerFlagsKeep) | SamplerFlagsSet;
         }
         LastWrite = $"sampler 0x{samplerCrc:X8} = 0x{settings:X8}";
+        return landed;
     }
 
-    /// <summary>Sets a material key's value in the loaded material, in the shader package's key order.</summary>
-    public void SetKey(uint key, uint value)
-    {
-        foreach (var address in Materials())
-        {
-            var material = (RenderMaterial*)address;
-            var package = (KernelShaderPackage*)TargetOf(address).ShaderPackage;
-            if (package == null || material->ShaderKeyValues == null)
-                continue;
-            var keys = package->MaterialKeysSpan;
-            var count = Math.Min(keys.Length, material->ShaderKeyCount);
-            for (var i = 0; i < count; i++)
-                if (keys[i] == key)
-                    material->ShaderKeyValues[i] = value;
-        }
-        LastWrite = $"key 0x{key:X8} = 0x{value:X8}";
-    }
 
     /// <summary>A constant's floats as the loaded material holds them now; null when it can't be read.</summary>
     public float[]? ReadConstant(uint crc)
@@ -292,6 +285,16 @@ internal sealed unsafe class LiveMaterial : IDisposable
         foreach (var element in package->MaterialElementsSpan)
             if (element.CRC == crc)
                 return element;
+        return null;
+    }
+
+    private static uint? SamplerId(KernelShaderPackage* package, uint crc)
+    {
+        if (package == null || package->Samplers == null)
+            return null;
+        for (var i = 0; i < package->SamplerCount; i++)
+            if (package->Samplers[i].CRC == crc)
+                return package->Samplers[i].Id;
         return null;
     }
 

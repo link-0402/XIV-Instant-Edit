@@ -183,8 +183,9 @@ internal sealed class MaterialSession
 
     /// <summary>
     /// Structural when the game would load something else: another shader, other texture files or
-    /// slots, a table of another size, or a key some texture slot depends on. Everything else
-    /// (constants, other keys, flags, sampler settings, rows) is written into the loaded material.
+    /// slots, a table of another size, or any key (writing a loaded material's key values showed
+    /// nothing in game). Everything else (constants, flags, sampler settings, rows) is written into
+    /// the loaded material.
     /// </summary>
     public static EditClass Classify(MaterialDocument before, MaterialDocument after)
     {
@@ -201,9 +202,7 @@ internal sealed class MaterialSession
         foreach (var id in before.Keys.Concat(after.Keys).Select(key => key.Id).Distinct())
         {
             var fallback = facts?.Key(id)?.Default;
-            if ((before.KeyValue(id) ?? fallback) == (after.KeyValue(id) ?? fallback))
-                continue;
-            if (facts == null || facts.SamplerOnlyWhen.Values.Any(conditions => conditions.Any(condition => condition.Key == id)))
+            if ((before.KeyValue(id) ?? fallback) != (after.KeyValue(id) ?? fallback))
                 return EditClass.Structural;
         }
         return EditClass.Live;

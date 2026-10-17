@@ -37,7 +37,8 @@ internal sealed partial class MaterialWindow
         everBound = true;
         if (added > 0 && loadedDoc != null)
         {
-            WriteDiff(loadedDoc, current.Current);
+            if (!WriteDiff(loadedDoc, current.Current))
+                previewDue = Environment.TickCount64 + PreviewDelayMs;
             shownDoc = current.Current;
         }
         return live.IsValid();
@@ -53,27 +54,30 @@ internal sealed partial class MaterialWindow
         var from = shownDoc ?? loadedDoc ?? doc;
         if (MaterialSession.LiveDiff(from, doc).Table && !liveTable.Bound)
             return false;
-        WriteDiff(from, doc);
+        if (!WriteDiff(from, doc))
+            return false;
         shownDoc = doc;
         return true;
     }
 
-    private void WriteDiff(MaterialDocument from, MaterialDocument to)
+    /// <summary>Writes what changed into the bound materials; false when part of it can only show after a reload.</summary>
+    private bool WriteDiff(MaterialDocument from, MaterialDocument to)
     {
+        var landed = true;
         var diff = MaterialSession.LiveDiff(from, to);
-        var facts = ShaderPackages.Get(to.ShaderPackage);
         foreach (var id in diff.Constants)
             if ((to.Constant(id)?.Values ?? ShaderPackages.Param(id)?.Default) is { } values)
                 live.SetConstant(id, values);
-        foreach (var id in diff.Keys)
-            if ((to.KeyValue(id) ?? facts?.Key(id)?.Default) is { } value)
-                live.SetKey(id, value);
+        // Key values only take effect when the material loads again.
+        if (diff.Keys.Length > 0)
+            landed = false;
         if (diff.Flags)
             live.SetFlags(to.ShaderFlags);
         foreach (var id in diff.Samplers)
-            live.SetSamplerFlags(id, to.Slots.First(slot => slot.SamplerId == id).SamplerSettings);
+            landed &= live.SetSamplerFlags(id, to.Slots.First(slot => slot.SamplerId == id).SamplerSettings);
         if (diff.Table && to.Table is { Kind: ColorTableKind.Dawntrail or ColorTableKind.Legacy } table)
             liveTable.Set(ShownTable(table), null);
+        return landed;
     }
 
     /// <summary>Every half second: finds the material again after a redraw, GPose or zone change.</summary>
