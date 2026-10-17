@@ -24,7 +24,7 @@ internal sealed unsafe class LiveMaterial : IDisposable
     private readonly IObjectTable objects;
     private readonly IPluginLog log;
     private readonly List<Target> targets = [];
-    private readonly Dictionary<nint, Snapshot> snapshots = [];
+    private readonly MaterialSnapshots<Snapshot> snapshots = new();
     private bool warned;
 
     /// <summary>One bound place, with the pointers seen at bind time.</summary>
@@ -82,9 +82,7 @@ internal sealed unsafe class LiveMaterial : IDisposable
     public int Bind(IReadOnlyList<MaterialBinding> bindings)
     {
         targets.RemoveAll(target => Resolve(target.Binding) != target);
-        var kept = targets.Select(target => target.Material).ToHashSet();
-        foreach (var stale in snapshots.Keys.Where(address => !kept.Contains(address)).ToList())
-            snapshots.Remove(stale);
+        snapshots.Retire(targets.Select(target => target.Material).ToHashSet());
         var added = 0;
         foreach (var binding in bindings)
         {
@@ -92,19 +90,21 @@ internal sealed unsafe class LiveMaterial : IDisposable
                 continue;
             targets.Add(target);
             added++;
-            if (snapshots.ContainsKey(target.Material))
-                continue;
-            var material = (RenderMaterial*)target.Material;
-            var constants = material->MaterialParameterCBuffer == null ? [] : material->MaterialParameterCBuffer->TryGetBuffer().ToArray();
-            var samplers = new uint[material->TextureCount];
-            for (var i = 0; i < samplers.Length; i++)
-                samplers[i] = material->Textures[i].SamplerFlags;
-            var keys = material->ShaderKeyValues == null ? [] : material->ShaderKeyValuesSpan.ToArray();
-            snapshots[target.Material] = new Snapshot(constants, material->ShaderFlags, samplers, keys);
+            snapshots.Take(target.Material, target.Handle, () => Read((RenderMaterial*)target.Material));
         }
         if (added > 0)
             warned = false;
         return added;
+    }
+
+    private static Snapshot Read(RenderMaterial* material)
+    {
+        var constants = material->MaterialParameterCBuffer == null ? [] : material->MaterialParameterCBuffer->TryGetBuffer().ToArray();
+        var samplers = new uint[material->TextureCount];
+        for (var i = 0; i < samplers.Length; i++)
+            samplers[i] = material->Textures[i].SamplerFlags;
+        var keys = material->ShaderKeyValues == null ? [] : material->ShaderKeyValuesSpan.ToArray();
+        return new Snapshot(constants, material->ShaderFlags, samplers, keys);
     }
 
     /// <summary>Every bound place still holds the material it was bound to; false drops nothing by itself.</summary>
@@ -194,7 +194,8 @@ internal sealed unsafe class LiveMaterial : IDisposable
         foreach (var address in Materials())
         {
             var material = (RenderMaterial*)address;
-            var snapshot = snapshots[address];
+            if (!snapshots.TryGetBound(address, out var snapshot))
+                return false;
             var constants = material->MaterialParameterCBuffer == null ? [] : material->MaterialParameterCBuffer->TryGetBuffer();
             if (!constants.SequenceEqual(snapshot.Constants) || material->ShaderFlags != snapshot.Flags)
                 return false;
@@ -210,7 +211,7 @@ internal sealed unsafe class LiveMaterial : IDisposable
             foreach (var address in Materials())
             {
                 var material = (RenderMaterial*)address;
-                if (!snapshots.TryGetValue(address, out var snapshot))
+                if (!snapshots.TryGetBound(address, out var snapshot))
                     continue;
                 if (material->MaterialParameterCBuffer != null)
                 {
