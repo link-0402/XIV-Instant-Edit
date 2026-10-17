@@ -8,6 +8,33 @@ internal static partial class MaterialEditorScenarios
     {
         CheckPathMatch();
         CheckLiveDiff();
+        CheckSnapshotsOutliveBindings();
+    }
+
+    private static void CheckSnapshotsOutliveBindings()
+    {
+        // After a zone change the game handed the same material, still holding live edits, to a new draw object (2026-10-17).
+        var snapshots = new MaterialSnapshots<string>();
+        var reads = 0;
+        string Read(string value) { reads++; return value; }
+        Require(snapshots.Take(0x100, 0x900, () => Read("own")) == "own" && reads == 1, "a newly bound material is read once");
+        Require(snapshots.Take(0x100, 0x900, () => Read("edited")) == "own" && reads == 1, "binding it again keeps the first snapshot");
+        snapshots.Retire([]);
+        Require(!snapshots.TryGetBound(0x100, out _) && snapshots.Bound.Count == 0, "a material whose binding went stale is no longer bound");
+        Require(snapshots.Take(0x100, 0x900, () => Read("edited")) == "own" && reads == 1,
+            "the same material with the same file, bound again after its binding went stale, gets its first snapshot back");
+        snapshots.Retire([]);
+        Require(snapshots.Take(0x100, 0x901, () => Read("other file")) == "other file" && reads == 2, "the same address with another file is a new material");
+        snapshots.Retire([0x100]);
+        Require(snapshots.TryGetBound(0x100, out var kept) && kept == "other file", "a kept material stays bound");
+        for (var i = 0; i < 40; i++)
+        {
+            snapshots.Take(0x1000 + i, 0x900, () => "x");
+            snapshots.Retire([]);
+        }
+        Require(snapshots.RetiredCount <= MaterialSnapshots<string>.RetiredLimit, "retired snapshots are capped");
+        snapshots.Clear();
+        Require(snapshots.Bound.Count == 0 && snapshots.RetiredCount == 0, "Clear forgets bound and retired snapshots");
     }
 
     private static void CheckPathMatch()
