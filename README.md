@@ -1,3 +1,5 @@
+![XIV Instant Edit](docs/images/banner.png)
+
 # XIV Instant Edit
 
 Instant Edit is a Final Fantasy XIV Dalamud plugin that sends the models, textures and animations you see in game
