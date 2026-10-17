@@ -14,9 +14,11 @@ namespace InstantEdit.Ui.Material;
 internal sealed partial class MaterialWindow
 {
     private const int WhereSize = 256;
+    // Matches no key, so the next refresh always reads (a null key means "no readable index texture").
+    private const string UsageUnread = "\0unread";
 
     private Task<IndexUsage?>? usageTask;
-    private string? usageFor;
+    private string? usageFor = UsageUnread;
     private IndexUsage? usage;
     private string usageNote = "No index texture.";
     private bool showWhere;
@@ -131,6 +133,6 @@ internal sealed partial class MaterialWindow
         whereFor = null;
         whereBuilding = null;
         usage = null;
-        usageFor = null;
+        usageFor = UsageUnread;
     }
 }
