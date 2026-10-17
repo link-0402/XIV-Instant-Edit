@@ -23,7 +23,10 @@ DIAGNOSTICS_RELATIVE_PATH = Path(
     "XIVLauncher", "pluginConfigs", "InstantEdit", "Diagnostics"
 )
 STALE_SECONDS = 24 * 60 * 60
-BACKUP_RETENTION_SECONDS = 7 * 24 * 60 * 60
+# Managed backups are kept this many days unless the in-game plugin sends its own setting.
+DEFAULT_BACKUP_RETENTION_DAYS = 7
+MIN_BACKUP_RETENTION_DAYS = 1
+MAX_BACKUP_RETENTION_DAYS = 365
 MAX_MODEL_BYTES = 512 * 1024 * 1024
 MAX_PREVIEW_BYTES = 1024 * 1024 * 1024
 MAX_PREVIEW_FILES = 2048
@@ -50,6 +53,7 @@ OWNED_ROOT_TEMPORARY_RE = re.compile(r"^\.pending-context-revocations\.json\.[0-
 _lock = threading.RLock()
 _base_directory = Path(tempfile.gettempdir())
 _automatic_cleanup = True
+_backup_retention_days = DEFAULT_BACKUP_RETENTION_DAYS
 _active_jobs: set[Path] = set()
 
 
@@ -62,17 +66,32 @@ class CacheStagingError(ValueError):
         super().__init__(cause)
 
 
-def configure_cache(base_directory: str | Path, automatic_cleanup: bool) -> Path:
-    """Update and persist the thread-safe cache configuration without Blender APIs."""
-    global _base_directory, _automatic_cleanup
+def valid_backup_retention_days(value) -> bool:
+    """Whether a backup retention sent by the plugin is a whole number of days in range."""
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and MIN_BACKUP_RETENTION_DAYS <= value <= MAX_BACKUP_RETENTION_DAYS)
+
+
+def configure_cache(base_directory: str | Path, automatic_cleanup: bool,
+                    backup_retention_days: int | None = None) -> Path:
+    """Update and persist the thread-safe cache configuration without Blender APIs.
+    ``backup_retention_days`` is how long the in-game plugin keeps backups (its Settings);
+    None keeps the current value, for a plugin that doesn't send it."""
+    global _base_directory, _automatic_cleanup, _backup_retention_days
+    if backup_retention_days is not None and not valid_backup_retention_days(backup_retention_days):
+        raise ValueError("backup retention must be a whole number of days in range")
     base = Path(base_directory or tempfile.gettempdir()).expanduser().resolve()
     if base.exists() and not base.is_dir():
         raise ValueError("cache base path must be a directory")
     with _lock:
         previous_base = _base_directory
         previous_cleanup = _automatic_cleanup
+        previous_retention = _backup_retention_days
         _base_directory = base
         _automatic_cleanup = bool(automatic_cleanup)
+        if backup_retention_days is not None:
+            _backup_retention_days = backup_retention_days
+        retention = _backup_retention_days
     try:
         root = ensure_cache_root()
     except Exception:
@@ -82,9 +101,16 @@ def configure_cache(base_directory: str | Path, automatic_cleanup: bool) -> Path
         with _lock:
             _base_directory = previous_base
             _automatic_cleanup = previous_cleanup
+            _backup_retention_days = previous_retention
         raise
-    _persist_cache_settings(base, bool(automatic_cleanup))
+    _persist_cache_settings(base, bool(automatic_cleanup), retention)
     return root
+
+
+def backup_retention_days() -> int:
+    """How many days the backup sweep in ``clean_cache`` keeps managed backups."""
+    with _lock:
+        return _backup_retention_days
 
 
 def cache_settings_path() -> Path:
@@ -100,15 +126,17 @@ def restore_cache_configuration() -> bool:
             return False
         directory = settings.get("cacheDirectory")
         automatic_cleanup = settings.get("automaticCleanup", True)
+        retention = settings.get("backupRetentionDays")
         if not isinstance(directory, str) or not directory.strip() or not isinstance(automatic_cleanup, bool):
             return False
-        configure_cache(directory, automatic_cleanup)
+        configure_cache(directory, automatic_cleanup,
+                        retention if valid_backup_retention_days(retention) else None)
         return True
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         return False
 
 
-def _persist_cache_settings(base: Path, automatic_cleanup: bool) -> None:
+def _persist_cache_settings(base: Path, automatic_cleanup: bool, retention_days: int) -> None:
     path = cache_settings_path()
     temporary = path.with_suffix(path.suffix + ".tmp")
     try:
@@ -117,6 +145,7 @@ def _persist_cache_settings(base: Path, automatic_cleanup: bool) -> None:
             json.dumps({
                 "cacheDirectory": str(base),
                 "automaticCleanup": automatic_cleanup,
+                "backupRetentionDays": retention_days,
             }),
             encoding="utf-8",
         )
@@ -290,8 +319,9 @@ def clean_cache(older_than_seconds: float | None = None) -> tuple[int, int]:
             except OSError:
                 continue
 
-    # Backup histories are deliberately longer-lived than transient jobs.
-    backup_cutoff = time.time() - BACKUP_RETENTION_SECONDS
+    # Backup histories are deliberately longer-lived than transient jobs: as long as the
+    # plugin's Settings keep backups, since the plugin's model backups live here too.
+    backup_cutoff = time.time() - backup_retention_days() * 24 * 60 * 60
     for target in tuple((root / "backups").iterdir()):
         if target.is_symlink() or not target.is_dir() or not re_full_hash(target.name):
             continue

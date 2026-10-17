@@ -61,6 +61,12 @@ internal sealed class MotionClip
     /// <summary>The bone each of the decoded clip's transform tracks drives, in track order; empty unless decoded.</summary>
     public ImmutableArray<short> SourceTracks { get; init; } = [];
 
+    /// <summary>
+    /// Tracked bones whose channels the decoded clip left to the skeleton's reference pose (see
+    /// <see cref="AnimationReferenceChannels"/>): a save drops their tracks while nothing moved them, and so does Live.
+    /// </summary>
+    public ImmutableArray<short> ReferenceFollowers { get; init; } = [];
+
     /// <summary>The decoded clip's blend hint: 0 normal, 1 or 2 additive (see <see cref="AnimationRetarget.Encode(BoneTransform, BoneTransform, sbyte)"/>).</summary>
     public sbyte BlendHint { get; init; }
 
@@ -103,7 +109,7 @@ internal sealed class MotionClip
     /// <summary>A copy to apply layers to, so this decode stays the unedited motion.</summary>
     public MotionClip Clone()
     {
-        var copy = new MotionClip(Skeleton, Duration, Samples, TrackFloats, FloatTracks) { SourceTracks = SourceTracks, BlendHint = BlendHint, Loops = Loops };
+        var copy = new MotionClip(Skeleton, Duration, Samples, TrackFloats, FloatTracks) { SourceTracks = SourceTracks, ReferenceFollowers = ReferenceFollowers, BlendHint = BlendHint, Loops = Loops };
         data.CopyTo(copy.data, 0);
         return copy;
     }

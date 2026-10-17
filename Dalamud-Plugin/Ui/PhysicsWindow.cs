@@ -577,7 +577,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             : service.IsMine(name) ? $"Replaces what you saved in {name}."
             : "Makes a new mod.");
         if (service.ModDirectories.Any(mod => !string.Equals(mod, name, StringComparison.OrdinalIgnoreCase)))
-            ImGui.TextColored(Theme.Muted, "Your other saved physics mods turn off.");
+            ImGui.TextColored(Theme.Muted, "Your other saved physics mods for this race turn off.");
         // A save waits for a running preview, which Run would otherwise drop it for.
         var waiting = working != null;
         if (waiting)

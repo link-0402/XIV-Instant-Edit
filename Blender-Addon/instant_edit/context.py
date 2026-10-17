@@ -103,6 +103,11 @@ class ContextValidationError(ValueError):
     """Raised when an XIV Instant Edit context cannot be used safely."""
 
 
+class ContextSceneError(ContextValidationError):
+    """The context's routing is fine, but its objects aren't (a mesh named outside "1.2 Name", no
+    meshes, damaged object metadata): the scene's to fix, not a reason to drop the routing."""
+
+
 @dataclass(frozen=True)
 class MeshNameInfo:
     """Parsed YAA mesh identifier and the label/orientation around it."""
@@ -440,12 +445,15 @@ def reattach_context(collection, payload: dict, scene) -> "ContextRef":
     """Take on the plugin's answer for a saved context, or leave the collection as it was.
 
     Raises ContextValidationError when the answer doesn't fit or the result would not validate,
-    with the collection's previous metadata put back.
+    with the collection's previous metadata put back. Raises ContextSceneError, keeping the answer,
+    when only the collection's objects don't validate: that is the scene's to fix, and export says so.
     """
     snapshot = routing_snapshot(collection)
     try:
         apply_authoritative_context(collection, payload)
         return validate_context(_value(collection, "context_id", ""), scene)
+    except ContextSceneError:
+        raise
     except ContextValidationError:
         restore_routing(collection, snapshot)
         raise
@@ -584,6 +592,44 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         raise ContextValidationError("callback port is out of range")
 
     objects = tuple(collection.objects)
+    try:
+        mesh_objects = _validated_meshes(objects)
+    except ContextSceneError:
+        raise
+    except ContextValidationError as error:
+        raise ContextSceneError(str(error)) from error
+
+    return ContextRef(
+        collection=collection,
+        objects=objects,
+        mesh_objects=tuple(mesh_objects),
+        context_id=context_id,
+        import_id=import_id if isinstance(import_id, str) else "",
+        plugin_instance_id=plugin_instance_id,
+        capability=capability,
+        source_game_path=source_game_path,
+        source_kind=source_kind,
+        resolved_game_path=resolved_game_path,
+        destination_state=destination_state,
+        managed_destination=managed_destination,
+        target_file_path=target_file_path,
+        source_mod_directory=source_mod_directory,
+        source_mod_stable_id=source_mod_stable_id,
+        source_mod_name=source_mod_name,
+        source_mod_root_path=source_mod_root_path if isinstance(source_mod_root_path, str) else "",
+        target_relative_path=target_relative_path if isinstance(target_relative_path, str) else "",
+        target_collection_id=target_collection_id if isinstance(target_collection_id, str) else "",
+        target_collection_name=target_collection_name if isinstance(target_collection_name, str) else "",
+        resource_manifest_version=resource_manifest_version,
+        resource_manifest_status=resource_manifest_status,
+        backup_target_id=backup_target_id if isinstance(backup_target_id, str) else "",
+        backup_directory=backup_directory if isinstance(backup_directory, str) else "",
+        callback_port=callback_port,
+    )
+
+
+def _validated_meshes(objects) -> list:
+    """The context collection's mesh objects, each checked (see validate_context)."""
     mesh_objects = []
     for obj in objects:
         if obj.name.startswith(SIZE_COPY_NAME):
@@ -627,35 +673,8 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
         mesh_objects.append(obj)
 
     if not mesh_objects:
-        raise ContextValidationError("context contains no mesh objects")
-
-    return ContextRef(
-        collection=collection,
-        objects=objects,
-        mesh_objects=tuple(mesh_objects),
-        context_id=context_id,
-        import_id=import_id if isinstance(import_id, str) else "",
-        plugin_instance_id=plugin_instance_id,
-        capability=capability,
-        source_game_path=source_game_path,
-        source_kind=source_kind,
-        resolved_game_path=resolved_game_path,
-        destination_state=destination_state,
-        managed_destination=managed_destination,
-        target_file_path=target_file_path,
-        source_mod_directory=source_mod_directory,
-        source_mod_stable_id=source_mod_stable_id,
-        source_mod_name=source_mod_name,
-        source_mod_root_path=source_mod_root_path if isinstance(source_mod_root_path, str) else "",
-        target_relative_path=target_relative_path if isinstance(target_relative_path, str) else "",
-        target_collection_id=target_collection_id if isinstance(target_collection_id, str) else "",
-        target_collection_name=target_collection_name if isinstance(target_collection_name, str) else "",
-        resource_manifest_version=resource_manifest_version,
-        resource_manifest_status=resource_manifest_status,
-        backup_target_id=backup_target_id if isinstance(backup_target_id, str) else "",
-        backup_directory=backup_directory if isinstance(backup_directory, str) else "",
-        callback_port=callback_port,
-    )
+        raise ContextSceneError("context contains no mesh objects")
+    return mesh_objects
 
 
 def active_context(context=None) -> ContextRef:

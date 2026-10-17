@@ -49,6 +49,16 @@ internal static class CompanionClipFixture
             "a startup in the loop's own file is already saved with it");
         check(AnimationBakeRules.CompanionClip(Capture(Mod, Mod.ToUpperInvariant()), false, Resource(Loop, Mod), AnimationDestination.NewMod) == Start,
             "mod folders match whatever their case, as Windows paths do");
+        // The save asks the collection again: a startup another mod now gives stays where it is, and one the
+        // edited clip's mod now gives comes along, whatever the capture saw.
+        check(AnimationBakeRules.CompanionCandidate(Capture(Mod, "Other mod"), false, Resource(Loop, Mod), AnimationDestination.NewMod) == Start &&
+              AnimationBakeRules.CompanionFrom(Start, Resource(Start, "Other mod"), Resource(Loop, Mod)) == null &&
+              AnimationBakeRules.CompanionFrom(Start, Resource(Start, Mod), Resource(Loop, Mod)) == Start &&
+              AnimationBakeRules.CompanionFrom(Start, Resource(Start, null), Resource(Loop, Mod)) == null,
+            "the save decides from where the collection gives the other half now, not from the capture");
+        check(AnimationBakeRules.CompanionCandidate(both, false, Resource(Loop, Mod), AnimationDestination.InPlace) == null &&
+              AnimationBakeRules.CompanionCandidate(Capture(Mod, Mod, start: Loop), false, Resource(Loop, Mod), AnimationDestination.NewMod) == null,
+            "saving in place, or a startup in the loop's own file, never asks");
         check(AnimationBakeRules.CompanionNote(false) == "Its startup goes into the new mod too." &&
               AnimationBakeRules.CompanionNote(true) == "Its loop goes into the new mod too.",
             "the save footer says which clip comes along");

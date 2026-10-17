@@ -227,9 +227,11 @@ def _resizing(api, objects, picked):
     try:
         resizer = api.Resizer(objects, picked, substitute=True)
         substitutes = dict(resizer.substitutes)
-        if len(set(substitutes.values())) < len(substitutes):
+        linked = any(getattr(part, "library", None) is not None for part in substitutes.values())
+        if len(set(substitutes.values())) < len(substitutes) or linked:
             # Two meshes stand for one part (a LOD0 and a LOD1 copy): the part can be exported as
-            # only one of them, so the copies are resized themselves, as before substitutes.
+            # only one of them. A part linked from a library can't take the mesh's name or settings.
+            # Either way the copies are resized themselves, as before substitutes.
             resizer = api.Resizer(objects, picked, substitute=False)
             substitutes = {}
     except api.ResizeError as error:

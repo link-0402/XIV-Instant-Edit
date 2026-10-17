@@ -67,7 +67,7 @@ internal sealed class BlenderConnection
 
         var expectedRoot = _textures.EnsureConfiguredCache();
         var synchronizedRoot = await _blender.ConfigureCacheAsync(
-            port, _config.TextureCacheDirectory, _config.AutomaticCacheCleanup, cancellationToken).ConfigureAwait(false);
+            port, _config.TextureCacheDirectory, _config.AutomaticCacheCleanup, _config.CacheRetentionDays, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(synchronizedRoot))
             return false;
 

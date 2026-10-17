@@ -14,7 +14,7 @@ import bpy
 
 from .context import (CONTEXT_FIELDS, SCHEMA as CONTEXT_SCHEMA, SUPPORTED_VERSIONS as SUPPORTED_CONTEXT_VERSIONS,
                       context_default, is_safe_game_model_path)
-from .cache import CacheStagingError, STALE_SECONDS, cache_root, finish_job
+from .cache import CacheStagingError, STALE_SECONDS, cache_root, finish_job, valid_backup_retention_days
 from .character import parse_request as parse_character, to_property as character_property
 from .diagnostics import BridgeRequestError, record_failure, sanitize_text
 from .plugin_http import post_json
@@ -473,7 +473,7 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 data = self._validate_cache_settings(data)
                 from .cache import STALE_SECONDS, clean_cache, configure_cache
                 try:
-                    root = configure_cache(data["cacheDirectory"], data["automaticCleanup"])
+                    root = configure_cache(data["cacheDirectory"], data["automaticCleanup"], data["backupRetentionDays"])
                 except Exception as error:
                     raise BridgeRequestError(
                         "cache_configuration", "cache_configuration_failed",
@@ -719,7 +719,15 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "request_validation", "invalid_automatic_cleanup",
                 "automaticCleanup must be a boolean.",
                 "Update both XIV Instant Edit components and retry.")
-        return {**data, "cacheDirectory": directory, "automaticCleanup": automatic_cleanup}
+        # Older plugins don't send it; the add-on then keeps its current backup days.
+        retention = data.get("backupRetentionDays")
+        if retention is not None and not valid_backup_retention_days(retention):
+            raise BridgeRequestError(
+                "request_validation", "invalid_backup_retention",
+                "backupRetentionDays must be a whole number of days from 1 to 365.",
+                "Update both XIV Instant Edit components and retry.")
+        return {**data, "cacheDirectory": directory, "automaticCleanup": automatic_cleanup,
+                "backupRetentionDays": retention}
 
     @staticmethod
     def _validate_import(data) -> dict:

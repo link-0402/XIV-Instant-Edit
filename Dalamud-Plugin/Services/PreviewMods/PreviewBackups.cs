@@ -30,6 +30,10 @@ internal static class PreviewBackups
         return groups.Select(g => new PreviewBackupGroup(g[0].Backup.Created, g)).Reverse().ToList();
     }
 
+    /// <summary> The groups of <paramref name="groups"/> that back up <paramref name="file"/>: a save of it, not another tool's backup of a file beside it. </summary>
+    public static IReadOnlyList<PreviewBackupGroup> Holding(IEnumerable<PreviewBackupGroup> groups, PreviewSource file)
+        => groups.Where(group => group.Files.Any(f => SameFile(f.Source, file))).ToList();
+
     private static bool SameFile(PreviewSource a, PreviewSource b)
         => string.Equals(a.ModDirectory, b.ModDirectory, StringComparison.OrdinalIgnoreCase) &&
            string.Equals(a.RelativePath.Replace('\\', '/'), b.RelativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);

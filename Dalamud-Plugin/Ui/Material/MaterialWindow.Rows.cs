@@ -609,6 +609,13 @@ internal sealed partial class MaterialWindow
             var bytes = await ReadTextureAsync(normalFile).ConfigureAwait(false);
             if (bytes == null || indexPath == null)
                 return "The normal map couldn't be read, so no index texture was made. The whole model shows pair 1 until you add one.";
+            // A made index goes where nothing is yet: over a game texture of that name it would change every
+            // material that reads it, and a path the mod maps already would stop the save.
+            if (existing == null)
+                indexPath = MaterialSession.FreeTexturePath(indexPath, path =>
+                    data.FileExists(path) || current.NewFiles.ContainsKey(path) ||
+                    !source.IsGameData && source.ModRootPath.Length > 0 &&
+                    ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, path) != null);
             try
             {
                 built = LegacyIndexTexture.FromNormal(TextureDecoder.Decode(bytes, int.MaxValue));
@@ -637,12 +644,16 @@ internal sealed partial class MaterialWindow
     private static (MaterialDocument Doc, IReadOnlyList<string> Notes) ConvertedToDawntrail(MaterialDocument doc, string? indexPath)
     {
         IReadOnlyList<string> notes = [];
+        var legacy = doc.Table is { Kind: ColorTableKind.Legacy } old ? old : null;
         if (!doc.ShaderPackage.Equals("character.shpk", StringComparison.OrdinalIgnoreCase))
             (doc, notes) = MaterialSession.Reconcile(doc.WithShaderPackage("character.shpk"), ShaderPackages.Get("character.shpk")!);
-        else if (doc.Table is { Kind: ColorTableKind.Legacy } table)
-            doc = doc.WithTable(table.ToDawntrail());
+        else if (legacy != null)
+            doc = doc.WithTable(legacy.ToDawntrail());
         if (indexPath == null)
             return (doc, notes);
+        // The index made from the normal map blends each legacy row into the next, as legacy shaders do.
+        if (legacy != null)
+            doc = doc.WithTable(legacy.ToDawntrail(blendNext: true));
         // The made texture replaces the index slot Reconcile may have pointed elsewhere.
         var slot = doc.Slots.ToList().FindIndex(s => s.SamplerId == IndexSampler);
         doc = slot < 0 ? doc.WithAddedSlot(IndexSampler, indexPath) : doc.WithSlot(slot, doc.Slots[slot] with { Path = indexPath });

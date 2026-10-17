@@ -133,6 +133,12 @@ internal sealed partial class MaterialWindow
             Say(FeedbackSeverity.Warning, "A copy can't carry the model's new second UV map. Save writes both, or apply Scrolling pattern again without it.");
             return;
         }
+        // Saves and restores of other windows may be writing the same mod's option files right now.
+        if (!ModWrites.Wait(0))
+        {
+            Say(FeedbackSeverity.Warning, "Another Material window is saving. Try again in a moment.");
+            return;
+        }
         try
         {
             var bytes = doc.Write();
@@ -152,5 +158,6 @@ internal sealed partial class MaterialWindow
             log.Warning(e, "Could not save a copy of the material into an option.");
             Say(FeedbackSeverity.Error, $"The copy could not be saved: {e.Message}");
         }
+        finally { ModWrites.Release(); }
     }
 }

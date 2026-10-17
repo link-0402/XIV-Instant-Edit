@@ -35,7 +35,8 @@ public sealed record PainterStatus(bool Reachable, string AddonVersion, string P
 public sealed class PainterClient : IDisposable
 {
     public const string OpenSchema = "instant-edit.painter-open";
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    // Only ever 127.0.0.1: never through a system proxy.
+    private readonly HttpClient _http = new(new SocketsHttpHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(10) };
 
     public async Task<PainterStatus> GetStatusAsync(int port, TimeSpan timeout, CancellationToken token = default)
     {

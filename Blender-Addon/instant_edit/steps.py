@@ -14,9 +14,23 @@ import bpy
 from .props import get_instant_edit_props
 
 
+# Esc while a step waits on a worker: work that can give up waiting (the receipt of a lost export
+# reply) does so and ends as still pending. The work itself, already sent, can't be taken back.
+stop_waiting = threading.Event()
+
+# Whether the steps run to their end at once on Blender's main thread (no window, see start), so a
+# wait blocks Blender itself and is kept short.
+_inline = False
+
+
+def inline_run() -> bool:
+    return _inline
+
+
 class Step:
     """Where an export is: ``text`` for the status bar, ``done`` of ``total`` for the progress bar.
-    ``wait``, when set, is work on a worker thread the export waits for; Esc can't stop it."""
+    ``wait``, when set, is work on a worker thread the export waits for; Esc can't stop it, only
+    the waiting that can give up (see stop_waiting)."""
 
     def __init__(self, text: str, done: int = 0, total: int = 1, wait=None):
         self.text, self.done, self.total, self.wait = text, done, total, wait
@@ -95,16 +109,20 @@ def start(context, steps, done, failed, report, cancelled: str = "") -> set[str]
     operator takes a step at a time, so Blender keeps drawing and shows the progress, and Esc
     cancels, the status then ending with ``cancelled``; without one (tests, background) it runs
     to its end at once. Returns the calling operator's result."""
+    global _inline
     if _running:
         report({"ERROR"}, "An export is already running.")
         steps.close()
         return {"CANCELLED"}
     if bpy.app.background or getattr(context, "window", None) is None:
+        _inline = True
         try:
             result = run(steps)
         except Exception as error:
             failed(report, error)
             return {"CANCELLED"}
+        finally:
+            _inline = False
         done(report, result)
         return {"FINISHED"}
     _pending[:] = [(steps, done, failed, cancelled)]
@@ -139,6 +157,7 @@ class RunExportSteps(bpy.types.Operator):
         window_manager.modal_handler_add(self)
         self._progress = False
         _running = True
+        stop_waiting.clear()
         self._show(context, "Starting the export. Esc cancels.")
         return {"RUNNING_MODAL"}
 
@@ -157,6 +176,11 @@ class RunExportSteps(bpy.types.Operator):
             get_instant_edit_props().last_status = message
             self.report({"WARNING"}, message)
             return {"CANCELLED"}
+        if event.type == "ESC" and event.value == "PRESS" and waiting and not stop_waiting.is_set():
+            # What was sent stays sent; only waiting for the plugin's answer stops.
+            stop_waiting.set()
+            self._show(context, f"{step.text} Stopping the wait; the plugin may still finish it.")
+            return {"RUNNING_MODAL"}
         if event.type != "TIMER":
             return {"PASS_THROUGH"} if event.type in _VIEW_EVENTS else {"RUNNING_MODAL"}
         if waiting:

@@ -15,17 +15,29 @@ internal static class AnimationBakeRules
     /// as long as the collection gives both from the same mod and they are separate files. Without it the new
     /// mod would pair the edited clip with the game's own other half once the original mod is off. Null when
     /// nothing comes along: saving in place, a clip without a startup, or one half from the game or another mod.
+    /// This reads the sources the capture saw, for the save footer's note; the save asks the collection again
+    /// (<see cref="CompanionCandidate"/>, <see cref="CompanionFrom"/>).
     /// </summary>
-    public static string? CompanionClip(AnimationCapture capture, bool startup, AnimationResource edited, AnimationDestination destination)
+    public static string? CompanionClip(AnimationCapture capture, bool startup, AnimationResource edited, AnimationDestination destination) =>
+        CompanionCandidate(capture, startup, edited, destination) is { } other
+            ? CompanionFrom(other, capture.Sources.FirstOrDefault(resource => string.Equals(resource.GamePath, other, StringComparison.OrdinalIgnoreCase)), edited)
+            : null;
+
+    /// <summary>
+    /// The other half's game path a save to a new mod may carry along (see <see cref="CompanionClip"/>), before
+    /// knowing where the collection gives it from. Null when nothing can come along.
+    /// </summary>
+    public static string? CompanionCandidate(AnimationCapture capture, bool startup, AnimationResource edited, AnimationDestination destination)
     {
-        if (destination != AnimationDestination.NewMod || capture.Startup is null || edited.ModDirectory is not { } mod)
+        if (destination != AnimationDestination.NewMod || capture.Startup is null || edited.ModDirectory is null)
             return null;
         var other = startup ? capture.Clip.GamePath : capture.Startup.GamePath;
-        if (string.Equals(other, edited.GamePath, StringComparison.OrdinalIgnoreCase))
-            return null;
-        var source = capture.Sources.FirstOrDefault(resource => string.Equals(resource.GamePath, other, StringComparison.OrdinalIgnoreCase));
-        return SameMod(source, mod) ? other : null;
+        return string.Equals(other, edited.GamePath, StringComparison.OrdinalIgnoreCase) ? null : other;
     }
+
+    /// <summary><paramref name="candidate"/> when <paramref name="current"/>, where it comes from, is <paramref name="edited"/>'s mod; else null.</summary>
+    public static string? CompanionFrom(string? candidate, AnimationResource? current, AnimationResource edited) =>
+        candidate != null && edited.ModDirectory is { } mod && SameMod(current, mod) ? candidate : null;
 
     /// <summary>The save footer's line when <see cref="CompanionClip"/> brings the other clip; <paramref name="startup"/> is whether the startup is edited.</summary>
     public static string CompanionNote(bool startup) => startup ? "Its loop goes into the new mod too." : "Its startup goes into the new mod too.";

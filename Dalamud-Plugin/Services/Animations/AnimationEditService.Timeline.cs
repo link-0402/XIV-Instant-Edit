@@ -410,7 +410,10 @@ internal sealed partial class AnimationEditService
             // The file the timeline lives in: the clip's PAP, or an expression's own TMB.
             var edited = source.Resource.GamePath;
             // A new mod gets the loop's startup from the same mod too, or the startup's loop, unchanged.
-            var companion = AnimationBakeRules.CompanionClip(capture, source.Startup, source.Resource, destination);
+            // Where it comes from is read now: the collection may have changed since the capture.
+            var candidate = AnimationBakeRules.CompanionCandidate(capture, source.Startup, source.Resource, destination);
+            var companion = candidate == null ? null
+                : AnimationBakeRules.CompanionFrom(candidate, (await resources.ReadAsync(capture.CollectionId, candidate, token)).Resource, source.Resource);
             var manifest = await resources.ManifestAsync(capture,
                 [edited, .. companion == null ? Array.Empty<string>() : [companion], .. replaced?.Keys ?? []], destination, token);
             if (manifest.Resources.First(r => string.Equals(r.GamePath, edited, StringComparison.OrdinalIgnoreCase)).Hash != source.Resource.Hash)

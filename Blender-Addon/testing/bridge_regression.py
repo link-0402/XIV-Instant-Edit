@@ -937,6 +937,31 @@ def run_staging_isolation_regression(addon) -> None:
             "a reattach answer that doesn't validate is rolled back instead of breaking the context",
         )
 
+        # A scene-side problem (a mesh renamed outside "1.2 Name") is the scene's to fix: the answer stays.
+        good_answer = {
+            field.wire: context_module._value(pending_collection, field.name, field.default)
+            for field in context_module.CONTEXT_FIELDS
+        }
+        good_answer.update(capability="reattached-capability")
+        renamed = next(obj for obj in pending_collection.objects if obj.type == "MESH")
+        kept_name = renamed.name
+        renamed.name = "Body"
+        try:
+            context_module.reattach_context(pending_collection, good_answer, bpy.context.scene)
+        except context_module.ContextSceneError:
+            pass
+        else:
+            raise AssertionError("a mesh named outside the pattern validated")
+        finally:
+            renamed.name = kept_name
+        _require(
+            context_module._value(pending_collection, "capability") == "reattached-capability" and
+            context_module.validate_context("pending-collection-context", bpy.context.scene) is not None,
+            "a reattach the scene's objects fail keeps the plugin's answer instead of asking to re-import",
+        )
+        context_module.reattach_context(
+            pending_collection, {**good_answer, "capability": "promoted-capability"}, bpy.context.scene)
+
         # One field table drives the add-on's side of the protocol, and it matches the plugin's.
         protocol = json.loads(
             (Path(__file__).resolve().parents[2] / "Tests" / "TestSupport" / "context-protocol.json")
@@ -1475,6 +1500,43 @@ def run_staging_isolation_regression(addon) -> None:
                 )
             else:
                 raise AssertionError("an export that never finished returned a receipt")
+
+            # Esc stops the wait (steps.stop_waiting): the same still-pending answer, at once.
+            request_counts.update(export=0, status=0)
+            ops.steps.stop_waiting.set()
+            try:
+                ops._send_plugin_export_to(export_ref, redraw_payload, "/export")
+            except ops.PluginResponseError as error:
+                _require(
+                    error.code == "export_still_pending" and request_counts["export"] == 1 and
+                    request_counts["status"] == 1 and "seconds" in error.message,
+                    "Esc stops waiting for a lost export's receipt and says it may still be written",
+                )
+            else:
+                raise AssertionError("a stopped wait returned a receipt")
+            finally:
+                ops.steps.stop_waiting.clear()
+
+            # The plugin restarting mid-wait answers 401/410: never a context to reattach and send again for.
+            original_status = ops._request_export_status
+
+            def restarted(_ref, _export_id):
+                raise ops.PluginResponseError(401, "plugin_instance_mismatch", "The plugin restarted.")
+
+            ops._request_export_status = restarted
+            request_counts.update(export=0, status=0)
+            try:
+                ops._send_plugin_export_to(export_ref, redraw_payload, "/export")
+            except ops.PluginResponseError as error:
+                _require(
+                    error.status is None and error.code == "export_receipt_unavailable" and
+                    "second time" in error.remedy and request_counts["export"] == 1,
+                    "a receipt poll the restarted plugin refuses is not taken for an expired context to send again for",
+                )
+            else:
+                raise AssertionError("a refused receipt poll returned a receipt")
+            finally:
+                ops._request_export_status = original_status
 
             def refused(request, timeout=0):
                 request_counts["export" if request.full_url.endswith("/export") else "status"] += 1

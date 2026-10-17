@@ -8,6 +8,7 @@ from urllib.error import URLError
 import bpy
 
 from .context import (
+    ContextSceneError,
     ContextValidationError,
     _value,
     context_collections,
@@ -60,14 +61,19 @@ def apply_reattach(collection, payload: dict | None, scene) -> bool:
     when the answer doesn't validate."""
     if payload is None:
         return False
+    scene_problem = None
     try:
         reattach_context(collection, payload, scene)
+    except ContextSceneError as error:
+        # Reconnected: only the scene's objects need fixing, which export reports too.
+        scene_problem = error
     except ContextValidationError:
         return False
     _update_scene_properties(payload, scene)
     props = getattr(scene, "xiv_ie_instant_edit_props", None)
     if props is not None:
-        props.last_status = "XIV Instant Edit context reconnected."
+        props.last_status = ("XIV Instant Edit context reconnected." if scene_problem is None
+                             else f"XIV Instant Edit context reconnected; fix this before exporting: {scene_problem}")
     return True
 
 

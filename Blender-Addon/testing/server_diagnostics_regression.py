@@ -237,7 +237,12 @@ def run() -> None:
                    "cacheDirectory": str(Path(tempfile.gettempdir()).resolve()),
                    "automaticCleanup": True}
     assert server._ImportHandler._validate_cache_settings(valid_cache)["cacheDirectory"]
+    assert server._ImportHandler._validate_cache_settings(valid_cache)["backupRetentionDays"] is None
+    assert server._ImportHandler._validate_cache_settings({**valid_cache, "backupRetentionDays": 30})["backupRetentionDays"] == 30
     for payload, expected in (
+        ({**valid_cache, "backupRetentionDays": 0}, "invalid_backup_retention"),
+        ({**valid_cache, "backupRetentionDays": "30"}, "invalid_backup_retention"),
+        ({**valid_cache, "backupRetentionDays": True}, "invalid_backup_retention"),
         ({**valid_cache, "schema": "old.schema"}, "unsupported_schema"),
         ({**valid_cache, "version": 2}, "unsupported_version"),
         ({**valid_cache, "cacheDirectory": "relative/cache"}, "invalid_cache_directory"),

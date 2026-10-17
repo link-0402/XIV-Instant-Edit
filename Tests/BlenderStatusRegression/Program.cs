@@ -223,12 +223,13 @@ static async Task CheckBridgeResponsesAsync()
     using (var cacheContexts = new ExportContextRegistry("blender-cache-settings-regression"))
     using (var cacheClient = new BlenderClient(null!, cacheContexts, cacheHttp))
     {
-        var configured = await cacheClient.ConfigureCacheAsync(42424, "C:/Cache", true);
+        var configured = await cacheClient.ConfigureCacheAsync(42424, "C:/Cache", true, 30);
         Require(configured == "C:/Cache/XIV Instant Edit" && cacheHandler.LastMethod == "POST" &&
                 JsonNode.Parse(cacheHandler.LastBody!)!["schema"]?.GetValue<string>() == "instant-edit.cache-settings" &&
                 JsonNode.Parse(cacheHandler.LastBody!)!["cacheDirectory"]?.GetValue<string>() == "C:/Cache" &&
-                JsonNode.Parse(cacheHandler.LastBody!)!["automaticCleanup"]?.GetValue<bool>() == true,
-            "the plugin sends its central cache directory and cleanup preference to Blender");
+                JsonNode.Parse(cacheHandler.LastBody!)!["automaticCleanup"]?.GetValue<bool>() == true &&
+                JsonNode.Parse(cacheHandler.LastBody!)!["backupRetentionDays"]?.GetValue<int>() == 30,
+            "the plugin sends its central cache directory, cleanup preference and backup days to Blender");
     }
 
     var structured = BridgeFailure.FromResponse(

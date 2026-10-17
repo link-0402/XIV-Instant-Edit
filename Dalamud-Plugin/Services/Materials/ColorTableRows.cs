@@ -440,8 +440,11 @@ public sealed class ColorTable
     /// The table in the Dawntrail layout. A legacy row p fills both rows of Dawntrail pair p, so the
     /// index texture picks the same colours whatever its blend channel says; its dye row keeps the
     /// template and maps diffuse, specular, emissive and gloss (as roughness).
+    /// With <paramref name="blendNext"/>, pair p holds legacy row p on top and row p + 1 below instead,
+    /// for an index made from the normal map (see <see cref="LegacyIndexTexture"/>): its blend channel
+    /// then gives the in-between colours legacy shaders blend for alphas between two rows.
     /// </summary>
-    public ColorTable ToDawntrail()
+    public ColorTable ToDawntrail(bool blendNext = false)
     {
         if (Kind == ColorTableKind.Dawntrail)
             return Clone();
@@ -452,13 +455,20 @@ public sealed class ColorTable
         DtDyeRow[]? dye = LegacyDye != null ? new DtDyeRow[DtRowCount] : null;
         for (var p = 0; p < LegacyRowCount; p++)
         {
-            rows[2 * p] = rows[2 * p + 1] = LegacyRows[p].ToDawntrail();
+            var below = blendNext ? Math.Min(p + 1, LegacyRowCount - 1) : p;
+            rows[2 * p] = LegacyRows[p].ToDawntrail();
+            rows[2 * p + 1] = below == p ? rows[2 * p] : LegacyRows[below].ToDawntrail();
             if (dye == null)
                 continue;
-            var old = LegacyDye![p];
-            var flags = (ushort)((old.Flags & 0b111) | ((old.Flags & 0b1000) != 0 ? 1 << 5 : 0));
-            dye[2 * p] = dye[2 * p + 1] = new DtDyeRow(0).WithFlags(flags).WithTemplate(old.Template);
+            dye[2 * p] = DyeToDawntrail(LegacyDye![p]);
+            dye[2 * p + 1] = below == p ? dye[2 * p] : DyeToDawntrail(LegacyDye[below]);
         }
         return new ColorTable(rows, dye, baseFlags);
+    }
+
+    private static DtDyeRow DyeToDawntrail(LegacyDyeRow old)
+    {
+        var flags = (ushort)((old.Flags & 0b111) | ((old.Flags & 0b1000) != 0 ? 1 << 5 : 0));
+        return new DtDyeRow(0).WithFlags(flags).WithTemplate(old.Template);
     }
 }
