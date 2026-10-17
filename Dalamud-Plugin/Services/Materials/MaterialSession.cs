@@ -37,8 +37,11 @@ internal sealed class MaterialSession
     public const string FallbackModName = "Material Edit";
     private const uint IndexSampler = 0x565F8FD8;
 
+    public const string ScrollShader = "characterscroll.shpk";
+
     private readonly Func<MaterialDocument, EditClass, Task> onEdit;
     private readonly Dictionary<string, byte[]> newFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (PreviewSource Model, byte[] Bytes)> modelChanges = new(StringComparer.OrdinalIgnoreCase);
 
     public MaterialSession(MaterialSource source, MaterialDocument initial, Func<MaterialDocument, EditClass, Task> onEdit)
     {
@@ -68,6 +71,20 @@ internal sealed class MaterialSession
     /// <summary>The new files the document reads.</summary>
     public IReadOnlyList<(string GamePath, byte[] Bytes)> NewFilesFor(MaterialDocument doc)
         => newFiles.Where(file => doc.TexturePaths.Contains(file.Key, StringComparer.OrdinalIgnoreCase)).Select(file => (file.Key, file.Value)).ToList();
+
+    /// <summary>
+    /// A model the material is drawn with, changed for it: <paramref name="model"/> is the file as read
+    /// (its hash guards the save), <paramref name="bytes"/> the changed file. Only a second UV map for the
+    /// scroll shader is added this way, so the change goes with the material while it is on that shader.
+    /// </summary>
+    public void AddModelChange(PreviewSource model, byte[] bytes) => modelChanges[PathRules.NormalizeGamePath(model.GamePath)] = (model, bytes);
+
+    /// <summary>A change to the model at <paramref name="gamePath"/> waits for the save.</summary>
+    public bool HasModelChange(string gamePath) => modelChanges.ContainsKey(PathRules.NormalizeGamePath(gamePath));
+
+    /// <summary>The model changes the document needs: those for the scroll shader, while it is on it.</summary>
+    public IReadOnlyList<(PreviewSource Model, byte[] Bytes)> ModelChangesFor(MaterialDocument doc)
+        => doc.ShaderPackage.Equals(ScrollShader, StringComparison.OrdinalIgnoreCase) ? modelChanges.Values.ToList() : [];
 
     /// <summary>Applies an edit as one undo step (or part of the running gesture) and passes it on to the preview.</summary>
     public Task Apply(Func<MaterialDocument, MaterialDocument> edit, string label)
@@ -99,7 +116,8 @@ internal sealed class MaterialSession
         var saved = Current;
         var bytes = saved.Write();
         var added = NewFilesFor(saved);
-        var result = await previews.WriteAsync(SaveWrites(Source, bytes, added), Source.ObjectIndex, newModName, "Material written by XIV Instant Edit.",
+        var models = ModelChangesFor(saved);
+        var result = await previews.WriteAsync(SaveWrites(Source, bytes, added, models), Source.ObjectIndex, newModName, "Material written by XIV Instant Edit.",
             FallbackModName, "Open the material again").ConfigureAwait(false);
         if (Source.IsGameData && result.FixMod is { } mod && await previews.ModRootAsync().ConfigureAwait(false) is { Length: > 0 } root)
             Source = Source.SavedInto(root, mod, PreviewSource.Hash(bytes));
@@ -107,6 +125,8 @@ internal sealed class MaterialSession
             Source = Source with { Sha256 = PreviewSource.Hash(bytes) };
         foreach (var file in added)
             newFiles.Remove(file.GamePath);
+        foreach (var (model, _) in models)
+            modelChanges.Remove(PathRules.NormalizeGamePath(model.GamePath));
         if (ReferenceEquals(History.Current, saved))
             History.MarkSaved();
         return result;
@@ -114,15 +134,24 @@ internal sealed class MaterialSession
 
     /// <summary>
     /// Where a save writes: a mod material over its file (unless it already holds these bytes) with its
-    /// new textures added to the same mod; a game material and its new textures into a new mod.
+    /// new textures added to the same mod; a game material and its new textures into a new mod. A
+    /// changed model goes over its own mod's file (backed up), or with a game material into its new mod.
     /// </summary>
-    internal static PreviewWrites SaveWrites(MaterialSource source, byte[] bytes, IReadOnlyList<(string GamePath, byte[] Bytes)> added)
+    internal static PreviewWrites SaveWrites(MaterialSource source, byte[] bytes, IReadOnlyList<(string GamePath, byte[] Bytes)> added,
+        IReadOnlyList<(PreviewSource Model, byte[] Bytes)>? models = null)
     {
+        models ??= [];
+        var modModels = models.Where(m => m.Model.IsModFile).Select(m => (m.Model, m.Bytes)).ToList();
+        var gameModels = models.Where(m => !m.Model.IsModFile).ToList();
+        if (gameModels.Count > 0 && !source.IsGameData)
+            throw new InvalidOperationException("A game model can only change together with a game material, which goes into a new mod.");
         if (source.IsGameData)
-            return new PreviewWrites([], [], [PreviewModEntry.At(source.GamePath, bytes), .. added.Select(file => PreviewModEntry.At(file.GamePath, file.Bytes))]);
+            return new PreviewWrites(modModels, [], [PreviewModEntry.At(source.GamePath, bytes), .. added.Select(file => PreviewModEntry.At(file.GamePath, file.Bytes)),
+                .. gameModels.Select(m => PreviewModEntry.At(m.Model.GamePath, m.Bytes))]);
         var target = source.ToPreviewSource();
         var unchanged = string.Equals(PreviewSource.Hash(bytes), target.Sha256, StringComparison.OrdinalIgnoreCase);
-        return new PreviewWrites(unchanged ? [] : [(target, bytes)], added.Select(file => (target, PathRules.NormalizeGamePath(file.GamePath), file.Bytes)).ToList(), []);
+        return new PreviewWrites([.. unchanged ? [] : new[] { (target, bytes) }, .. modModels],
+            added.Select(file => (target, PathRules.NormalizeGamePath(file.GamePath), file.Bytes)).ToList(), []);
     }
 
     /// <summary>
@@ -146,6 +175,8 @@ internal sealed class MaterialSession
         var files = new Dictionary<string, byte[]> { [Source.GamePath] = doc.Write() };
         foreach (var (gamePath, bytes) in NewFilesFor(doc))
             files[gamePath] = bytes;
+        foreach (var (model, bytes) in ModelChangesFor(doc))
+            files[PathRules.NormalizeGamePath(model.GamePath)] = bytes;
         var warning = await preview.ShowAsync(Source.ObjectIndex, files, token).ConfigureAwait(false);
         PreviewShown = true;
         return warning;

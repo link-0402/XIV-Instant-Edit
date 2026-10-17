@@ -20,6 +20,7 @@ internal sealed partial class MaterialWindow
     private void OpenPresets(MaterialSession current)
     {
         ReadMask(current.Current);
+        CheckModels(current);
         ImGui.OpenPopup(PresetsPopup);
     }
 
@@ -98,6 +99,8 @@ internal sealed partial class MaterialWindow
             else if (preset.Name == "Clean up" && ImGui.IsItemHovered())
                 Tip(string.Join("\n", preset.Apply(context, presetTarget).Changes));
             ImGui.TextColored(Theme.Hint, preset.Description);
+            if (preset.Name == ScrollingPattern)
+                DrawUv2Option(current);
         }
     }
 
@@ -166,10 +169,27 @@ internal sealed partial class MaterialWindow
         }
         foreach (var texture in result.NewTextures)
             current.AddNewFile(texture.GamePath, texture.Bytes);
+        List<string> changes = [.. result.Changes];
+        List<string> warnings = [.. result.Warnings];
+        if (preset.Name == ScrollingPattern)
+        {
+            try
+            {
+                var (change, warning) = ApplyUv2(current);
+                if (change != null) changes.Add(change);
+                if (warning != null) warnings.Add(warning);
+            }
+            catch (Exception e) when (e is InvalidDataException or NotSupportedException or InvalidOperationException or OverflowException)
+            {
+                warnings.Add($"The second UV map couldn't be added: {e.Message}");
+            }
+        }
         _ = current.Apply(_ => result.Doc, preset.Name);
-        var text = $"{preset.Name}: " + string.Join(" ", result.Changes);
-        if (result.Warnings.Count > 0)
-            text += " " + string.Join(" ", result.Warnings);
-        Say(result.Warnings.Count > 0 ? FeedbackSeverity.Warning : FeedbackSeverity.Success, text);
+        var text = $"{preset.Name}: " + string.Join(" ", changes);
+        if (warnings.Count > 0)
+            text += " " + string.Join(" ", warnings);
+        Say(warnings.Count > 0 ? FeedbackSeverity.Warning : FeedbackSeverity.Success, text);
     }
+
+    private const string ScrollingPattern = "Scrolling pattern";
 }

@@ -95,35 +95,112 @@ public static class PresetChecks
     }
 
     /// <summary>
-    /// The scrolling pattern's texture: soft diagonal stripes cycling through the hues, tiling
-    /// seamlessly, as an uncompressed 256 x 256 texture.
+    /// The glow a scrolling row needs, since the pattern only shows through the glow: a row that
+    /// glows keeps its colour, a dark one glows in its base colour, a black one in white.
+    /// </summary>
+    public static Vector3 ScrollGlow(DtColorRow row)
+        => MathF.Max(row.Emissive.X, MathF.Max(row.Emissive.Y, row.Emissive.Z)) > 0f ? row.Emissive
+            : MathF.Max(row.Diffuse.X, MathF.Max(row.Diffuse.Y, row.Diffuse.Z)) >= 0.1f ? row.Diffuse
+            : Vector3.One;
+
+    /// <summary>
+    /// The scrolling pattern's texture: glowing energy veins with sparkles on black, in grey so the
+    /// rows' glow colour tints it, tiling seamlessly, as an uncompressed 256 x 256 texture. Like the
+    /// energy and sparkle textures scrolling mods use.
     /// </summary>
     public static byte[] ScrollPattern()
     {
         const int size = 256;
+        const int cells = 6;
+        const float warp = 0.55f;
+        var warpU = PeriodicNoise(size, 4, 3);
+        var warpU2 = PeriodicNoise(size, 8, 5);
+        var warpV = PeriodicNoise(size, 4, 4);
+        var warpV2 = PeriodicNoise(size, 8, 6);
+        var flicker = PeriodicNoise(size, 8, 21);
         var bgra = new byte[size * size * 4];
         for (var y = 0; y < size; y++)
             for (var x = 0; x < size; x++)
             {
-                // Two stripes across the tile, so the pattern repeats at the tile's edges.
-                var phase = (x + y) / (float)size * 2f;
-                var hue = phase - MathF.Floor(phase);
-                var soft = 0.75f + 0.25f * MathF.Cos(phase * 2 * MathF.PI * 2);
-                var colour = Hue(hue) * soft;
-                var i = (y * size + x) * 4;
-                bgra[i] = (byte)(Math.Clamp(colour.Z, 0, 1) * 255);
-                bgra[i + 1] = (byte)(Math.Clamp(colour.Y, 0, 1) * 255);
-                bgra[i + 2] = (byte)(Math.Clamp(colour.X, 0, 1) * 255);
-                bgra[i + 3] = 255;
+                var p = y * size + x;
+                // Bend the straight cell borders into lightning-like curves; the warp wraps, so the tile still repeats.
+                var u = x / (float)size * cells + (warpU[p] - 0.5f) * 2 * warp + (warpU2[p] - 0.5f) * warp;
+                var v = y / (float)size * cells + (warpV[p] - 0.5f) * 2 * warp + (warpV2[p] - 0.5f) * warp;
+                var edge = CellEdge(Wrap(u, cells), Wrap(v, cells), cells);
+                var value = (MathF.Exp(-edge / 0.035f) + MathF.Exp(-edge / 0.16f) * 0.35f) * (0.55f + 0.45f * flicker[p]);
+                for (var k = 0; k < 36; k++)
+                {
+                    var dx = Wrap(x - Hash(k, 1, 77) * size + size / 2f, size) - size / 2f;
+                    var dy = Wrap(y - Hash(k, 2, 77) * size + size / 2f, size) - size / 2f;
+                    var radius = 0.7f + Hash(k, 3, 77) * 1.3f;
+                    value = MathF.Max(value, MathF.Exp(-(dx * dx + dy * dy) / (2 * radius * radius)) * (0.5f + 0.5f * Hash(k, 4, 77)));
+                }
+                var grey = (byte)(Math.Clamp(value, 0f, 1f) * 255);
+                bgra[p * 4] = grey;
+                bgra[p * 4 + 1] = grey;
+                bgra[p * 4 + 2] = grey;
+                bgra[p * 4 + 3] = 255;
             }
         return TextureFiles.BgraTex(bgra, size, size);
     }
 
-    private static Vector3 Hue(float hue)
+    /// <summary>The distance to the nearest border of a wrapping grid of jittered cells (second nearest point minus nearest), in cells.</summary>
+    private static float CellEdge(float u, float v, int cells)
     {
-        var r = Math.Clamp(MathF.Abs(hue * 6 - 3) - 1, 0, 1);
-        var g = Math.Clamp(2 - MathF.Abs(hue * 6 - 2), 0, 1);
-        var b = Math.Clamp(2 - MathF.Abs(hue * 6 - 4), 0, 1);
-        return new Vector3(r, g, b);
+        int gx = (int)MathF.Floor(u), gy = (int)MathF.Floor(v);
+        float f1 = 9f, f2 = 9f;
+        for (var oy = -1; oy <= 1; oy++)
+            for (var ox = -1; ox <= 1; ox++)
+            {
+                int cx = gx + ox, cy = gy + oy;
+                int wx = ((cx % cells) + cells) % cells, wy = ((cy % cells) + cells) % cells;
+                var dx = cx + Hash(wx, wy, 11) - u;
+                var dy = cy + Hash(wx, wy, 12) - v;
+                var d = MathF.Sqrt(dx * dx + dy * dy);
+                if (d < f1)
+                {
+                    f2 = f1;
+                    f1 = d;
+                }
+                else if (d < f2)
+                    f2 = d;
+            }
+        return f2 - f1;
+    }
+
+    /// <summary>Smooth value noise with <paramref name="period"/> cells across a <paramref name="size"/> tile, wrapping at its edges.</summary>
+    private static float[] PeriodicNoise(int size, int period, int seed)
+    {
+        var noise = new float[size * size];
+        for (var y = 0; y < size; y++)
+        {
+            var fy = y * period / (float)size;
+            var y0 = (int)fy;
+            var ty = Fade(fy - y0);
+            var y1 = (y0 + 1) % period;
+            for (var x = 0; x < size; x++)
+            {
+                var fx = x * period / (float)size;
+                var x0 = (int)fx;
+                var tx = Fade(fx - x0);
+                var x1 = (x0 + 1) % period;
+                var a = Hash(x0, y0, seed) * (1 - tx) + Hash(x1, y0, seed) * tx;
+                var b = Hash(x0, y1, seed) * (1 - tx) + Hash(x1, y1, seed) * tx;
+                noise[y * size + x] = a * (1 - ty) + b * ty;
+            }
+        }
+        return noise;
+    }
+
+    private static float Fade(float t) => t * t * t * (t * (t * 6 - 15) + 10);
+
+    private static float Wrap(float value, float period) => value - MathF.Floor(value / period) * period;
+
+    /// <summary>A repeatable pseudo-random value in 0 to 1 for a lattice point.</summary>
+    private static float Hash(int x, int y, int seed)
+    {
+        var h = unchecked((uint)x * 374761393u + (uint)y * 668265263u + (uint)seed * 2246822519u);
+        h = unchecked((h ^ (h >> 13)) * 1274126177u);
+        return ((h ^ (h >> 16)) & 0xFFFFFF) / (float)0xFFFFFF;
     }
 }

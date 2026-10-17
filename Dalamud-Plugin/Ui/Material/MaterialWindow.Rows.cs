@@ -83,6 +83,8 @@ internal sealed partial class MaterialWindow
                 hoveredRow = pair * 2 + (bottom ? 1 : 0);
             DrawSwatches(draw, position, new Vector2(width, half), a);
             DrawSwatches(draw, position + new Vector2(0, half), new Vector2(width, half), b);
+            // A line between the rows, so a pair of matching rows still reads as two.
+            draw.AddLine(position + new Vector2(0, half), position + new Vector2(width, half), ImGui.GetColorU32(new Vector4(0, 0, 0, .6f)), Theme.Scaled(1));
             // Pairs the index texture never selects are drawn at 40%, and so is a used pair's row it never picks.
             var dim = ImGui.GetColorU32(Theme.WithAlpha(Theme.PanelBg, 0.6f));
             if (usage != null && !usage.PairUsed(pair))
@@ -179,7 +181,7 @@ internal sealed partial class MaterialWindow
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Hint, row % 2 == 0 ? "(top, index green 255)" : "(bottom, index green 0)");
         pulse |= ImGui.IsItemHovered();
-        pulse |= DrawRowActions(current, row, values, name);
+        pulse |= DrawRowActions(current, table, row, values, name);
 
         Section("Colour");
         RowColour(current, row, "Base colour", values.Diffuse, colour => values with { Diffuse = colour }, name);
@@ -204,9 +206,9 @@ internal sealed partial class MaterialWindow
         if (RowLabel("Detail pattern", "Which detail pattern the row uses (0 to 63)."))
         {
             var tile = values.TileIndex;
-            var changed = ImGui.InputInt("##tile", ref tile, 1, 4);
-            tile = Math.Clamp(tile, 0, 63);
-            Track(current, changed, d => EditRow(d, row, r => r with { TileIndex = tile }), $"{name} detail pattern");
+            // One pick is one undo step, so no gesture tracking: the last item may be a list entry in the popup.
+            if (SlicePicker("##tile", ref tile, 63, TextureArraySlices.ArrayKind.PatternColour, TextureArraySlices.ArrayKind.PatternNormal))
+                _ = current.Apply(d => EditRow(d, row, r => r with { TileIndex = tile }), $"{name} detail pattern");
         }
         RowPercent(current, row, "Detail strength", "How strongly the pattern shows.", values.TileAlpha, v => values with { TileAlpha = v }, name);
         var (scaleU, scaleV, rotation, shear) = TileTransform.Decompose(values.TileUU, values.TileUV, values.TileVU, values.TileVV);
@@ -224,9 +226,8 @@ internal sealed partial class MaterialWindow
         if (RowLabel("Reflection map", "Which reflection texture the row uses."))
         {
             var sphere = values.SphereMapIndex;
-            var changed = ImGui.InputInt("##sphere", ref sphere, 1, 4);
-            sphere = Math.Clamp(sphere, 0, 127);
-            Track(current, changed, d => EditRow(d, row, r => r with { SphereMapIndex = sphere }), $"{name} reflection map");
+            if (SlicePicker("##sphere", ref sphere, 127, TextureArraySlices.ArrayKind.Reflection))
+                _ = current.Apply(d => EditRow(d, row, r => r with { SphereMapIndex = sphere }), $"{name} reflection map");
         }
         RowPercent(current, row, "Reflection strength", "How much of the reflection map shows.", values.SphereMapMask, v => values with { SphereMapMask = v }, name);
         if (doc.ShaderPackage.Equals("characterscroll.shpk", StringComparison.OrdinalIgnoreCase) && RowLabel("Scroll layer", "Which scrolling layer the row shows: 0 none, 1 or 2."))
@@ -269,8 +270,8 @@ internal sealed partial class MaterialWindow
         return pulse;
     }
 
-    /// <summary>Copy, paste and reset for one row; true while one of them is hovered or the paste menu is open.</summary>
-    private bool DrawRowActions(MaterialSession current, int row, DtColorRow values, string name)
+    /// <summary>Copy, paste and discard for one row; true while one of them is hovered or the paste menu is open.</summary>
+    private bool DrawRowActions(MaterialSession current, ColorTable table, int row, DtColorRow values, string name)
     {
         var buttons = ImGui.GetFrameHeight() * 3 + ImGui.GetStyle().ItemSpacing.X * 2;
         ImGui.SameLine();
@@ -289,8 +290,18 @@ internal sealed partial class MaterialWindow
         }
         hovered |= ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
         ImGui.SameLine();
-        if (Widgets.GhostIconButton("##reset-row", FontAwesomeIcon.UndoAlt, "Reset this row to the game's defaults (hold Ctrl)") && ImGui.GetIO().KeyCtrl)
-            _ = current.Apply(d => EditRow(d, row, _ => DtColorRow.Default), $"Reset {name}");
+        // The row as last saved; nothing to go back to when the table was added or converted since.
+        var saved = current.History.Saved.Table is { Kind: ColorTableKind.Dawntrail } before ? before : null;
+        var savedDye = saved?.Dye?[row];
+        var edited = saved != null && (saved.Rows[row] != values || (savedDye is { } dye && table.Dye?[row] is { } now && now != dye));
+        using (ImRaii.Disabled(!edited))
+        {
+            if (Widgets.GhostIconButton("##reset-row", FontAwesomeIcon.UndoAlt, "Discard the changes to this row (hold Ctrl)") && ImGui.GetIO().KeyCtrl && saved != null)
+            {
+                var savedRow = saved.Rows[row];
+                _ = current.Apply(d => DiscardRow(d, row, savedRow, savedDye), $"Discard changes to {name}");
+            }
+        }
         hovered |= ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
         using var popup = ImRaii.Popup(PastePopup);
         if (!popup.Success || rowClipboard is not { } copied)
@@ -328,6 +339,18 @@ internal sealed partial class MaterialWindow
         return doc.WithTable(table);
     }
 
+    /// <summary>The document with one row (and its dye, when both tables have one) back as saved.</summary>
+    private static MaterialDocument DiscardRow(MaterialDocument doc, int row, DtColorRow saved, DtDyeRow? savedDye)
+    {
+        if (doc.Table is not { Kind: ColorTableKind.Dawntrail } source)
+            return doc;
+        var table = source.Clone();
+        table.Rows[row] = saved;
+        if (savedDye is { } dye && table.Dye != null)
+            table.Dye[row] = dye;
+        return doc.WithTable(table);
+    }
+
     // ---- Row controls ----
 
     private static void Section(string title)
@@ -345,6 +368,80 @@ internal sealed partial class MaterialWindow
         ImGui.SameLine(Theme.Scaled(150));
         ImGui.SetNextItemWidth(-1);
         return true;
+    }
+
+    /// <summary>
+    /// A detail pattern or reflection map: the picked one's thumbnails, then a list of every one in the
+    /// game's arrays with theirs. A number box while the game hasn't loaded the arrays. True on a change.
+    /// </summary>
+    private bool SlicePicker(string id, ref int value, int max, params TextureArraySlices.ArrayKind[] arrays)
+    {
+        if (slices.Info(arrays[0]) is not { } info)
+        {
+            var typed = ImGui.InputInt(id, ref value, 1, 4);
+            value = Math.Clamp(value, 0, max);
+            return typed;
+        }
+        var thumb = ImGui.GetFrameHeight();
+        var at = ImGui.GetCursorScreenPos();
+        ImGui.Dummy(new Vector2(ThumbnailsWidth(arrays.Length, thumb), thumb));
+        DrawThumbnails(ImGui.GetWindowDrawList(), arrays, value, at, thumb);
+        if (ImGui.IsItemHovered())
+            ThumbnailTooltip(arrays, value);
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(-1);
+        var changed = false;
+        using var combo = ImRaii.Combo(id, value < info.Count ? $"{value}" : $"{value} (not in the game)", ImGuiComboFlags.HeightLarge);
+        if (!combo.Success)
+            return false;
+        using var align = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f));
+        var size = Theme.Scaled(48);
+        var step = size + ImGui.GetStyle().ItemSpacing.Y;
+        if (ImGui.IsWindowAppearing())
+            ImGui.SetScrollY(Math.Max(0, value - 1) * step);
+        var draw = ImGui.GetWindowDrawList();
+        var clipper = ImGui.ImGuiListClipper();
+        try
+        {
+            clipper.Begin(info.Count, step);
+            while (clipper.Step())
+                for (var index = clipper.DisplayStart; index < clipper.DisplayEnd; index++)
+                {
+                    var start = ImGui.GetCursorScreenPos();
+                    if (ImGui.Selectable($"{index}##slice-{index}", index == value, ImGuiSelectableFlags.None, new Vector2(0, size)) && index != value)
+                    {
+                        value = index;
+                        changed = true;
+                    }
+                    DrawThumbnails(draw, arrays, index, start + new Vector2(Theme.Scaled(36), 0), size);
+                }
+            clipper.End();
+        }
+        finally
+        {
+            clipper.Destroy();
+        }
+        return changed;
+    }
+
+    private static float ThumbnailsWidth(int count, float size) => count * size + (count - 1) * Theme.Scaled(2);
+
+    private void DrawThumbnails(ImDrawListPtr draw, TextureArraySlices.ArrayKind[] arrays, int slice, Vector2 at, float size)
+    {
+        for (var i = 0; i < arrays.Length; i++)
+            slices.Draw(draw, arrays[i], slice, at + new Vector2(i * (size + Theme.Scaled(2)), 0), new Vector2(size));
+    }
+
+    /// <summary>The slice's thumbnails, large, in a tooltip; nothing when the game doesn't have it.</summary>
+    private void ThumbnailTooltip(TextureArraySlices.ArrayKind[] arrays, int slice)
+    {
+        if (slices.Info(arrays[0]) is not { } info || slice < 0 || slice >= info.Count)
+            return;
+        using var tooltip = ImRaii.Tooltip();
+        var size = Theme.Scaled(128);
+        var at = ImGui.GetCursorScreenPos();
+        ImGui.Dummy(new Vector2(ThumbnailsWidth(arrays.Length, size), size));
+        DrawThumbnails(ImGui.GetWindowDrawList(), arrays, slice, at, size);
     }
 
     private static void RowColour(MaterialSession current, int row, string label, Vector3 stored, Func<Vector3, DtColorRow> with, string name)
@@ -439,6 +536,8 @@ internal sealed partial class MaterialWindow
             var tile = values.TileIndex;
             ImGui.SetNextItemWidth(-1);
             var tileChanged = ImGui.InputInt("##tile", ref tile, 0, 0);
+            if (ImGui.IsItemHovered() && !ImGui.IsItemActive())
+                ThumbnailTooltip([TextureArraySlices.ArrayKind.PatternColour, TextureArraySlices.ArrayKind.PatternNormal], values.TileIndex);
             tile = Math.Clamp(tile, 0, 63);
             var tiled = values with { TileIndex = tile };
             Track(current, tileChanged, d => EditLegacyRow(d, row, _ => tiled), $"{name} detail pattern");

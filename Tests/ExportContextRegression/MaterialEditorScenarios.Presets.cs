@@ -13,6 +13,8 @@ internal static partial class MaterialEditorScenarios
         CheckMetal();
         CheckTranslucentCrashes();
         CheckScrollingPattern();
+        CheckModelUv2();
+        CheckModelChangeSaves();
         CheckGlass();
         CheckCleanUp();
         CheckUsedRowsTarget();
@@ -62,8 +64,24 @@ internal static partial class MaterialEditorScenarios
             "layer 1 moves at 0.2 and repeats 1.5 times, and every row shows layer 1");
         Require(doc.Slots.Select(slot => slot.SamplerId).ToHashSet().SetEquals([0x0C5EC1F1u, 0x8A4E82B6u, 0x565F8FD8u, CatchlightSampler]),
             "the result has the Hair RGB Shader mod's shape: normal, mask, index and catchlight");
+        Require(doc.Table!.Rows.All(row => MathF.Max(row.Emissive.X, MathF.Max(row.Emissive.Y, row.Emissive.Z)) > 0f),
+            "every scrolling row glows, since the pattern only shows through the glow");
+        Require(PresetChecks.ScrollGlow(DtColorRow.Default with { Emissive = new System.Numerics.Vector3(0.5f, 0f, 0f) }) == new System.Numerics.Vector3(0.5f, 0f, 0f)
+                && PresetChecks.ScrollGlow(DtColorRow.Default with { Diffuse = new System.Numerics.Vector3(0.2f, 0.4f, 0.6f) }) == new System.Numerics.Vector3(0.2f, 0.4f, 0.6f)
+                && PresetChecks.ScrollGlow(DtColorRow.Default with { Diffuse = System.Numerics.Vector3.Zero }) == System.Numerics.Vector3.One,
+            "a glowing row keeps its glow, a dark one glows in its base colour, a black one in white");
         Require(result.NewTextures.Count == 1 && result.NewTextures[0].GamePath == catchlight?.Path && MtrlTexLooksValid(result.NewTextures[0].Bytes),
             "the pattern texture comes with the preset");
+        var pixels = result.NewTextures[0].Bytes.AsSpan(80);
+        var greys = new HashSet<byte>();
+        var grey = true;
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            grey &= pixels[i] == pixels[i + 1] && pixels[i] == pixels[i + 2] && pixels[i + 3] == 255;
+            greys.Add(pixels[i]);
+        }
+        Require(grey && greys.Contains(0) && greys.Contains(255) && greys.Count > 64 && result.NewTextures[0].Bytes.AsSpan().SequenceEqual(PresetChecks.ScrollPattern()),
+            "the pattern is grey (the glow colour tints it), runs from black to white, and is the same every time");
 
         var session = MaterialSession.CreateForRegression(Source(InstantEdit.Models.ResourceSourceState.LoadedMod), PresetDocument(MaskPreset), (_, _) => Task.CompletedTask);
         session.AddNewFile(result.NewTextures[0].GamePath, result.NewTextures[0].Bytes);

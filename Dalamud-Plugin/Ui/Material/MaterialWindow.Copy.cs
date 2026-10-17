@@ -128,6 +128,11 @@ internal sealed partial class MaterialWindow
     private void SaveCopy(MaterialSession current, IModFileCopies target, string optionKey)
     {
         var doc = current.Current;
+        if (current.ModelChangesFor(doc).Count > 0)
+        {
+            Say(FeedbackSeverity.Warning, "A copy can't carry the model's new second UV map. Save writes both, or apply Scrolling pattern again without it.");
+            return;
+        }
         try
         {
             var bytes = doc.Write();

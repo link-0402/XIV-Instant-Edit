@@ -96,7 +96,7 @@ public static class EffectPresets
         public const uint Catchlight = 0x9A8A46F5;
 
         public override string Name => "Scrolling pattern";
-        public override string Description => "A pattern scrolls across the rows, like RGB hair.";
+        public override string Description => "Glowing veins scroll across the rows.";
         public override bool NeedsRows => true;
         public override string Requirement => "Needs normal, mask and index textures.";
 
@@ -120,8 +120,8 @@ public static class EffectPresets
             doc = doc.WithConstant(0x738A241C, [0.2f]).WithConstant(0x71CC9A45, [0.2f]).WithConstant(0x43345395, [1.5f]).WithConstant(0x4172EDCC, [1.5f]);
             changes.Add("Reflections come from the pattern; layer 1 scrolls at 0.2 and repeats 1.5 times.");
             var (rows, note) = Rows(context with { Doc = doc }, target);
-            doc = EditRows(doc, rows, row => row with { ScrollLayer = 1f });
-            changes.Add($"{RowCount(rows.Length)} show layer 1.");
+            doc = EditRows(doc, rows, row => row with { ScrollLayer = 1f, Emissive = ScrollGlow(row) });
+            changes.Add($"{RowCount(rows.Length)} show layer 1 and glow, since the pattern shows through the glow.");
             return Result(doc, changes, [], note, [.. textures]);
         }
     }

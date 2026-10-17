@@ -39,8 +39,14 @@ public static class LegacyIndexTexture
 /// <summary>
 /// Reads an index texture the way the shader does. Dawntrail: red picks pair p = round(r / 17), green
 /// blends it, the top row 2p getting g / 255 and the bottom row 2p + 1 the rest. Legacy: red alone
-/// picks one of 16 rows. A row counts as used when some texel gives it more than 1 / 255.
+/// picks one of 16 rows. A row counts as used when some texel gives it more than 1 / 255 and the
+/// texel's four neighbours pick the same pair.
 /// </summary>
+/// <remarks>
+/// BC compression blurs the edge between two pairs into a ramp a texel wide whose reds round to every
+/// pair in between (in game 2026-10-17 a BC7 index with pairs 1 and 16 touched all 16, none of the
+/// middle ones on a texel whose neighbours agree). The shares still count every texel.
+/// </remarks>
 public static class IndexUsageCalc
 {
     private const float UsedWeight = 1f / 255f;
@@ -49,30 +55,37 @@ public static class IndexUsageCalc
     public static IndexUsage Compute(DecodedTexture index, ColorTableKind kind)
     {
         var rows = kind == ColorTableKind.Legacy ? ColorTable.LegacyRowCount : ColorTable.DtRowCount;
-        var texels = index.Width * index.Height;
+        var (width, height) = (index.Width, index.Height);
+        var texels = width * height;
         var weight = new double[rows];
         var used = new bool[rows];
         var rowOfTexel = new byte[texels];
         var bgra = index.Bgra;
+        var picks = new byte[texels];
+        for (var i = 0; i < texels; i++)
+            picks[i] = (byte)Math.Clamp((int)MathF.Round(bgra[i * 4 + 2] / 17f), 0, 15);
         for (var i = 0; i < texels; i++)
         {
             var green = bgra[i * 4 + 1];
-            var red = bgra[i * 4 + 2];
-            var pick = Math.Clamp((int)MathF.Round(red / 17f), 0, 15);
+            var pick = picks[i];
+            var (x, y) = (i % width, i / width);
+            // Past the texture's edge counts as agreeing.
+            var settled = (x == 0 || picks[i - 1] == pick) && (x == width - 1 || picks[i + 1] == pick)
+                && (y == 0 || picks[i - width] == pick) && (y == height - 1 || picks[i + width] == pick);
             if (kind == ColorTableKind.Legacy)
             {
                 weight[pick] += 1;
-                used[pick] = true;
-                rowOfTexel[i] = (byte)pick;
+                used[pick] |= settled;
+                rowOfTexel[i] = pick;
                 continue;
             }
             var top = green / 255f;
             var bottom = 1f - top;
             weight[pick * 2] += top;
             weight[pick * 2 + 1] += bottom;
-            if (top > UsedWeight)
+            if (settled && top > UsedWeight)
                 used[pick * 2] = true;
-            if (bottom > UsedWeight)
+            if (settled && bottom > UsedWeight)
                 used[pick * 2 + 1] = true;
             rowOfTexel[i] = (byte)(top >= bottom ? pick * 2 : pick * 2 + 1);
         }
