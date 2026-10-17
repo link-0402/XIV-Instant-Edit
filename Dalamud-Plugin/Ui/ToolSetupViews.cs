@@ -307,15 +307,15 @@ internal sealed class ToolSetupViews
             });
         }
 
-        var plugin = BlenderClient.CurrentPluginVersion;
-        switch (_blenderStatus?.Classify(plugin))
+        var minimum = ComponentVersions.BlenderAddonMinimum;
+        switch (_blenderStatus?.Classify(minimum))
         {
             case BlenderConnectionState.Online:
                 Widgets.StatusDot("Blender", Theme.Online, $"connected, add-on {_blenderStatus!.AddonVersion}");
                 break;
             case BlenderConnectionState.VersionMismatch:
                 Widgets.StatusDot("Blender", Theme.Mismatch,
-                    $"connected, but the add-on is {_blenderStatus!.AddonVersion ?? "an older version"} and this plugin is {plugin}. Update it below.");
+                    $"connected, but the add-on is {_blenderStatus!.AddonVersion ?? "an older version"} and this plugin needs {minimum} or newer. Update it below.");
                 break;
             default:
                 Widgets.StatusDot("Blender", Theme.Offline, "not connected. Start Blender once the add-on is installed.");
@@ -347,17 +347,18 @@ internal sealed class ToolSetupViews
             return;
         }
 
-        var plugin = BlenderClient.NormalizeVersion(BlenderClient.CurrentPluginVersion);
+        var minimum = ComponentVersions.BlenderAddonMinimum;
+        var latest = ComponentVersions.BlenderAddonLatest;
         var online = copies.FirstOrDefault(copy => !copy.FromFile);
         var fromFile = copies.FirstOrDefault(copy => copy.FromFile);
         if (online is not null)
         {
-            var current = BlenderClient.NormalizeVersion(online.Version) == plugin;
+            var current = ComponentVersions.Satisfies(online.Version, minimum);
             ImGui.TextColored(current ? Theme.Success : Theme.Mismatch, current ? "✓" : "●");
             ImGui.SameLine(0, Theme.Scaled(4));
             ImGui.TextColored(Theme.Muted, current
                 ? $"Add-on {online.Version}, updated from GitHub."
-                : $"Add-on {online.Version} from GitHub; this plugin is {plugin}.");
+                : $"Add-on {online.Version} from GitHub; this plugin needs {minimum} or newer.");
         }
         else if (fromFile is not null)
         {
@@ -381,7 +382,7 @@ internal sealed class ToolSetupViews
         var replace = (online is null && fromFile is not null) || action?.OfferReplace == true;
         var label = online is null
             ? fromFile is null ? "Install add-on" : "Switch to the GitHub add-on"
-            : BlenderClient.NormalizeVersion(online.Version) == plugin ? "Reinstall add-on" : "Update add-on";
+            : BlenderAddonLabels.ButtonLabel(online.Version);
         if (action?.OfferReplace == true)
             label = "Replace the other copy";
         using (ImRaii.Disabled(busy || running))
@@ -394,8 +395,8 @@ internal sealed class ToolSetupViews
                         return new ActionState(false, FeedbackSeverity.Error, result.Error,
                             OfferReplace: !replace && result.OtherCopies.Count > 0);
                     var message = $"Installed add-on {result.InstalledVersion} in Blender {install.Version}, with update checks at startup.";
-                    if (result.InstalledVersion.Length > 0 && BlenderClient.NormalizeVersion(result.InstalledVersion) != plugin)
-                        message += $" GitHub doesn't have {plugin} yet; Blender offers it once it's published.";
+                    if (ComponentVersions.IsOlder(result.InstalledVersion, latest))
+                        message += $" GitHub doesn't have {latest} yet; Blender offers it once it's published.";
                     return new ActionState(false, FeedbackSeverity.Success, message + " Start Blender to use it.");
                 });
         }
@@ -560,19 +561,18 @@ internal sealed class ToolSetupViews
         if (!_config.PainterIntegrationEnabled)
             return;
 
-        var current = BlenderClient.CurrentPluginVersion;
         if (PainterPlugin() is not { } plugin)
             Searching("the Painter plugin");
         else
         {
             var installed = plugin.Installed;
-            var sameVersion = installed.Length > 0 && BlenderClient.NormalizeVersion(installed) == BlenderClient.NormalizeVersion(current);
-            var upToDate = sameVersion && plugin.FilesMatch;
+            var latest = ComponentVersions.PainterPluginLatest;
+            var upToDate = installed.Length > 0 && plugin.FilesMatch;
             if (!tooOld && ImGui.Button(installed.Length == 0 ? "Install Painter plugin" : upToDate ? "Reinstall Painter plugin" : "Update Painter plugin"))
             {
                 try
                 {
-                    var folder = PainterInstallation.Install(_config.PainterPort, _config.ListenPort, current);
+                    var folder = PainterInstallation.Install(_config.PainterPort, _config.ListenPort);
                     _painterMessage = $"Installed to {folder}. In Painter, enable it once under Python > xiv_instant_edit (restart Painter after an update).";
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -586,8 +586,8 @@ internal sealed class ToolSetupViews
                 ImGui.SameLine();
             Widgets.Hint(installed.Length == 0 ? "Not installed yet."
                 : upToDate ? $"Version {installed} is installed."
-                : sameVersion ? $"Version {installed} is installed, but its files differ from this build's. Update it, then restart Painter."
-                : $"Version {installed} is installed; this plugin is {current}.");
+                : ComponentVersions.IsOlder(installed, latest) ? $"Version {installed} is installed; this build has {latest}. Update it, then restart Painter."
+                : $"Version {installed} is installed, but its files differ from this build's. Update it, then restart Painter.");
             Widgets.Hint("Plugin folder: " + plugin.Folder);
         }
         if (_painterMessage.Length > 0)

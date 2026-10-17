@@ -39,7 +39,6 @@ public sealed class MainWindow : Window, IDisposable
     private readonly OnScreenService _onScreen;
     private readonly IPluginLog _log;
     private readonly PreviewService _previews;
-    private readonly string _pluginVersion;
     private readonly Action _saveConfig;
     private readonly Action _openChangelog;
     private readonly Action _openSettings;
@@ -100,9 +99,8 @@ public sealed class MainWindow : Window, IDisposable
         _options = new OptionsPopup(config, saveConfig);
         _statusStrip = new StatusStrip(_feed);
         _blenderConnection = new BlenderConnection(blender, config, textures, log);
-        _pluginVersion = _blenderConnection.PluginVersion;
         _models = new ModelSender(config, penumbra, sourceMods, blender, _blenderConnection, data, chat, log, resourceSources, _feed, lifetime);
-        _painter = new PainterPanel(config, log, textures, _models, _feed, _pluginVersion, lifetime);
+        _painter = new PainterPanel(config, log, textures, _models, _feed, lifetime);
         _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, lifetime);
         _hoverCards = new ResourceHoverCards(previews);
         _animationDelivery = new AnimationDelivery(config, blender, _blenderConnection);
@@ -458,12 +456,12 @@ public sealed class MainWindow : Window, IDisposable
         var penumbraValue = penumbra ? "OK" : "Unavailable";
         var (blenderValue, blenderDetail) = blender switch
         {
-            BlenderConnectionState.Online => ("Online", "The XIV Instant Edit add-on is reachable and matches this plugin version."),
-            BlenderConnectionState.VersionMismatch => ("Mismatch", BlenderClient.VersionMismatchMessage(_pluginVersion)),
+            BlenderConnectionState.Online => ("Online", "The XIV Instant Edit add-on is reachable."),
+            BlenderConnectionState.VersionMismatch => ("Mismatch", BlenderClient.VersionMismatchMessage(_blenderConnection.AddonVersion, ComponentVersions.BlenderAddonMinimum)),
             _ => ("Offline", "Start Blender and enable the XIV Instant Edit add-on to edit models."),
         };
 
-        var painterDot = _painter.Enabled ? PainterPanel.Dot(_painter.State, _pluginVersion) : default;
+        var painterDot = _painter.Enabled ? PainterPanel.Dot(_painter.State, _painter.PainterPluginVersion) : default;
         var rightWidth = Widgets.StatusDotWidth("Penumbra", penumbraValue) + Theme.Scaled(10)
                          + Widgets.StatusDotWidth("Blender", blenderValue) + Theme.Scaled(10)
                          + (_painter.Enabled ? Widgets.StatusDotWidth("Painter", painterDot.Value) + Theme.Scaled(10) : 0)

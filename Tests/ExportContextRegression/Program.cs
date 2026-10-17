@@ -200,6 +200,7 @@ try
     Scenarios.Run(() => PainterScenarios.Run(testRoot));
     Scenarios.Run(() => GameFileScenarios.Run(testRoot));
     Scenarios.Run(() => ToolSetupScenarios.Run(testRoot));
+    Scenarios.Run(ComponentVersionScenarios.Run);
     Scenarios.Run(() => NeckSeamScenarios.Run(testRoot));
     Scenarios.Run(() => PreviewModScenarios.Run(testRoot));
     Scenarios.Run(() => TextureCompressionScenarios.Run(testRoot));

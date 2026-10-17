@@ -16,6 +16,7 @@ internal sealed class BlenderConnection
     private readonly IPluginLog _log;
     private readonly object _stateLock = new();
     private BlenderConnectionState _blenderState = BlenderConnectionState.Offline;
+    private string? _addonVersion;
     private bool _blenderChecking;
     private DateTime _lastBlenderCheck = DateTime.MinValue;
 
@@ -28,6 +29,16 @@ internal sealed class BlenderConnection
     }
 
     public string PluginVersion { get; } = BlenderClient.CurrentPluginVersion;
+
+    /// <summary> The add-on version the last background check found, or null. </summary>
+    public string? AddonVersion
+    {
+        get
+        {
+            lock (_stateLock)
+                return _addonVersion;
+        }
+    }
 
     /// <summary> The state the last background check found. </summary>
     public BlenderConnectionState State
@@ -51,7 +62,7 @@ internal sealed class BlenderConnection
         int port,
         CancellationToken cancellationToken = default)
     {
-        if (status.Classify(PluginVersion) != BlenderConnectionState.Online || !status.CacheSettingsSupported)
+        if (status.Classify(ComponentVersions.BlenderAddonMinimum) != BlenderConnectionState.Online || !status.CacheSettingsSupported)
             return false;
 
         var expectedRoot = _textures.EnsureConfiguredCache();
@@ -93,10 +104,12 @@ internal sealed class BlenderConnection
         _ = Task.Run(async () =>
         {
             var found = BlenderConnectionState.Offline;
+            string? addonVersion = null;
             try
             {
                 var status = await CheckStatusAsync(_config.BlenderPort).ConfigureAwait(false);
-                found = status.Classify(PluginVersion);
+                found = status.Classify(ComponentVersions.BlenderAddonMinimum);
+                addonVersion = status.AddonVersion;
                 if (found == BlenderConnectionState.Online)
                     await SynchronizeCacheAsync(status, _config.BlenderPort).ConfigureAwait(false);
             }
@@ -109,6 +122,7 @@ internal sealed class BlenderConnection
                 lock (_stateLock)
                 {
                     _blenderState = found;
+                    _addonVersion = addonVersion;
                     _blenderChecking = false;
                     _lastBlenderCheck = DateTime.UtcNow;
                 }
@@ -126,8 +140,8 @@ internal sealed class BlenderConnection
         var blenderStatus = await CheckStatusAsync(blenderPort, cancellationToken).ConfigureAwait(false);
         if (!blenderStatus.Reachable)
             throw new InvalidOperationException("Blender is offline. Start Blender and enable the XIV Instant Edit add-on before editing.");
-        if (blenderStatus.Classify(PluginVersion) != BlenderConnectionState.Online)
-            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(PluginVersion));
+        if (blenderStatus.Classify(ComponentVersions.BlenderAddonMinimum) != BlenderConnectionState.Online)
+            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(blenderStatus.AddonVersion, ComponentVersions.BlenderAddonMinimum));
         if (!await SynchronizeCacheAsync(blenderStatus, blenderPort, cancellationToken).ConfigureAwait(false))
             throw new InvalidOperationException("Blender's cache could not be synchronized. Update and restart the XIV Instant Edit add-on, then retry.");
         if (importOptions.ArmatureMode == BlenderImportOptions.ExistingMode &&

@@ -108,6 +108,7 @@ internal static class ChangelogCatalog
             Entry("Blender add-on: racially scaled models can now be exported. Quick Export only refuses to put them back into another race's file, use the new export option instead."),
             Entry("Blender add-on: Export Magic Fit Sizes exports the model at every size you picked in Magic Fit, each as an option of one group."),
             Entry("Blender add-on: Blender stays responsive while Quick Export runs. Esc cancels a sizes export."),
+            Entry("The Blender add-on and the Painter plugin only need updating when they changed, not with every plugin update."),
             Entry("The Build a mod, Timeline and Body Physics windows are marked Beta."),
             Entry("A Discord link is in the plugin's title bar and the Blender add-on's links menu."),
             Entry("Settings > Cache: choose how long backups, exports and Timeline edits are kept, from 7 to 90 days.")),

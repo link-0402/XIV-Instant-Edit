@@ -26,22 +26,28 @@ static async Task CheckConnectionStatesAsync()
     Require(
         BlenderClient.NormalizeVersion(pluginVersion) == pluginVersion,
         "the plugin release version is normalized to major.minor.patch");
+    var minimum = ComponentVersions.BlenderAddonMinimum;
 
-
-    var matching = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+    foreach (var (addon, expected, name) in new[]
     {
-        Content = new StringContent($"{{\"addonVersion\":\"{pluginVersion}\"}}"),
-    });
-    Require(matching.Reachable && matching.AddonVersion == pluginVersion &&
-            matching.Classify(pluginVersion) == BlenderConnectionState.Online,
-        "matching add-on and plugin versions produce the online state");
-
-    var mismatched = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+        (minimum, BlenderConnectionState.Online, "the minimum add-on version is accepted"),
+        ("2.9.0", BlenderConnectionState.Online, "a newer add-on than the plugin is accepted"),
+        ("2.2.0.1", BlenderConnectionState.Online, "a four-part add-on version compares by its first three parts"),
+        ("2.1.0", BlenderConnectionState.VersionMismatch, "an add-on below the minimum is a reachable mismatch"),
+        ("1.1.3", BlenderConnectionState.VersionMismatch, "an old add-on is a reachable mismatch"),
+    })
     {
-        Content = new StringContent("{\"addonVersion\":\"1.1.3\"}"),
-    });
-    Require(mismatched.Reachable && mismatched.Classify(pluginVersion) == BlenderConnectionState.VersionMismatch,
-        "a different add-on version produces a reachable mismatch state");
+        var status = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($"{{\"addonVersion\":\"{addon}\"}}"),
+        });
+        Require(status.Reachable && status.AddonVersion == addon && status.Classify(minimum) == expected, name);
+    }
+    Require(BlenderClient.VersionMismatchMessage("2.1.0", "2.2.0") ==
+            "The Blender add-on is 2.1.0; this plugin needs 2.2.0 or newer. Update it in Settings." &&
+            BlenderClient.VersionMismatchMessage(null, "2.2.0") ==
+            "The Blender add-on is an older version; this plugin needs 2.2.0 or newer. Update it in Settings.",
+        "the mismatch message names the add-on and the minimum");
 
     foreach (var (name, body) in new[]
     {
@@ -55,20 +61,20 @@ static async Task CheckConnectionStatesAsync()
             Content = new StringContent(body),
         });
         Require(status.Reachable && status.AddonVersion is null &&
-                status.Classify(pluginVersion) == BlenderConnectionState.VersionMismatch,
+                status.Classify(minimum) == BlenderConnectionState.VersionMismatch,
             $"{name} stays reachable but cannot report a matching version");
     }
 
     var nonSuccess = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
-    Require(!nonSuccess.Reachable && nonSuccess.Classify(pluginVersion) == BlenderConnectionState.Offline,
+    Require(!nonSuccess.Reachable && nonSuccess.Classify(minimum) == BlenderConnectionState.Offline,
         "a non-success status response produces offline state");
 
     var failedRequest = await ProbeAsync(exception: new HttpRequestException("connection refused"));
-    Require(!failedRequest.Reachable && failedRequest.Classify(pluginVersion) == BlenderConnectionState.Offline,
+    Require(!failedRequest.Reachable && failedRequest.Classify(minimum) == BlenderConnectionState.Offline,
         "a failed status request produces offline state");
 
     var canceledRequest = await ProbeAsync(cancellationToken: new CancellationToken(true));
-    Require(!canceledRequest.Reachable && canceledRequest.Classify(pluginVersion) == BlenderConnectionState.Offline,
+    Require(!canceledRequest.Reachable && canceledRequest.Classify(minimum) == BlenderConnectionState.Offline,
         "a canceled status request produces offline state");
 
 }
@@ -184,7 +190,7 @@ static async Task CheckBridgeResponsesAsync()
     }
     var settingsStatus = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
     {
-        Content = new StringContent($"{{\"addonVersion\":\"{BlenderClient.CurrentPluginVersion}\",\"capabilities\":[\"{BlenderClient.CacheSettingsCapability}\"]}}"),
+        Content = new StringContent($"{{\"addonVersion\":\"{ComponentVersions.BlenderAddonMinimum}\",\"capabilities\":[\"{BlenderClient.CacheSettingsCapability}\"]}}"),
     });
     Require(settingsStatus.CacheSettingsSupported, "the add-on advertises the central cache-settings endpoint");
     Require(settingsStatus.PendingImports == -1, "an add-on that doesn't count its pending imports reports none known");
@@ -192,7 +198,7 @@ static async Task CheckBridgeResponsesAsync()
     {
         var pendingStatus = await ProbeAsync(() => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent($"{{\"addonVersion\":\"{BlenderClient.CurrentPluginVersion}\",\"pendingImports\":{pending}}}"),
+            Content = new StringContent($"{{\"addonVersion\":\"{ComponentVersions.BlenderAddonMinimum}\",\"pendingImports\":{pending}}}"),
         });
         Require(pendingStatus.PendingImports == expected, "Blender's count of pending imports is read when it is a count");
     }

@@ -9,7 +9,9 @@ param(
     [switch]$SkipPlugin,
     [switch]$SkipBlender,
     # Package uncommitted add-on or plugin changes anyway (not for a real release).
-    [switch]$AllowDirty
+    [switch]$AllowDirty,
+    # Only run the component version checks and print what the release would ship.
+    [switch]$CheckOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,14 +72,72 @@ function Assert-DalamudPackage {
     Write-Host "Verified Dalamud package: $PackagePath"
 }
 
+function Get-CsprojValue {
+    param([string]$ProjectPath, [string]$Name)
+
+    $match = Select-String -LiteralPath $ProjectPath -Pattern "<$Name>([^<]+)</$Name>" | Select-Object -First 1
+    if ($null -eq $match) {
+        throw "No <$Name> found in $ProjectPath"
+    }
+    return $match.Matches[0].Groups[1].Value.Trim()
+}
+
 function Get-PluginVersion {
     param([string]$ProjectPath)
 
-    $match = Select-String -LiteralPath $ProjectPath -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
-    if ($null -eq $match) {
-        throw "No <Version> found in $ProjectPath"
+    return Get-CsprojValue $ProjectPath 'Version'
+}
+
+# The add-on version the tracked index.json hands out, and the git tag it was released from: the tag
+# in its archive_url, or (for a relative archive_url, as before release assets) the tag named after it.
+function Get-ReleasedAddon {
+    param([string]$IndexPath)
+
+    $entry = @((Get-Content -LiteralPath $IndexPath -Raw | ConvertFrom-Json).data | Where-Object { $_.id -eq 'xiv_instant_edit' }) | Select-Object -First 1
+    if ($null -eq $entry) {
+        throw "$IndexPath lists no xiv_instant_edit entry."
     }
-    return $match.Matches[0].Groups[1].Value
+    $tag = $entry.version
+    if ($entry.archive_url -match '/releases/download/([^/]+)/') {
+        $tag = $Matches[1]
+    }
+    return @{ Version = $entry.version; Tag = $tag }
+}
+
+function Get-ManifestVersion {
+    param([string]$ManifestPath)
+
+    $match = [regex]::Match([System.IO.File]::ReadAllText($ManifestPath), '(?m)^version\s*=\s*"([^"]+)"')
+    if (-not $match.Success) {
+        throw "No version found in $ManifestPath"
+    }
+    return $match.Groups[1].Value
+}
+
+function Get-PainterVersion {
+    param([string]$Source)
+
+    $match = [regex]::Match($Source, '(?m)^PLUGIN_VERSION\s*=\s*"([^"]+)"')
+    if (-not $match.Success) {
+        throw 'No PLUGIN_VERSION found in the Painter plugin.'
+    }
+    return $match.Groups[1].Value
+}
+
+# Whether committed files under the pathspecs differ between the tag and HEAD.
+function Test-PathsChanged {
+    param([string]$Tag, [string[]]$Pathspecs)
+
+    & git -C $repoRoot rev-parse --verify --quiet "refs/tags/$Tag" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tag $Tag not found. Fetch the release tags (git fetch --tags) first."
+    }
+    & git -C $repoRoot diff --quiet $Tag HEAD -- @Pathspecs
+    switch ($LASTEXITCODE) {
+        0 { return $false }
+        1 { return $true }
+        default { throw "git diff $Tag HEAD failed." }
+    }
 }
 
 # Points the in-repo repo.json's download links at this version's release, not "latest": its
@@ -140,10 +200,84 @@ if (-not $AllowDirty) {
     }
 }
 
+# Component versions. The add-on and the Painter plugin are versioned on their own: bumped only when
+# their code changes, and the plugin accepts any version at or above its declared minimum.
+$addonVersion = Get-ManifestVersion $blenderManifest
+$released = Get-ReleasedAddon $trackedIndex
+# What the add-on package holds (blender_manifest.toml's paths_exclude_pattern), less its docs.
+$addonPaths = @(
+    'Blender-Addon',
+    ':(exclude)Blender-Addon/blender_repo',
+    ':(exclude)Blender-Addon/testing',
+    ':(exclude,glob)Blender-Addon/**/__pycache__/**',
+    ':(exclude)Blender-Addon/*.zip',
+    ':(exclude)Blender-Addon/*.ps1',
+    ':(exclude)Blender-Addon/.*',
+    ':(exclude)Blender-Addon/*.md',
+    ':(exclude)Blender-Addon/LICENSE'
+)
 $pluginVersion = Get-PluginVersion $pluginProject
 if ([string]::IsNullOrWhiteSpace($Tag)) {
     $Tag = $pluginVersion
 }
+$forcedSkip = [bool]$SkipBlender
+$shipsAddon = $false
+if ([version]$addonVersion -lt [version]$released.Version) {
+    throw "blender_manifest.toml is $addonVersion, below the released add-on $($released.Version)."
+}
+if ([version]$addonVersion -eq [version]$released.Version) {
+    & git -C $repoRoot rev-parse --verify --quiet "refs/tags/$($released.Tag)" *> $null
+    if ($LASTEXITCODE -ne 0 -and $released.Tag -eq $Tag) {
+        # An earlier run of this release already pointed index.json at it; the tag comes later.
+        Write-Host "Blender add-on $addonVersion is being released with $Tag; packaging it."
+        $shipsAddon = $true
+    } elseif (Test-PathsChanged $released.Tag $addonPaths) {
+        if (-not $forcedSkip) {
+            throw "Add-on files changed since $($released.Version) ($($released.Tag)). Bump the version in blender_manifest.toml."
+        }
+        Write-Warning "Add-on files changed since $($released.Version) without a version bump; -SkipBlender leaves them out of this release."
+    } elseif (-not $forcedSkip) {
+        Write-Host "Blender add-on $addonVersion is already released and unchanged; skipping its package."
+    }
+} elseif ($forcedSkip) {
+    Write-Host "Blender add-on $addonVersion is new (released: $($released.Version)), but -SkipBlender leaves it out."
+} else {
+    Write-Host "Blender add-on $addonVersion is new (released: $($released.Version)); packaging it."
+    $shipsAddon = $true
+}
+if ($forcedSkip -or -not $shipsAddon) {
+    $SkipBlender = $true
+}
+# The add-on users can get from GitHub after this release.
+$publishedAddon = if ($SkipBlender) { $released.Version } else { $addonVersion }
+
+$painterInit = Join-Path $repoRoot 'Tools\SubstancePainter\xiv_instant_edit\__init__.py'
+$painterVersion = Get-PainterVersion ([System.IO.File]::ReadAllText($painterInit))
+$previousTag = & git -C $repoRoot describe --tags --abbrev=0 HEAD 2>$null
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($previousTag)) {
+    Write-Warning "No release tag found; can't check the Painter plugin for unbumped changes."
+} else {
+    $previousPainter = Get-PainterVersion ((& git -C $repoRoot show "${previousTag}:Tools/SubstancePainter/xiv_instant_edit/__init__.py") -join "`n")
+    if ($previousPainter -eq $painterVersion -and (Test-PathsChanged $previousTag @('Tools/SubstancePainter/xiv_instant_edit'))) {
+        throw "Painter plugin files changed since $previousTag. Bump PLUGIN_VERSION in Tools/SubstancePainter/xiv_instant_edit/__init__.py."
+    }
+    Write-Host "Painter plugin $painterVersion (at $previousTag`: $previousPainter)."
+}
+
+$addonMinimum = Get-CsprojValue $pluginProject 'BlenderAddonMinimumVersion'
+$painterMinimum = Get-CsprojValue $pluginProject 'PainterPluginMinimumVersion'
+if ([version]$addonMinimum -gt [version]$publishedAddon) {
+    throw "BlenderAddonMinimumVersion $addonMinimum is above the add-on version users can get after this release, $publishedAddon."
+}
+if ([version]$painterMinimum -gt [version]$painterVersion) {
+    throw "PainterPluginMinimumVersion $painterMinimum is above the Painter plugin version $painterVersion."
+}
+Write-Host "The plugin needs add-on $addonMinimum or newer and Painter plugin $painterMinimum or newer."
+if ($CheckOnly) {
+    Write-Host "Checks passed. Blender package: $(if ($SkipBlender) { 'skipped' } else { 'built' })."
+    exit 0
+}
+
 $repoJson = Join-Path $repoRoot 'Dalamud-Plugin\repo.json'
 if (-not $SkipPlugin -and $Configuration -eq 'Release') {
     Assert-AssetFree $Tag 'XIV-Instant-Edit.zip'

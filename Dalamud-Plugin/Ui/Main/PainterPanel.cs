@@ -22,7 +22,6 @@ internal sealed class PainterPanel
     private readonly TextureEditService _textures;
     private readonly ModelSender _models;
     private readonly StatusFeed _feed;
-    private readonly string _pluginVersion;
     private readonly CancellationToken _lifetime;
     private readonly object _statusLock = new();
     private PainterJobService? _painter;
@@ -36,14 +35,13 @@ internal sealed class PainterPanel
     private bool _painterChecking;
 
     public PainterPanel(Configuration config, IPluginLog log, TextureEditService textures, ModelSender models, StatusFeed feed,
-        string pluginVersion, CancellationToken lifetime)
+        CancellationToken lifetime)
     {
         _config = config;
         _log = log;
         _textures = textures;
         _models = models;
         _feed = feed;
-        _pluginVersion = pluginVersion;
         _lifetime = lifetime;
     }
 
@@ -79,8 +77,14 @@ internal sealed class PainterPanel
         get
         {
             StartPainterCheckIfNeeded();
-            lock (_statusLock) return _painterStatus.Classify(_pluginVersion);
+            lock (_statusLock) return _painterStatus.Classify(ComponentVersions.PainterPluginMinimum);
         }
+    }
+
+    /// <summary> The Painter plugin version the last check found; empty when unknown. </summary>
+    public string PainterPluginVersion
+    {
+        get { lock (_statusLock) return _painterStatus.AddonVersion; }
     }
 
     private void StartPainterCheckIfNeeded()
@@ -110,10 +114,10 @@ internal sealed class PainterPanel
         });
     }
 
-    public static (string Value, string Detail, Vector4 Colour) Dot(PainterConnectionState state, string pluginVersion) => state switch
+    public static (string Value, string Detail, Vector4 Colour) Dot(PainterConnectionState state, string painterPluginVersion) => state switch
     {
-        PainterConnectionState.Online => ("Online", "Substance Painter's XIV Instant Edit plugin is reachable and matches this version.", Theme.Online),
-        PainterConnectionState.VersionMismatch => ("Mismatch", $"Update the Painter plugin from Settings; it doesn't match plugin version {pluginVersion}.", Theme.Mismatch),
+        PainterConnectionState.Online => ("Online", "Substance Painter's XIV Instant Edit plugin is reachable.", Theme.Online),
+        PainterConnectionState.VersionMismatch => ("Mismatch", PainterStatus.MismatchMessage(painterPluginVersion, ComponentVersions.PainterPluginMinimum), Theme.Mismatch),
         _ => ("Offline", "Start Substance Painter with the XIV Instant Edit plugin enabled to paint textures.", Theme.Offline),
     };
 
@@ -258,7 +262,7 @@ internal sealed class PainterPanel
 
         ImGui.Spacing();
         var state = State;
-        var (value, detail, colour) = Dot(state, _pluginVersion);
+        var (value, detail, colour) = Dot(state, PainterPluginVersion);
         ImGui.AlignTextToFramePadding();
         Widgets.StatusDot("Painter", colour, value, detail);
         if (state == PainterConnectionState.Offline)

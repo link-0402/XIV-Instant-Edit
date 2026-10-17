@@ -16,15 +16,19 @@ public sealed record PainterStatus(bool Reachable, string AddonVersion, string P
 {
     public static readonly PainterStatus Offline = new(false, "", "", false, "", false);
 
-    public PainterConnectionState Classify(string expectedPluginVersion)
+    /// <summary> Online when the Painter plugin is at or above <paramref name="minimumPluginVersion"/> (<see cref="ComponentVersions.PainterPluginMinimum"/>); newer ones are accepted. </summary>
+    public PainterConnectionState Classify(string minimumPluginVersion)
     {
         if (!Reachable)
             return PainterConnectionState.Offline;
-        var expected = BlenderClient.NormalizeVersion(expectedPluginVersion);
-        return expected.Length > 0 && BlenderClient.NormalizeVersion(AddonVersion) == expected
+        return ComponentVersions.Satisfies(AddonVersion, minimumPluginVersion)
             ? PainterConnectionState.Online
             : PainterConnectionState.VersionMismatch;
     }
+
+    public static string MismatchMessage(string? pluginVersion, string minimum)
+        => $"The Painter plugin is {(string.IsNullOrEmpty(pluginVersion) ? "an older version" : pluginVersion)}; " +
+           $"this plugin needs {minimum} or newer. Update it from Settings.";
 }
 
 /// <summary> Talks to the XIV Instant Edit plugin's listener inside Substance Painter. </summary>

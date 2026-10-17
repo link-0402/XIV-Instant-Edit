@@ -146,6 +146,14 @@ class SettingsTests(unittest.TestCase):
                 handle.write("{ broken")
             self.assertEqual(settings.load(path), settings.Settings())
 
+    def test_config_without_a_version_reports_the_plugin_version(self):
+        # Instant Edit no longer writes a version; the plugin reports its own PLUGIN_VERSION.
+        with tempfile.TemporaryDirectory() as temp:
+            path = os.path.join(temp, "config.json")
+            with open(path, "w") as handle:
+                json.dump({"painterPort": 5000, "pluginPort": 5001}, handle)
+            self.assertEqual(settings.load(path).version, settings.PLUGIN_VERSION)
+
 
 class BridgeTests(unittest.TestCase):
     def setUp(self):
