@@ -18,11 +18,11 @@ internal sealed record ChangelogRelease(
 
 internal static class ChangelogCatalog
 {
-    public const string CurrentVersion = "2.2.0";
+    public const string CurrentVersion = "3.0.0";
 
     public static IReadOnlyList<ChangelogRelease> Releases { get; } =
     [
-        Release("2.2.0",
+        Release("3.0.0",
             Highlight("Mod Browser: every Penumbra mod is a tile now. Click one to open it in a window of its own."),
             Entry("See what a mod is made of: its options, models with their materials and textures, animations, effects and sounds.", 1),
             Entry("Drop your own files on anything to replace it, add files, and make groups and options. Changes go straight into the mod.", 1),

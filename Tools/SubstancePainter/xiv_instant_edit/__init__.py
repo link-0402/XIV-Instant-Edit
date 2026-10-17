@@ -7,7 +7,7 @@ textures in FFXIV's channel layout and hands them back to Instant Edit.
 
 # This plugin's own version. Bump it only when these files change; Instant Edit accepts any
 # version at or above its PainterPluginMinimumVersion.
-PLUGIN_VERSION = "2.2.0"
+PLUGIN_VERSION = "3.0.0"
 
 _plugin = None
 
