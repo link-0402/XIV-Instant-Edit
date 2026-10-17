@@ -89,7 +89,8 @@ internal static partial class MaterialEditorScenarios
         Require(MaterialSession.Classify(mask, mask.WithKey(TextureMode, 0x600EF9DF)) == EditClass.Structural,
             "switching the texture mode changes which textures are read, so it needs a redraw");
         var decalOff = mask.WithKey(DecalKey, 0x4242B842);
-        Require(MaterialSession.Classify(decalOff, decalOff.WithKey(DecalKey, 0x584265DD)) == EditClass.Live, "the decal key is shown live");
+        // Writing a loaded material's key values showed nothing in game (2026-10-17), and Penumbra never writes them live.
+        Require(MaterialSession.Classify(decalOff, decalOff.WithKey(DecalKey, 0x584265DD)) == EditClass.Structural, "any key change needs a redraw");
         Require(MaterialSession.Classify(mask, mask.WithShaderPackage("characterscroll.shpk")) == EditClass.Structural, "a shader switch needs a redraw");
         Require(MaterialSession.Classify(mask, mask.WithFlags(mask.ShaderFlags | 0x10)) == EditClass.Live, "shader flags are shown live");
         var table = mask.Table!.Clone();
