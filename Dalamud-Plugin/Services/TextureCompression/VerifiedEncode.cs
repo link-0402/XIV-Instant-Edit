@@ -20,7 +20,7 @@ internal enum VerifiedEncodeOutcome
 /// <param name="Source">The original TEX, its mip offsets normalized.</param>
 /// <param name="Target">The TEX format to encode to (<see cref="TextureCost.Bc7"/> …), or null for Auto: BC5 when every use is an index map, else BC7.</param>
 /// <param name="MaxSide">Halve the texture until both sides fit (16 at least), or null to keep its size.</param>
-/// <param name="AllowSingleColor">Shrink a texture of one colour to 32 × 32 when the check allows it.</param>
+/// <param name="AllowSingleColor">Shrink a texture of one colour to 16 × 16 when the check allows it.</param>
 internal sealed record VerifiedEncodeRequest(byte[] Source, TexInfo Info, IReadOnlyList<TextureUse> Uses, uint? Target, int? MaxSide, bool AllowSingleColor);
 
 /// <param name="Width">The size written: the original's, the capped one, or <see cref="SingleColor.Size"/>.</param>
@@ -30,7 +30,7 @@ internal sealed record VerifiedEncodeResult(VerifiedEncodeOutcome Outcome, byte[
 
 /// <summary>
 /// Encodes one texture through Penumbra and checks the result before anyone writes it: a texture
-/// of one colour can become a 32 × 32 one, a size cap halves it first, Penumbra encodes and decodes
+/// of one colour can become a 16 × 16 one, a size cap halves it first, Penumbra encodes and decodes
 /// it, and <see cref="CompressionCheck"/> compares what its shaders read against the original (or
 /// the original halved to the same size). Shared by automatic texture optimization and a mod's
 /// texture clean-up. Dalamud-free; files go through <paramref name="work"/>, which the caller owns.

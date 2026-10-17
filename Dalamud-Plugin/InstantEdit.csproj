@@ -70,9 +70,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The Mod Browser's bundled material presets (from TexTools) and placeholder textures, read from beside the DLL. -->
+    <!-- The Mod Browser's bundled material presets (from TexTools), read from beside the DLL. -->
     <None Include="Studio\Resources\MaterialPresets\**" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="Studio\Resources\DummyTextures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

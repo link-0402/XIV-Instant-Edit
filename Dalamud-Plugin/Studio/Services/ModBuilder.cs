@@ -1088,45 +1088,29 @@ internal sealed class ModBuilder
     }
 
     /// <summary>
-    /// Fills a texture slot's placeholder: the generated white square (existing behaviour), or
-    /// a bundled ready-made .tex copied in as-is — see <see cref="DummyTextureLibrary"/>.
-    /// Returns true on success.
+    /// Fills a texture slot's placeholder: a generated square of one colour — see
+    /// <see cref="DummyTextureLibrary"/>. Returns true on success.
     /// </summary>
     private bool ProcessDummyTexture(TextureSlot tex, string textureName, string gamePath, string rel, string modPath,
         BuildReport report, Target source)
     {
         var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
+        var compression = TextureCompressionInfo.ForPlaceholder(tex.Compression);
+        var dummyKey = TextureCache.KeyForGenerated(option, DummyTextureLibrary.Size, compression);
+        var texData = _textures.Get(dummyKey);
+        string error = string.Empty;
+        if (texData == null && TextureConverter.CreateDummy(option, compression, out texData, out error))
+            _textures.Store(dummyKey, texData);
 
-        if (option.IsGenerated)
+        if (texData == null)
         {
-            var compression = TextureCompressionInfo.ForPlaceholder(tex.Compression);
-            var dummyKey = TextureCache.KeyForGenerated("white", tex.WhiteDummySize, compression);
-            var texData = _textures.Get(dummyKey);
-            string error = string.Empty;
-            if (texData == null && TextureConverter.CreateWhiteDummy(tex.WhiteDummySize, compression, out texData, out error))
-                _textures.Store(dummyKey, texData);
-
-            if (texData == null)
-            {
-                report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, error, source);
-                return false;
-            }
-
-            File.WriteAllBytes(LocalPath(modPath, rel), texData);
-            report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath,
-                $"white {tex.WhiteDummySize}x{tex.WhiteDummySize} dummy", source);
-            return true;
-        }
-
-        var fullPath = Path.Combine(_req.PluginDirectory, option.ResourcePath!);
-        if (!File.Exists(fullPath))
-        {
-            report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, $"bundled dummy texture missing ({fullPath})", source);
+            report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, error, source);
             return false;
         }
 
-        File.Copy(fullPath, LocalPath(modPath, rel), true);
-        report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath, $"{option.Label} (bundled dummy)", source);
+        File.WriteAllBytes(LocalPath(modPath, rel), texData);
+        report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath,
+            $"{option.Label.ToLowerInvariant()} {DummyTextureLibrary.Size}x{DummyTextureLibrary.Size} dummy", source);
         return true;
     }
 

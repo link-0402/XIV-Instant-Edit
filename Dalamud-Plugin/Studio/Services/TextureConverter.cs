@@ -105,29 +105,23 @@ public static class TextureConverter
     }
 
     /// <summary>
-    /// Generates a fully white, fully opaque square .tex file of <paramref name="size"/>
-    /// pixels (must be a power of two between 16 and 4096) — no source file needed.
+    /// Generates a placeholder .tex: a <see cref="DummyTextureLibrary.Size"/> square of the
+    /// option's one colour — no source file needed.
     /// </summary>
-    public static bool CreateWhiteDummy(int size, bool compressBc7, out byte[] texData, out string error)
-        => CreateWhiteDummy(size, compressBc7 ? TextureCompression.Bc7 : TextureCompression.None, out texData, out error);
-
-    /// <summary>
-    /// Generates a fully white, fully opaque square .tex file of <paramref name="size"/>
-    /// pixels (must be a power of two between 16 and 4096) — no source file needed.
-    /// </summary>
-    public static bool CreateWhiteDummy(int size, TextureCompression compression, out byte[] texData, out string error)
+    public static bool CreateDummy(DummyTextureLibrary.DummyOption option, TextureCompression compression, out byte[] texData, out string error)
     {
         texData = Array.Empty<byte>();
         error   = string.Empty;
 
-        if (size < 16 || size > 4096 || (size & (size - 1)) != 0)
-        {
-            error = $"Dummy texture size must be a power of two between 16 and 4096 (got {size}).";
-            return false;
-        }
-
+        const int size = DummyTextureLibrary.Size;
         var bgra = new byte[size * size * 4];
-        Array.Fill(bgra, (byte)255); // white + fully opaque in every channel
+        for (var i = 0; i < bgra.Length; i += 4)
+        {
+            bgra[i]     = option.B;
+            bgra[i + 1] = option.G;
+            bgra[i + 2] = option.R;
+            bgra[i + 3] = option.A;
+        }
 
         if (compression == TextureCompression.None)
         {

@@ -57,7 +57,7 @@ internal sealed class StudioHost : IDisposable
     /// </summary>
     public string TextureCacheDirectory { get; }
 
-    /// <summary>The folder holding the bundled material presets and placeholder textures (Resources/).</summary>
+    /// <summary>The folder holding the bundled material presets (Resources/).</summary>
     public string PluginDirectory { get; }
 
     /// <summary>The modpack being built: what the build window reads and edits, and what a build turns into a new mod.</summary>

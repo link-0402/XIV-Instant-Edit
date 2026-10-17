@@ -47,7 +47,7 @@ internal static class TextureCompressionViews
         return $"{What(entries.Count, entries.Count(entry => entry.Shrunk), refits.Count)} so far, {Bytes(saved)} smaller in total.";
     }
 
-    /// <summary> "2 textures optimized (1 of one color, shrunk to 32 × 32) and 1 hairstyle refit", leaving out what is none. </summary>
+    /// <summary> "2 textures optimized (1 of one color, shrunk to 16 × 16) and 1 hairstyle refit", leaving out what is none. </summary>
     private static string What(int textures, int shrunk, int hairstyles)
     {
         var parts = new List<string>();
@@ -58,7 +58,7 @@ internal static class TextureCompressionViews
         return string.Join(" and ", parts);
     }
 
-    /// <summary> " (2 of one color, shrunk to 32 × 32)", or nothing when none were shrunk. </summary>
+    /// <summary> " (2 of one color, shrunk to 16 × 16)", or nothing when none were shrunk. </summary>
     private static string OneColor(int shrunk)
         => shrunk == 0 ? string.Empty : string.Create(CultureInfo.InvariantCulture, $" ({shrunk:N0} of one color, shrunk to {SingleColor.Size} × {SingleColor.Size})");
 

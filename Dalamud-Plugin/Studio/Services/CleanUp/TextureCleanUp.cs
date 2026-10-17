@@ -20,7 +20,7 @@ namespace InstantEdit.Studio.Services.CleanUp;
 
 internal enum TextureFormatChoice
 {
-    /// <summary>BC5 for index maps, BC7 for the rest; a texture of one colour may become 32 × 32.</summary>
+    /// <summary>BC5 for index maps, BC7 for the rest; a texture of one colour may become 16 × 16.</summary>
     Auto,
 
     /// <summary>The format it has (only resized).</summary>

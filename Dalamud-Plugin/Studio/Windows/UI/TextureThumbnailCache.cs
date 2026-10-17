@@ -84,22 +84,8 @@ internal sealed class TextureThumbnailCache : IDisposable
         if (tex.UseWhiteDummy)
         {
             var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
-            if (option.IsGenerated)
-            {
-                Swatch(side, new Vector4(1, 1, 1, 1));
-                Gui.Tooltip($"Generated white {tex.WhiteDummySize}×{tex.WhiteDummySize} texture");
-            }
-            else if (option.Key == DummyTextureLibrary.NullNormalKey)
-            {
-                // The "flat"/no-bump colour of a tangent-space normal map, so the swatch reads
-                // correctly at a glance instead of looking like an arbitrary blue placeholder.
-                Swatch(side, new Vector4(0.5f, 0.5f, 1f, 1f));
-                Gui.Tooltip($"Bundled dummy texture — {option.Label}");
-            }
-            else
-            {
-                Placeholder(side, FontAwesomeIcon.LayerGroup, Theme.Accent, $"Bundled dummy texture — {option.Label}");
-            }
+            Swatch(side, new Vector4(option.R, option.G, option.B, option.A) / 255f);
+            Gui.Tooltip($"Generated {option.Label.ToLowerInvariant()} {DummyTextureLibrary.Size}×{DummyTextureLibrary.Size} texture");
             return;
         }
 

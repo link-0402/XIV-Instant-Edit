@@ -14,7 +14,7 @@ namespace InstantEdit.Services.TextureCompression;
 /// </summary>
 internal static class SingleColor
 {
-    public const int Size = 32;
+    public const int Size = 16;
 
     /// <summary> How many levels a channel may vary across the texture for it to still count as one color. </summary>
     public const int Tolerance = 4;
