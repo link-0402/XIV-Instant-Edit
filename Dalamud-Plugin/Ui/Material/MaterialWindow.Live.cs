@@ -28,7 +28,9 @@ internal sealed partial class MaterialWindow
     private bool BindLive(MaterialSession current)
     {
         nextLiveCheck = Environment.TickCount64 + LiveCheckMs;
-        var found = LiveMaterial.Find(objects, current.Source.ObjectIndex, current.Source.GamePath);
+        var source = current.Source;
+        var paths = MaterialPathMatch.Candidates(source.GamePath, source.IsGameData ? null : source.ActualPath, preview.FileFor(source.GamePath));
+        var found = LiveMaterial.Find(objects, source.ObjectIndex, paths);
         var added = live.Bind(found) + liveTable.Bind(found);
         if (!live.Bound)
             return false;
