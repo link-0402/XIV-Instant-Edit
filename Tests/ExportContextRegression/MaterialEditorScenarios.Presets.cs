@@ -11,6 +11,7 @@ internal static partial class MaterialEditorScenarios
     public static void RunPresets()
     {
         CheckMetal();
+        CheckTranslucentCrashes();
         CheckScrollingPattern();
         CheckGlass();
         CheckCleanUp();
@@ -36,6 +37,16 @@ internal static partial class MaterialEditorScenarios
         Require(metal.Apply(Context(PresetDocument(MaskPreset)), RowTarget.All).Warnings.Any(warning => warning.Contains("mask", StringComparison.OrdinalIgnoreCase)),
             "Metal says so when the mask couldn't be checked");
         Require(!metal.Applies(Context(PresetDocument(HairPreset))), "Metal needs colour rows, which hair has none of");
+    }
+
+    private static void CheckTranslucentCrashes()
+    {
+        // Translucent skin crashes the game (seen in game and in Penumbra's editor, 2026-10-17), like stockings.
+        Require(PresetChecks.TranslucentCrashes("skin.shpk") && PresetChecks.TranslucentCrashes("characterstockings.shpk")
+                && !PresetChecks.TranslucentCrashes("character.shpk") && !PresetChecks.TranslucentCrashes("hair.shpk"),
+            "translucency is refused on skin and stockings only");
+        Require(!PresetNamed("See-through").Applies(Context(PresetDocument(MaskPreset).WithShaderPackage("skin.shpk"))),
+            "See-through doesn't apply to skin");
     }
 
     private static void CheckScrollingPattern()

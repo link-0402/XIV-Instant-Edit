@@ -147,8 +147,8 @@ public static class EffectPresets
     {
         public override string Name => "See-through";
         public override string Description => "The material's alpha shows through.";
-        public override string Requirement => "Translucent stockings crash the game.";
-        public override bool Applies(PresetContext context) => !context.Doc.ShaderPackage.Equals("characterstockings.shpk", StringComparison.OrdinalIgnoreCase);
+        public override string Requirement => TranslucentCrashNote;
+        public override bool Applies(PresetContext context) => !TranslucentCrashes(context.Doc.ShaderPackage);
 
         public override PresetResult Apply(PresetContext context, RowTarget target)
         {
