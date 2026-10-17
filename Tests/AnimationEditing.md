@@ -544,6 +544,28 @@ visibly change motion. All 385 animation regressions pass.
   iv_ bones unticked), both Undo last save and the row's Undo read the original file again; the 47 bones have their
   tracks again, nothing is unticked and the highest index is 153 again.)
 
+## Quantized clips made on an older skeleton (2026-10-17)
+
+`[Noff][IVCS] Idle Pussy Lick [Shiver]`'s `loop_emot18_loop.pap` is quantized and
+declares 167 reference bones: IVCS before 2.3 added `n_hara_noanim_trans`. No c0801
+skeleton in the library has 167 bones, and the first-bones fallback was predictive
+only, so the Source page said no source was found and the clip could not be repaired.
+Quantized clips now take a longer skeleton's first bones too, from their exact model
+only: both compressions fill unstored channels from the source's rest pose. Among
+first bones, those that name the animated bones as the skeleton the clip names come
+first (NFLB has its own bones at 154-166, where IVCS has its physics bones), then the
+character's own file, then the skeleton that added the fewest bones since (IVCS 2.3:
+1, YAS: 5).
+
+Offline, with the plugin's own Rank against the real library: without the live rig
+the source is IVCS 2.3's first 167 bones; with the NFLB + YAS rig live, the rig's
+first 167 (the clip moves nothing past 153). Repair onto IVCS writes all 145 tracks
+up to index 153. The face clip `nf_idleoral1.pap` (80 bones) matched before and still
+does.
+
+- [ ] Open the Shiver loop's timeline: the Source page shows "Uses only its first 167
+  bones". Repair onto IVCS into a new mod and confirm it plays like the original.
+
 ## Timeline editor live acceptance (pending)
 
 The Timeline tab opens the selected clip in the Timeline window. The TMB reader and

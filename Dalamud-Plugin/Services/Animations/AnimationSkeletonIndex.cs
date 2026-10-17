@@ -590,13 +590,23 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
             try { return AnimationSkeleton.Fits(channels, candidate.Skeleton); }
             catch (InvalidDataException) { return false; }
         }
-        ImmutableArray<SkeletonCandidate> RankCandidates(IEnumerable<SkeletonCandidate> available)
+        // With first bones, cut is how many bones the whole skeleton has after them.
+        ImmutableArray<SkeletonCandidate> RankCandidates(IEnumerable<(SkeletonCandidate Candidate, int Cut)> pool)
         {
-            return available.Select(c =>
+            var available = pool.ToArray();
+            string Layout(SkeletonCandidate c) => string.Join('/', channels.Bones.Select(i => c.Skeleton.Bones[i].Name));
+            bool Named(SkeletonCandidate c) => !string.IsNullOrEmpty(channels.OriginalSkeleton) && channels.OriginalSkeleton == c.Skeleton.Name;
+            // Skeleton mods put different bones after the shared ones: IVCS's physics bones sit
+            // where NFLB has its own. First bones whose animated bones are named as in the first
+            // bones of the skeleton the animation names are the layout it was made for.
+            var namedLayouts = available.Where(p => p.Candidate.Source.LeadingBones > 0 && Named(p.Candidate))
+                .Select(p => Layout(p.Candidate)).ToHashSet(StringComparer.Ordinal);
+            return available.Select(pair =>
             {
+                var (c, cut) = pair;
                 var model = c.Source.CanonicalModel ?? ModelFromPath(c.Source.Resource.GamePath);
                 var modelScore = ModelScore(c);
-                var name = !string.IsNullOrEmpty(channels.OriginalSkeleton) && channels.OriginalSkeleton == c.Skeleton.Name ? 1 : 0;
+                var name = Named(c) ? 1 : 0;
                 var candidatePath = c.Source.Resource.GamePath.Replace('\\', '/');
                 var provenance = candidatePath == normalizedExpected ? 2 :
                     parts.Length >= 5 && Family(candidatePath) == Family(normalizedExpected) ? 1 : 0;
@@ -608,13 +618,18 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
                 var referenceOnlyText = referenceOnly.Length == 0 ? "0 reference-only bones" : referenceOnly.Length <= 4
                     ? $"{referenceOnly.Length} reference-only bone{(referenceOnly.Length == 1 ? "" : "s")} ({string.Join(", ", referenceOnly)})"
                     : $"{referenceOnly.Length} reference-only bones";
-                // Among first bones that fit, those of the character's own skeleton file are the ones the
-                // animation plays on: the game decodes it against their rest pose. That outweighs another
+                var layout = c.Source.LeadingBones > 0 && namedLayouts.Contains(Layout(c)) ? 1 : 0;
+                // Among first bones of that layout, those of the character's own skeleton file are the ones
+                // the animation plays on: the game decodes it against their rest pose. That outweighs another
                 // file whose skeleton has the name the animation was made for.
                 var live = c.Source.LeadingBones > 0 && c.Source.Kind == SkeletonSourceKind.Collection && provenance == 2 ? 1 : 0;
-                var rank = modelScore * 10000000000000000L + live * 2000000000000000L + name * 1000000000000000L +
-                    provenance * 10000000000000L + overlap * 10000000L - referenceOnly.Length;
-                var leadingText = c.Source.LeadingBones > 0 ? $"; only its first {c.Source.LeadingBones} bones, as no whole skeleton fits" : "";
+                // Then the skeleton that added the fewest bones since, the closest to the one it was made on:
+                // IVCS 2.3 added one bone to the older IVCS, YAS five.
+                var closest = c.Source.LeadingBones > 0 ? 99 - Math.Min(cut, 99) : 0;
+                var rank = modelScore * 10000000000000000L + layout * 4000000000000000L + live * 2000000000000000L +
+                    name * 1000000000000000L + provenance * 10000000000000L + closest * 100000000000L + overlap * 10000000L - referenceOnly.Length;
+                var leadingText = c.Source.LeadingBones > 0
+                    ? $"; only its first {c.Source.LeadingBones} bones of {c.Source.LeadingBones + cut}, as no whole skeleton fits" : "";
                 return c with { Rank = rank,
                     Rationale = $"Source model {(model ?? "unconfirmed")} (score {modelScore}); skeleton name {(name == 1 ? "matches" : "unconfirmed")}; variant match {provenance}; {overlap} ordered bones/parents match; {referenceOnlyText}{leadingText}" };
             }).GroupBy(c => c.Skeleton.Fingerprint).Select(g => g.OrderByDescending(c => c.Rank).ThenBy(c => c.Source.Resource.ResolvedPath, StringComparer.Ordinal).First())
@@ -622,17 +637,18 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
         }
         ImmutableArray<SkeletonCandidate> RankFitting(IEnumerable<SkeletonCandidate> pool)
         {
-            var fitting = pool.Where(Fits);
             if (exactReferenceModel != null)
-                fitting = fitting.Where(candidate =>
+                pool = pool.Where(candidate =>
                     (candidate.Source.CanonicalModel ?? ModelFromPath(candidate.Source.Resource.GamePath)) == exactReferenceModel);
-            var found = RankCandidates(fitting);
-            // A predictive animation made before a skeleton mod appended bones declares fewer
-            // reference bones than the mod's skeletons now have. When no whole skeleton fits,
-            // the first bones of a longer one are the skeleton it was made for. Quantized data
-            // stays with its exact model's whole skeleton.
-            if (found.IsEmpty && channels is { ExactReferenceModel: false, ReferenceBones: { } leading })
-                found = RankCandidates(pool.Select(c => Leading(c, leading)).OfType<SkeletonCandidate>().Where(Fits));
+            var found = RankCandidates(pool.Where(Fits).Select(c => (c, 0)));
+            // An animation made before a skeleton mod appended bones declares fewer reference
+            // bones than the mod's skeletons now have, such as one made on IVCS before it added
+            // n_hara_noanim_trans. When no whole skeleton fits, the first bones of a longer one
+            // are the skeleton it was made for: both compressions fill unstored channels from
+            // those bones' rest pose. Quantized data takes them from its exact model only.
+            if (found.IsEmpty && channels.ReferenceBones is { } leading)
+                found = RankCandidates(pool.Select(c => (Leading: Leading(c, leading), Cut: c.Skeleton.Bones.Length - leading))
+                    .Where(p => p.Leading != null && Fits(p.Leading)).Select(p => (p.Leading!, p.Cut)));
             return found;
         }
         // Posing skeletons are left out while any other skeleton fits (see IsPosingFile).
@@ -643,7 +659,7 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
         if (ranked.IsEmpty)
             return new(SkeletonResolutionState.Incompatible, [], Reason: channels.ReferenceBones is { } bones
                 ? channels.ExactReferenceModel
-                    ? $"The quantized animation requires the main {exactReferenceModel ?? "PAP"} skeleton ({bones} reference bones, {channels.ReferenceFloats} reference floats); no exact source was found."
+                    ? $"The quantized animation requires a {exactReferenceModel ?? "PAP"} skeleton with {bones} reference bones and {channels.ReferenceFloats} reference floats, or a longer one's first {bones} bones; none was found."
                     : $"No source skeleton fits the predictive animation ({bones} reference bones, {channels.ReferenceFloats} reference floats). A compatible source reference pose is required before retargeting."
                 : "No source skeleton has valid animation track, float, and partition bindings.");
         var chosen = ranked.FirstOrDefault(c => SelectionId(c) == selectedIdentity);
