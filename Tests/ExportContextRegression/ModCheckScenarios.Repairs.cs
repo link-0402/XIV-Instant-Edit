@@ -17,6 +17,24 @@ internal static partial class ModCheckScenarios
         JunkKeysAreRemovedWhenTheRealPathExists();
         DisabledModsAndOverriddenFilesAreReported();
         ATicksSnapshotIsntChangedByLaterTicks();
+        SeveralFixesAreTickedAtOnce();
+    }
+
+    private static void SeveralFixesAreTickedAtOnce()
+    {
+        Repair Fix(string id, string? group = null) => new(id, id, CheckCategory.Leftovers, id, id, RepairConfidence.High, false,
+            Array.Empty<RepairEdit>(), Array.Empty<FileDeletion>(), Array.Empty<string>(), group);
+        var report = new ModCheckReport("mod", null, DateTime.UtcNow, Array.Empty<CheckFinding>(),
+            [Fix("a"), Fix("rekey", "pair"), Fix("remove", "pair"), Fix("b")], [], [], null, null, []);
+        var selection = new RepairSelection(report);
+        string[] shown = ["a", "rekey", "remove", "b"];
+
+        selection.SetMany(RepairSelection.Range(shown, "b", "a"), true);
+        Require(selection.IsTicked("a") && selection.IsTicked("rekey") && !selection.IsTicked("remove") && selection.IsTicked("b"),
+            "a shift-click range ticks every fix between the two clicks, either way round, and only the first of two alternatives");
+        selection.SetMany(RepairSelection.Range(shown, "rekey", "b"), false);
+        Require(selection.IsTicked("a") && !shown.Skip(1).Any(selection.IsTicked), "unticking a range unticks just that range");
+        Require(RepairSelection.Range(shown, "gone", "b").SequenceEqual(["b"]), "a range from a fix no longer shown is just the clicked one");
     }
 
     private static void MissingFilesCanBeRetargeted()
