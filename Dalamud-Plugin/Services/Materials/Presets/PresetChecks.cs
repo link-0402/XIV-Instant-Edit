@@ -18,6 +18,12 @@ public static class PresetChecks
     public const uint SheenTint = 0x1F264897;
     public const uint SheenAperture = 0xF490F76E;
     public const uint Translucent = 0x10;
+    public const string TranslucentCrashNote = "Translucent skin and stockings crash the game.";
+
+    /// <summary>Whether turning Translucent on for this shader crashes the game (skin and stockings).</summary>
+    public static bool TranslucentCrashes(string shaderPackage)
+        => shaderPackage.Equals("skin.shpk", StringComparison.OrdinalIgnoreCase)
+           || shaderPackage.Equals("characterstockings.shpk", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether the material has Dawntrail rows its shader reads.</summary>
     public static bool HasRows(PresetContext context)

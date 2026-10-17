@@ -35,14 +35,14 @@ internal sealed partial class MaterialWindow
             _ = current.Apply(d => d.WithFlags(backfaces ? d.ShaderFlags | HideBackfaces : d.ShaderFlags & ~HideBackfaces), "Hide backfaces");
         Tip(ShaderLabels.Flags[0].Help);
         ImGui.SameLine(0, Theme.Gap * 3);
-        var stockings = doc.ShaderPackage.Equals("characterstockings.shpk", StringComparison.OrdinalIgnoreCase);
+        var crashes = Services.Materials.Presets.PresetChecks.TranslucentCrashes(doc.ShaderPackage);
         var translucent = (flags & Translucent) != 0;
-        using (ImRaii.Disabled(stockings && !translucent))
+        using (ImRaii.Disabled(crashes && !translucent))
         {
             if (ImGui.Checkbox("Translucent##material-translucent", ref translucent))
                 _ = current.Apply(d => d.WithFlags(translucent ? d.ShaderFlags | Translucent : d.ShaderFlags & ~Translucent), "Translucent");
         }
-        Tip(stockings ? "Translucent stockings crash the game." : ShaderLabels.Flags[4].Help);
+        Tip(crashes ? Services.Materials.Presets.PresetChecks.TranslucentCrashNote : ShaderLabels.Flags[4].Help);
         var other = flags & ~(HideBackfaces | Translucent);
         if (other != 0)
         {
