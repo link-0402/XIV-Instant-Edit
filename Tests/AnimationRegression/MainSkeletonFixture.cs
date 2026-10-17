@@ -83,6 +83,31 @@ internal static unsafe class MainSkeletonFixture
               { State: SkeletonResolutionState.Matched, Selected.Source.Kind: SkeletonSourceKind.Collection },
             "the character's own skeleton file wins over other files' first bones whose skeleton name matches the animation's");
 
+        // NFLB keeps IVCS's first bones but puts its own where IVCS has physics bones.
+        var nflbLive = live with { Skeleton = described with { Name = "c0801", Bones = described.Bones.SetItem(100, described.Bones[100] with { Name = "nf_bone100" }) } };
+        check(AnimationSkeletonIndex.Rank(predictive, [nflbLive, candidate], described, GamePath) is
+              { State: SkeletonResolutionState.Matched, Selected.Source.Kind: SkeletonSourceKind.Mod },
+            "the character's own file loses to first bones that name the animated bones as the skeleton the animation names does");
+        var nflbUnanimated = live with { Skeleton = described with { Name = "c0801", Bones = described.Bones.SetItem(160, described.Bones[160] with { Name = "nf_bone160" }) } };
+        check(AnimationSkeletonIndex.Rank(predictive, [nflbUnanimated, candidate], described, GamePath) is
+              { State: SkeletonResolutionState.Matched, Selected.Source.Kind: SkeletonSourceKind.Collection },
+            "the character's own file still wins when only bones the animation leaves alone are named differently");
+        // YAS appended five bones to the older IVCS where IVCS 2.3 appended one, and rests a few bones differently.
+        var yas = candidate with
+        {
+            Source = candidate.Source with { Resource = candidate.Source.Resource with { ResolvedPath = "a-yas.sklb" } },
+            Skeleton = older with
+            {
+                Fingerprint = "yas",
+                Bones = [.. older.Bones.SetItem(1, older.Bones[1] with { Reference = rest with { Position = Vector3.UnitY } }),
+                    .. Enumerable.Range(0, 5).Select(i => new SkeletonBone($"ya_bone{i}", 0, 0, rest))],
+            },
+        };
+        check(AnimationSkeletonIndex.Rank(predictive, [yas, candidate], described, GamePath) is
+              { State: SkeletonResolutionState.Matched, Selected.Source.Resource.ResolvedPath: "fixture.sklb" } &&
+              AnimationSkeletonIndex.Rank(predictive, [candidate, yas], described, GamePath).Selected?.Source.Resource.ResolvedPath == "fixture.sklb",
+            "among first bones that fit equally well, those of the skeleton that added the fewest bones since are chosen");
+
         var whole = candidate with
         {
             Source = candidate.Source with { Resource = candidate.Source.Resource with { ResolvedPath = "older.sklb" } },
@@ -91,9 +116,31 @@ internal static unsafe class MainSkeletonFixture
         check(AnimationSkeletonIndex.Rank(predictive, [candidate, whole], described, GamePath) is
               { State: SkeletonResolutionState.Matched, Candidates.Length: 1, Selected.Source.LeadingBones: 0 },
             "a whole skeleton that fits is used without offering any skeleton's first bones");
-        check(AnimationSkeletonIndex.Rank(predictive with { ExactReferenceModel = true }, [candidate], described, GamePath).State ==
-              SkeletonResolutionState.Incompatible,
-            "quantized animations are never matched to a skeleton's first bones");
+        // A quantized clip made on IVCS before it appended n_hara_noanim_trans, such as
+        // [Noff][IVCS] Idle Pussy Lick [Shiver]: 167 reference bones against IVCS 2.3's 168.
+        var quantized = predictive with { ExactReferenceModel = true };
+        check(AnimationSkeletonIndex.Rank(quantized, [candidate], described, GamePath) is
+              { State: SkeletonResolutionState.Matched, Selected: { Source.LeadingBones: 167, Skeleton.Bones.Length: 167 } } matchedQuantized &&
+              matchedQuantized.Selected!.Skeleton.Fingerprint == olderFingerprint,
+            "a quantized animation made before bones were appended matches its model's longer skeleton's first bones");
+        var otherModel = candidate with
+        {
+            Source = candidate.Source with
+            {
+                Resource = candidate.Source.Resource with { GamePath = "chara/human/c0101/skeleton/base/b0001/skl_c0101b0001.sklb", ResolvedPath = "c0101.sklb" },
+            },
+        };
+        check(AnimationSkeletonIndex.Rank(quantized, [otherModel], described, GamePath).State == SkeletonResolutionState.Incompatible,
+            "a quantized animation never takes another model's first bones, whose rest pose it was not made on");
+        check(AnimationSkeletonIndex.Rank(quantized, [otherModel, candidate], described, GamePath).Candidates is [{ Source.LeadingBones: 167 } only] &&
+              only.Source.Resource.ResolvedPath == "fixture.sklb",
+            "among first bones, only those of the quantized animation's own model are offered");
+        check(AnimationSkeletonIndex.Rank(quantized, [yas, candidate], described, GamePath).Selected?.Source.Resource.ResolvedPath == "fixture.sklb",
+            "a quantized animation also takes the first bones of the skeleton that added the fewest bones since");
+        var quantizedBinding = Quantized(quantized, arena);
+        reject(() => AnimationNative.Sampler.Validate(main, quantizedBinding), "the whole skeleton still fails the quantized decoder guard");
+        AnimationNative.Sampler.Validate(AnimationSkeleton.Materialize(source, arena), quantizedBinding);
+        check(true, "the first bones pass the unchanged quantized decoder guard");
         check(AnimationSkeletonIndex.Rank(predictive with { ReferenceBones = 169 }, [candidate], described, GamePath).State ==
               SkeletonResolutionState.Incompatible,
             "an animation declaring more bones than any skeleton has still reports that no skeleton fits");
@@ -129,6 +176,27 @@ internal static unsafe class MainSkeletonFixture
         a->Animation.NumberOfFloatTracks = channels.Floats.Length;
         a->NumBones = channels.ReferenceBones!.Value; a->NumFloatSlots = channels.ReferenceFloats!.Value; a->NumFrames = 2;
         a->CompressedData = arena.Copy<byte>([1]); a->IntData = arena.Array<ushort>(8); a->FloatData = arena.Array<float>(8);
+        var b = arena.Alloc<hkaAnimationBinding>(); b->Animation.ptr = &a->Animation;
+        b->TransformTrackToBoneIndices = arena.Copy<short>(channels.Bones.AsSpan());
+        b->FloatTrackToFloatSlotIndices = arena.Copy<short>(channels.Floats.AsSpan());
+        return b;
+    }
+
+    private static hkaAnimationBinding* Quantized(AnimationChannels channels, AnimationNative.Arena arena)
+    {
+        var a = arena.Alloc<AnimationNative.Quantized>();
+        a->Animation.Type = hkaAnimation.AnimationType.QuantizedCompressedAnimation;
+        a->Animation.Duration = 1;
+        a->Animation.NumberOfTransformTracks = channels.Bones.Length;
+        a->Animation.NumberOfFloatTracks = channels.Floats.Length;
+        var header = new AnimationNative.QuantizedHeader
+        {
+            HeaderSize = (ushort)sizeof(AnimationNative.QuantizedHeader), NumBones = (ushort)channels.ReferenceBones!.Value,
+            NumFloats = (ushort)channels.ReferenceFloats!.Value, NumFrames = 2, Duration = 1, FrameSize = 1,
+        };
+        var data = new byte[sizeof(AnimationNative.QuantizedHeader) + 2];
+        new ReadOnlySpan<byte>(&header, sizeof(AnimationNative.QuantizedHeader)).CopyTo(data);
+        a->Data = arena.Copy<byte>(data);
         var b = arena.Alloc<hkaAnimationBinding>(); b->Animation.ptr = &a->Animation;
         b->TransformTrackToBoneIndices = arena.Copy<short>(channels.Bones.AsSpan());
         b->FloatTrackToFloatSlotIndices = arena.Copy<short>(channels.Floats.AsSpan());
