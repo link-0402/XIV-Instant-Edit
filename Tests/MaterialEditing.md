@@ -43,19 +43,24 @@ Saving:
 - [x] Save again after that: it writes into the new mod (with a backup), not a second new mod.
 - [x] Discard changes (dots menu) puts the values back as last saved.
 
-## Colour rows (Task 7, pending)
+## Colour rows (Task 7, mostly done)
 
-- [ ] A gear material on character.shpk shows a "Colour rows" tab with 16 pairs of swatches (base,
+- [x] A gear material on character.shpk shows a "Colour rows" tab with 16 pairs of swatches (base,
   shine, glow); clicking a pair shows its two rows side by side with named fields.
-- [ ] Change row 1's base colour and let go: the character redraws with the new colour where the
-  index texture picks pair 1.
-- [ ] Detail scale, rotation and shear change the pattern; Advanced shows the stored matrix.
-- [ ] Copy a row and paste it onto another (Everything, Colours only, Surface only): only the
-  chosen fields change, and Undo takes it back in one step.
+- [x] Change row 1's base colour and let go: the character redraws with the new colour where the
+  index texture picks pair 1. (Live since Task 9; checked on pair 16 of the Critique dress.)
+- [ ] Detail scale, rotation and shear change the pattern; Advanced shows the stored matrix. (Not
+  judged: the change doesn't show at screenshot size. Critique stores a detail scale of 250, but
+  the scale drags clamp to +-64 once touched.)
+- [x] Copy a row and paste it onto another (Everything, Colours only, Surface only): only the
+  chosen fields change, and Undo takes it back in one step. (Colours only, through the buttons.)
 - [ ] A legacy material (characterlegacy.shpk) shows the 16-row table; the dots menu's "Convert to
   Dawntrail" moves it to character.shpk with 32 rows, and the character still looks the same.
-  (Vanilla e6015 Crakows are characterlegacy.shpk with a 32-row Dawntrail table and show 16 pairs.)
-- [ ] A character.shpk material with an old 16-row table shows the warning and Convert button.
+  (No characterlegacy.shpk material with a 16-row table under 60 MB in the library; vanilla e6015
+  Crakows are characterlegacy.shpk with a 32-row Dawntrail table and show 16 pairs.)
+- [x] A character.shpk material with an old 16-row table shows the warning and Convert button.
+  (Strawberry Halo copy: 32 rows, each old row in both rows of its pair, one undo step. Open: the
+  material keeps no index texture after converting, so the rows can't map like the old ones did.)
 
 ## Live preview in memory (Task 8, mostly done; needs XIV Bridge with automation on)
 
@@ -104,19 +109,25 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   (Critique dress, a one-colour index: only pair 16 bright, "Used by 100% of the index texture".)
 - [x] A vanilla gear material: the pairs its index uses are bright, with their share in the tooltip.
   (e6015 Crakows: pairs 7 and 8.)
-- [ ] "Show where" draws the index texture with the selected pair's texels lit (top yellow, bottom
-  blue), and follows when another pair is picked.
-- [ ] A material whose index slot points at a missing file greys nothing and says so.
+- [x] "Show where" draws the index texture with the selected pair's texels lit (top yellow, bottom
+  blue), and follows when another pair is picked. (Critique harness, pairs 1 and 2.)
+- [x] A material whose index slot points at a missing file greys nothing and says so. ("The index
+  texture could not be read."; with no index slot the reason was missing after opening another
+  material, fixed in a140030.)
 
 ## Presets (Task 11, pending)
 
-- [ ] Presets button: ten cards; ones that don't fit the material are disabled with the reason.
-- [ ] Metal on a plain gear material (Used rows): the used rows turn metallic the same frame; the
-  message names the rows changed and warns if the mask's green channel is rough.
+- [x] Presets button: ten cards; ones that don't fit the material are disabled with the reason.
+  (All ten fit the harness; See-through now also refuses skin, d3caa97.)
+- [x] Metal on a plain gear material (Used rows): the used rows turn metallic the same frame; the
+  message names the rows changed and warns if the mask's green channel is rough. (Message and
+  rows checked; the harness faces away, so the look is unjudged.)
 - [ ] Scrolling pattern: the character redraws on the scroll shader and the pattern visibly moves;
-  the new `_fx.tex` sits beside the material after Save (in the mod, or in the new mod).
+  the new `_fx.tex` sits beside the material after Save (in the mod, or in the new mod). (Redraw on
+  characterscroll.shpk with the `_fx.tex` loaded from the preview; movement and Save not checked.)
 - [ ] Glass, See-through and Matcap each look right after their redraw; Undo takes each back in one
-  step.
+  step. (Glass and See-through apply and undo; Matcap not reached: the game crashed from another
+  Bridge client's script at that point.)
 - [ ] Dyeable adds a dye table (the rows' Dye section appears); Clean up's hover lists what it
   removes.
 
