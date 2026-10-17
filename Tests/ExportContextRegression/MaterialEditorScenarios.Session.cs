@@ -171,5 +171,27 @@ internal static partial class MaterialEditorScenarios
             "a material source knows whether it is game data, its mod-relative path, object and hash");
         Require(mod.ToPreviewSource().IsModFile && !game.ToPreviewSource().IsModFile && game.ToPreviewSource().GamePath == game.GamePath,
             "only a mod row's source can be written back in place");
+        CheckSaveWrites(mod, game);
+    }
+
+    /// <summary>
+    /// Save writes straight into the mod (or a new mod for game data), with no throwaway preview mod:
+    /// a preview mod made first stayed behind, enabled, whenever the write failed (review 2026-10-17).
+    /// </summary>
+    private static void CheckSaveWrites(MaterialSource mod, MaterialSource game)
+    {
+        byte[] bytes = [1, 2, 3];
+        var added = new[] { ("chara/equipment/e0085/material/v0002/mt_c0201e0085_glv_a_fx.tex", new byte[] { 9 }) };
+        var intoMod = MaterialSession.SaveWrites(mod, bytes, added);
+        Require(intoMod.ModWrites.Count == 1 && intoMod.ModWrites[0].Bytes == bytes && intoMod.ModWrites[0].Source.IsModFile
+                && intoMod.Additions.Count == 1 && intoMod.Additions[0].GamePath == added[0].Item1 && intoMod.GameFiles.Count == 0,
+            "a mod material saves over its file and adds its new textures to the same mod, making no new mod");
+        var unchanged = MaterialSession.SaveWrites(mod, File.ReadAllBytes(PresetPath(MaskPreset)), []);
+        Require(unchanged.ModWrites.Count == 0 && unchanged.Additions.Count == 0 && unchanged.GameFiles.Count == 0,
+            "saving the bytes the file already holds writes nothing");
+        var intoNewMod = MaterialSession.SaveWrites(game, bytes, added);
+        Require(intoNewMod.ModWrites.Count == 0 && intoNewMod.Additions.Count == 0 && intoNewMod.GameFiles.Count == 2
+                && intoNewMod.GameFiles[0].RelativePath == "Files/" + game.GamePath && intoNewMod.GameFiles[1].RelativePath == "Files/" + added[0].Item1,
+            "a game material and its new textures go into the new mod");
     }
 }
