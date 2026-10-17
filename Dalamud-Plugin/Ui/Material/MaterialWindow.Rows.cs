@@ -3,6 +3,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Materials;
+using InstantEdit.Services.Previews;
 using InstantEdit.Studio.Models;
 
 namespace InstantEdit.Ui.Material;
@@ -349,8 +350,11 @@ internal sealed partial class MaterialWindow
         if (onCharacter)
         {
             Widgets.Banner("##legacy-ignored", FeedbackSeverity.Warning, "The game ignores this old 16-row table on character.shpk. Convert it to Dawntrail rows.");
-            if (ImGui.Button("Convert to Dawntrail##legacy-convert"))
-                _ = current.Apply(d => d.WithTable(d.Table!.ToDawntrail()), "Convert table");
+            using (ImRaii.Disabled(Busy))
+            {
+                if (ImGui.Button("Convert to Dawntrail##legacy-convert"))
+                    ConvertToDawntrail(current, doc);
+            }
         }
         else
         {
@@ -422,14 +426,80 @@ internal sealed partial class MaterialWindow
         return doc.WithTable(table);
     }
 
-    /// <summary>A legacy material moves to character.shpk with Dawntrail rows.</summary>
+    /// <summary>
+    /// A legacy material moves to character.shpk with Dawntrail rows. Legacy shaders pick rows with the
+    /// normal map's alpha, so unless the material has an index texture that loads, one is made from the
+    /// normal map; the conversion and the texture land as one undo step.
+    /// </summary>
     private void ConvertToDawntrail(MaterialSession current, MaterialDocument doc)
     {
-        if (doc.ShaderPackage.Equals("character.shpk", StringComparison.OrdinalIgnoreCase))
+        var normal = doc.Slots.FirstOrDefault(slot => slot.SamplerId == MaterialDocument.NormalSampler && slot.Path.Length > 0)?.Path;
+        var existing = doc.Slots.FirstOrDefault(slot => slot.SamplerId == IndexSampler && slot.Path.Length > 0)?.Path;
+        var indexPath = existing ?? (normal == null ? null : MaterialSession.IndexPathFor(normal));
+        var normalFile = normal != null && resolvedTextures.TryGetValue(normal, out var foundNormal) ? foundNormal : normal;
+        var indexFile = existing != null && resolvedTextures.TryGetValue(existing, out var foundIndex) ? foundIndex : existing;
+        byte[]? built = null;
+        Run(async () =>
         {
-            _ = current.Apply(d => d.WithTable(d.Table!.ToDawntrail()), "Convert table");
-            return;
+            if (await ReadTextureAsync(indexFile).ConfigureAwait(false) != null)
+                return null;
+            var bytes = await ReadTextureAsync(normalFile).ConfigureAwait(false);
+            if (bytes == null || indexPath == null)
+                return "The normal map couldn't be read, so no index texture was made. The whole model shows pair 1 until you add one.";
+            try
+            {
+                built = LegacyIndexTexture.FromNormal(TextureDecoder.Decode(bytes, int.MaxValue));
+            }
+            catch (Exception e) when (e is InvalidDataException or NotSupportedException or ArgumentException)
+            {
+                return "The normal map's format can't be read, so no index texture was made. The whole model shows pair 1 until you add one.";
+            }
+            return null;
+        }, warning =>
+        {
+            if (built != null)
+                current.AddNewFile(indexPath!, built);
+            IReadOnlyList<string> notes = [];
+            _ = current.Apply(d =>
+            {
+                var (converted, changed) = ConvertedToDawntrail(d, built != null ? indexPath : null);
+                notes = changed;
+                return converted;
+            }, "Convert to Dawntrail");
+            var text = built != null ? $"Converted to Dawntrail rows, with an index texture made from the normal map ({indexPath})." : "Converted to Dawntrail rows.";
+            return string.Join(" ", new[] { text, warning }.Concat(notes).Where(part => !string.IsNullOrEmpty(part)));
+        });
+    }
+
+    private static (MaterialDocument Doc, IReadOnlyList<string> Notes) ConvertedToDawntrail(MaterialDocument doc, string? indexPath)
+    {
+        IReadOnlyList<string> notes = [];
+        if (!doc.ShaderPackage.Equals("character.shpk", StringComparison.OrdinalIgnoreCase))
+            (doc, notes) = MaterialSession.Reconcile(doc.WithShaderPackage("character.shpk"), ShaderPackages.Get("character.shpk")!);
+        else if (doc.Table is { Kind: ColorTableKind.Legacy } table)
+            doc = doc.WithTable(table.ToDawntrail());
+        if (indexPath == null)
+            return (doc, notes);
+        // The made texture replaces the index slot Reconcile may have pointed elsewhere.
+        var slot = doc.Slots.ToList().FindIndex(s => s.SamplerId == IndexSampler);
+        doc = slot < 0 ? doc.WithAddedSlot(IndexSampler, indexPath) : doc.WithSlot(slot, doc.Slots[slot] with { Path = indexPath });
+        return (doc, notes.Where(note => !note.Contains("Make that texture", StringComparison.Ordinal)).ToList());
+    }
+
+    /// <summary>A texture's bytes from a mod file or the game's files; null when there is none.</summary>
+    private async Task<byte[]?> ReadTextureAsync(string? file)
+    {
+        if (string.IsNullOrEmpty(file))
+            return null;
+        try
+        {
+            if (Path.IsPathRooted(file))
+                return File.Exists(file) ? await File.ReadAllBytesAsync(file, life.Token).ConfigureAwait(false) : null;
+            return (await data.GetFileAsync<Lumina.Data.FileResource>(file, life.Token).ConfigureAwait(false))?.Data;
         }
-        SwitchShader(current, ShaderInfo.All.First(def => def.ShaderPackName == "character.shpk"));
+        catch (Exception e) when (e is IOException or FileNotFoundException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 }
