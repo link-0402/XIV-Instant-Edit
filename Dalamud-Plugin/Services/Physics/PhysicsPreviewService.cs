@@ -16,6 +16,8 @@ internal sealed record PhysicsPreviewRecord
     /// <summary> &lt;cache&gt;/physics-preview/&lt;session&gt;. </summary>
     public required string SessionFolder { get; init; }
     public required DateTime CreatedUtc { get; init; }
+    /// <summary> The object shown with the preview, redrawn when the preview goes without a Stop (unload, crash). </summary>
+    public int? ObjectIndex { get; init; }
 }
 
 /// <summary> The check after a preview's redraw found the preview gone and added it again; a warning when it still loses. </summary>
@@ -151,6 +153,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             var current = new PhysicsPreviewRecord
             {
                 Tag = Tag, CollectionId = collection.Id, Priority = Priority, SessionFolder = sessionFolder, CreatedUtc = DateTime.UtcNow,
+                ObjectIndex = objectIndex,
             };
             SaveRecord(current);
             lock (sync) (record, session, revision) = (current, sessionFolder, next);
@@ -326,6 +329,9 @@ internal sealed class PhysicsPreviewService : IDisposable
                 TryDelete(leftover.SessionFolder);
                 ClearRecord();
                 lock (sync) record = null;
+                // The character may still wear the preview's files, which are gone now.
+                if (leftover.ObjectIndex is { } index)
+                    await penumbra.RedrawObjectAsync(index).ConfigureAwait(false);
             }
             string root;
             try { root = Path.Combine(Path.GetFullPath(cacheRoot()), CacheFolder); }
@@ -442,7 +448,10 @@ internal sealed class PhysicsPreviewService : IDisposable
         }
     }
 
-    /// <summary> Removes the temporary mod, waiting briefly when called off the framework thread. </summary>
+    /// <summary>
+    /// Removes the temporary mod and redraws the character, so it doesn't keep wearing preview files
+    /// that are deleted next. Waits briefly when called off the framework thread.
+    /// </summary>
     public void Dispose()
     {
         if (disposed)
@@ -456,7 +465,13 @@ internal sealed class PhysicsPreviewService : IDisposable
             lock (sync) current = record;
             if (current == null)
                 return;
-            (bool Gone, string? Error) Remove() => penumbra.RemoveTemporaryModOnFramework(current.Tag, current.CollectionId, current.Priority);
+            (bool Gone, string? Error) Remove()
+            {
+                var removed = penumbra.RemoveTemporaryModOnFramework(current.Tag, current.CollectionId, current.Priority);
+                if (removed.Gone && current.ObjectIndex is { } index)
+                    penumbra.RedrawObjectOnFramework(index);
+                return removed;
+            }
             (bool Gone, string? Error) removed;
             if (framework.IsInFrameworkUpdateThread)
                 removed = Remove();

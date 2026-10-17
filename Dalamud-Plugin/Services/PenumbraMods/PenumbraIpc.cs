@@ -86,19 +86,22 @@ internal sealed class PenumbraIpc : IDisposable
 
     /// <summary> Redraws one object, so it loads its skeleton, physics and animations again. </summary>
     internal Task<string?> RedrawObjectAsync(int objectIndex)
-        => _framework.RunOnFrameworkThread(() =>
+        => _framework.RunOnFrameworkThread(() => RedrawObjectOnFramework(objectIndex));
+
+    /// <summary> <see cref="RedrawObjectAsync"/> for a caller already on the framework thread. </summary>
+    internal string? RedrawObjectOnFramework(int objectIndex)
+    {
+        try
         {
-            try
-            {
-                RedrawObject.Invoke(objectIndex);
-                return (string?)null;
-            }
-            catch (Exception e)
-            {
-                _log.Warning(e, "Could not redraw object {ObjectIndex}.", objectIndex);
-                return "Your character could not be redrawn; redraw it in Penumbra.";
-            }
-        });
+            RedrawObject.Invoke(objectIndex);
+            return null;
+        }
+        catch (Exception e)
+        {
+            _log.Warning(e, "Could not redraw object {ObjectIndex}.", objectIndex);
+            return "Your character could not be redrawn; redraw it in Penumbra.";
+        }
+    }
 
     /// <summary> Whether Penumbra is loaded and the resource tree IPC is available. </summary>
     public bool Available
