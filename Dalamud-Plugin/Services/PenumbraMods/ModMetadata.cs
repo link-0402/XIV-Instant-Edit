@@ -344,6 +344,31 @@ internal static class ModMetadata
         return result;
     }
 
+    /// <summary>
+    /// The mod-relative file the mod maps <paramref name="gamePath"/> to beside <paramref name="ownerFile"/>:
+    /// from a container that maps <paramref name="ownerGamePath"/> to that file, else the first mapping
+    /// (default files come first); null when the mod doesn't map it or can't be read.
+    /// </summary>
+    internal static string? MappedFileBeside(string modRoot, string ownerGamePath, string ownerFile, string gamePath)
+    {
+        try
+        {
+            var containers = AnimationMappingContainers(LoadV4ModMetadata(modRoot)).ToList();
+            var owner = NormalizedModFile(ownerFile);
+            string? In(JsonObject files) => files.Where(pair => SameGamePath(pair.Key, gamePath))
+                .Select(pair => NormalizedModFile(JsonString(pair.Value))).FirstOrDefault(file => file is { Length: > 0 });
+            foreach (var files in containers)
+                if (files.Any(pair => SameGamePath(pair.Key, ownerGamePath) && string.Equals(NormalizedModFile(JsonString(pair.Value)), owner, StringComparison.OrdinalIgnoreCase))
+                    && In(files) is { } beside)
+                    return beside;
+            return containers.Select(In).FirstOrDefault(file => file != null);
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
+        {
+            return null;
+        }
+    }
+
     private static string? NormalizedModFile(string? value) => value?.Replace('\\', '/').Trim().TrimStart('/');
 
     /// <summary>
