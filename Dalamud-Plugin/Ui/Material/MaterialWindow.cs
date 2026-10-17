@@ -10,6 +10,7 @@ using InstantEdit.Services.Materials;
 using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.PreviewMods;
+using InstantEdit.Studio;
 using InstantEdit.Studio.Services;
 
 namespace InstantEdit.Ui.Material;
@@ -42,7 +43,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
 
     private MaterialSession? session;
     private Task<Opened>? opening;
-    private (ResourceView Row, ActorView Actor)? pendingOpen;
+    private (ResourceView Row, ActorView Actor, IModFileCopies? Copies)? pendingOpen;
     private bool openSwitchPopup;
     private bool openNewModPopup;
     private bool openAfterSave;
@@ -55,7 +56,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private Guid? collection;
     private bool customShader;
 
-    private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader);
+    private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader, IModFileCopies? Copies);
 
     internal MaterialWindow(PreviewModService previewMods, MaterialPreviewService preview, PenumbraIpc penumbra, PreviewService previews,
         IDataManager data, ITextureProvider textures, IFramework framework, IObjectTable objects, IPluginLog log)
@@ -97,7 +98,10 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         => IsOpen && session != null && string.Equals(session.Source.GamePath, PathRules.NormalizeGamePath(gamePath), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Opens a row's material; asks first when another one has unsaved changes.</summary>
-    public void Open(ResourceView row, ActorView actor)
+    public void Open(ResourceView row, ActorView actor) => Open(row, actor, null);
+
+    /// <summary>Opens a row's material; <paramref name="copies"/> is the mod window it came from, which a copy can be saved into.</summary>
+    public void Open(ResourceView row, ActorView actor, IModFileCopies? copies)
     {
         IsOpen = true;
         if (EditBlock(row) is { } blocked)
@@ -106,21 +110,24 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             return;
         }
         if (session != null && SameFile(session.Source, row) && opening == null)
+        {
+            this.copies = copies ?? this.copies;
             return;
+        }
         if (session is { History.Dirty: true })
         {
-            pendingOpen = (row, actor);
+            pendingOpen = (row, actor, copies);
             openSwitchPopup = true;
             return;
         }
-        Load(row, actor);
+        Load(row, actor, copies);
     }
 
     private static bool SameFile(MaterialSource source, ResourceView row)
         => string.Equals(source.GamePath, PathRules.NormalizeGamePath(row.GamePath), StringComparison.OrdinalIgnoreCase)
            && string.Equals(source.ActualPath, row.ActualPath, StringComparison.OrdinalIgnoreCase);
 
-    private void Load(ResourceView row, ActorView actor)
+    private void Load(ResourceView row, ActorView actor, IModFileCopies? copies)
     {
         if (opening != null)
             return;
@@ -131,7 +138,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 ? (await data.GetFileAsync<Lumina.Data.FileResource>(row.GamePath, life.Token).ConfigureAwait(false))?.Data
                   ?? throw new IOException("The game file could not be read.")
                 : await File.ReadAllBytesAsync(row.ActualPath, life.Token).ConfigureAwait(false);
-            return await ReadAsync(MaterialSource.FromRow(row, actor, bytes), bytes).ConfigureAwait(false);
+            return await ReadAsync(MaterialSource.FromRow(row, actor, bytes), bytes, copies).ConfigureAwait(false);
         });
     }
 
@@ -140,14 +147,15 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     {
         if (opening != null)
             return;
+        var from = copies;
         opening = Task.Run(async () =>
         {
             var bytes = await File.ReadAllBytesAsync(source.ActualPath, life.Token).ConfigureAwait(false);
-            return await ReadAsync(source with { Sha256 = PreviewSource.Hash(bytes) }, bytes).ConfigureAwait(false);
+            return await ReadAsync(source with { Sha256 = PreviewSource.Hash(bytes) }, bytes, from).ConfigureAwait(false);
         });
     }
 
-    private async Task<Opened> ReadAsync(MaterialSource source, byte[] bytes)
+    private async Task<Opened> ReadAsync(MaterialSource source, byte[] bytes, IModFileCopies? copies)
     {
         if (!MtrlReader.LooksLikeMtrl(bytes))
             throw new InvalidDataException("This file is not a material.");
@@ -159,7 +167,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             var shader = (await penumbra.ResolveCollectionPathsAsync(target.Id, ["shader/sm5/shpk/" + info.ShaderPackageName]).ConfigureAwait(false))[0];
             custom = shader != null && Path.IsPathRooted(shader);
         }
-        return new Opened(source, MaterialDocument.From(info), target?.Id, custom);
+        return new Opened(source, MaterialDocument.From(info), target?.Id, custom, copies);
     }
 
     public override void OnClose()
@@ -243,6 +251,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         DrawSwitchPopup();
         DrawNewModPopup(current);
         DrawCleanUpPopup(current);
+        DrawCopyPopup(current);
         HandleShortcuts(current);
         // A control that went away while held never reports letting go.
         if (current.History.InGesture && !ImGui.IsAnyItemActive())
@@ -307,7 +316,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 if (work.IsCompletedSuccessfully && session is { History.Dirty: false } && pendingOpen is { } next)
                 {
                     pendingOpen = null;
-                    Load(next.Row, next.Actor);
+                    Load(next.Row, next.Actor, next.Copies);
                 }
             }
         }
@@ -341,6 +350,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }
         collection = opened.Collection;
         customShader = opened.CustomShader;
+        copies = opened.Copies;
         loadedDoc = opened.Document;
         shownDoc = null;
         everBound = false;
@@ -512,6 +522,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip("Moves the material to character.shpk with 32 Dawntrail rows. Each old row fills both rows of its pair.");
         }
+        DrawCopyMenuItem(current);
         IReadOnlyList<PreviewBackupGroup> backups = current.Source.IsGameData ? [] : previewMods.Backups([current.Source.ToPreviewSource()]);
         using (ImRaii.Disabled(backups.Count == 0 || Busy))
         {
@@ -624,7 +635,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             ImGui.CloseCurrentPopup();
             pendingOpen = null;
             current.History.MarkSaved();
-            Load(next.Row, next.Actor);
+            Load(next.Row, next.Actor, next.Copies);
         }
         ImGui.SameLine();
         if (ImGui.Button("Cancel##material-switch-cancel"))

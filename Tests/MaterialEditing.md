@@ -116,6 +116,19 @@ stainingtemplate.stm (43 templates each).
 - [ ] Bake: the rows hold the dyed values, and with "No dye" the character still looks dyed.
 - [ ] Untick Dyeable: the dye rows go (the character redraws); tick it again: empty dye rows.
 
+## Save as copy into an option (pending)
+
+The places, file names and the meta.json write are checked offline (ModHandoffScenarios.RunCopies).
+- [ ] Open a material from a mod window, edit a value, dots menu > Save as copy into an option: the
+  list shows Default files and every option; the options using the opened file say "uses this file".
+- [ ] Pick another option and Save copy: the message names it; in Penumbra that option now points
+  at a new file in its own folder, and the original file and the other options are unchanged.
+- [ ] Turn that option on and redraw: the character shows the copy. Save again: it writes the copy,
+  not the original.
+- [ ] After Scrolling pattern, Save as copy: the new `_fx.tex` goes into the same option.
+- [ ] Opened from On Screen or Game Files, the menu has no such item; with the mod window closed it
+  is greyed with the reason.
+
 ## Finish (Task 13, pending)
 
 - [ ] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using InstantEdit.Models;
+using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Ui;
 
@@ -29,7 +30,8 @@ internal interface IModHandoff
     /// <summary>Why the row's material can't open in the Material window, or null when it can.</summary>
     string? MaterialBlock(ResourceView row);
 
-    void EditMaterial(ResourceView row, ActorView mod);
+    /// <summary>Opens the row's material; <paramref name="copies"/> lets the Material window save a copy into an option of the mod.</summary>
+    void EditMaterial(ResourceView row, ActorView mod, IModFileCopies copies);
 
     /// <summary>Why the row's animation can't go to Blender, or null when it can.</summary>
     string? AnimationBlock(ResourceView row);
@@ -42,6 +44,47 @@ internal interface IModHandoff
 
     /// <summary>The latest message of the model, texture and animation hand-offs, or null.</summary>
     (DateTimeOffset Time, string Text, FeedbackSeverity Severity)? LatestMessage { get; }
+}
+
+/// <summary>
+/// The mod window a material was opened from, for the Material window's "Save as copy into an
+/// option": the places in the mod a copy can go, and the mod window's own write that puts it there
+/// as new files of the mod. Render thread only.
+/// </summary>
+internal interface IModFileCopies
+{
+    string ModName { get; }
+
+    /// <summary>Why no copy can be written now (the mod window was closed, the mod is being updated), or null.</summary>
+    string? Block { get; }
+
+    /// <summary>
+    /// The default files and every option, for a copy of files at <paramref name="gamePaths"/> (the
+    /// first is the copied file, which is at <paramref name="sourceRelPath"/> in the mod).
+    /// </summary>
+    IReadOnlyList<ModHandoffOption> Options(IReadOnlyList<string> gamePaths, string sourceRelPath);
+
+    /// <summary>
+    /// Writes <paramref name="files"/> into the mod as new files and points the option
+    /// <paramref name="optionKey"/> at them. The files it used before stay in the mod.
+    /// </summary>
+    ModHandoffCopy SaveCopy(string optionKey, IReadOnlyList<(string GamePath, byte[] Bytes)> files);
+}
+
+/// <summary>
+/// A place in a mod a copy can go: its key (<see cref="OptionRef.Serialize"/>) and name, whether it
+/// has a file at the copy's game path already and whether that is the copied file itself, and why it
+/// can't take the copy (null when it can).
+/// </summary>
+internal sealed record ModHandoffOption(string Key, string Label, bool HasFile, bool UsesSource, string? Block);
+
+/// <summary>A file a copy wrote: its game path, its path in the mod as meta.json names it, and the file on disk.</summary>
+internal sealed record ModHandoffCopiedFile(string GamePath, string RelPath, string DiskPath);
+
+/// <summary>What a copy into an option wrote, in the order of its files, or why nothing was written.</summary>
+internal sealed record ModHandoffCopy(string? Error, string OptionLabel, IReadOnlyList<ModHandoffCopiedFile> Files)
+{
+    public static ModHandoffCopy Failed(string error) => new(error, string.Empty, []);
 }
 
 /// <summary>The mod a file belongs to, as the hand-offs name it.</summary>
@@ -145,4 +188,147 @@ internal static class ModHandoffBridge
     /// </summary>
     public static ActorView Mod(ModHandoffMod mod, IEnumerable<ModHandoffFile> files, int importObjectIndex)
         => new(null, "Mod", mod.Name, files.Select(file => Row(mod, file)).ToList(), importObjectIndex);
+}
+
+/// <summary>
+/// A copy of files saved into one option of a mod: written into the mod folder as new files, where
+/// the mod window puts that option's files, and the option's game paths pointed at them. No file of
+/// the mod is written over, and every other entry of meta.json stays as it is.
+/// </summary>
+internal static class ModHandoffCopies
+{
+    private const int MaxNames = 100;
+
+    /// <summary>"Default files", or "Group: Option".</summary>
+    public static string Label(PenumbraModMeta meta, OptionRef option)
+        => option.IsDefault ? "Default files" : $"{meta.FindGroupView(option.Group)?.Name ?? "(missing group)"}: {meta.OptionName(option)}";
+
+    /// <summary>
+    /// The places a copy of files at <paramref name="gamePaths"/> can go: the default files, then each
+    /// option (each container of a combining group) as meta.json lists them. One where a file of the
+    /// user's own is set up for one of the game paths (<paramref name="replaced"/>) can't take it: the
+    /// mod window's next update would point it back at that file.
+    /// </summary>
+    public static IReadOnlyList<ModHandoffOption> Options(PenumbraModMeta meta, IReadOnlyList<string> gamePaths, string sourceRelPath,
+        Func<OptionRef, string, bool> replaced)
+    {
+        var options = new List<ModHandoffOption>();
+        foreach (var option in meta.FileCarriers())
+        {
+            var rel = string.Empty;
+            var has = gamePaths.Count > 0 && meta.TryGetFile(option, gamePaths[0], out rel);
+            var source = has && sourceRelPath.Length > 0 && PathNormalizer.SameRel(rel, sourceRelPath);
+            var block = gamePaths.Any(path => replaced(option, path)) ? "A file of your own replaces it here. Undo that in the mod window first." : null;
+            options.Add(new ModHandoffOption(option.Serialize(), Label(meta, option), has, source, block));
+        }
+        return options;
+    }
+
+    /// <summary>
+    /// Where each file of a copy goes in the mod folder: where the mod window puts a file of that option
+    /// (see <see cref="ModWriter.ReplacementRel"/>), else beside it as name_copy, name_copy2 and so on.
+    /// Never a path that is <paramref name="taken"/>: a file there already, or one the mod uses.
+    /// </summary>
+    public static IReadOnlyList<(string GamePath, string RelPath)> Plan(PenumbraModMeta meta, OptionRef option, IReadOnlyList<string> gamePaths,
+        Func<string, bool> taken)
+    {
+        var planned = new HashSet<string>(StringComparer.Ordinal);
+        var plan = new List<(string GamePath, string RelPath)>();
+        foreach (var gamePath in gamePaths)
+        {
+            if (!PathNormalizer.IsSafeRel(PathNormalizer.GamePath(gamePath)))
+                throw new InvalidOperationException($"{gamePath} is not a valid game path.");
+            var natural = ModWriter.ReplacementRel(meta, gamePath, option);
+            string? rel = null;
+            for (var n = 0; n < MaxNames && rel == null; n++)
+            {
+                var candidate = n == 0 ? natural : Beside(natural, n == 1 ? "_copy" : $"_copy{n}");
+                var key = PathNormalizer.RelKey(candidate);
+                if (planned.Contains(key) || taken(candidate))
+                    continue;
+                planned.Add(key);
+                rel = candidate;
+            }
+            plan.Add((gamePath, rel ?? throw new IOException($"{Path.GetFileName(gamePath)} has no free file name left in the mod.")));
+        }
+        return plan;
+    }
+
+    private static string Beside(string rel, string suffix)
+    {
+        var folder = Path.GetDirectoryName(rel) ?? string.Empty;
+        var name = $"{Path.GetFileNameWithoutExtension(rel)}{suffix}{Path.GetExtension(rel)}";
+        return folder.Length > 0 ? $"{folder}\\{name}" : name;
+    }
+
+    /// <summary>
+    /// Writes a copy's files where <see cref="Plan"/> puts them and points the option's game paths at
+    /// them in <paramref name="meta"/>; saving meta.json is the caller's. <paramref name="inUse"/> are
+    /// the rel keys anything else of the mod still needs (see ModProject.RelKeysInUse). A file is never
+    /// written over: one that appears meanwhile fails the copy. When anything fails, the files written
+    /// are deleted again and the error is thrown.
+    /// </summary>
+    public static IReadOnlyList<ModHandoffCopiedFile> Write(string modFolder, PenumbraModMeta meta, OptionRef option,
+        IReadOnlyList<(string GamePath, byte[] Bytes)> files, IReadOnlySet<string> inUse)
+    {
+        if (files.Count == 0)
+            throw new ArgumentException("There is nothing to copy.", nameof(files));
+        if (!meta.OptionExists(option))
+            throw new InvalidOperationException("That option is no longer in the mod.");
+
+        var referenced = meta.ReferencedRelKeys();
+        var plan = Plan(meta, option, files.Select(file => file.GamePath).ToList(), rel =>
+        {
+            var key = PathNormalizer.RelKey(rel);
+            return inUse.Contains(key) || referenced.Contains(key) || File.Exists(PathNormalizer.ToDiskPath(modFolder, rel));
+        });
+        var written = new List<ModHandoffCopiedFile>();
+        try
+        {
+            for (var i = 0; i < plan.Count; i++)
+            {
+                var full = PathNormalizer.ToDiskPath(modFolder, plan[i].RelPath);
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+                var temp = full + PenumbraModMeta.TempSuffix;
+                File.WriteAllBytes(temp, files[i].Bytes);
+                try
+                {
+                    File.Move(temp, full, overwrite: false);
+                }
+                catch
+                {
+                    TryDelete(temp);
+                    throw;
+                }
+                written.Add(new ModHandoffCopiedFile(plan[i].GamePath, plan[i].RelPath, full));
+            }
+            foreach (var file in written)
+                meta.SetFile(option, file.GamePath, file.RelPath);
+            return written;
+        }
+        catch
+        {
+            Delete(written);
+            throw;
+        }
+    }
+
+    /// <summary>Deletes the files of a copy again, when meta.json could not take it.</summary>
+    public static void Delete(IEnumerable<ModHandoffCopiedFile> files)
+    {
+        foreach (var file in files)
+            TryDelete(file.DiskPath);
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Left in the mod folder, unused by anything.
+        }
+    }
 }

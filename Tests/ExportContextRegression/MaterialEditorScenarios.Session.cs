@@ -17,6 +17,25 @@ internal static partial class MaterialEditorScenarios
         CheckReconcileToScroll();
         CheckSessionApply();
         CheckSourceFromRow();
+        CheckSavedAsCopy();
+    }
+
+    private static void CheckSavedAsCopy()
+    {
+        var source = Source(ResourceSourceState.LoadedMod);
+        var session = MaterialSession.CreateForRegression(source, PresetDocument(MaskPreset), (_, _) => Task.CompletedTask);
+        const string pattern = "chara/equipment/e0085/texture/v01_c0201e0085_glv_fx.tex";
+        session.AddNewFile(pattern, [1, 2, 3]);
+        session.Apply(doc => doc.WithAddedSlot(0x0C5EC1F1, pattern), "Pattern");
+        var saved = session.Current;
+        var bytes = saved.Write();
+        session.SavedAsCopy(saved, @"C:\Penumbra\Gloves\Style\Blue\glv_a.mtrl", @"Style\Blue\glv_a.mtrl", bytes);
+        Require(session.Source.ActualPath == @"C:\Penumbra\Gloves\Style\Blue\glv_a.mtrl" && session.Source.RelativePath == "Style/Blue/glv_a.mtrl"
+                && session.Source.Sha256 == InstantEdit.Services.PreviewMods.PreviewSource.Hash(bytes)
+                && session.Source.GamePath == source.GamePath && session.Source.ModDirectory == source.ModDirectory,
+            "after a copy into an option the session saves the copy, at the same game path in the same mod");
+        Require(!session.History.Dirty && session.History.CanUndo && session.NewFiles.Count == 0,
+            "the copied edits count as saved, stay undoable, and the textures that went with the copy aren't saved again");
     }
 
     private static void CheckHistory()

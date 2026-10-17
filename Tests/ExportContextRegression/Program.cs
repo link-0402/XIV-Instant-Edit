@@ -165,6 +165,7 @@ try
     Scenarios.Run(() => CheckSessionStore(testRoot));
     Scenarios.Run(() => SelectorStabilityScenarios.Run(testRoot));
     Scenarios.Run(() => ModHandoffScenarios.Run(testRoot));
+    Scenarios.Run(() => ModHandoffScenarios.RunCopies(testRoot));
     Scenarios.Run(() => ModCheckScenarios.RunReaders(testRoot));
     Scenarios.Run(() => ModCheckScenarios.RunAnalysis(testRoot));
     Scenarios.Run(() => ModCheckScenarios.RunApply(testRoot));

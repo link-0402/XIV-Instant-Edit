@@ -44,10 +44,10 @@ internal sealed class MainModHandoff : IModHandoff
     void IModHandoff.EditTexture(ResourceView row, ActorView mod) => _textureTab.StartTextureEdit(row, mod);
 
     private Func<ResourceView, string?>? _materialBlock;
-    private Action<ResourceView, ActorView>? _editMaterial;
+    private Action<ResourceView, ActorView, IModFileCopies?>? _editMaterial;
 
-    /// <summary>The Material window's open and its reasons not to, once it exists.</summary>
-    public void AttachMaterials(Action<ResourceView, ActorView> edit, Func<ResourceView, string?> block)
+    /// <summary>The Material window's open (with the mod window's copies) and its reasons not to, once it exists.</summary>
+    public void AttachMaterials(Action<ResourceView, ActorView, IModFileCopies?> edit, Func<ResourceView, string?> block)
     {
         _editMaterial = edit;
         _materialBlock = block;
@@ -55,7 +55,7 @@ internal sealed class MainModHandoff : IModHandoff
 
     string? IModHandoff.MaterialBlock(ResourceView row) => _materialBlock is null ? "The Material window is unavailable." : _materialBlock(row);
 
-    void IModHandoff.EditMaterial(ResourceView row, ActorView mod) => _editMaterial?.Invoke(row, mod);
+    void IModHandoff.EditMaterial(ResourceView row, ActorView mod, IModFileCopies copies) => _editMaterial?.Invoke(row, mod, copies);
 
     string? IModHandoff.AnimationBlock(ResourceView row) => _animationSend.AnimationSendBlock(row);
 

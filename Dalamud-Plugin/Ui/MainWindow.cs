@@ -251,10 +251,10 @@ public sealed class MainWindow : Window, IDisposable
 
     internal void AttachPhysics(Action open) => _physicsCard.Attach(open);
 
-    /// <summary> Material rows of On Screen, Game Files and the mod windows open the Material window. </summary>
-    internal void AttachMaterials(Action<ResourceView, ActorView> edit, Func<ResourceView, string?> block)
+    /// <summary> Material rows of On Screen, Game Files and the mod windows open the Material window; a mod window's can save a copy into an option. </summary>
+    internal void AttachMaterials(Action<ResourceView, ActorView, IModFileCopies?> edit, Func<ResourceView, string?> block)
     {
-        _rows.AttachMaterials(edit, block);
+        _rows.AttachMaterials((row, actor) => edit(row, actor, null), block);
         _handoff.AttachMaterials(edit, block);
     }
 
