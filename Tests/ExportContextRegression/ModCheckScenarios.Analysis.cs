@@ -26,6 +26,7 @@ internal static partial class ModCheckScenarios
         MaterialInEveryOptionOfASingleGroupIsAlwaysProvided();
         MaterialOnlyInAMultiOptionIsConditional();
         RunOptionMaterials();
+        RunPlaceholderSets();
         HealthyModHasNoFindings();
         Dx11TexturesAreRequestedWithTheirPrefix();
         ReportsBrokenMaterialsAndFiles();

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
@@ -24,6 +25,12 @@ internal sealed partial class CheckView
     private readonly ModEditor _editor;
     private readonly ModSession _session;
     private readonly CheckInspector _inspector;
+
+    private List<string> _drawnRepairs = new();
+    private List<string> _shownRepairs = new();
+
+    /// <summary>The fix last clicked, where a shift-click range starts.</summary>
+    private string? _anchorRepair;
 
     /// <summary>The finding picked in the list, for the inspector.</summary>
     internal string? SelectedFinding { get; private set; }
@@ -174,6 +181,10 @@ internal sealed partial class CheckView
             ImGui.TextColored(Theme.Good, "Nothing found.");
         }
 
+        // The fix checkboxes in the order drawn last frame, for shift-click ranges.
+        (_shownRepairs, _drawnRepairs) = (_drawnRepairs, _shownRepairs);
+        _drawnRepairs.Clear();
+
         var footer = ImGui.GetFrameHeightWithSpacing() * 2 + ImGui.GetStyle().ItemSpacing.Y;
         if (ImGui.BeginChild("##problems", new Vector2(-1, -footer), false))
         {
@@ -186,7 +197,9 @@ internal sealed partial class CheckView
                 var warnings = findings.Count(f => f.Severity == Severity.Warning);
                 var counts = errors > 0 ? $"{errors} error{(errors == 1 ? string.Empty : "s")}" : warnings > 0 ? $"{warnings} warning{(warnings == 1 ? string.Empty : "s")}" : $"{findings.Length}";
                 var flags = category == CheckCategory.Leftovers && errors + warnings == 0 ? ImGuiTreeNodeFlags.None : ImGuiTreeNodeFlags.DefaultOpen;
-                if (!ImGui.CollapsingHeader($"{label} ({counts})###cat{(int)category}", flags))
+                var open = ImGui.CollapsingHeader($"{label} ({counts})###cat{(int)category}", flags);
+                DrawCategoryMenu(category, findings);
+                if (!open)
                     continue;
                 foreach (var finding in findings)
                     DrawFinding(report, finding);
@@ -235,9 +248,10 @@ internal sealed partial class CheckView
             using (Gui.Disabled(Check.Busy))
             {
                 if (ImGui.Checkbox($"{repair.Title}##{repair.Id}", ref ticked))
-                    selection.Set(repair.Id, ticked);
+                    TickClicked(selection, repair.Id, ticked);
             }
-            Gui.Tooltip(repair.Explanation);
+            Gui.Tooltip($"{repair.Explanation}\n\nShift-click to set every fix from the last one you clicked.");
+            _drawnRepairs.Add(repair.Id);
             if (repair.Candidates is { Count: > 1 } candidates)
             {
                 ImGui.SameLine();
@@ -257,6 +271,35 @@ internal sealed partial class CheckView
             ImGui.Unindent(Theme.S(24));
         }
         ImGui.PopID();
+    }
+
+    /// <summary>A click on a fix's checkbox; with Shift held, every fix shown between it and the last one clicked gets the same tick.</summary>
+    private void TickClicked(RepairSelection selection, string id, bool ticked)
+    {
+        if (ImGui.GetIO().KeyShift && _anchorRepair is { } anchor)
+            selection.SetMany(RepairSelection.Range(_shownRepairs, anchor, id), ticked);
+        else
+            selection.Set(id, ticked);
+        _anchorRepair = id;
+    }
+
+    /// <summary>Right-click on a category header: tick or untick all of its fixes.</summary>
+    private void DrawCategoryMenu(CheckCategory category, CheckFinding[] findings)
+    {
+        var ids = findings.SelectMany(f => f.RepairIds).Distinct().ToArray();
+        if (ids.Length == 0 || Check.Selection is not { } selection)
+            return;
+        Gui.Tooltip("Right-click to tick or untick all fixes here.");
+        if (!ImGui.BeginPopupContextItem($"##catmenu{(int)category}"))
+            return;
+        using (Gui.Disabled(Check.Busy))
+        {
+            if (ImGui.MenuItem(ids.Length == 1 ? "Tick the fix here" : $"Tick all {ids.Length} fixes here"))
+                selection.SetMany(ids, true);
+            if (ImGui.MenuItem("Untick all fixes here"))
+                selection.SetMany(ids, false);
+        }
+        ImGui.EndPopup();
     }
 
     private void DrawApplyFooter(ModCheckReport report)
@@ -285,6 +328,16 @@ internal sealed partial class CheckView
         }
         if (why != null)
             Gui.Tooltip(why);
+
+        using (Gui.Disabled(Check.Busy || report.Repairs.Count == 0))
+        {
+            ImGui.SameLine();
+            if (Gui.IconTextButton(FontAwesomeIcon.CheckSquare, "Tick all", "Tick every fix in the list. Of two fixes that can't both be made, only the first."))
+                selection.SetMany(report.Repairs.Select(repair => repair.Id), true);
+            ImGui.SameLine();
+            if (Gui.IconTextButton(FontAwesomeIcon.Square, "Untick all", "Untick every fix in the list."))
+                selection.SetMany(report.Repairs.Select(repair => repair.Id), false);
+        }
     }
 
     private void StartApply(ModCheckReport report, RepairSelection selection)
