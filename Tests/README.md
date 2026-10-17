@@ -57,6 +57,9 @@ updates the distribution archives or extension repository index.
 
 - `bridge_regression.py`: manifest status, model limits and zero flow values,
   isolated material previews, then the import/context/target-selection workflow.
+  It checks the add-on's context field table against `TestSupport/context-protocol.json`,
+  which `ExportContextRegression` and `BlenderStatusRegression` check the plugin's
+  context and import payload against.
 - `smoke_export.py`: UV seams, mesh IDs and naming, isolated Simple Import folder
   handling, Mesh Studio operations, combined rest rigs and visible mesh bindings,
   and actual MDL export/round-trip workflows (including newly weighted bones).

@@ -137,12 +137,12 @@ class FakePlugin:
         self._original = None
 
     def __enter__(self):
-        self._original = self.http.urllib.request.urlopen
-        self.http.urllib.request.urlopen = self._urlopen
+        self._original = self.http.urlopen
+        self.http.urlopen = self._urlopen
         return self
 
     def __exit__(self, *_exc):
-        self.http.urllib.request.urlopen = self._original
+        self.http.urlopen = self._original
         return False
 
     def _urlopen(self, request, timeout=0):

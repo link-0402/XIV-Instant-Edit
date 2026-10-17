@@ -28,14 +28,15 @@ from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
 from ..xivpy.model   import XIVModel
 from .props          import IN_PLACE_TARGET, NO_EXPORT_CONTEXT, get_instant_edit_props
-from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, ContextValidationError,
-                             _value, apply_authoritative_context, clear_context_metadata,
+from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, CONTEXT_FIELD_NAMES, ContextValidationError,
+                             _value, clear_context_metadata,
+                             context_metadata_from_wire, reattach_context,
                              context_collections,
                              context_id_for_object, create_collection, mesh_ids_from_name,
                              mesh_name_info, MASHUP_SOURCE_MATERIAL_PROPERTY,
                              tag_object,
                              validate_context)
-from .plugin_http    import PluginResponseTooLarge, post_json
+from .plugin_http    import PluginResponseTooLarge, connection_refused, post_json
 from .material_preview import (cleanup_preview_bundle, discard_preview_data,
                                load_preview_manifest)
 from .cache import create_job, finish_job
@@ -58,7 +59,12 @@ def _physical_parent_path(file_path: str) -> str:
 
 
 MAX_PLUGIN_RESPONSE_SIZE = 64 * 1024
-EXPORT_STATUS_POLL_ATTEMPTS = 30
+# After a lost export reply, how long Blender keeps asking for the receipt while the plugin says
+# the export is still being written. A send on a worker thread (steps.in_background) can wait for
+# a slow Penumbra write; one on Blender's main thread freezes the window, so it waits less.
+EXPORT_RECEIPT_WAIT_SECONDS = 10 * 60
+EXPORT_RECEIPT_WAIT_MAIN_THREAD_SECONDS = 15
+EXPORT_STATUS_POLL_SECONDS = 0.5
 INVALID_VARIANT_CHARS = frozenset('<>:"/\\|?*')
 MASHUP_TARGET = "CREATE_MASHUP"
 SAVE_NEW_MOD_TARGET = "SAVE_NEW_MOD"
@@ -140,12 +146,13 @@ def _plugin_transport_error(
     endpoint: str,
     cause: str,
     remedy: str,
+    code: str = "plugin_connection_failed",
 ) -> PluginResponseError:
     failure = record_failure(
         component="dalamud_plugin",
         operation=_plugin_operation(endpoint),
         stage="transport",
-        code="plugin_connection_failed",
+        code=code,
         cause=cause,
         remedy=remedy,
         endpoint=endpoint,
@@ -1205,6 +1212,8 @@ class InstantImport(Operator):
     file_path: bpy.props.StringProperty(options={'HIDDEN'})  # type: ignore
     object_index: bpy.props.IntProperty(default=-1, options={'HIDDEN'})  # type: ignore
     import_name: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
+    # The context, one property per context.CONTEXT_FIELDS entry (with its kind and default; the
+    # bridge suite checks that they match).
     callback_port: bpy.props.IntProperty(default=0, options={'HIDDEN'})  # type: ignore
     schema: bpy.props.StringProperty(default="", options={'HIDDEN'})  # type: ignore
     version: bpy.props.IntProperty(default=0, options={'HIDDEN'})  # type: ignore
@@ -1282,33 +1291,9 @@ class InstantImport(Operator):
                 "version": self.version,
             }
             collection_metadata = {
-                **context_metadata,
-                "plugin_instance_id": self.plugin_instance_id,
-                "capability": self.capability,
-                "source_game_path": self.source_game_path,
-                "source_kind": self.source_kind,
-                "resolved_game_path": self.resolved_game_path,
-                "destination_state": self.destination_state,
-                "managed_destination": self.managed_destination,
-                "target_file_path": self.target_file_path,
-                "source_mod_directory": self.source_mod_directory,
-                "source_mod_stable_id": self.source_mod_stable_id,
-                "source_mod_name": self.source_mod_name,
-                "source_mod_root_path": self.source_mod_root_path,
-                "target_relative_path": self.target_relative_path,
-                "target_collection_id": self.target_collection_id,
-                "target_collection_name": self.target_collection_name,
-                "resource_manifest_version": self.resource_manifest_version,
-                "resource_manifest_status": self.resource_manifest_status,
-                "backup_target_id": self.backup_target_id,
-                "backup_directory": self.backup_directory,
-                "import_id": self.import_id,
-                "callback_port": self.callback_port,
+                **{name: getattr(self, name) for name in CONTEXT_FIELD_NAMES},
                 "import_file_name": file_path.name,
             }
-
-            collection_metadata["import_file_name"] = file_path.name
-
             collection = create_collection(context.scene, collection_metadata)
 
             if self.apply_textures_and_materials:
@@ -1595,55 +1580,11 @@ def _preselect_sole_export_context(
 
 def _mashup_context_metadata(payload: dict, target_file_path: str) -> dict:
     """Convert a plugin-created output context into collection metadata."""
-    if not isinstance(payload, dict):
-        raise ContextValidationError("plugin returned an invalid mashup output context")
-
-    schema = payload.get("schema")
-    version = payload.get("version")
-    context_id = payload.get("contextId")
-    import_id = payload.get("importId")
-    callback_port = payload.get("callbackPort")
-    if schema != SCHEMA or version not in SUPPORTED_VERSIONS:
-        raise ContextValidationError("plugin returned an unsupported mashup output context")
-    if not all(isinstance(value, str) and value for value in (
-        context_id, import_id, payload.get("pluginInstanceId"),
-        payload.get("capability"), payload.get("sourceGamePath"),
-    )):
-        raise ContextValidationError("plugin returned an incomplete mashup output context")
-    if isinstance(callback_port, bool) or not isinstance(callback_port, int):
-        raise ContextValidationError("plugin returned an invalid mashup output callback port")
-
-    output_path = str(target_file_path or payload.get("targetFilePath") or "")
+    metadata = context_metadata_from_wire(payload, "the plugin's mashup output context")
+    output_path = str(target_file_path or metadata["target_file_path"] or "")
     if not output_path:
         raise ContextValidationError("plugin returned an incomplete mashup output path")
-
-    return {
-        "context_id": context_id,
-        "schema": schema,
-        "version": version,
-        "plugin_instance_id": payload["pluginInstanceId"],
-        "capability": payload["capability"],
-        "source_game_path": payload["sourceGamePath"],
-        "source_kind": payload.get("sourceKind") or "mod",
-        "resolved_game_path": payload.get("resolvedGamePath") or payload["sourceGamePath"],
-        "destination_state": payload.get("destinationState") or "ready",
-        "managed_destination": payload.get("managedDestination") or "",
-        "target_file_path": output_path,
-        "source_mod_directory": payload.get("sourceModDirectory") or "",
-        "source_mod_stable_id": payload.get("sourceModStableId") or "",
-        "source_mod_name": payload.get("sourceModName") or "",
-        "source_mod_root_path": payload.get("sourceModRootPath") or "",
-        "target_relative_path": payload.get("targetRelativePath") or "",
-        "target_collection_id": payload.get("targetCollectionId") or "",
-        "target_collection_name": payload.get("targetCollectionName") or "",
-        "resource_manifest_version": payload.get("resourceManifestVersion") or 0,
-        "resource_manifest_status": payload.get("resourceManifestStatus") or "capture_failed",
-        "backup_target_id": payload.get("backupTargetId") or "",
-        "backup_directory": payload.get("backupDirectory") or "",
-        "import_id": import_id,
-        "callback_port": callback_port,
-        "import_file_name": Path(output_path).name,
-    }
+    return {**metadata, "target_file_path": output_path, "import_file_name": Path(output_path).name}
 
 
 def _mashup_duplicate_name(obj, context_id: str) -> str:
@@ -2356,19 +2297,24 @@ def _request_export_status(ref, export_id: str) -> tuple[dict | None, bool]:
     return None, False
 
 
-def _recover_export_receipt(ref, export_id: str) -> dict | None:
-    for attempt in range(EXPORT_STATUS_POLL_ATTEMPTS):
+def _recover_export_receipt(ref, export_id: str, wait_seconds: float) -> tuple[dict | None, bool]:
+    """Ask for a lost export's receipt for as long as the plugin still writes it, up to
+    ``wait_seconds``. Returns (receipt, still pending)."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
         receipt, pending = _request_export_status(ref, export_id)
-        if receipt is not None:
-            return receipt
-        if not pending:
-            return None
-        if attempt + 1 < EXPORT_STATUS_POLL_ATTEMPTS:
-            time.sleep(0.5)
-    return None
+        if receipt is not None or not pending:
+            return receipt, False
+        if time.monotonic() + EXPORT_STATUS_POLL_SECONDS > deadline:
+            return None, True
+        time.sleep(EXPORT_STATUS_POLL_SECONDS)
 
 
-def _send_plugin_export_to(ref, payload: dict, endpoint: str) -> dict:
+def _send_plugin_export_to(ref, payload: dict, endpoint: str, *,
+                           receipt_wait: float = EXPORT_RECEIPT_WAIT_SECONDS) -> dict:
+    """Send an export (or another request) to the plugin. When the reply of a request with an
+    exportId is lost, the plugin's receipt for it is looked up instead of sending it again;
+    ``receipt_wait`` bounds how long a still-running export is waited for."""
     try:
         status, body = post_json(
             ref.callback_port, endpoint, payload,
@@ -2379,11 +2325,29 @@ def _send_plugin_export_to(ref, payload: dict, endpoint: str) -> dict:
     except PluginResponseTooLarge as error:
         raise _plugin_response_too_large(error, endpoint) from error
     except (URLError, TimeoutError, OSError) as error:
+        if connection_refused(error):
+            # Nothing listened on the port, so the plugin never saw the request.
+            raise _plugin_transport_error(
+                error,
+                endpoint,
+                f"Nothing answered on the plugin port {ref.callback_port}, so nothing was written.",
+                "Start the game with XIV Instant Edit and check the plugin port in its settings, then retry.",
+            ) from error
         export_id = str(payload.get("exportId", ""))
         if export_id:
-            receipt = _recover_export_receipt(ref, export_id)
+            receipt, pending = _recover_export_receipt(ref, export_id, receipt_wait)
             if receipt is not None:
                 return receipt
+            if pending:
+                minutes = max(1, round(receipt_wait / 60))
+                raise _plugin_transport_error(
+                    error,
+                    endpoint,
+                    f"The plugin is still writing this export after about {minutes} minute(s).",
+                    "Wait until it shows as done in the game before exporting again: "
+                    "another export would write the model a second time.",
+                    code="export_still_pending",
+                ) from error
             message = f"plugin response was lost and no receipt was available for export {export_id}"
         else:
             message = "plugin response was lost"
@@ -2821,7 +2785,9 @@ def perform_mashup_export(
         if est_entries is not None:
             payload["estEntries"] = [dict(entry) for entry in est_entries]
         try:
-            result = _send_plugin_export_to(ref, payload, "/mashup/export")
+            # Mashups still send on Blender's main thread, so a slow write isn't waited for as long.
+            result = _send_plugin_export_to(
+                ref, payload, "/mashup/export", receipt_wait=EXPORT_RECEIPT_WAIT_MAIN_THREAD_SECONDS)
         except PluginResponseError as error:
             if error.status != 410 and not (
                 error.status == 401 and error.code == "plugin_instance_mismatch"
@@ -2839,7 +2805,8 @@ def perform_mashup_export(
             payload["pluginInstanceId"] = ref.plugin_instance_id
             payload["capability"] = ref.capability
             payload["contributors"] = _mashup_contributor_payload(refs, materials)
-            result = _send_plugin_export_to(ref, payload, "/mashup/export")
+            result = _send_plugin_export_to(
+                ref, payload, "/mashup/export", receipt_wait=EXPORT_RECEIPT_WAIT_MAIN_THREAD_SECONDS)
         warnings = ([est_issue] if est_issue else []) + list(result.get("warnings", []))
         target = result.get("targetFilePath") or ref.target_file_path
         destination_name = result.get("destinationName") or name
@@ -3095,10 +3062,14 @@ def _send_with_reattach(ref, payload_for, endpoint: str, step: steps.Step):
             error.status == 401 and error.code == "plugin_instance_mismatch"
         ):
             raise
-        from .recovery import reattach_collection
+        from .recovery import apply_reattach, reattach_request, request_reattach
 
+        # The plugin is asked on the worker too; only taking on its answer touches the scene.
+        answer = yield from steps.in_background(
+            partial(request_reattach, reattach_request(ref.collection)),
+            steps.Step("Reconnecting to the plugin.", step.done, step.total))
         scene = bpy.context.scene
-        if not reattach_collection(ref.collection, scene):
+        if not apply_reattach(ref.collection, answer, scene):
             raise ValueError(
                 f"plugin returned HTTP {error.status} ({error.code}); context recovery failed"
             ) from error
@@ -3115,8 +3086,7 @@ def _apply_promoted_context(context: Context, ref, result: dict):
         return ref
     if not isinstance(promoted, dict):
         raise ValueError("plugin returned an invalid promoted context")
-    apply_authoritative_context(ref.collection, promoted)
-    ref = validate_context(ref.context_id, context.scene)
+    ref = reattach_context(ref.collection, promoted, context.scene)
     props = get_instant_edit_props()
     props.context_version = int(promoted.get("version", VERSION))
     props.plugin_instance_id = ref.plugin_instance_id

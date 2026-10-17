@@ -170,8 +170,8 @@ def run() -> None:
             def __exit__(self, *_args):
                 return False
 
-        original_urlopen = plugin_http.urllib.request.urlopen
-        plugin_http.urllib.request.urlopen = lambda *_args, **_kwargs: OversizedResponse()
+        original_urlopen = plugin_http.urlopen
+        plugin_http.urlopen = lambda *_args, **_kwargs: OversizedResponse()
         try:
             plugin_http.post_json(
                 42424, "/import", {}, timeout=1, max_response_size=4)
@@ -180,7 +180,7 @@ def run() -> None:
         else:
             raise AssertionError("an oversized plugin response was not rejected")
         finally:
-            plugin_http.urllib.request.urlopen = original_urlopen
+            plugin_http.urlopen = original_urlopen
 
         post_json_reports_protocol_errors_as_transport_failures(plugin_http)
 

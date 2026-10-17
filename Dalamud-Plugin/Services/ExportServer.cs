@@ -853,9 +853,8 @@ public sealed partial class ExportServer : IDisposable
         if (parseError is not null)
             return parseError.Value;
         var clear = parsed!;
-        if (!string.Equals(clear.Schema, "instant-edit.backup-clear", StringComparison.Ordinal) || clear.Version != 1 ||
-            string.IsNullOrWhiteSpace(clear.BackupTargetId))
-            return Error(400, ResultCode.InvalidBackupClear, "unsupported or malformed backup clear envelope");
+        if (ValidateBackupClearEnvelope(clear) is { } clearError)
+            return Error(StatusForCode(clearError), clearError, "unsupported or malformed backup clear envelope");
         if (!_contexts.TryAuthorizeOperation(clear.PluginInstanceId!, clear.ContextId!, clear.Capability!,
                 out var target, out var registryCode) || target is null)
             return Error(StatusForCode(registryCode), registryCode, "export context was rejected");
@@ -1335,9 +1334,10 @@ public sealed partial class ExportServer : IDisposable
 
     internal static ResultCode? ValidateEnvelope(ExportRequest request)
     {
+        // An export envelope carries the add-on's context version.
         if (!string.Equals(request.Schema, "instant-edit.export", StringComparison.Ordinal))
-            return request.Version is 1 or 2 or 3 ? ResultCode.UnsupportedSchema : ResultCode.UnsupportedVersion;
-        if (request.Version is not (1 or 2 or 3))
+            return InstantEditImportContext.IsSupportedVersion(request.Version) ? ResultCode.UnsupportedSchema : ResultCode.UnsupportedVersion;
+        if (!InstantEditImportContext.IsSupportedVersion(request.Version))
             return ResultCode.UnsupportedVersion;
         if (string.IsNullOrWhiteSpace(request.PluginInstanceId) ||
             string.IsNullOrWhiteSpace(request.ContextId) ||
@@ -1544,6 +1544,16 @@ public sealed partial class ExportServer : IDisposable
             request.BackupName.Contains('/') || request.BackupName.Contains('\\'))
             return ResultCode.InvalidBackupName;
         return null;
+    }
+
+    private static ResultCode? ValidateBackupClearEnvelope(BackupRestoreRequest request)
+    {
+        if (ValidateSchemaVersion(request.Schema, "instant-edit.backup-clear", request.Version, 1) is { } schemaError)
+            return schemaError;
+        return string.IsNullOrWhiteSpace(request.PluginInstanceId) || !IsSafeId(request.ContextId) ||
+               string.IsNullOrWhiteSpace(request.Capability) || string.IsNullOrWhiteSpace(request.BackupTargetId)
+            ? ResultCode.InvalidBackupClear
+            : null;
     }
 
     private static ResultCode? ValidateReattachEnvelope(ReattachRequest request)
@@ -2123,17 +2133,7 @@ public sealed partial class ExportServer : IDisposable
 
     private static void WriteResponse(NetworkStream stream, int status, string body)
     {
-        var reason = status switch
-        {
-            200 => "OK",
-            202 => "Accepted",
-            400 => "Bad Request",
-            401 => "Unauthorized",
-            409 => "Conflict",
-            410 => "Gone",
-            500 => "Internal Server Error",
-            _   => "Not Found",
-        };
+        var reason = ReasonPhrase(status);
 
         var response = $"HTTP/1.1 {status} {reason}\r\n" +
                        "Content-Type: application/json\r\n" +
@@ -2145,6 +2145,22 @@ public sealed partial class ExportServer : IDisposable
         stream.Write(bytes, 0, bytes.Length);
         stream.Flush();
     }
+
+    internal static string ReasonPhrase(int status) => status switch
+    {
+        200 => "OK",
+        202 => "Accepted",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        409 => "Conflict",
+        410 => "Gone",
+        413 => "Content Too Large",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
+        _ => status is >= 200 and < 300 ? "OK" : status >= 500 ? "Server Error" : "Request Failed",
+    };
 
     private static string Json(object value)
         => JsonSerializer.Serialize(value);

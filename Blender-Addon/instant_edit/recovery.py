@@ -10,9 +10,8 @@ import bpy
 from .context import (
     ContextValidationError,
     _value,
-    apply_authoritative_context,
     context_collections,
-    validate_context,
+    reattach_context,
 )
 from .plugin_http import PluginResponseTooLarge, candidate_ports, post_json
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
@@ -35,15 +34,41 @@ def reattach_collection(collection, scene=None) -> bool:
         return False
 
     payload = _request_reattach(context_id, import_id, capability, candidate_ports(collection))
+    return apply_reattach(collection, payload, scene or bpy.context.scene)
+
+
+def reattach_request(collection) -> tuple | None:
+    """What reattaching ``collection`` asks the plugin, read on the main thread so the request
+    itself can run on a worker (see request_reattach); None when the collection can't reattach."""
+    values = (
+        _value(collection, "context_id", ""),
+        _value(collection, "import_id", ""),
+        _value(collection, "capability", ""),
+    )
+    if not all(isinstance(value, str) and value for value in values):
+        return None
+    return (*values, candidate_ports(collection))
+
+
+def request_reattach(request: tuple | None) -> dict | None:
+    """Ask the plugin for a context (see reattach_request). Safe on a worker thread."""
+    return None if request is None else _request_reattach(*request)
+
+
+def apply_reattach(collection, payload: dict | None, scene) -> bool:
+    """Take on the plugin's reattach answer on the main thread; the collection is left as it was
+    when the answer doesn't validate."""
     if payload is None:
         return False
     try:
-        apply_authoritative_context(collection, payload)
-        validate_context(context_id, scene or bpy.context.scene)
-        _update_scene_properties(payload, scene or bpy.context.scene)
-        return True
+        reattach_context(collection, payload, scene)
     except ContextValidationError:
         return False
+    _update_scene_properties(payload, scene)
+    props = getattr(scene, "xiv_ie_instant_edit_props", None)
+    if props is not None:
+        props.last_status = "XIV Instant Edit context reconnected."
+    return True
 
 
 def _request_reattach(
@@ -112,15 +137,7 @@ def recover_saved_contexts() -> None:
     if not collections:
         return
 
-    requests = []
-    for collection in collections:
-        values = (
-            _value(collection, "context_id", ""),
-            _value(collection, "import_id", ""),
-            _value(collection, "capability", ""),
-        )
-        if all(isinstance(value, str) and value for value in values):
-            requests.append((*values, candidate_ports(collection)))
+    requests = [request for request in map(reattach_request, collections) if request is not None]
     if not requests:
         return
 
@@ -177,41 +194,43 @@ def _poll_recovery_results():
             collection = next((item for item in context_collections(bpy.context.scene)
                                if _value(item, "context_id", "") == context_id), None)
             if payload is not None and collection is not None:
-                try:
-                    apply_authoritative_context(collection, payload)
-                    validate_context(context_id, bpy.context.scene)
-                    _update_scene_properties(payload, bpy.context.scene)
-                    if counts is not None:
-                        counts[0] += 1
-                except ContextValidationError:
-                    pass
+                if apply_reattach(collection, payload, bpy.context.scene) and counts is not None:
+                    counts[0] += 1
         elif kind == "done":
             recovered, total = _recovery_counts.pop(generation, [0, 0])
             failed = total - recovered
-            if failed:
-                props = getattr(bpy.context.scene, "xiv_ie_instant_edit_props", None)
-                if props is not None:
-                    props.last_status = (
-                        f"Recovered {recovered} XIV Instant Edit context(s); "
-                        f"{failed} context(s) could not reconnect. Re-import if needed."
-                    )
+            props = getattr(bpy.context.scene, "xiv_ie_instant_edit_props", None)
+            if props is not None and failed:
+                props.last_status = (
+                    f"Recovered {recovered} XIV Instant Edit context(s); "
+                    f"{failed} context(s) could not reconnect. Re-import if needed."
+                )
+            elif props is not None and recovered > 1:
+                props.last_status = f"Reconnected {recovered} XIV Instant Edit contexts."
             return None
     return 0.1
 
 
 def _update_scene_properties(payload: dict, scene) -> None:
+    """Refresh the scene's record of its current context when the reattached one is that context.
+
+    Recovering a saved file reattaches every context in it; whichever answered last must not
+    become the current one. The plugin's objectIndex is the actor the model was imported from in
+    an earlier game session, so it is not taken on.
+    """
     props = getattr(scene, "xiv_ie_instant_edit_props", None)
     if props is None:
         return
+    context_id = payload.get("contextId", "")
+    if props.context_id and props.context_id != context_id:
+        return
     props.game_path = payload.get("sourceGamePath", "")
-    props.object_index = payload.get("objectIndex", -1)
-    props.context_id = payload.get("contextId", "")
+    props.context_id = context_id
     props.context_schema = payload.get("schema", "")
     props.context_version = payload.get("version", 0)
     props.plugin_instance_id = payload.get("pluginInstanceId", "")
     props.capability = payload.get("capability", "")
     props.managed_destination = payload.get("managedDestination", "")
-    props.last_status = "XIV Instant Edit context reconnected."
 
 
 def _run_scheduled_recovery():

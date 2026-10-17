@@ -12,7 +12,8 @@ from queue       import Empty, Full, Queue
 
 import bpy
 
-from .context import is_safe_game_model_path
+from .context import (CONTEXT_FIELDS, SCHEMA as CONTEXT_SCHEMA, SUPPORTED_VERSIONS as SUPPORTED_CONTEXT_VERSIONS,
+                      context_default, is_safe_game_model_path)
 from .cache import CacheStagingError, STALE_SECONDS, cache_root, finish_job
 from .character import parse_request as parse_character, to_property as character_property
 from .diagnostics import BridgeRequestError, record_failure, sanitize_text
@@ -729,39 +730,40 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "Update both XIV Instant Edit components and retry.")
 
         import_options = _normalise_import_options(data.get("importOptions"))
-        if data.get("schema") != "instant-edit.context":
+        if data.get("schema") != CONTEXT_SCHEMA:
             raise BridgeRequestError(
                 "request_validation", "unsupported_schema",
                 "The import request uses an unsupported schema.",
                 "Install matching versions of the Dalamud plugin and Blender add-on.")
         version = data.get("version")
-        if isinstance(version, bool) or version not in {1, 2, 3}:
+        if isinstance(version, bool) or version not in SUPPORTED_CONTEXT_VERSIONS:
             raise BridgeRequestError(
                 "request_validation", "unsupported_version",
                 "The import request uses an unsupported protocol version.",
                 "Install matching versions of the Dalamud plugin and Blender add-on.")
 
-        plugin_instance_id = _string(data, "pluginInstanceId", required=True, max_length=256)
+        # The context's text fields, by wire name; schema was checked above and the numbers below.
+        context = {}
+        for field in CONTEXT_FIELDS:
+            if field.kind is str and field.wire != "schema":
+                value = _string(data, field.wire, required=field.required, max_length=field.max_length)
+                context[field.wire] = value or context_default(field, context, wire=True)
         plugin_version = _string(data, "pluginVersion", max_length=32)
-        context_id = _string(data, "contextId", required=True, max_length=256)
-        import_id = _string(data, "importId", required=True, max_length=256)
-        capability = _string(data, "capability", required=True, max_length=1024)
         file_path = _string(data, "filePath", required=True, max_length=4096)
-        source_game_path = _string(data, "sourceGamePath", required=True, max_length=4096)
-        source_kind = _string(data, "sourceKind", max_length=16) or "mod"
-        resolved_game_path = _string(data, "resolvedGamePath", max_length=4096) or source_game_path
-        destination_state = _string(data, "destinationState", max_length=32) or "ready"
-        managed_destination = _string(data, "managedDestination", max_length=4096)
-        target_file_path = _string(data, "targetFilePath", max_length=4096)
-        source_mod_directory = _string(data, "sourceModDirectory", max_length=256)
-        source_mod_stable_id = _string(data, "sourceModStableId", max_length=64)
-        source_mod_name = _string(data, "sourceModName", max_length=512)
-        source_mod_root_path = _string(data, "sourceModRootPath", max_length=4096)
-        target_relative_path = _string(data, "targetRelativePath", max_length=4096)
-        target_collection_id = _string(data, "targetCollectionId", max_length=64)
-        target_collection_name = _string(data, "targetCollectionName", max_length=512)
-        backup_target_id = _string(data, "backupTargetId", max_length=128)
-        backup_directory = _string(data, "backupDirectory", max_length=4096)
+        source_game_path = context["sourceGamePath"]
+        source_kind = context["sourceKind"]
+        resolved_game_path = context["resolvedGamePath"]
+        destination_state = context["destinationState"]
+        managed_destination = context["managedDestination"]
+        target_file_path = context["targetFilePath"]
+        source_mod_directory = context["sourceModDirectory"]
+        source_mod_stable_id = context["sourceModStableId"]
+        source_mod_name = context["sourceModName"]
+        source_mod_root_path = context["sourceModRootPath"]
+        target_relative_path = context["targetRelativePath"]
+        target_collection_id = context["targetCollectionId"]
+        backup_target_id = context["backupTargetId"]
+        backup_directory = context["backupDirectory"]
         preview_manifest_path = _string(data, "previewManifestPath", max_length=4096)
         display_name = _string(data, "displayName", max_length=255)
         if import_options["applyTexturesAndMaterials"] and not preview_manifest_path:
@@ -891,29 +893,11 @@ class _ImportHandler(BaseHTTPRequestHandler):
 
         return {
             **data,
-            "pluginInstanceId": plugin_instance_id,
+            **context,
             "pluginVersion": plugin_version,
-            "contextId": context_id,
-            "importId": import_id,
-            "capability": capability,
             "filePath": file_path,
-            "sourceGamePath": source_game_path,
-            "sourceKind": source_kind,
-            "resolvedGamePath": resolved_game_path,
-            "destinationState": destination_state,
-            "managedDestination": managed_destination,
-            "targetFilePath": target_file_path,
-            "sourceModDirectory": source_mod_directory,
-            "sourceModStableId": source_mod_stable_id,
-            "sourceModName": source_mod_name,
-            "sourceModRootPath": source_mod_root_path,
-            "targetRelativePath": target_relative_path,
-            "targetCollectionId": target_collection_id,
-            "targetCollectionName": target_collection_name,
             "resourceManifestVersion": resource_manifest_version,
             "resourceManifestStatus": resource_manifest_status,
-            "backupTargetId": backup_target_id,
-            "backupDirectory": backup_directory,
             "previewManifestPath": preview_manifest_path,
             "callbackPort": callback_port,
             "objectIndex": object_index,
@@ -1139,6 +1123,17 @@ def _process_animation_read(job: dict) -> None:
         job["done"].set()
 
 
+def _import_operator_context(data: dict) -> dict:
+    """The import operator's context properties (named as in CONTEXT_FIELDS) from a validated request."""
+    values = {}
+    for field in CONTEXT_FIELDS:
+        value = data.get(field.wire)
+        if value is None or value == "":
+            value = context_default(field, data, wire=True)
+        values[field.name] = int(value) if field.kind is int else value
+    return values
+
+
 def _run_queued_import(data: dict) -> None:
     """Run one queued import through the import operator; the plugin hears of a failure."""
     try:
@@ -1147,33 +1142,10 @@ def _run_queued_import(data: dict) -> None:
 
         result = bpy.ops.xiv_ie.instant_import(
             "EXEC_DEFAULT",
+            **_import_operator_context(data),
             file_path=data.get("filePath", ""),
             object_index=int(data.get("objectIndex", -1)),
             import_name=data.get("name", ""),
-            callback_port=data.get("callbackPort", 0),
-            schema=data.get("schema", ""),
-            version=int(data.get("version", 0)),
-            plugin_instance_id=data.get("pluginInstanceId", ""),
-            context_id=data.get("contextId", ""),
-            capability=data.get("capability", ""),
-            source_game_path=data.get("sourceGamePath", ""),
-            source_kind=data.get("sourceKind", "mod"),
-            resolved_game_path=data.get("resolvedGamePath", data.get("sourceGamePath", "")),
-            destination_state=data.get("destinationState", "ready"),
-            managed_destination=data.get("managedDestination", ""),
-            target_file_path=data.get("targetFilePath", ""),
-            source_mod_directory=data.get("sourceModDirectory", ""),
-            source_mod_stable_id=data.get("sourceModStableId", ""),
-            source_mod_name=data.get("sourceModName", ""),
-            source_mod_root_path=data.get("sourceModRootPath", ""),
-            target_relative_path=data.get("targetRelativePath", ""),
-            target_collection_id=data.get("targetCollectionId", ""),
-            target_collection_name=data.get("targetCollectionName", ""),
-            resource_manifest_version=int(data.get("resourceManifestVersion", 0)),
-            resource_manifest_status=data.get("resourceManifestStatus", "capture_failed"),
-            backup_target_id=data.get("backupTargetId", ""),
-            backup_directory=data.get("backupDirectory", ""),
-            import_id=data.get("importId", ""),
             armature_mode=data.get("importOptions", {}).get("armatureMode", "generated"),
             armature_target=data.get("importOptions", {}).get("targetObject", "Skeleton"),
             apply_textures_and_materials=data.get("importOptions", {}).get("applyTexturesAndMaterials", False),

@@ -4,6 +4,7 @@ import importlib
 import json
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -1525,7 +1526,7 @@ def run() -> None:
             def read(self, _size=-1):
                 return self.body
 
-        original_urlopen = plugin_http.urllib.request.urlopen
+        original_urlopen = plugin_http.urlopen
 
         coverage_material = "/mt_c0101e0002_top_c.mtrl"
         planned_aliases = {
@@ -1540,9 +1541,29 @@ def run() -> None:
         material_coverage_warning = True
         material_coverage_delay = 0.2
         variant_target_failure = False
+        # The plugin restarted: the next export is refused once and the context reattached.
+        export_instance_mismatch = 0
+        reattach_requests = []
+        reattached_context = None
 
         def fake_urlopen(request, timeout=0):
-            nonlocal material_coverage_warning
+            nonlocal material_coverage_warning, export_instance_mismatch
+            if request.full_url.endswith("/context/reattach"):
+                reattach_requests.append((
+                    json.loads(request.data.decode("utf-8")),
+                    threading.current_thread() is threading.main_thread(),
+                ))
+                return FakeResponse(json.dumps({
+                    "ok": True, "code": "context_reattached", "context": reattached_context,
+                }).encode("utf-8"))
+            if request.full_url.endswith("/export") and export_instance_mismatch:
+                export_instance_mismatch -= 1
+                export_payloads.append(json.loads(request.data.decode("utf-8")))
+                refused = FakeResponse(json.dumps({
+                    "ok": False, "code": "plugin_instance_mismatch", "error": "export context was rejected",
+                }).encode("utf-8"))
+                refused.status = 401
+                return refused
             if request.full_url.endswith("/material-coverage"):
                 time.sleep(material_coverage_delay)
                 payload = json.loads(request.data.decode("utf-8"))
@@ -1655,7 +1676,7 @@ def run() -> None:
                 }).encode("utf-8"))
             return FakeResponse()
 
-        plugin_http.urllib.request.urlopen = fake_urlopen
+        plugin_http.urlopen = fake_urlopen
         instant_props = bpy.context.scene.xiv_ie_instant_edit_props
         instant_module._switch_hidden_export_context()
         if instant_props.export_destination != context_id:
@@ -2370,6 +2391,31 @@ def run() -> None:
             for tagged in (obj, second, added_group):
                 tagged.pop(scaling_property, None)
         print("[PASS] Save as c0801 Model sends the scaled meshes as the race's own model")
+
+        # A plugin restart refuses the saved scene's export once; Quick Export reattaches on its
+        # worker thread and sends again with the plugin's new instance id.
+        context_module._set(context_collection, "import_id", "smoke-import")
+        reattached_context = {
+            field.wire: context_module._value(context_collection, field.name, field.default)
+            for field in context_module.CONTEXT_FIELDS
+        }
+        reattached_context["pluginInstanceId"] = "smoke-plugin-restarted"
+        export_instance_mismatch = 1
+        payloads_before = len(export_payloads)
+        try:
+            instant_ops.perform_instant_export(bpy.context)
+            sent = [payload["pluginInstanceId"] for payload in export_payloads[payloads_before:]]
+            if sent != ["smoke-plugin", "smoke-plugin-restarted"]:
+                raise AssertionError(f"Quick Export did not resend after reattaching: {sent}")
+            if [(request["contextId"], on_main) for request, on_main in reattach_requests] != [(context_id, False)]:
+                raise AssertionError(f"Quick Export reattached on Blender's main thread: {reattach_requests}")
+            if context_module._value(context_collection, "plugin_instance_id") != "smoke-plugin-restarted":
+                raise AssertionError("The reattached context was not stored on the collection")
+        finally:
+            export_instance_mismatch = 0
+            context_module._set(context_collection, "plugin_instance_id", "smoke-plugin")
+            context_module._remove_metadata(context_collection, ("import_id",))
+        print("[PASS] Quick Export reattaches a restarted plugin's context off the main thread and resends")
         # Magic Fit's Hair Weights tags: every part agrees on one hair skeleton.
         for tagged in (obj, second, added_group):
             tagged["xiv_est_hair"] = 160
@@ -2385,7 +2431,7 @@ def run() -> None:
             format_after_quick_export = quick_format_settings.model_format
         finally:
             instant_ops.reset_material_coverage_state()
-            plugin_http.urllib.request.urlopen = original_urlopen
+            plugin_http.urlopen = original_urlopen
             bpy.context.scene.xiv_ie_settings.reset_scaling_on_export = False
             for tagged in (obj, second, added_group):
                 tagged.pop("xiv_est_hair", None)

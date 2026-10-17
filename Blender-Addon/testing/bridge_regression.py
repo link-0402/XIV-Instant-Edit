@@ -14,6 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import URLError
 
 import bpy
 import numpy as np
@@ -915,6 +916,63 @@ def run_staging_isolation_regression(addon) -> None:
             "an authoritative export receipt promotes pending collection metadata, including the new mod's "
             "stable id, to a normal destination",
         )
+
+        # A reattach answer that would not validate leaves the collection's metadata as it was.
+        bad_answer = {
+            field.wire: context_module._value(pending_collection, field.name, field.default)
+            for field in context_module.CONTEXT_FIELDS
+        }
+        bad_answer.update(capability="replaced-capability", destinationState="bogus")
+        try:
+            context_module.reattach_context(pending_collection, bad_answer, bpy.context.scene)
+        except context_module.ContextValidationError:
+            pass
+        else:
+            raise AssertionError("a reattach answer with an invalid destination state was taken on")
+        _require(
+            pending_collection.get("capability") == "promoted-capability" and
+            pending_collection.get("instant_edit_capability") == "promoted-capability" and
+            context_module._value(pending_collection, "destination_state") == "ready" and
+            context_module.validate_context("pending-collection-context", bpy.context.scene) is not None,
+            "a reattach answer that doesn't validate is rolled back instead of breaking the context",
+        )
+
+        # One field table drives the add-on's side of the protocol, and it matches the plugin's.
+        protocol = json.loads(
+            (Path(__file__).resolve().parents[2] / "Tests" / "TestSupport" / "context-protocol.json")
+            .read_text(encoding="utf-8"))
+        fields = context_module.CONTEXT_FIELDS
+        _require(
+            [field.wire for field in fields] == protocol["fields"] and
+            context_module.SCHEMA == protocol["schema"] and
+            context_module.VERSION == protocol["currentVersion"] and
+            context_module.SUPPORTED_VERSIONS == set(protocol["supportedVersions"]),
+            "the add-on's context fields, schema and versions match Tests/TestSupport/context-protocol.json",
+        )
+        operator = bpy.ops.xiv_ie.instant_import.get_rna_type().properties
+        mismatched = [
+            field.name for field in fields
+            if field.name not in operator
+            or operator[field.name].type != ("INT" if field.kind is int else "STRING")
+            or operator[field.name].default != field.default
+        ]
+        _require(not mismatched, f"the import operator has a property for every context field: {mismatched}")
+        server_module = importlib.import_module(f"{addon.__name__}.instant_edit.server")
+        operator_values = server_module._import_operator_context({
+            **{field.wire: field.default for field in fields},
+            "sourceGamePath": "chara/x.mdl", "version": 3, "callbackPort": 42428,
+        })
+        _require(
+            list(operator_values) == list(context_module.CONTEXT_FIELD_NAMES) and
+            operator_values["resolved_game_path"] == "chara/x.mdl" and
+            operator_values["callback_port"] == 42428,
+            "a queued import hands the operator every context field, with the resolved path defaulted",
+        )
+        ref_fields = set(context_module.ContextRef.__dataclass_fields__)
+        _require(
+            set(context_module.CONTEXT_FIELD_NAMES) - {"schema", "version"} <= ref_fields,
+            "a validated context reference carries every routing field",
+        )
         context_module._set(pending_collection, "source_mod_stable_id", "22222222-2222-2222-2222-222222222222")
         context_module._set(pending_collection, "destination_state", "new_mod_required")
         try:
@@ -1308,7 +1366,7 @@ def run_staging_isolation_regression(addon) -> None:
                 return self.payload
 
         request_counts = {"export": 0, "status": 0}
-        original_urlopen = plugin_http.urllib.request.urlopen
+        original_urlopen = plugin_http.urlopen
 
         def timed_out_then_receipt(request, timeout=0):
             if request.full_url.endswith("/export"):
@@ -1325,7 +1383,7 @@ def run_staging_isolation_regression(addon) -> None:
                 })
             raise AssertionError(f"unexpected request: {request.full_url}")
 
-        plugin_http.urllib.request.urlopen = timed_out_then_receipt
+        plugin_http.urlopen = timed_out_then_receipt
         try:
             receipt = ops._send_plugin_export_to(
                 SimpleNamespace(
@@ -1338,7 +1396,7 @@ def run_staging_isolation_regression(addon) -> None:
                 "/export",
             )
         finally:
-            plugin_http.urllib.request.urlopen = original_urlopen
+            plugin_http.urlopen = original_urlopen
         _require(
             receipt["warnings"] == ["Player-owned redraw warning"] and
             receipt["targetFilePath"].endswith("original.mdl"),
@@ -1359,7 +1417,7 @@ def run_staging_isolation_regression(addon) -> None:
                 raise http.client.BadStatusLine("NOT HTTP\r\n")
             return timed_out_then_receipt(request, timeout)
 
-        plugin_http.urllib.request.urlopen = garbled_then_receipt
+        plugin_http.urlopen = garbled_then_receipt
         try:
             receipt = ops._send_plugin_export_to(
                 SimpleNamespace(
@@ -1372,12 +1430,71 @@ def run_staging_isolation_regression(addon) -> None:
                 "/export",
             )
         finally:
-            plugin_http.urllib.request.urlopen = original_urlopen
+            plugin_http.urlopen = original_urlopen
         _require(
             receipt["targetFilePath"].endswith("original.mdl") and
             request_counts == {"export": 1, "status": 1},
             "a reply that is not valid HTTP is recovered by status lookup like a lost response",
         )
+
+        # An export the plugin is still writing is waited for, not reported lost; past the wait
+        # the error says it is still running, so nobody exports (and writes) it a second time.
+        export_ref = SimpleNamespace(
+            plugin_instance_id="plugin-instance", context_id="context-id",
+            capability="capability", callback_port=42428)
+        pending_replies = {"left": 0}
+
+        def timed_out_then_pending(request, timeout=0):
+            if request.full_url.endswith("/export/status") and pending_replies["left"] > 0:
+                pending_replies["left"] -= 1
+                request_counts["status"] += 1
+                return ReceiptResponse(202, {"ok": True, "code": "export_pending", "complete": False})
+            return timed_out_then_receipt(request, timeout)
+
+        original_poll = ops.EXPORT_STATUS_POLL_SECONDS
+        ops.EXPORT_STATUS_POLL_SECONDS = 0
+        plugin_http.urlopen = timed_out_then_pending
+        try:
+            request_counts.update(export=0, status=0)
+            pending_replies["left"] = 40
+            receipt = ops._send_plugin_export_to(export_ref, redraw_payload, "/export")
+            _require(
+                receipt["targetFilePath"].endswith("original.mdl") and
+                request_counts == {"export": 1, "status": 41},
+                "a lost export reply waits for a plugin that is still writing past the old 30 polls",
+            )
+            request_counts.update(export=0, status=0)
+            pending_replies["left"] = 10 ** 9
+            try:
+                ops._send_plugin_export_to(export_ref, redraw_payload, "/export", receipt_wait=0.05)
+            except ops.PluginResponseError as error:
+                _require(
+                    error.code == "export_still_pending" and "second time" in error.remedy and
+                    request_counts["export"] == 1,
+                    "an export still being written after the wait says so instead of calling the reply lost",
+                )
+            else:
+                raise AssertionError("an export that never finished returned a receipt")
+
+            def refused(request, timeout=0):
+                request_counts["export" if request.full_url.endswith("/export") else "status"] += 1
+                raise URLError(ConnectionRefusedError(10061, "refused"))
+
+            request_counts.update(export=0, status=0)
+            plugin_http.urlopen = refused
+            try:
+                ops._send_plugin_export_to(export_ref, redraw_payload, "/export")
+            except ops.PluginResponseError as error:
+                _require(
+                    error.code == "plugin_connection_failed" and "nothing was written" in error.message and
+                    request_counts == {"export": 1, "status": 0},
+                    "a closed plugin port says nothing was written and asks for no receipt",
+                )
+            else:
+                raise AssertionError("a refused export returned a receipt")
+        finally:
+            ops.EXPORT_STATUS_POLL_SECONDS = original_poll
+            plugin_http.urlopen = original_urlopen
 
         _require(
             ops.normalise_variant_name("  alternate.mdl ") == "alternate",

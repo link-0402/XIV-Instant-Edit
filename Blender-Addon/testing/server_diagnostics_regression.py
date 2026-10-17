@@ -18,8 +18,10 @@ def _load_modules():
     package.__path__ = [str(root)]
     sys.modules[package_name] = package
 
+    # context.py only touches bpy inside functions, so the real field table loads without Blender.
+    sys.modules.setdefault("bpy", types.SimpleNamespace())
     loaded = {}
-    for name in ("cache", "diagnostics"):
+    for name in ("cache", "diagnostics", "context"):
         spec = importlib.util.spec_from_file_location(f"{package_name}.{name}", root / f"{name}.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
@@ -27,20 +29,9 @@ def _load_modules():
         spec.loader.exec_module(module)
         loaded[name] = module
 
-    context = types.ModuleType(f"{package_name}.context")
-    context.is_safe_game_model_path = lambda value: (
-        isinstance(value, str)
-        and value.endswith(".mdl")
-        and ":" not in value
-        and not value.startswith(("/", "\\"))
-        and ".." not in value.split("/")
-    )
-    sys.modules[context.__name__] = context
-
     plugin_http = types.ModuleType(f"{package_name}.plugin_http")
     plugin_http.post_json = lambda *_args, **_kwargs: (200, b'{"ok":true}')
     sys.modules[plugin_http.__name__] = plugin_http
-    sys.modules.setdefault("bpy", types.SimpleNamespace())
 
     spec = importlib.util.spec_from_file_location(f"{package_name}.server", root / "server.py")
     server = importlib.util.module_from_spec(spec)
