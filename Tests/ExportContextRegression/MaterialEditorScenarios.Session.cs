@@ -127,6 +127,15 @@ internal static partial class MaterialEditorScenarios
         Require(index is { Path: "chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_id.tex" } && character.Table is { Kind: ColorTableKind.Dawntrail, Rows.Length: 32 }
                 && characterNotes.Count >= 2,
             "switching a hair material to character.shpk adds an index slot next to the normal map and a fresh colour table");
+
+        // Translucent skin and stockings crash the game; a switch must not carry the flag onto them (review 2026-10-17).
+        var veil = mask.WithFlags(mask.ShaderFlags | 0x10);
+        var (skin, skinNotes) = MaterialSession.Reconcile(veil.WithShaderPackage("skin.shpk"), ShaderPackages.Get("skin.shpk")!);
+        var (stockings, _) = MaterialSession.Reconcile(veil.WithShaderPackage("characterstockings.shpk"), ShaderPackages.Get("characterstockings.shpk")!);
+        var (kept, _) = MaterialSession.Reconcile(veil.WithShaderPackage("characterglass.shpk"), ShaderPackages.Get("characterglass.shpk")!);
+        Require((skin.ShaderFlags & 0x10) == 0 && (stockings.ShaderFlags & 0x10) == 0 && (kept.ShaderFlags & 0x10) != 0
+                && skinNotes.Any(note => note.Contains("Translucent", StringComparison.Ordinal)),
+            "switching a translucent material to skin or stockings turns Translucent off and says so; other shaders keep it");
     }
 
     private static void CheckSessionApply()
