@@ -240,6 +240,11 @@ internal sealed class MaterialSession
     {
         var notes = new List<string>();
         var package = facts.Name;
+        if ((doc.ShaderFlags & Presets.PresetChecks.Translucent) != 0 && Presets.PresetChecks.TranslucentCrashes(package))
+        {
+            doc = doc.WithFlags(doc.ShaderFlags & ~Presets.PresetChecks.Translucent);
+            notes.Add($"Turned Translucent off: {Presets.PresetChecks.TranslucentCrashNote}");
+        }
         foreach (var (id, value) in doc.Keys.ToList())
         {
             var key = facts.Key(id);
