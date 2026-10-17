@@ -37,7 +37,8 @@ internal sealed partial class MaterialWindow
         switch (table.Kind)
         {
             case ColorTableKind.Dawntrail:
-                HighlightPair(doc, DrawPairs(table));
+                DrawDyeBar(current, doc, table);
+                HighlightPair(doc, DrawPairs(ShownTable(table)));
                 ImGui.Spacing();
                 DrawPairEditors(current, doc, table);
                 break;
@@ -192,7 +193,7 @@ internal sealed partial class MaterialWindow
         if (table.Dye != null)
         {
             Section("Dye");
-            ImGui.TextColored(Theme.Hint, "Dye rows come in a later step.");
+            DrawRowDye(current, table, row, name);
         }
 
         if (ImGui.TreeNode("Advanced##row-advanced"))

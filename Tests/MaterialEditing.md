@@ -103,3 +103,15 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   step.
 - [ ] Dyeable adds a dye table (the rows' Dye section appears); Clean up's hover lists what it
   removes.
+
+## Dye rows and preview dyes (Task 12, pending)
+
+The dye template reader is checked offline against the game's own stainingtemplate_gud.stm and
+stainingtemplate.stm (43 templates each).
+- [ ] On a dyeable gear material, pick a preview dye for Dye 1: the swatches and the character take
+  it the same frame.
+- [ ] Compare one row's dyed colour with Penumbra's dye preview for the same dye: they match. (Dye
+  field 3 is taken as glow exposure; note here if Penumbra shows it elsewhere.)
+- [ ] A row's Dye section: change its template, channel and fields; Undo takes each back.
+- [ ] Bake: the rows hold the dyed values, and with "No dye" the character still looks dyed.
+- [ ] Untick Dyeable: the dye rows go (the character redraws); tick it again: empty dye rows.

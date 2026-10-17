@@ -71,7 +71,7 @@ internal sealed partial class MaterialWindow
         foreach (var id in diff.Samplers)
             live.SetSamplerFlags(id, to.Slots.First(slot => slot.SamplerId == id).SamplerSettings);
         if (diff.Table && to.Table is { Kind: ColorTableKind.Dawntrail or ColorTableKind.Legacy } table)
-            liveTable.Set(table, null);
+            liveTable.Set(ShownTable(table), null);
     }
 
     /// <summary>Every half second: finds the material again after a redraw, GPose or zone change.</summary>
@@ -99,7 +99,7 @@ internal sealed partial class MaterialWindow
         highlighted = pair;
         if (!liveTable.Bound || doc.Table is not { Kind: ColorTableKind.Dawntrail } table)
             return;
-        liveTable.Set(table, pair < 0 ? null : new RowHighlight(pair * 2, pair * 2 + 1, HighlightTop, HighlightBottom));
+        liveTable.Set(ShownTable(table), pair < 0 ? null : new RowHighlight(pair * 2, pair * 2 + 1, HighlightTop, HighlightBottom));
     }
 
     private string LiveState(out System.Numerics.Vector4 colour)

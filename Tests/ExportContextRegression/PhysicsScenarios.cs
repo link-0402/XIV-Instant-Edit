@@ -515,7 +515,7 @@ internal static class PhysicsScenarios
         CheckMotions(game);
     }
 
-    private static string? GameSqpack()
+    internal static string? GameSqpack()
     {
         try
         {
