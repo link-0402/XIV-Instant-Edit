@@ -111,6 +111,12 @@ public sealed record RacialScalingRecord
 public sealed record InstantEditImportContext
 {
     public const int CurrentVersion = 3;
+    /// <summary>
+    /// The context versions an older add-on or saved scene may still send. Blender's side is
+    /// context.SUPPORTED_VERSIONS; Tests/TestSupport/context-protocol.json holds both.
+    /// </summary>
+    public static readonly IReadOnlyList<int> SupportedVersions = [1, 2, CurrentVersion];
+    public static bool IsSupportedVersion(int version) => SupportedVersions.Contains(version);
     public const string ModSource = "mod";
     public const string GameSource = "game";
     public const string ReadyDestination = "ready";

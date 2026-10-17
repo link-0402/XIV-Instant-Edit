@@ -35,6 +35,8 @@ BACKUP_FILE_RE = re.compile(
 )
 # Top-level entries the add-on or the in-game plugin write into the cache. Keep in
 # sync with OwnedRootDirectories/OwnedRootFiles in Dalamud-Plugin/Services/TextureFiles.cs.
+# pending-context-revocations.json moved to the config folder in 3.0.0 (see revocation.py);
+# it stays listed for caches an older add-on wrote it into.
 OWNED_ROOT_DIRECTORIES = frozenset(name.casefold() for name in (
     "imports", "exports", "backups", "texture-edits", "AnimationEdits", "skeleton-library", "Contexts", "painter", "game-exports",
     "texture-backups", "animation-preview", "physics-preview", "mod-backups", "package-imports",

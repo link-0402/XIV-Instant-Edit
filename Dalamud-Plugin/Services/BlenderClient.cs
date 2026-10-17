@@ -560,7 +560,10 @@ public sealed class BlenderClient : IDisposable
         ModelSkeletonPayload? skeleton,
         CharacterImportEntry? character)
     {
-
+        // The context is forgotten only when Blender can't have queued the import: it was never
+        // reached, or it refused the request. After a timeout or a cancellation it may still import
+        // the model, which then needs the context; an unused one expires with the retention setting.
+        var refused = true;
         try
         {
             var payload = JsonSerializer.Serialize(new
@@ -632,10 +635,15 @@ public sealed class BlenderClient : IDisposable
 
             using (resp)
             {
+                // Blender answered; until its answer is read, whether it queued the model is unknown.
+                refused = false;
                 var responseBody = await resp.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                refused = true;
                 try
                 {
-                    return ParseImportResponse(resp.StatusCode, responseBody);
+                    var accepted = ParseImportResponse(resp.StatusCode, responseBody);
+                    refused = false;
+                    return accepted;
                 }
                 catch (BlenderBridgeException exception)
                 {
@@ -664,6 +672,7 @@ public sealed class BlenderClient : IDisposable
         }
         catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
         {
+            refused = false;
             var timeoutFailure = BridgeFailure.Create(
                 "blender_addon",
                 "import",
@@ -677,10 +686,15 @@ public sealed class BlenderClient : IDisposable
                 $"import/transport/{timeoutFailure.Code}.");
             throw exception;
         }
-        catch
+        catch (OperationCanceledException)
         {
-            _contexts.RemoveContext(context.ContextId);
+            refused = false;
             throw;
+        }
+        finally
+        {
+            if (refused)
+                _contexts.RemoveContext(context.ContextId);
         }
     }
 

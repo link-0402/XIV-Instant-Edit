@@ -27,12 +27,15 @@ static async Task CheckConnectionStatesAsync()
         BlenderClient.NormalizeVersion(pluginVersion) == pluginVersion,
         "the plugin release version is normalized to major.minor.patch");
     var minimum = ComponentVersions.BlenderAddonMinimum;
+    // Taken from the minimum, so a version bump can't leave them below it.
+    var parsedMinimum = Version.Parse(minimum);
+    var newer = $"{parsedMinimum.Major}.{parsedMinimum.Minor + 9}.0";
 
     foreach (var (addon, expected, name) in new[]
     {
         (minimum, BlenderConnectionState.Online, "the minimum add-on version is accepted"),
-        ("2.9.0", BlenderConnectionState.Online, "a newer add-on than the plugin is accepted"),
-        ("2.2.0.1", BlenderConnectionState.Online, "a four-part add-on version compares by its first three parts"),
+        (newer, BlenderConnectionState.Online, "a newer add-on than the plugin is accepted"),
+        ($"{minimum}.1", BlenderConnectionState.Online, "a four-part add-on version compares by its first three parts"),
         ("2.1.0", BlenderConnectionState.VersionMismatch, "an add-on below the minimum is a reachable mismatch"),
         ("1.1.3", BlenderConnectionState.VersionMismatch, "an old add-on is a reachable mismatch"),
     })
@@ -175,6 +178,15 @@ await Scenarios.RunAsync(TextureEditScenarios.RunDropsAsync);
 await Scenarios.RunAsync(PreviewScenarios.RunAsync);
 await Scenarios.RunAsync(ModWriterScenarios.RunAsync);
 return Scenarios.Finish("Blender status and texture regressions");
+
+static string RepositoryRoot()
+{
+    var directory = new DirectoryInfo(AppContext.BaseDirectory);
+    while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Blender-Addon", "blender_manifest.toml")))
+        directory = directory.Parent;
+    Require(directory is not null, "the repository is found from the test output");
+    return directory!.FullName;
+}
 
 static async Task CheckBridgeResponsesAsync()
 {
@@ -373,11 +385,51 @@ static async Task CheckBridgeResponsesAsync()
                 characterEnvelope["character"]?["attach"]?["bone"]?.GetValue<string>() == "n_buki_r" &&
                 characterEnvelope["character"]?["attach"]?["offset"]?.AsArray().Count == 10,
             "an import of a character send tells Blender the send, its armature and where a weapon hangs");
+
+        // The import names every field of the context protocol, as the add-on's field table reads them.
+        var protocol = JsonNode.Parse(File.ReadAllText(Path.Combine(
+            RepositoryRoot(), "Tests", "TestSupport", "context-protocol.json")))!.AsObject();
+        var missingFields = protocol["fields"]!.AsArray().Select(field => field!.GetValue<string>())
+            .Where(field => !importEnvelope.ContainsKey(field)).ToArray();
+        Require(missingFields.Length == 0,
+            $"an import tells Blender every context protocol field: {string.Join(", ", missingFields)}");
     }
     finally
     {
         if (Directory.Exists(importRoot))
             Directory.Delete(importRoot, true);
+    }
+
+    // A context is forgotten only when Blender can't have queued the import.
+    foreach (var (name, handler, cancelled, kept) in new (string, StubHandler, bool, bool)[]
+    {
+        ("unreachable", new StubHandler(null, new HttpRequestException("refused")), false, false),
+        ("refusing", new StubHandler(() => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StringContent("{\"ok\":false,\"code\":\"import_queue_full\"}"),
+        }, null), false, false),
+        ("timed out", new StubHandler(null, new TaskCanceledException("timed out")), false, true),
+        ("cancelled", new StubHandler(() => new HttpResponseMessage(HttpStatusCode.OK), null), true, true),
+    })
+    {
+        using var http = new HttpClient(handler);
+        using var contexts = new ExportContextRegistry("blender-import-removal-regression", persist: null);
+        using var client = new BlenderClient(null!, contexts, http);
+        using var cancellation = new CancellationTokenSource();
+        if (cancelled)
+            cancellation.Cancel();
+        try
+        {
+            await client.SendGameImportAsync(
+                42424, "C:/Temp/handoff.mdl", "chara/equipment/e0001/model/c0101e0001_top.mdl",
+                "chara/equipment/e0001/model/c0101e0001_top.mdl", 0, "Import", 42425,
+                cancellationToken: cancellation.Token);
+        }
+        catch (Exception error) when (error is BlenderBridgeException or OperationCanceledException)
+        {
+        }
+        Require(contexts.Summaries().Count == (kept ? 1 : 0),
+            $"a {name} import {(kept ? "keeps its context for a model Blender may still import" : "forgets its context")}");
     }
 
     var keyed = BlenderClient.ParseAnimationResponse(HttpStatusCode.OK,

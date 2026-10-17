@@ -129,7 +129,7 @@ def active_workers_discard_previous_file(addon):
     with patch.object(recovery, "_request_reattach", side_effect=reattach), \
             patch.object(revocation, "_send", side_effect=revoke), \
             patch.object(bridge, "schedule_revocations"), \
-            patch.object(recovery, "apply_authoritative_context") as apply:
+            patch.object(recovery, "reattach_context") as apply:
         try:
             for worker in workers:
                 worker.start()
@@ -345,7 +345,7 @@ def clear_quick_backups_uses_the_plugin_transport(addon):
 
     with patch.object(ops, "export_destination_context", return_value=ref), \
             patch.object(ops, "selected_variant_target", return_value=None), \
-            patch.object(plugin_http.urllib.request, "urlopen", side_effect=garbled):
+            patch.object(plugin_http, "urlopen", side_effect=garbled):
         try:
             ops.clear_quick_backups(bpy.context)
         except ops.PluginResponseError as error:

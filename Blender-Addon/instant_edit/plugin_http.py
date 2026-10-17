@@ -17,6 +17,22 @@ class PluginResponseTooLarge(ValueError):
         super().__init__("plugin response is too large")
 
 
+# The plugin only listens on loopback. urllib's default opener would send these requests through
+# HTTP_PROXY or the Windows proxy settings, handing the context's capability to the proxy.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def urlopen(request, timeout: float):
+    """Open a request to the plugin directly, never through a proxy. Tests replace this."""
+    return _DIRECT.open(request, timeout=timeout)
+
+
+def connection_refused(error: BaseException) -> bool:
+    """True when nothing listened on the plugin port, so the request never reached the plugin."""
+    reason = error.reason if isinstance(error, URLError) else error
+    return isinstance(reason, ConnectionRefusedError)
+
+
 def candidate_ports(collection) -> list[int]:
     ports = []
     stored = _value(collection, "callback_port", 0)
@@ -57,7 +73,7 @@ def post_json(
     )
     try:
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout) as response:
                 status = getattr(response, "status", None) or response.getcode()
                 body = response.read(max_response_size + 1)
         except HTTPError as error:

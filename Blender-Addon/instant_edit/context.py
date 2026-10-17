@@ -23,18 +23,69 @@ COLLECTION_TAG = "instant_edit_context_id"
 OBJECT_TAG = "instant_edit_context_id"
 MASHUP_SOURCE_MATERIAL_PROPERTY = "instant_edit_mashup_source_material"
 
-CONTEXT_METADATA_FIELDS = (
-    "context_id", "schema", "version", "plugin_instance_id", "capability",
-    "source_game_path", "managed_destination", "target_file_path",
-    "source_mod_directory", "source_mod_name", "source_mod_root_path",
-    "source_mod_stable_id",
-    "target_relative_path", "source_kind", "resolved_game_path", "destination_state",
-    "target_collection_id", "target_collection_name",
-    "resource_manifest_version", "resource_manifest_status",
-    "backup_target_id", "backup_directory",
-    "import_id", "callback_port", "import_file_name", "collection_kind",
-    "mashup_source_material",
+
+@dataclass(frozen=True)
+class ContextField:
+    """One field of an instant-edit.context record.
+
+    ``name`` is the field in Blender: the import operator's property and the context collection's
+    custom property (under both spellings, see _set). ``wire`` is its name in the plugin's JSON, in
+    an import request and in a reattach answer. A ``required`` field must be present in both; the
+    others fall back to ``default``.
+    """
+
+    name: str
+    wire: str
+    kind: type = str
+    default: object = ""
+    max_length: int = 4096
+    required: bool = False
+
+
+# Every field of the context, in one place. The plugin's side is InstantEditImportContext and
+# BlenderClient's import payload; Tests/TestSupport/context-protocol.json holds the wire names both
+# suites check theirs against.
+CONTEXT_FIELDS = (
+    ContextField("context_id", "contextId", max_length=256, required=True),
+    ContextField("schema", "schema", max_length=64, required=True),
+    ContextField("version", "version", int, 0, required=True),
+    ContextField("plugin_instance_id", "pluginInstanceId", max_length=256, required=True),
+    ContextField("capability", "capability", max_length=1024, required=True),
+    ContextField("source_game_path", "sourceGamePath", required=True),
+    ContextField("source_kind", "sourceKind", default="mod", max_length=16),
+    # Defaults to the source game path (see context_default).
+    ContextField("resolved_game_path", "resolvedGamePath"),
+    ContextField("destination_state", "destinationState", default="ready", max_length=32),
+    ContextField("managed_destination", "managedDestination"),
+    ContextField("target_file_path", "targetFilePath"),
+    ContextField("source_mod_directory", "sourceModDirectory", max_length=256),
+    ContextField("source_mod_stable_id", "sourceModStableId", max_length=64),
+    ContextField("source_mod_name", "sourceModName", max_length=512),
+    ContextField("source_mod_root_path", "sourceModRootPath"),
+    ContextField("target_relative_path", "targetRelativePath"),
+    ContextField("target_collection_id", "targetCollectionId", max_length=64),
+    ContextField("target_collection_name", "targetCollectionName", max_length=512),
+    ContextField("resource_manifest_version", "resourceManifestVersion", int, 0),
+    ContextField("resource_manifest_status", "resourceManifestStatus", default="capture_failed", max_length=32),
+    ContextField("backup_target_id", "backupTargetId", max_length=128),
+    ContextField("backup_directory", "backupDirectory"),
+    ContextField("import_id", "importId", max_length=256, required=True),
+    ContextField("callback_port", "callbackPort", int, 0, required=True),
 )
+CONTEXT_FIELD_NAMES = tuple(field.name for field in CONTEXT_FIELDS)
+
+# Everything clear_context_metadata removes: the context, and what the import added beside it.
+CONTEXT_METADATA_FIELDS = CONTEXT_FIELD_NAMES + (
+    "import_file_name", "collection_kind", "mashup_source_material",
+)
+
+
+def context_default(field: ContextField, values: dict, *, wire: bool = False):
+    """The value an absent or empty optional field takes, given the record's other ``values``
+    (keyed by wire names when ``wire``)."""
+    if field.name == "resolved_game_path":
+        return values.get("sourceGamePath" if wire else "source_game_path") or ""
+    return field.default
 
 REQUIRED_OBJECT_FIELDS = (
     "xiv_material",
@@ -338,39 +389,66 @@ def apply_authoritative_context(collection, payload: dict) -> None:
         raise ContextValidationError("context reattach response changed the context id")
     if import_id and payload.get("importId") != import_id:
         raise ContextValidationError("context reattach response changed the import id")
-    if payload.get("schema") != SCHEMA or payload.get("version") not in SUPPORTED_VERSIONS:
-        raise ContextValidationError("context reattach response has an invalid schema or version")
-
-    fields = {
-        "context_id": payload.get("contextId"),
-        "schema": payload.get("schema"),
-        "version": payload.get("version"),
-        "plugin_instance_id": payload.get("pluginInstanceId"),
-        "capability": payload.get("capability"),
-        "source_game_path": payload.get("sourceGamePath"),
-        "source_kind": payload.get("sourceKind") or "mod",
-        "resolved_game_path": payload.get("resolvedGamePath") or payload.get("sourceGamePath"),
-        "destination_state": payload.get("destinationState") or "ready",
-        "managed_destination": payload.get("managedDestination") or "",
-        "target_file_path": payload.get("targetFilePath") or "",
-        "source_mod_directory": payload.get("sourceModDirectory") or "",
-        "source_mod_stable_id": payload.get("sourceModStableId") or "",
-        "source_mod_name": payload.get("sourceModName") or "",
-        "source_mod_root_path": payload.get("sourceModRootPath") or "",
-        "target_relative_path": payload.get("targetRelativePath") or "",
-        "target_collection_id": payload.get("targetCollectionId") or "",
-        "target_collection_name": payload.get("targetCollectionName") or "",
-        "resource_manifest_version": payload.get("resourceManifestVersion") or 0,
-        "resource_manifest_status": payload.get("resourceManifestStatus") or "capture_failed",
-        "backup_target_id": payload.get("backupTargetId") or "",
-        "backup_directory": payload.get("backupDirectory") or "",
-        "import_id": payload.get("importId"),
-        "callback_port": payload.get("callbackPort"),
-    }
-    if not all(value is not None for value in fields.values()):
-        raise ContextValidationError("context reattach response is incomplete")
-    for name, value in fields.items():
+    for name, value in context_metadata_from_wire(payload, "context reattach response").items():
         _set(collection, name, value)
+
+
+def context_metadata_from_wire(payload, what: str) -> dict:
+    """A context the plugin sent (a reattach answer, a new mod's context), named as in Blender.
+
+    Raises ContextValidationError naming ``what`` when a required field is missing or mistyped.
+    """
+    if not isinstance(payload, dict):
+        raise ContextValidationError(f"{what} is not an object")
+    if payload.get("schema") != SCHEMA or payload.get("version") not in SUPPORTED_VERSIONS:
+        raise ContextValidationError(f"{what} has an invalid schema or version")
+    fields = {}
+    for field in CONTEXT_FIELDS:
+        value = payload.get(field.wire)
+        if field.required:
+            if field.kind is int:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ContextValidationError(f"{what} has an invalid {field.wire}")
+            elif not isinstance(value, str) or not value:
+                raise ContextValidationError(f"{what} is missing {field.wire}")
+        elif not value:
+            value = context_default(field, payload, wire=True)
+        fields[field.name] = value
+    return fields
+
+
+def routing_snapshot(collection) -> dict:
+    """The collection's context fields as stored, to put back with restore_routing."""
+    snapshot = {}
+    for name in CONTEXT_FIELD_NAMES:
+        for key in (name, f"instant_edit_{name}"):
+            if key in collection:
+                snapshot[key] = collection[key]
+    return snapshot
+
+
+def restore_routing(collection, snapshot: dict) -> None:
+    for name in CONTEXT_FIELD_NAMES:
+        for key in (name, f"instant_edit_{name}"):
+            if key in snapshot:
+                collection[key] = snapshot[key]
+            else:
+                collection.pop(key, None)
+
+
+def reattach_context(collection, payload: dict, scene) -> "ContextRef":
+    """Take on the plugin's answer for a saved context, or leave the collection as it was.
+
+    Raises ContextValidationError when the answer doesn't fit or the result would not validate,
+    with the collection's previous metadata put back.
+    """
+    snapshot = routing_snapshot(collection)
+    try:
+        apply_authoritative_context(collection, payload)
+        return validate_context(_value(collection, "context_id", ""), scene)
+    except ContextValidationError:
+        restore_routing(collection, snapshot)
+        raise
 
 
 def _require_int(value, name: str, minimum: int = 0) -> int:
@@ -433,41 +511,35 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
             f"context {context_id!r} must have exactly one scene collection"
         )
     collection = collections[0]
-    _check_aliases(collection, (
-        "context_id", "schema", "version", "plugin_instance_id", "capability",
-        "source_game_path", "managed_destination", "target_file_path",
-        "source_mod_directory", "source_mod_name", "source_mod_root_path", "callback_port",
-        "source_mod_stable_id",
-        "target_relative_path", "source_kind", "resolved_game_path", "destination_state",
-        "target_collection_id", "target_collection_name",
-        "resource_manifest_version", "resource_manifest_status",
-        "backup_target_id", "backup_directory",
-    ))
+    _check_aliases(collection, CONTEXT_FIELD_NAMES)
 
     if _value(collection, "schema") != SCHEMA or _value(collection, "version") not in SUPPORTED_VERSIONS:
         raise ContextValidationError("context collection has an invalid schema or version")
 
-    plugin_instance_id = _value(collection, "plugin_instance_id", "")
-    capability = _value(collection, "capability", "")
-    source_game_path = _value(collection, "source_game_path", "")
-    source_kind = _value(collection, "source_kind", "mod")
-    resolved_game_path = _value(collection, "resolved_game_path", source_game_path)
-    destination_state = _value(collection, "destination_state", "ready")
-    managed_destination = _value(collection, "managed_destination", "")
-    target_file_path = _value(collection, "target_file_path", "")
-    source_mod_directory = _value(collection, "source_mod_directory", "")
-    source_mod_stable_id = _value(collection, "source_mod_stable_id", "")
-    source_mod_name = _value(collection, "source_mod_name", "")
-    source_mod_root_path = _value(collection, "source_mod_root_path", "")
-    target_relative_path = _value(collection, "target_relative_path", "")
-    target_collection_id = _value(collection, "target_collection_id", "")
-    target_collection_name = _value(collection, "target_collection_name", "")
-    resource_manifest_version = _value(collection, "resource_manifest_version", 0)
-    resource_manifest_status = _value(collection, "resource_manifest_status", "capture_failed")
-    backup_target_id = _value(collection, "backup_target_id", "")
-    backup_directory = _value(collection, "backup_directory", "")
-    import_id = _value(collection, "import_id", "")
-    callback_port = _value(collection, "callback_port", 0)
+    stored = {}
+    for field in CONTEXT_FIELDS:
+        stored[field.name] = _value(collection, field.name, context_default(field, stored))
+    plugin_instance_id = stored["plugin_instance_id"]
+    capability = stored["capability"]
+    source_game_path = stored["source_game_path"]
+    source_kind = stored["source_kind"]
+    resolved_game_path = stored["resolved_game_path"]
+    destination_state = stored["destination_state"]
+    managed_destination = stored["managed_destination"]
+    target_file_path = stored["target_file_path"]
+    source_mod_directory = stored["source_mod_directory"]
+    source_mod_stable_id = stored["source_mod_stable_id"]
+    source_mod_name = stored["source_mod_name"]
+    source_mod_root_path = stored["source_mod_root_path"]
+    target_relative_path = stored["target_relative_path"]
+    target_collection_id = stored["target_collection_id"]
+    target_collection_name = stored["target_collection_name"]
+    resource_manifest_version = stored["resource_manifest_version"]
+    resource_manifest_status = stored["resource_manifest_status"]
+    backup_target_id = stored["backup_target_id"]
+    backup_directory = stored["backup_directory"]
+    import_id = stored["import_id"]
+    callback_port = stored["callback_port"]
     if not all(isinstance(value, str) and value for value in (
         plugin_instance_id, capability, source_game_path, source_kind,
         resolved_game_path, destination_state

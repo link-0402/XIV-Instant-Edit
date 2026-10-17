@@ -1,0 +1,32 @@
+{
+  "description": "The instant-edit.context record both components exchange. Blender-Addon/instant_edit/context.py (CONTEXT_FIELDS) and the plugin's InstantEditImportContext and import payload are checked against it by bridge_regression.py and ExportContextRegression.",
+  "schema": "instant-edit.context",
+  "currentVersion": 3,
+  "supportedVersions": [1, 2, 3],
+  "fields": [
+    "contextId",
+    "schema",
+    "version",
+    "pluginInstanceId",
+    "capability",
+    "sourceGamePath",
+    "sourceKind",
+    "resolvedGamePath",
+    "destinationState",
+    "managedDestination",
+    "targetFilePath",
+    "sourceModDirectory",
+    "sourceModStableId",
+    "sourceModName",
+    "sourceModRootPath",
+    "targetRelativePath",
+    "targetCollectionId",
+    "targetCollectionName",
+    "resourceManifestVersion",
+    "resourceManifestStatus",
+    "backupTargetId",
+    "backupDirectory",
+    "importId",
+    "callbackPort"
+  ]
+}

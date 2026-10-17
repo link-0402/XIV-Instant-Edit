@@ -11,7 +11,7 @@ from urllib.error import URLError
 
 import bpy
 
-from .cache import ensure_cache_root
+from .cache import cache_root, diagnostics_root
 from .context import _value
 from .plugin_http import PluginResponseTooLarge, candidate_ports, post_json
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
@@ -21,6 +21,12 @@ SCHEMA = "instant-edit.pending-revocations"
 VERSION = 1
 REQUEST_TIMEOUT_SECONDS = 2
 MAX_RESPONSE_SIZE = 64 * 1024
+QUEUE_FILE = "pending-context-revocations.json"
+# Plugin answers that a revocation can never succeed: the context is already gone, or the record
+# can't authorize it. Such a record is done instead of being retried at every start.
+FINAL_REJECTIONS = frozenset({
+    "stale_context", "invalid_capability", "missing_field", "unsupported_schema", "unsupported_version",
+})
 
 _lock = threading.RLock()
 _results = queue.Queue()
@@ -29,16 +35,22 @@ _generation = 0
 
 
 def _queue_path():
-    return ensure_cache_root() / "pending-context-revocations.json"
+    """Beside cache-settings.json in the plugin's config folder: durable state stays out of the
+    cache, which defaults to %TEMP% where cleaners delete old files."""
+    path = diagnostics_root().parent / QUEUE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
-def _load_locked() -> list[dict]:
-    path = _queue_path()
-    if not path.exists():
-        return []
+def _legacy_queue_path():
+    """Where add-ons before 3.0.0 kept the queue: the cache root."""
+    return cache_root() / QUEUE_FILE
+
+
+def _read_records(path) -> list[dict]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    except (UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("pending context revocations are unreadable") from error
     if not isinstance(payload, dict) or payload.get("schema") != SCHEMA or payload.get("version") != VERSION:
         raise ValueError("pending context revocations have an invalid format")
@@ -46,6 +58,49 @@ def _load_locked() -> list[dict]:
     if not isinstance(records, list):
         raise ValueError("pending context revocations have an invalid format")
     return [record for record in records if isinstance(record, dict)]
+
+
+def _read_or_set_aside(path, *, keep_damaged: bool = True) -> list[dict]:
+    """The records in ``path``. A damaged file is renamed aside (or deleted, when not
+    ``keep_damaged``), so it no longer stops clearing contexts or every later revocation; its
+    revocations are lost and those contexts expire."""
+    if not path.exists():
+        return []
+    try:
+        return _read_records(path)
+    except ValueError as error:
+        if keep_damaged:
+            os.replace(path, path.with_name(f"{path.name}.{uuid.uuid4().hex[:8]}.damaged"))
+        else:
+            path.unlink(missing_ok=True)
+        record_failure(
+            component="blender_addon",
+            operation="context_revocation",
+            stage="revocation_persistence",
+            code="revocation_queue_damaged",
+            cause="Blender's queue of pending context revocations was damaged and was set aside.",
+            remedy="Nothing to do: contexts it named expire in the plugin after the retention set in its Settings.",
+            endpoint="/context/revoke",
+            exception=error,
+        )
+        return []
+
+
+def _key(record: dict) -> tuple:
+    return record.get("contextId"), record.get("importId")
+
+
+def _load_locked() -> list[dict]:
+    records = _read_or_set_aside(_queue_path())
+    legacy = _legacy_queue_path()
+    if legacy.exists():
+        known = {_key(record) for record in records}
+        # A file left beside the cache's own entries would stop an unmarked cache being reclaimed.
+        records += [record for record in _read_or_set_aside(legacy, keep_damaged=False)
+                    if _key(record) not in known]
+        _save_locked(records)
+        legacy.unlink(missing_ok=True)
+    return records
 
 
 def _save_locked(records: list[dict]) -> None:
@@ -99,6 +154,7 @@ def queue_context_revocations(collections) -> int:
 
 
 def _send(record: dict) -> bool:
+    """Revoke one record; True when it is done (revoked, or refused for good), False to retry."""
     payload = {
         "schema": "instant-edit.context-revoke",
         "version": 1,
@@ -127,9 +183,11 @@ def _send(record: dict) -> bool:
                     response_body, status, endpoint="/context/revoke",
                     operation="context_revoke")
             else:
-                record_remote_failure(
+                failure = record_remote_failure(
                     response_body, status, endpoint="/context/revoke",
                     default_operation="context_revoke")
+                if failure.get("code") in FINAL_REJECTIONS:
+                    return True
         except PluginResponseTooLarge as error:
             record_protocol_failure(
                 error.body,
