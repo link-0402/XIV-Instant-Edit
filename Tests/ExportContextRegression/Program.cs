@@ -41,6 +41,14 @@ static byte[] MinimalModel(params string[] materials)
 
 static byte[] ModelWithMeshes(
     IReadOnlyList<string> materials,
+    params (ushort MaterialIndex, ushort VertexCount, uint IndexCount)[] meshes) =>
+    ModelWithOrphanStrings(materials, [], meshes);
+
+// Orphans go into the string table ahead of the materials without a material slot,
+// the way tools that delete mesh groups leave an unused material name behind.
+static byte[] ModelWithOrphanStrings(
+    IReadOnlyList<string> materials,
+    IReadOnlyList<string> orphans,
     params (ushort MaterialIndex, ushort VertexCount, uint IndexCount)[] meshes)
 {
     const int fileHeaderSize = 68;
@@ -48,9 +56,9 @@ static byte[] ModelWithMeshes(
     const int meshHeaderSize = 56;
     const int lodSize = 60;
     const int meshSize = 36;
-    var strings = materials.SelectMany(value => Encoding.UTF8.GetBytes(value + "\0")).ToArray();
+    var strings = orphans.Concat(materials).SelectMany(value => Encoding.UTF8.GetBytes(value + "\0")).ToArray();
     var stringOffsets = new int[materials.Count];
-    var stringOffset = 0;
+    var stringOffset = orphans.Sum(value => Encoding.UTF8.GetByteCount(value) + 1);
     for (var index = 0; index < materials.Count; index++)
     {
         stringOffsets[index] = stringOffset;
@@ -63,7 +71,7 @@ static byte[] ModelWithMeshes(
     BitConverter.TryWriteBytes(model.AsSpan(14, 2), checked((ushort)materials.Count));
 
     var stringsHeader = fileHeaderSize;
-    BitConverter.TryWriteBytes(model.AsSpan(stringsHeader, 2), checked((ushort)materials.Count));
+    BitConverter.TryWriteBytes(model.AsSpan(stringsHeader, 2), checked((ushort)(orphans.Count + materials.Count)));
     BitConverter.TryWriteBytes(model.AsSpan(stringsHeader + 4, 4), checked((uint)strings.Length));
     strings.CopyTo(model, stringsHeader + stringHeaderSize);
 
@@ -805,6 +813,12 @@ static async Task CheckExportContextsAsync(string testRoot)
             (0, 12, 18),
             (1, 0, 0))).SequenceEqual(["/mt_used.mtrl"]),
         "dependency capture ignores material slots attached only to empty meshes");
+    Require(MaterialPreviewBundleBuilder.ReadUsedModelMaterials(ModelWithOrphanStrings(
+            ["/mt_a.mtrl", "/mt_b.mtrl"],
+            ["/mt_removed.mtrl"],
+            (0, 12, 18),
+            (1, 12, 18))).SequenceEqual(["/mt_a.mtrl", "/mt_b.mtrl"]),
+        "dependency capture reads material slots through the offset table when the string table keeps an unused material name");
 
     const string optionMaterial = "chara/equipment/e0001/material/v0001/mt_option.mtrl";
     const string defaultTexture = "chara/equipment/e0001/texture/default_d.tex";

@@ -527,9 +527,11 @@ public sealed partial class MaterialPreviewBundleBuilder
             stringSize > bytes.Length - stringHeaderOffset - stringHeaderSize)
             throw new InvalidDataException("MDL string table exceeds the supported bounds.");
 
-        var start = stringHeaderOffset + stringHeaderSize;
+        var tableStart = stringHeaderOffset + stringHeaderSize;
+        var start = tableStart;
         var end = checked(start + (int)stringSize);
         var materials = new List<string>(materialCount);
+        var stringsByOffset = new Dictionary<int, string>();
         var strictUtf8 = new UTF8Encoding(false, true);
         for (var index = 0; index < stringCount; index++)
         {
@@ -537,16 +539,39 @@ public sealed partial class MaterialPreviewBundleBuilder
             if (terminator < 0)
                 throw new InvalidDataException("MDL string table contains an unterminated string.");
             var value = strictUtf8.GetString(bytes, start, terminator - start);
+            stringsByOffset[start - tableStart] = value;
             if (value.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) &&
                 IsSafeGameResourcePath(value, ".mtrl"))
                 materials.Add(value);
             start = terminator + 1;
         }
 
-        if (materials.Count != materialCount)
-            throw new InvalidDataException(
-                $"MDL declares {materialCount} materials but its string table contains {materials.Count} safe material paths.");
-        return materials;
+        if (materials.Count == materialCount)
+            return materials;
+
+        // Tools that delete mesh groups can leave the removed mesh's material name
+        // in the string table. The game only reaches names through the material
+        // offset table, so read the slots from there when the counts disagree.
+        if (TryReadMeshLayout(bytes, materialCount, out var layout))
+        {
+            var slots = new List<string>(materialCount);
+            for (var index = 0; index < materialCount; index++)
+            {
+                var offset = BinaryPrimitives.ReadUInt32LittleEndian(
+                    bytes.AsSpan(layout.MaterialTableOffset + index * 4, 4));
+                if (offset > int.MaxValue ||
+                    !stringsByOffset.TryGetValue((int)offset, out var value) ||
+                    !value.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) ||
+                    !IsSafeGameResourcePath(value, ".mtrl"))
+                    break;
+                slots.Add(value);
+            }
+            if (slots.Count == materialCount)
+                return slots;
+        }
+
+        throw new InvalidDataException(
+            $"MDL declares {materialCount} materials but its string table contains {materials.Count} safe material paths.");
     }
 
     /// <summary>
@@ -572,6 +597,33 @@ public sealed partial class MaterialPreviewBundleBuilder
         out HashSet<int> usedIndices)
     {
         usedIndices = [];
+        if (!TryReadMeshLayout(bytes, materialCount, out var layout))
+            return false;
+
+        const int meshSize = 36;
+        for (var index = 0; index < layout.MeshCount; index++)
+        {
+            var offset = layout.MeshTableOffset + index * meshSize;
+            var vertexCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset, 2));
+            var indexCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 4, 4));
+            var materialIndex = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 8, 2));
+            if (materialIndex >= materialCount)
+                return false;
+            if (vertexCount > 0 && indexCount > 0)
+                usedIndices.Add(materialIndex);
+        }
+        return true;
+    }
+
+    private readonly record struct MeshLayout(int MeshTableOffset, int MeshCount, int MaterialTableOffset);
+
+    /// <summary>
+    /// Locates the mesh table and the material-name offset table. Both lie inside the
+    /// file when this returns true.
+    /// </summary>
+    private static bool TryReadMeshLayout(byte[] bytes, int materialCount, out MeshLayout layout)
+    {
+        layout = default;
         const int fileHeaderSize = 68;
         const int vertexDeclarationSize = 17 * 8;
         const int stringHeaderSize = 8;
@@ -620,24 +672,15 @@ public sealed partial class MaterialPreviewBundleBuilder
             if (meshTableOffset > bytes.Length - meshTableBytes)
                 return false;
 
-            for (var index = 0; index < meshCount; index++)
-            {
-                var offset = checked(meshTableOffset + index * meshSize);
-                var vertexCount = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset, 2));
-                var indexCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset + 4, 4));
-                var materialIndex = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 8, 2));
-                if (materialIndex >= materialCount)
-                    return false;
-                if (vertexCount > 0 && indexCount > 0)
-                    usedIndices.Add(materialIndex);
-            }
-
             var materialTableOffset = checked(meshTableOffset + meshTableBytes +
                                                attributeCount * 4 +
                                                terrainShadowMeshCount * terrainShadowMeshSize +
                                                BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(meshHeaderOffset + 8, 2)) * submeshSize +
                                                terrainShadowSubmeshCount * terrainShadowSubmeshSize);
-            return materialTableOffset <= bytes.Length - materialCount * 4;
+            if (materialTableOffset > bytes.Length - materialCount * 4)
+                return false;
+            layout = new MeshLayout(meshTableOffset, meshCount, materialTableOffset);
+            return true;
         }
         catch (ArgumentOutOfRangeException)
         {
