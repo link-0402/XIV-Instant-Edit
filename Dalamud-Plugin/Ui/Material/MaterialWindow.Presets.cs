@@ -60,7 +60,10 @@ internal sealed partial class MaterialWindow
             ImGui.TextColored(Theme.Muted, "Presets need a character shader.");
             return;
         }
-        var context = new PresetContext(doc, facts, usage, selectedPair, mask, current.Source.GamePath);
+        var context = new PresetContext(doc, facts, usage, selectedPair, mask, current.Source.GamePath)
+        {
+            DyeTemplate = stains?.Templates.FirstOrDefault() ?? 0,
+        };
         Widgets.SectionHeader("Presets");
         if (doc.Table is { Kind: ColorTableKind.Dawntrail })
         {

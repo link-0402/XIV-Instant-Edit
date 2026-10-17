@@ -312,6 +312,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }
         PollTextures();
         PollUsage();
+        PollDye();
     }
 
     /// <summary>Makes a freshly read material the open one; the last one's preview comes down first.</summary>
