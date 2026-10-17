@@ -79,6 +79,7 @@ internal sealed partial class MaterialWindow
     private string UsageText(int pair)
         => usage == null ? usageNote
             : usage.PairUsed(pair) ? $"Used by {usage.PairShare(pair) * 100:0.#}% of the index texture."
+            : usage.PairShare(pair) > 0 ? "Not used. Only stray texels where other pairs meet."
             : "Not used by the index texture.";
 
     /// <summary>The index texture with the selected pair's texels lit (top row yellow, bottom row blue).</summary>

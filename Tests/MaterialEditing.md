@@ -193,7 +193,7 @@ The places, file names and the meta.json write are checked offline (ModHandoffSc
 - [ ] Hover the top half of a pair swatch: only that row pulses (yellow) and the bottom row keeps
   its colours; the bottom half pulses only its row (blue). The tooltip names the row and its share
   of the pair; a sub row the index never picks is dimmed in its half.
-- [ ] Hover a row's name, copy, paste or reset button below: that row pulses; it keeps pulsing
+- [ ] Hover a row's name, copy, paste or discard button below: that row pulses; it keeps pulsing
   while the paste menu is open. `material` shows "highlightedRow".
 - [ ] Unload the plugin with two previews shown: both temporary mods go and the character redraws.
 

@@ -47,13 +47,29 @@ internal sealed partial class MaterialWindow
             return;
         resolving = null;
         if (done.IsCompletedSuccessfully)
+        {
             resolvedTextures = done.Result;
+            ShowNewFiles();
+        }
         else
             log.Debug(done.Exception!, "Could not resolve the material's textures.");
         if (resolveWanted.Any(path => !resolvedTextures.ContainsKey(path)) && session != null)
             ResolveTextures(session.Current);
         else if (session != null)
             RefreshUsage(session.Current);
+    }
+
+    /// <summary>
+    /// Points the textures a preset added (not saved yet, so the collection doesn't have them) at the
+    /// preview's copies, once a preview has written them.
+    /// </summary>
+    private void ShowNewFiles()
+    {
+        if (session == null)
+            return;
+        foreach (var (gamePath, _) in session.NewFilesFor(session.Current))
+            if (preview.FileFor(gamePath) is { } file && File.Exists(file))
+                resolvedTextures[gamePath] = file;
     }
 
     private void DrawTextures(MaterialSession current, MaterialDocument doc)

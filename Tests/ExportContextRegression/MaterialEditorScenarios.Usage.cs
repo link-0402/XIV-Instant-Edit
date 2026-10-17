@@ -65,7 +65,7 @@ internal static partial class MaterialEditorScenarios
         var tex = LegacyIndexTexture.FromNormal(normal);
         var index = TextureDecoder.Decode(tex, int.MaxValue);
         var usage = IndexUsageCalc.Compute(index, ColorTableKind.Dawntrail);
-        Require(index.Width == 4 && index.Height == 2 && Used(usage).SequenceEqual([0, 2, 4, 14, 30]),
+        Require(index.Width == 4 && index.Height == 2 && usage.RowOfTexel.SequenceEqual(new byte[] { 0, 2, 4, 14, 30, 30, 4, 0 }),
             "the index built from the normal map's alpha picks the top row of each legacy row's pair (alpha 120 is row 7)");
     }
 
@@ -107,5 +107,18 @@ internal static partial class MaterialEditorScenarios
 
         var pure = IndexUsageCalc.Compute(Solid(4, 34, 255), ColorTableKind.Dawntrail);
         Require(Used(pure).SequenceEqual([4]), "green 255 gives the top row all of the weight, so the bottom row stays unused");
+
+        // Pair 1 on the left, pair 16 on the right, a BC-style ramp column between them (red 128 is
+        // pair 9), and a 3 x 3 patch of pair 5 whose middle texel's neighbours agree.
+        var edge = Solid(12, 0, 0);
+        for (var y = 0; y < 12; y++)
+            for (var x = 0; x < 12; x++)
+            {
+                var red = x == 6 ? 128 : x > 6 ? 255 : x is >= 1 and <= 3 && y is >= 1 and <= 3 ? 68 : 0;
+                edge.Bgra[(y * 12 + x) * 4 + 2] = (byte)red;
+            }
+        var noisy = IndexUsageCalc.Compute(edge, ColorTableKind.Dawntrail);
+        Require(Used(noisy).SequenceEqual([1, 9, 31]) && noisy.RowShare[17] > 0,
+            "a ramp texel between two pairs doesn't make its pair used, though it still counts in the shares; a 3 x 3 patch does");
     }
 }

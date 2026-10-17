@@ -44,6 +44,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private readonly IPluginLog log;
     private readonly LiveMaterial live;
     private readonly LiveColorTable liveTable;
+    private readonly TextureArraySlices slices;
     private readonly CancellationTokenSource life = new();
 
     private MaterialSession? session;
@@ -62,7 +63,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private Guid? collection;
     private bool customShader;
 
-    private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader, IModFileCopies? Copies);
+    private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader, IModFileCopies? Copies,
+        IReadOnlyList<PreviewSource> Models);
 
     /// <param name="slot">The window's number; window 0 keeps the first window's id (and its saved place).</param>
     internal MaterialWindow(int slot, PreviewModService previewMods, MaterialPreviewService preview, PenumbraIpc penumbra, PreviewService previews,
@@ -82,6 +84,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         this.log = log;
         live = new LiveMaterial(objects, log);
         liveTable = new LiveColorTable(objects, log);
+        slices = new TextureArraySlices(framework, log);
         Size = new Vector2(1020, 680);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(760, 420), MaximumSize = new Vector2(float.MaxValue, float.MaxValue) };
@@ -165,7 +168,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 ? (await data.GetFileAsync<Lumina.Data.FileResource>(row.GamePath, life.Token).ConfigureAwait(false))?.Data
                   ?? throw new IOException("The game file could not be read.")
                 : await File.ReadAllBytesAsync(row.ActualPath, life.Token).ConfigureAwait(false);
-            return await ReadAsync(MaterialSource.FromRow(row, actor, bytes), bytes, copies).ConfigureAwait(false);
+            return await ReadAsync(MaterialSource.FromRow(row, actor, bytes), bytes, copies, ModelsFor(row, actor)).ConfigureAwait(false);
         });
     }
 
@@ -178,11 +181,11 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         opening = Task.Run(async () =>
         {
             var bytes = await File.ReadAllBytesAsync(source.ActualPath, life.Token).ConfigureAwait(false);
-            return await ReadAsync(source with { Sha256 = PreviewSource.Hash(bytes) }, bytes, from).ConfigureAwait(false);
+            return await ReadAsync(source with { Sha256 = PreviewSource.Hash(bytes) }, bytes, from, models).ConfigureAwait(false);
         });
     }
 
-    private async Task<Opened> ReadAsync(MaterialSource source, byte[] bytes, IModFileCopies? copies)
+    private async Task<Opened> ReadAsync(MaterialSource source, byte[] bytes, IModFileCopies? copies, IReadOnlyList<PreviewSource> drawnWith)
     {
         if (!MtrlReader.LooksLikeMtrl(bytes))
             throw new InvalidDataException("This file is not a material.");
@@ -194,7 +197,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             var shader = (await penumbra.ResolveCollectionPathsAsync(target.Id, ["shader/sm5/shpk/" + info.ShaderPackageName]).ConfigureAwait(false))[0];
             custom = shader != null && Path.IsPathRooted(shader);
         }
-        return new Opened(source, MaterialDocument.From(info), target?.Id, custom, copies);
+        return new Opened(source, MaterialDocument.From(info), target?.Id, custom, copies, drawnWith);
     }
 
     public override void OnClose()
@@ -227,6 +230,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             log.Warning(e, "Could not put the material's own values back while unloading.");
         }
         ReleaseUsage();
+        slices.Dispose();
         life.Dispose();
     }
 
@@ -350,6 +354,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             }
         }
         PollTextures();
+        PollModels();
         PollUsage();
         PollDye();
     }
@@ -374,6 +379,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             ReleaseUsage();
         }
         collection = opened.Collection;
+        models = opened.Models;
+        ForgetModels();
         customShader = opened.CustomShader;
         copies = opened.Copies;
         loadedDoc = opened.Document;
@@ -417,6 +424,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 loadedDoc = shown;
                 shownDoc = null;
                 nextLiveCheck = Environment.TickCount64 + LiveCheckMs;
+                ShowNewFiles();
                 return warning ?? (preview.Shared
                     ? $"Shown on the character. Others using {preview.CollectionName} see it too. Nothing is saved yet."
                     : "Shown on the character. Nothing is saved yet.");
@@ -568,7 +576,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 ImGui.SetTooltip("Moves the material to character.shpk with 32 Dawntrail rows. Each old row fills both rows of its pair.");
         }
         DrawCopyMenuItem(current);
-        IReadOnlyList<PreviewBackupGroup> backups = current.Source.IsGameData ? [] : previewMods.Backups([current.Source.ToPreviewSource()]);
+        // A save may have written the model with the material (its second UV map), so its backups count too.
+        IReadOnlyList<PreviewBackupGroup> backups = current.Source.IsGameData ? [] : previewMods.Backups([current.Source.ToPreviewSource(), .. models]);
         using (ImRaii.Disabled(backups.Count == 0 || Busy))
         {
             if (ImGui.MenuItem("Undo last save") && backups.Count > 0)
@@ -634,6 +643,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }, warning =>
         {
             previews.Invalidate(current.Source.ActualPath);
+            ForgetModels();
             loadedDoc = current.History.Saved;
             shownDoc = null;
             return warning ?? result?.Describe("Saved") ?? "Saved.";
@@ -657,6 +667,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }, warning =>
         {
             Reload(source);
+            ForgetModels();
             return warning ?? $"Put back the material from before {group.Created.ToLocalTime():d MMM, HH:mm}. The file it replaced is backed up too.";
         });
     }

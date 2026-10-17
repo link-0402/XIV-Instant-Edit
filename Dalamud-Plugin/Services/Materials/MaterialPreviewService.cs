@@ -16,6 +16,8 @@ internal sealed record MaterialPreviewRecord
     /// <summary> &lt;cache&gt;/material-preview/&lt;session&gt;. </summary>
     public required string SessionFolder { get; init; }
     public required DateTime CreatedUtc { get; init; }
+    /// <summary> The object shown with the preview, redrawn when the preview goes without a Stop (unload, crash). </summary>
+    public int? ObjectIndex { get; init; }
 }
 
 /// <summary>
@@ -131,7 +133,7 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
         try
         {
             var normalized = files.ToDictionary(file => PathRules.NormalizeGamePath(file.Key).ToLowerInvariant(), file => file.Value);
-            if (normalized.Count == 0 || normalized.Any(file => !ModPaths.IsSafeGameResourcePath(file.Key, ".mtrl", ".tex") || file.Value.Length == 0))
+            if (normalized.Count == 0 || normalized.Any(file => !ModPaths.IsSafeGameResourcePath(file.Key, ".mtrl", ".tex", ".mdl") || file.Value.Length == 0))
                 throw new InvalidDataException("The preview files are invalid.");
             if (!penumbra.Available)
                 throw new IOException("Penumbra is not available.");
@@ -173,6 +175,7 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
             var current = new MaterialPreviewRecord
             {
                 Tag = tag, CollectionId = collection.Id, Priority = Priority, SessionFolder = sessionFolder, CreatedUtc = DateTime.UtcNow,
+                ObjectIndex = objectIndex,
             };
             SaveRecord(current);
             lock (sync) (record, session, revision) = (current, sessionFolder, next);
@@ -282,6 +285,9 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
                 TryDelete(leftover.SessionFolder);
                 ClearRecord();
                 lock (sync) record = null;
+                // The character may still wear the preview's files, which are gone now.
+                if (leftover.ObjectIndex is { } index)
+                    await penumbra.RedrawObjectAsync(index).ConfigureAwait(false);
             }
             // Slot 0 starts with the plugin; a later slot could find another window's long-shown preview stale.
             if (slot != 0)
@@ -401,7 +407,11 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
         }
     }
 
-    /// <summary> Removes the temporary mod, waiting briefly when called off the framework thread. </summary>
+    /// <summary>
+    /// Removes the temporary mod and redraws the character, so it doesn't keep wearing preview files
+    /// that are deleted next (Penumbra then shows the material as unavailable). Waits briefly when
+    /// called off the framework thread.
+    /// </summary>
     public void Dispose()
     {
         if (disposed)
@@ -415,7 +425,13 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
             lock (sync) current = record;
             if (current == null)
                 return;
-            (bool Gone, string? Error) Remove() => penumbra.RemoveTemporaryModOnFramework(current.Tag, current.CollectionId, current.Priority);
+            (bool Gone, string? Error) Remove()
+            {
+                var removed = penumbra.RemoveTemporaryModOnFramework(current.Tag, current.CollectionId, current.Priority);
+                if (removed.Gone && current.ObjectIndex is { } index)
+                    penumbra.RedrawObjectOnFramework(index);
+                return removed;
+            }
             (bool Gone, string? Error) removed;
             if (framework.IsInFrameworkUpdateThread)
                 removed = Remove();

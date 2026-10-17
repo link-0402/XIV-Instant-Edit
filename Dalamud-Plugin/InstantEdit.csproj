@@ -111,6 +111,11 @@
       <HintPath>$(DalamudDevPath)\Newtonsoft.Json.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Direct3D 11 bindings, for views over single slices of the game's texture arrays (the material editor's thumbnails). -->
+    <Reference Include="TerraFX.Interop.Windows">
+      <HintPath>$(DalamudDevPath)\TerraFX.Interop.Windows.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
