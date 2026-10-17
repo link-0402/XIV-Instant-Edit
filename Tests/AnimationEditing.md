@@ -1116,7 +1116,7 @@ older journals are covered offline in EditAgainFixture):
   second mod appears.)
 
 Docs (Phase 8):
-- [x] The changelog's 2.2.0 lists the bone layer entries under Timeline, and the Animations
+- [x] The changelog's 3.0.0 lists the bone layer entries under Timeline, and the Animations
   tab's hint beside the open-timeline button names bone layers.
   (XIV Bridge tests/instant-edit/animations/225, 2026-10-10: eight entries under "Timeline: bone layers change how the
   animation moves, live on your character in GPose."; the hint for a body clip reads "Events, length, bone layers,

@@ -24,7 +24,7 @@ internal static class ComponentVersionScenarios
     }
 
     private static void MinimumsAreDeclared()
-        => Require(ComponentVersions.BlenderAddonMinimum == "2.2.0" && ComponentVersions.PainterPluginMinimum == "2.2.0",
+        => Require(ComponentVersions.BlenderAddonMinimum == "3.0.0" && ComponentVersions.PainterPluginMinimum == "3.0.0",
             "both minimums are declared");
 
     private static void MinimumsAreShipped()
