@@ -96,6 +96,7 @@ internal static partial class TextureEditScenarios
             await MisplacedMipsAsync(Path.Combine(root, "misplaced-mips"));
             await DroppedImageAsync(Path.Combine(root, "dropped"));
             await DroppedVanillaImageAsync(Path.Combine(root, "dropped-vanilla"));
+            await CopiedTextureAsync(Path.Combine(root, "copied"));
         }
         finally
         {
@@ -1072,6 +1073,34 @@ internal static partial class TextureEditScenarios
         Check(result.Outcome == ExternalTextureOutcome.Failed && result.Message.Contains("divisible by 4"),
             "an image the texture's block compression can't hold is refused with why");
         Check(f.Backend.Commits == 4 && File.ReadAllBytes(s.TargetFile)[80] == 40, "refused drops leave the texture alone");
+    }
+
+    /// <summary>
+    /// Another row's texture copied onto this one in On Screen: the caller reads its bytes (from its mod or the
+    /// game's data) and the copy then goes through the texture's session as a dropped image does.
+    /// </summary>
+    private static async Task CopiedTextureAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var copied = Tex((uint)TexFile.TextureFormat.BC7, 8, 8, 3, 12);
+        var result = await f.Service.ReplaceAsync(f.Request, "c0101b0001_d.tex", _ => Task.FromResult(UncompressedOffsets(copied)));
+        Check(f.Backend.TargaInputs[^1].SequenceEqual(copied) && result.Outcome == ExternalTextureOutcome.Unchanged && f.Backend.Commits == 0,
+            "a copied TEX goes through the converter with its mip offsets normalized, and one the same as the texture commits nothing");
+
+        var png = File.ReadAllBytes(Png(Path.Combine(root, "images", "Green.png"), 8, 8, 70));
+        result = await f.Service.ReplaceAsync(f.Request, "Green.png", _ => Task.FromResult(png));
+        var s = f.Service.Sessions.Single();
+        Check(result.Outcome == ExternalTextureOutcome.Applied && File.ReadAllBytes(s.TargetFile)[80] == 70 &&
+              s.Replacement is { File: "Green.png" } && f.Service.FindUndoableReplace(f.Request)?.Id == s.Id,
+            "a copy is committed and can be undone like a dropped image");
+
+        await RejectAsync(() => f.Service.ReplaceAsync(f.Request, "Empty.tex", _ => Task.FromResult(Array.Empty<byte>())),
+            "a copy that read nothing is refused");
+        var read = false;
+        await RejectAsync(() => f.Service.ReplaceAsync(f.Request, "notes.txt", _ => { read = true; return Task.FromResult(png); }),
+            "a copy whose name isn't an image is refused");
+        Check(!read && f.Backend.Commits == 1 && File.ReadAllBytes(s.TargetFile)[80] == 70,
+            "a refused copy reads nothing and leaves the texture alone");
     }
 
     /// <summary> An image dropped on a vanilla texture creates its mod; undo puts the game's texture back in that mod. </summary>

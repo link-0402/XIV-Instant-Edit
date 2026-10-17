@@ -101,7 +101,7 @@ public sealed class MainWindow : Window, IDisposable
         _blenderConnection = new BlenderConnection(blender, config, textures, log);
         _models = new ModelSender(config, penumbra, sourceMods, blender, _blenderConnection, data, chat, log, resourceSources, _feed, lifetime);
         _painter = new PainterPanel(config, log, textures, _models, _feed, lifetime);
-        _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, log, lifetime);
+        _textureTab = new TextureSessionsTab(config, textures, previews, _painter, _feed, data, log, lifetime);
         _hoverCards = new ResourceHoverCards(previews);
         _animationDelivery = new AnimationDelivery(config, blender, _blenderConnection);
         _recorder = new RecorderPanel(config, saveConfig, log, _feed, _animationDelivery, lifetime);
