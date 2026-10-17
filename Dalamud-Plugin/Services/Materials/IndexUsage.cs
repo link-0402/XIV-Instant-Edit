@@ -15,6 +15,28 @@ public sealed record IndexUsage(float[] RowShare, bool[] RowUsed, int Width, int
 }
 
 /// <summary>
+/// The index texture a converted legacy table needs. Legacy shaders pick the row with the normal map's
+/// alpha, and converting puts legacy row p into both rows of pair p, so red = 17 p (the pair of that
+/// alpha) and green = 255 (the top row; both rows are the same).
+/// </summary>
+public static class LegacyIndexTexture
+{
+    public static byte[] FromNormal(DecodedTexture normal)
+    {
+        var texels = normal.Width * normal.Height;
+        var bgra = new byte[texels * 4];
+        for (var i = 0; i < texels; i++)
+        {
+            var pair = Math.Clamp((int)MathF.Round(normal.Bgra[i * 4 + 3] / 17f), 0, 15);
+            bgra[i * 4 + 1] = 255;
+            bgra[i * 4 + 2] = (byte)(pair * 17);
+            bgra[i * 4 + 3] = 255;
+        }
+        return TextureFiles.BgraTex(bgra, normal.Width, normal.Height);
+    }
+}
+
+/// <summary>
 /// Reads an index texture the way the shader does. Dawntrail: red picks pair p = round(r / 17), green
 /// blends it, the top row 2p getting g / 255 and the bottom row 2p + 1 the rest. Legacy: red alone
 /// picks one of 16 rows. A row counts as used when some texel gives it more than 1 / 255.

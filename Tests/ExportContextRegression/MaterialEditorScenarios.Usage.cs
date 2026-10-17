@@ -8,6 +8,26 @@ internal static partial class MaterialEditorScenarios
     public static void RunUsage()
     {
         CheckUsage();
+        CheckLegacyIndexTexture();
+    }
+
+    /// <summary>
+    /// Converting a legacy table needs an index texture, or the game picks one pair everywhere (review
+    /// 2026-10-17). Legacy shaders pick the row with the normal map's alpha; the built index sends each
+    /// texel to the top row of the pair holding that legacy row.
+    /// </summary>
+    private static void CheckLegacyIndexTexture()
+    {
+        byte[] alphas = [0, 17, 34, 120, 255, 255, 34, 0];
+        var bgra = new byte[alphas.Length * 4];
+        for (var i = 0; i < alphas.Length; i++)
+            (bgra[i * 4], bgra[i * 4 + 1], bgra[i * 4 + 2], bgra[i * 4 + 3]) = ((byte)128, (byte)128, (byte)255, alphas[i]);
+        var normal = new DecodedTexture(bgra, 4, 2, 4, 2, 0, 1);
+        var tex = LegacyIndexTexture.FromNormal(normal);
+        var index = TextureDecoder.Decode(tex, int.MaxValue);
+        var usage = IndexUsageCalc.Compute(index, ColorTableKind.Dawntrail);
+        Require(index.Width == 4 && index.Height == 2 && Used(usage).SequenceEqual([0, 2, 4, 14, 30]),
+            "the index built from the normal map's alpha picks the top row of each legacy row's pair (alpha 120 is row 7)");
     }
 
     /// <summary>A BGRA image of one colour: the index texture's red picks the pair, green blends its rows.</summary>
