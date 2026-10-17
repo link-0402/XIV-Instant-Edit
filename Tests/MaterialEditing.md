@@ -179,6 +179,24 @@ The places, file names and the meta.json write are checked offline (ModHandoffSc
   gave pairs 8-16. Save added the texture to the material's option. The halo isn't worn, so the
   look isn't judged.)
 
+## Several windows and the one-row pulse (2026-10-17, need an in-game check)
+
+- [ ] Open a material, then another from a different row: a second window opens beside the first,
+  and both keep their edits. Opening a material that a window already holds brings that window up.
+- [ ] Two windows with structural edits (a key or a preset) on the same character: both previews
+  show at once (Penumbra lists "XIV Instant Edit material preview" and "... preview 2"); closing
+  one takes only its preview down.
+- [ ] Close a window with no unsaved changes, then open a third material: it reuses that window
+  instead of making a new one. A closed window with unsaved changes keeps them for its material.
+- [ ] Copy a row in one window and paste it in another.
+- [ ] Save in two windows at once into the same mod: both files land, meta.json intact.
+- [ ] Hover the top half of a pair swatch: only that row pulses (yellow) and the bottom row keeps
+  its colours; the bottom half pulses only its row (blue). The tooltip names the row and its share
+  of the pair; a sub row the index never picks is dimmed in its half.
+- [ ] Hover a row's name, copy, paste or reset button below: that row pulses; it keeps pulsing
+  while the paste menu is open. `material` shows "highlightedRow".
+- [ ] Unload the plugin with two previews shown: both temporary mods go and the character redraws.
+
 ## Finish (Task 13, pending)
 
 - [x] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as

@@ -44,8 +44,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Services.Heels.HeelsOffsetService _heels;
     private readonly Services.Physics.PhysicsBuilderService _physics;
     private readonly PhysicsWindow           _physicsWindow;
-    private readonly Services.Materials.MaterialPreviewService _materialPreview;
-    private readonly Ui.Material.MaterialWindow _materialWindow;
+    private readonly Ui.Material.MaterialWindows _materialWindows;
     private readonly Services.Testing.BridgeTools? _bridgeTools;
     private readonly Services.TextureCompression.TextureCompressionService _compression;
     private readonly Studio.StudioHost       _studio;
@@ -266,14 +265,17 @@ public sealed class Plugin : IDalamudPlugin
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
         // The Material window: every setting of a material named, shown on the character through a temporary mod, saved with a backup.
-        _materialPreview = new Services.Materials.MaterialPreviewService(_penumbra.Ipc, _penumbra.Previews, framework, log, configDirectory,
-            () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
-        _materialWindow = new Ui.Material.MaterialWindow(new Services.PreviewMods.PreviewModService(_penumbra.Previews), _materialPreview, _penumbra.Ipc,
-            _previews, data, textureProvider, framework, objects, log);
-        _window.AttachMaterials(_materialWindow.Open, Ui.Material.MaterialWindow.EditBlock);
+        // One window per open material, each with its own preview.
+        _windowSystem = new WindowSystem();
+        var materialSaves = new Services.PreviewMods.PreviewModService(_penumbra.Previews);
+        _materialWindows = new Ui.Material.MaterialWindows(_windowSystem, Services.Materials.MaterialPreviewService.RecordedSlots(configDirectory),
+            slot => new Services.Materials.MaterialPreviewService(_penumbra.Ipc, _penumbra.Previews, framework, log, configDirectory,
+                () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), slot),
+            (slot, preview) => new Ui.Material.MaterialWindow(slot, materialSaves, preview, _penumbra.Ipc, _previews, data, textureProvider, framework, objects, log));
+        _window.AttachMaterials(_materialWindows.Open, Ui.Material.MaterialWindow.EditBlock);
         // Test tools for XIV Bridge (Tests/*.md checks), only when running as a dev plugin.
         if (pi.IsDev)
-            _bridgeTools = new Services.Testing.BridgeTools(pi, framework, log, _config, _contexts, _backups, estEntries, _physicsWindow, _materialWindow);
+            _bridgeTools = new Services.Testing.BridgeTools(pi, framework, log, _config, _contexts, _backups, estEntries, _physicsWindow, _materialWindows);
         // Automatic cache cleanup also removes old exports from the cache's export folder, and the
         // backups of optimized textures and cleaned-up mods, after the days set in Settings.
         _textures.AdditionalCacheCleanup = () =>
@@ -318,7 +320,6 @@ public sealed class Plugin : IDalamudPlugin
                 : null);
         _window.AttachStudio(_studio);
 
-        _windowSystem = new WindowSystem();
         _windowSystem.AddWindow(_window);
         _windowSystem.AddWindow(_changelogWindow);
         _windowSystem.AddWindow(_setupWindow);
@@ -328,8 +329,10 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_timelineWindow.Overlay);
         _windowSystem.AddWindow(_physicsWindow.Overlay);
         _windowSystem.AddWindow(_physicsWindow);
-        _windowSystem.AddWindow(_materialWindow);
+        _materialWindows.AddJoining();
 
+        // Material windows opened while the last frame drew join the system first.
+        _pi.UiBuilder.Draw += _materialWindows.AddJoining;
         _pi.UiBuilder.Draw += _windowSystem.Draw;
         _pi.UiBuilder.Draw += _studio.Draw;
         _pi.UiBuilder.Draw += _setupWindow.DrawFileDialog;
@@ -450,6 +453,7 @@ public sealed class Plugin : IDalamudPlugin
         _bridgeTools?.Dispose();
         _commands.RemoveHandler("/ie");
         _commands.RemoveHandler("/iesettings");
+        _pi.UiBuilder.Draw -= _materialWindows.AddJoining;
         _pi.UiBuilder.Draw -= _windowSystem.Draw;
         _pi.UiBuilder.Draw -= _studio.Draw;
         _pi.UiBuilder.Draw -= _setupWindow.DrawFileDialog;
@@ -468,7 +472,6 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_timelineWindow.Overlay);
         _windowSystem.RemoveWindow(_physicsWindow.Overlay);
         _windowSystem.RemoveWindow(_physicsWindow);
-        _windowSystem.RemoveWindow(_materialWindow);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
         _recorder.Dispose();
@@ -490,9 +493,8 @@ public sealed class Plugin : IDalamudPlugin
         _heels.Dispose();
         // Removes the physics preview's temporary mod, so it goes before Penumbra.
         _physicsWindow.Dispose();
-        // The material preview's temporary mod goes before Penumbra too.
-        _materialWindow.Dispose();
-        _materialPreview.Dispose();
+        // The Material windows leave the window system and their previews' temporary mods go, before Penumbra too.
+        _materialWindows.Dispose();
         _physics.Dispose();
         _gameFiles.Dispose();
         _textures.FileChanged -= _previews.Invalidate;

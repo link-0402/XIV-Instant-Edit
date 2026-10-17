@@ -16,9 +16,10 @@ using InstantEdit.Studio.Services;
 namespace InstantEdit.Ui.Material;
 
 /// <summary>
-/// The Material window: one material at a time, opened from a row's menu in On Screen, Game Files
-/// or a mod window. Every setting is named; edits show on the character (through a temporary mod
-/// and a redraw) and Save writes the mod's file with a backup, or a new mod for a game file.
+/// A Material window: one material at a time, opened from a row's menu in On Screen, Game Files
+/// or a mod window; <see cref="MaterialWindows"/> opens more of them for more materials. Every setting
+/// is named; edits show on the character (through the window's own temporary mod and a redraw) and
+/// Save writes the mod's file with a backup, or a new mod for a game file.
 /// </summary>
 internal sealed partial class MaterialWindow : Window, IDisposable
 {
@@ -28,6 +29,10 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private const int PreviewDelayMs = 300;
     private const string Recheck = "Open the material again";
 
+    // Windows save into the same mods (one may be the other's), so saves and restores take turns.
+    private static readonly SemaphoreSlim ModWrites = new(1, 1);
+
+    private readonly string windowId;
     private readonly PreviewModService previewMods;
     private readonly MaterialPreviewService preview;
     private readonly PenumbraIpc penumbra;
@@ -43,6 +48,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
 
     private MaterialSession? session;
     private Task<Opened>? opening;
+    private string? openingPath;
     private (ResourceView Row, ActorView Actor, IModFileCopies? Copies)? pendingOpen;
     private bool openSwitchPopup;
     private bool openNewModPopup;
@@ -58,10 +64,13 @@ internal sealed partial class MaterialWindow : Window, IDisposable
 
     private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader, IModFileCopies? Copies);
 
-    internal MaterialWindow(PreviewModService previewMods, MaterialPreviewService preview, PenumbraIpc penumbra, PreviewService previews,
+    /// <param name="slot">The window's number; window 0 keeps the first window's id (and its saved place).</param>
+    internal MaterialWindow(int slot, PreviewModService previewMods, MaterialPreviewService preview, PenumbraIpc penumbra, PreviewService previews,
         IDataManager data, ITextureProvider textures, IFramework framework, IObjectTable objects, IPluginLog log)
-        : base("Material###InstantEditMaterial")
+        : base("Material" + IdFor(slot))
     {
+        Slot = slot;
+        windowId = IdFor(slot);
         this.previewMods = previewMods;
         this.preview = preview;
         this.penumbra = penumbra;
@@ -93,9 +102,26 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         };
     }
 
-    /// <summary>The material at <paramref name="gamePath"/> is the one open here.</summary>
-    public bool IsOpenFor(string gamePath)
-        => IsOpen && session != null && string.Equals(session.Source.GamePath, PathRules.NormalizeGamePath(gamePath), StringComparison.OrdinalIgnoreCase);
+    private static string IdFor(int slot) => slot == 0 ? "###InstantEditMaterial" : $"###InstantEditMaterial{slot + 1}";
+
+    public int Slot { get; }
+
+    /// <summary>Where the window was last drawn, for placing the next one beside it.</summary>
+    public Vector2? LastPosition { get; private set; }
+
+    /// <summary>
+    /// The material at <paramref name="gamePath"/> is open here (closed windows keep theirs) or on its
+    /// way. Two windows on one game path would write into the same loaded material.
+    /// </summary>
+    public bool Holds(string gamePath)
+    {
+        var normalized = PathRules.NormalizeGamePath(gamePath);
+        return string.Equals(session?.Source.GamePath, normalized, StringComparison.OrdinalIgnoreCase)
+               || (opening != null && string.Equals(openingPath, normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Another material can open here without losing anything: no job running, and empty or closed with nothing unsaved.</summary>
+    public bool Free => opening == null && working == null && pendingOpen == null && (session == null || (!IsOpen && !session.History.Dirty));
 
     /// <summary>Opens a row's material; asks first when another one has unsaved changes.</summary>
     public void Open(ResourceView row, ActorView actor) => Open(row, actor, null);
@@ -132,6 +158,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         if (opening != null)
             return;
         previewDue = 0;
+        openingPath = PathRules.NormalizeGamePath(row.GamePath);
         opening = Task.Run(async () =>
         {
             var bytes = row.SourceState == ResourceSourceState.GameData
@@ -207,6 +234,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
 
     public override void Draw()
     {
+        LastPosition = ImGui.GetWindowPos();
         previews.Pump();
         Poll();
         if (openSwitchPopup)
@@ -227,7 +255,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             DrawSwitchPopup();
             return;
         }
-        WindowName = $"Material: {current.Source.FileName}###InstantEditMaterial";
+        WindowName = $"Material: {current.Source.FileName}{windowId}";
         var doc = current.Current;
         DrawToolbar(current, doc);
         DrawMessage();
@@ -599,7 +627,9 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         {
             // The saved file is what the character loads next; the temporary preview of it comes down without a redraw of its own.
             await current.DiscardAsync(preview, redraw: false).ConfigureAwait(false);
-            result = await current.SaveAsync(previewMods, modName).ConfigureAwait(false);
+            await ModWrites.WaitAsync(life.Token).ConfigureAwait(false);
+            try { result = await current.SaveAsync(previewMods, modName).ConfigureAwait(false); }
+            finally { ModWrites.Release(); }
             return result.Warnings.Count == 0 ? null : string.Join(" ", result.Warnings);
         }, warning =>
         {
@@ -617,8 +647,13 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         Run(async () =>
         {
             await current.DiscardAsync(preview, redraw: false).ConfigureAwait(false);
-            var warnings = await previewMods.RestoreAsync(group, source.ObjectIndex, Recheck).ConfigureAwait(false);
-            return warnings.Count == 0 ? null : string.Join(" ", warnings);
+            await ModWrites.WaitAsync(life.Token).ConfigureAwait(false);
+            try
+            {
+                var warnings = await previewMods.RestoreAsync(group, source.ObjectIndex, Recheck).ConfigureAwait(false);
+                return warnings.Count == 0 ? null : string.Join(" ", warnings);
+            }
+            finally { ModWrites.Release(); }
         }, warning =>
         {
             Reload(source);
