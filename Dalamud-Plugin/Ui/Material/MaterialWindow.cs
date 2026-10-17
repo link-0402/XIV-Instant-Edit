@@ -175,7 +175,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         previewDue = 0;
         // The previews show unsaved edits; closing puts the character's own look back. The edits stay until another material opens.
         RestoreLive();
-        if (session is not { PreviewShown: true } current)
+        // A preview still on its way (working) is shown only once it lands, so its discard waits for it.
+        if (session is not { } current || (!current.PreviewShown && working == null))
             return;
         loadedDoc = current.History.Saved;
         var stop = working ?? Task.FromResult<string?>(null);
@@ -331,12 +332,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         var old = session;
         var reload = old != null && string.Equals(old.Source.ActualPath, opened.Source.ActualPath, StringComparison.OrdinalIgnoreCase)
                      && string.Equals(old.Source.GamePath, opened.Source.GamePath, StringComparison.OrdinalIgnoreCase);
-        if (old is { PreviewShown: true } && !reload)
-            Run(async () =>
-            {
-                await old.DiscardAsync(preview).ConfigureAwait(false);
-                return null;
-            }, _ => $"Opened {opened.Source.FileName}.");
+        if (old != null && !reload)
+            DiscardAfterWork(old, opened.Source.FileName);
         if (!reload)
             RestoreLive();
         if (reload && old != null)
@@ -396,6 +393,26 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                     ? $"Shown on the character. Others using {preview.CollectionName} see it too. Nothing is saved yet."
                     : "Shown on the character. Nothing is saved yet.");
             });
+    }
+
+    /// <summary>
+    /// Takes the last material's preview down once the job in flight is done (a preview still on its
+    /// way lands first). The job's own completion is for the last material, so it is dropped.
+    /// </summary>
+    private void DiscardAfterWork(MaterialSession old, string opened)
+    {
+        var previous = working;
+        workDone = _ => $"Opened {opened}.";
+        working = Task.Run(async () =>
+        {
+            if (previous != null)
+            {
+                try { await previous.ConfigureAwait(false); }
+                catch (Exception e) { log.Debug(e, "The last material's job failed before its preview was taken down."); }
+            }
+            await old.DiscardAsync(preview).ConfigureAwait(false);
+            return (string?)null;
+        });
     }
 
     private void Run(Func<Task<string?>> action, Func<string?, string> done)
