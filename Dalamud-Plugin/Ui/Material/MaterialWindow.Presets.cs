@@ -101,6 +101,57 @@ internal sealed partial class MaterialWindow
         }
     }
 
+    private const string CleanUpPopup = "Clean up##material-cleanup";
+    private PresetResult? pendingCleanUp;
+    private bool openCleanUp;
+
+    /// <summary>Works out what Clean up would remove and asks first.</summary>
+    private void StartCleanUp(MaterialSession current)
+    {
+        var doc = current.Current;
+        if (ShaderPackages.Get(doc.ShaderPackage) is not { } facts)
+            return;
+        var context = new PresetContext(doc, facts, usage, selectedPair, mask, current.Source.GamePath);
+        pendingCleanUp = EffectPresets.All.Single(preset => preset is { Name: "Clean up" }).Apply(context, RowTarget.All);
+        openCleanUp = true;
+    }
+
+    private void DrawCleanUpPopup(MaterialSession current)
+    {
+        if (openCleanUp)
+        {
+            openCleanUp = false;
+            ImGui.OpenPopup(CleanUpPopup);
+        }
+        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(400, 0), Theme.Scaled(620, 520));
+        if (!ImGui.BeginPopupModal(CleanUpPopup, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+        var result = pendingCleanUp;
+        var nothing = result == null || ReferenceEquals(result.Doc, current.Current) || MaterialDocument.Same(result.Doc, current.Current);
+        Widgets.SectionHeader(nothing ? "Nothing to clean up" : "Clean up removes");
+        if (result != null && !nothing)
+            foreach (var change in result.Changes)
+                ImGui.BulletText(change);
+        ImGui.Spacing();
+        using (ImRaii.Disabled(nothing))
+        {
+            if (ImGui.Button("Clean up##cleanup-apply") && result != null)
+            {
+                _ = current.Apply(_ => result.Doc, "Clean up");
+                Say(FeedbackSeverity.Success, $"Cleaned up: {result.Changes.Count} setting{(result.Changes.Count == 1 ? "" : "s")}. Undo takes it back.");
+                pendingCleanUp = null;
+                ImGui.CloseCurrentPopup();
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(nothing ? "Close##cleanup-cancel" : "Cancel##cleanup-cancel"))
+        {
+            pendingCleanUp = null;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.EndPopup();
+    }
+
     private void ApplyPreset(MaterialSession current, MaterialEffectPreset preset, PresetContext context)
     {
         PresetResult result;
