@@ -26,10 +26,12 @@ internal sealed unsafe class LiveColorTable : IDisposable
     /// One bound table slot. <see cref="Original"/> is the game's texture, held with a reference of
     /// ours; <see cref="Current"/> is ours while it is in the slot, else 0.
     /// </summary>
-    private sealed class Slot(MaterialBinding binding, nint characterBase, nint original)
+    private sealed class Slot(MaterialBinding binding, nint characterBase, nint material, nint original)
     {
         public MaterialBinding Binding { get; } = binding;
         public nint CharacterBase { get; } = characterBase;
+        /// <summary>The material in the place at bind time; another one there means the slot belongs to other gear.</summary>
+        public nint Material { get; } = material;
         public nint Original { get; set; } = original;
         public nint Current { get; set; }
     }
@@ -61,7 +63,7 @@ internal sealed unsafe class LiveColorTable : IDisposable
             if (pointer == null || *pointer == null)
                 continue;
             (*pointer)->IncRef();
-            slots.Add(new Slot(binding, (nint)characterBase, (nint)(*pointer)));
+            slots.Add(new Slot(binding, (nint)characterBase, MaterialAt(characterBase, binding), (nint)(*pointer)));
             added++;
         }
         return added;
@@ -153,8 +155,9 @@ internal sealed unsafe class LiveColorTable : IDisposable
     public void Dispose() => Restore();
 
     /// <summary>
-    /// Drops slots whose draw object is gone (letting go of our reference to the original), and
-    /// follows a table texture the game made anew: it becomes the original, and the rows are shown again.
+    /// Drops slots whose draw object is gone or whose place holds another material now (letting go of
+    /// our reference to the original), and follows a table texture the game made anew for the same
+    /// material: it becomes the original, and the rows are shown again.
     /// </summary>
     private void Revalidate()
     {
@@ -170,15 +173,41 @@ internal sealed unsafe class LiveColorTable : IDisposable
                 continue;
             }
             var holding = (nint)(*pointer);
-            if (holding == slot.Current || (slot.Current == 0 && holding == slot.Original))
-                continue;
-            // The game swapped in a table of its own, letting go of ours.
-            ((Texture*)slot.Original)->DecRef();
-            (*pointer)->IncRef();
-            slot.Original = holding;
-            slot.Current = 0;
-            dirty = pending != null;
+            switch (TableSlotFollow.Decide(MaterialAt(characterBase, slot.Binding) == slot.Material, holding, slot.Current, slot.Original))
+            {
+                case TableSlotAction.Keep:
+                    continue;
+                case TableSlotAction.DropPuttingBack:
+                    // Our reference to the original becomes the slot's again.
+                    *pointer = (Texture*)slot.Original;
+                    ((Texture*)slot.Current)->DecRef();
+                    slots.RemoveAt(i);
+                    continue;
+                case TableSlotAction.Drop:
+                    ((Texture*)slot.Original)->DecRef();
+                    slots.RemoveAt(i);
+                    continue;
+                case TableSlotAction.Adopt:
+                    // The game swapped in a table of its own, letting go of ours.
+                    ((Texture*)slot.Original)->DecRef();
+                    (*pointer)->IncRef();
+                    slot.Original = holding;
+                    slot.Current = 0;
+                    dirty = pending != null;
+                    continue;
+            }
         }
+    }
+
+    /// <summary>The material in a binding's place now, or 0.</summary>
+    private static nint MaterialAt(CharacterBase* characterBase, MaterialBinding binding)
+    {
+        if (characterBase == null || characterBase->Models == null || binding.ModelSlot < 0 || binding.ModelSlot >= characterBase->SlotCount)
+            return 0;
+        var model = characterBase->Models[binding.ModelSlot];
+        if (model == null || model->Materials == null || binding.MaterialSlot < 0 || binding.MaterialSlot >= model->MaterialCount)
+            return 0;
+        return (nint)model->Materials[binding.MaterialSlot];
     }
 
     private static Texture** SlotPointer(CharacterBase* characterBase, MaterialBinding binding)

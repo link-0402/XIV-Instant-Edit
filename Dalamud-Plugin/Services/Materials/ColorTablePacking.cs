@@ -9,6 +9,28 @@ public readonly record struct RowHighlight(int RowA, int RowB, Vector3 ColourA, 
 /// The colour table as the game's table texture holds it: 32 rows of 8 RGBA half texels (the
 /// Dawntrail row layout), legacy tables converted first.
 /// </summary>
+public enum TableSlotAction
+{
+    Keep,
+    /// <summary>The game made a new table texture for the same material (a dye change): follow it.</summary>
+    Adopt,
+    /// <summary>Another material sits in the place now (a gear change): let go of the slot.</summary>
+    Drop,
+    /// <summary>As <see cref="Drop"/>, but our texture is still in the slot, so the original goes back first.</summary>
+    DropPuttingBack,
+}
+
+/// <summary>What a bound colour-table slot does when the texture or material in its place changed.</summary>
+public static class TableSlotFollow
+{
+    public static TableSlotAction Decide(bool sameMaterial, nint holding, nint current, nint original)
+    {
+        if (!sameMaterial)
+            return current != 0 && holding == current ? TableSlotAction.DropPuttingBack : TableSlotAction.Drop;
+        return holding == current || (current == 0 && holding == original) ? TableSlotAction.Keep : TableSlotAction.Adopt;
+    }
+}
+
 public static class ColorTablePacking
 {
     public const int Width = 8;

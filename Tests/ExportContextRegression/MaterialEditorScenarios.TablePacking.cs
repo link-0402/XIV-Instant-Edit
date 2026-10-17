@@ -8,6 +8,23 @@ internal static partial class MaterialEditorScenarios
     public static void RunTablePacking()
     {
         CheckTablePacking();
+        CheckTableSlotFollowing();
+    }
+
+    /// <summary>What a bound table slot does when the slot changes under it (review 2026-10-17: a gear change kept the old rows).</summary>
+    private static void CheckTableSlotFollowing()
+    {
+        const nint ours = 0x10, original = 0x20, game = 0x30;
+        Require(TableSlotFollow.Decide(sameMaterial: true, holding: ours, current: ours, original: original) == TableSlotAction.Keep
+                && TableSlotFollow.Decide(true, original, 0, original) == TableSlotAction.Keep,
+            "a slot holding our rows, or the original while ours aren't in, is kept");
+        Require(TableSlotFollow.Decide(true, game, ours, original) == TableSlotAction.Adopt,
+            "a new table texture for the same material (a dye change) becomes the original and the rows go back in");
+        Require(TableSlotFollow.Decide(false, game, ours, original) == TableSlotAction.Drop
+                && TableSlotFollow.Decide(false, original, 0, original) == TableSlotAction.Drop,
+            "another material in the place (a gear change) drops the slot, whatever texture it holds");
+        Require(TableSlotFollow.Decide(false, ours, ours, original) == TableSlotAction.DropPuttingBack,
+            "another material in the place with our rows still in the slot puts the original back first");
     }
 
     private static void CheckTablePacking()
