@@ -48,8 +48,8 @@ internal sealed unsafe class LiveMaterial : IDisposable
 
     public string LastWrite { get; private set; } = string.Empty;
 
-    /// <summary>Every place on the object (its body and weapons) where a material loaded from <paramref name="gamePath"/> sits.</summary>
-    public static IReadOnlyList<MaterialBinding> Find(IObjectTable objects, int objectIndex, string gamePath)
+    /// <summary>Every place on the object (its body and weapons) where a material loaded under one of <paramref name="paths"/> sits (see <see cref="MaterialPathMatch.Candidates"/>).</summary>
+    public static IReadOnlyList<MaterialBinding> Find(IObjectTable objects, int objectIndex, IReadOnlyCollection<string> paths)
     {
         var found = new List<MaterialBinding>();
         foreach (var kind in Enum.GetValues<DrawObjectKind>())
@@ -67,7 +67,7 @@ internal sealed unsafe class LiveMaterial : IDisposable
                 {
                     var material = model->Materials[index];
                     if (material != null && material->MaterialResourceHandle != null
-                        && MaterialPathMatch.Matches(material->MaterialResourceHandle->FileName.Utf8(), gamePath))
+                        && MaterialPathMatch.MatchesAny(material->MaterialResourceHandle->FileName.Utf8(), paths))
                         found.Add(new MaterialBinding(objectIndex, kind, slot, index));
                 }
             }

@@ -80,6 +80,16 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
 
     public string CollectionName { get { lock (sync) return collectionName; } }
 
+    /// <summary> The file the shown preview redirects <paramref name="gamePath"/> to, or null without a preview. </summary>
+    public string? FileFor(string gamePath)
+    {
+        lock (sync)
+            return session == null || revision == 0
+                ? null
+                : Path.Combine(session, revision.ToString(CultureInfo.InvariantCulture),
+                    PathRules.NormalizeGamePath(gamePath).ToLowerInvariant().Replace('/', Path.DirectorySeparatorChar));
+    }
+
     public Task<string?> ShowAsync(int objectIndex, IReadOnlyDictionary<string, byte[]> files, CancellationToken token)
     {
         ObjectDisposedException.ThrowIf(disposed, this);

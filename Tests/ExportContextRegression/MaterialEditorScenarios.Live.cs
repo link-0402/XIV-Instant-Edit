@@ -19,6 +19,17 @@ internal static partial class MaterialEditorScenarios
             "backslashes and a leading slash don't matter");
         Require(!MaterialPathMatch.Matches("|x|chara/equipment/e0085/material/v0002/mt_c0201e0085_glv_b.mtrl", game) && !MaterialPathMatch.Matches("", game),
             "another file does not match");
+
+        // A mod's material is loaded under its file on disk, as read from the game (2026-10-17).
+        const string dress = "chara/equipment/e6059/material/v0001/mt_c0201e6059_top_dress.mtrl";
+        const string handle = "|2_2_1D79C9AE_0076|G:/Penumbra/Critique/chara/equipment/e6059/material/v0001/mt_c0201e6059_top_dress.mtrl";
+        var modFile = MaterialPathMatch.Candidates(dress, @"G:\Penumbra\Critique\chara\equipment\e6059\material\v0001\mt_c0201e6059_top_dress.mtrl", null);
+        Require(MaterialPathMatch.MatchesAny(handle, modFile), "a mod's material matches by the mod file it was loaded from");
+        Require(!MaterialPathMatch.MatchesAny(handle, MaterialPathMatch.Candidates(dress, dress, null)), "a game file's candidates don't match a mod file");
+        var preview = MaterialPathMatch.Candidates(dress, @"G:\Penumbra\Critique\x.mtrl", @"C:\Cache\material-preview\0123456789abcdef\2\" + dress.Replace('/', '\\'));
+        Require(MaterialPathMatch.MatchesAny("|1_2_3|C:/Cache/material-preview/0123456789abcdef/2/" + dress, preview),
+            "the structural preview's file matches while it is shown");
+        Require(modFile.Count == 2 && MaterialPathMatch.Candidates(dress, "", " ").Count == 1, "empty paths are left out");
     }
 
     private static void CheckLiveDiff()
