@@ -163,6 +163,19 @@ The places, file names and the meta.json write are checked offline (ModHandoffSc
 - [ ] Opened from On Screen or Game Files, the menu has no such item; with the mod window closed it
   is greyed with the reason.
 
+## Final review fixes (2026-10-17, need an in-game check)
+
+- [ ] Save on a mod material whose file changed since it was opened (edit it elsewhere first): the
+  window says it changed, and no "Material Save" mod is left in Penumbra (232c815: Save writes
+  straight into the mod now).
+- [ ] Change a key, then another, and close the window (or open another material and Discard)
+  while the second redraw runs: the preview comes down and the character shows its own material
+  (93e61fc).
+- [ ] Edit colour rows on the top, then change the top in Glamourer: the new item shows its own
+  colours, not the edited rows (2be2c23).
+- [ ] Convert to Dawntrail on a legacy material: a new `_id.tex` from the normal map is listed as a
+  new file, the character keeps its old colour layout, and Save adds the texture (14b6004).
+
 ## Finish (Task 13, pending)
 
 - [x] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as
