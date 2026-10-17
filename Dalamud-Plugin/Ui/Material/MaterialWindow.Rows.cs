@@ -166,9 +166,10 @@ internal sealed partial class MaterialWindow
         }
         RowPercent(current, row, "Detail strength", "How strongly the pattern shows.", values.TileAlpha, v => values with { TileAlpha = v }, name);
         var (scaleU, scaleV, rotation, shear) = TileTransform.Decompose(values.TileUU, values.TileUV, values.TileVU, values.TileVV);
-        RowTransform(current, row, "Detail scale across", "How often the pattern repeats across.", scaleU, -64f, 64f,
+        // Mods store scales well past 64 (250 is common), so the drags must not clamp them on a touch.
+        RowTransform(current, row, "Detail scale across", "How often the pattern repeats across.", scaleU, -1024f, 1024f,
             v => Compose(values, v, scaleV, rotation, shear), name);
-        RowTransform(current, row, "Detail scale down", "How often the pattern repeats down.", scaleV, -64f, 64f,
+        RowTransform(current, row, "Detail scale down", "How often the pattern repeats down.", scaleV, -1024f, 1024f,
             v => Compose(values, scaleU, v, rotation, shear), name);
         RowTransform(current, row, "Detail rotation", "Turns the pattern, in degrees.", rotation, -180f, 180f,
             v => Compose(values, scaleU, scaleV, v, shear), name);

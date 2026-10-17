@@ -283,20 +283,20 @@ public static class EffectPresets
                     continue;
                 doc = doc.WithoutKey(id);
                 changes.Add(key == null
-                    ? $"Removed {ShaderLabels.Key(id).Label}: this shader doesn't have it."
-                    : $"Removed {ShaderLabels.Key(id).Label} = {ShaderLabels.KeyValue(id, value)}: this shader has no such value.");
+                    ? $"Removes {ShaderLabels.Key(id).Label}: this shader doesn't have it."
+                    : $"Removes {ShaderLabels.Key(id).Label} = {ShaderLabels.KeyValue(id, value)}: this shader has no such value.");
             }
             foreach (var constant in context.Doc.Constants)
             {
                 if (facts.Reads(constant.Id, doc.Keys))
                     continue;
                 doc = doc.WithoutConstant(constant.Id);
-                changes.Add($"Removed {ShaderLabels.Constant(constant.Id).Label}: this shader ignores it.");
+                changes.Add($"Removes {ShaderLabels.Constant(constant.Id).Label}: this shader ignores it.");
             }
             if (facts.Key(VertexColour) is { } vertex && vertex.Values.Contains(UsualVertexColour) && doc.KeyValue(VertexColour) != UsualVertexColour)
             {
                 doc = doc.WithKey(VertexColour, UsualVertexColour);
-                changes.Add("Vertex colour is now the usual one for gear.");
+                changes.Add("Sets Vertex colour to the usual one for gear.");
             }
             if (changes.Count == 0)
                 changes.Add("Nothing to clean up.");

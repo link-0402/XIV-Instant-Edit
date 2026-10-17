@@ -56,7 +56,9 @@ internal static partial class MaterialEditorScenarios
         var preview = MaterialPathMatch.Candidates(dress, @"G:\Penumbra\Critique\x.mtrl", @"C:\Cache\material-preview\0123456789abcdef\2\" + dress.Replace('/', '\\'));
         Require(MaterialPathMatch.MatchesAny("|1_2_3|C:/Cache/material-preview/0123456789abcdef/2/" + dress, preview),
             "the structural preview's file matches while it is shown");
-        Require(modFile.Count == 2 && MaterialPathMatch.Candidates(dress, "", " ").Count == 1, "empty paths are left out");
+        Require(MaterialPathMatch.Candidates(dress, "", " ").Count == 1, "empty paths are left out");
+        Require(modFile.Count == 1 && !MaterialPathMatch.MatchesAny("|1_2_3|" + dress, modFile),
+            "a mod file doesn't bind to the vanilla material the character may wear while the mod is off");
     }
 
     private static void CheckLiveDiff()

@@ -94,10 +94,17 @@ public static class MaterialPathMatch
     public static bool MatchesAny(string handleFileName, IReadOnlyCollection<string> paths)
         => paths.Any(path => Matches(handleFileName, path));
 
-    /// <summary>The paths a material may be loaded under: its game path, the file it was opened from and the preview's file, without empty ones.</summary>
+    /// <summary>
+    /// The paths a material may be loaded under, without empty ones: the mod file it was opened from
+    /// (or, for a game file, its game path) and the preview's file. A mod file leaves the game path out,
+    /// so a character wearing the vanilla material while the mod is off isn't edited.
+    /// </summary>
     public static IReadOnlyCollection<string> Candidates(string gamePath, string? actualPath, string? previewFile)
-        => new[] { gamePath, actualPath, previewFile }.Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path!)
+    {
+        var opened = !string.IsNullOrWhiteSpace(actualPath) && Path.IsPathRooted(actualPath) ? actualPath : gamePath;
+        return new[] { opened, previewFile }.Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path!)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
     /// <summary>Without Penumbra's "|collection|" prefix, with forward slashes and no leading slash.</summary>
     public static string Normalize(string path)
