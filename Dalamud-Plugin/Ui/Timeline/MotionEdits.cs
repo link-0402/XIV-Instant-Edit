@@ -39,11 +39,12 @@ internal static class MotionEdits
     {
         MotionLayerKind.Offset => "Offset",
         MotionLayerKind.Amplitude => "Amplitude",
+        MotionLayerKind.Symmetry => "Symmetry",
         _ => "Pose",
     };
 
-    /// <summary>The largest amount a kind takes: a pose blends at most fully, the others go up to 400%.</summary>
-    public static float MaxAmount(MotionLayerKind kind) => kind == MotionLayerKind.Pose ? 1 : MotionEvaluator.MaxAmount;
+    /// <summary>The largest amount a kind takes: a pose or a symmetry blends at most fully, the others go up to 400%.</summary>
+    public static float MaxAmount(MotionLayerKind kind) => kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry ? 1 : MotionEvaluator.MaxAmount;
 
     /// <summary>
     /// Adds a layer of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/> after
@@ -69,11 +70,52 @@ internal static class MotionEdits
         do key = "m" + (next++).ToString(CultureInfo.InvariantCulture);
         while (!keys.Add(key));
         var number = doc.Motion.Count(layer => layer.Kind == kind) + 1;
-        var added = new MotionLayer(key, kind, $"{KindName(kind)} {number}", start, end, fade, fade,
+        var added = new MotionLayer(key, kind, kind == MotionLayerKind.Symmetry ? MotionSymmetry.DefaultName(MotionSide.Left) : $"{KindName(kind)} {number}",
+            start, end, fade, fade,
             kind == MotionLayerKind.Amplitude ? 1.5f : 1,
-            kind == MotionLayerKind.Offset ? PoseComponents.All : PoseComponents.Rotation | PoseComponents.Position,
+            kind switch
+            {
+                MotionLayerKind.Offset => PoseComponents.All,
+                MotionLayerKind.Symmetry => PoseComponents.Rotation,
+                _ => PoseComponents.Rotation | PoseComponents.Position,
+            },
             MotionInterpolation.Smooth);
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
+    }
+
+    /// <summary>
+    /// Adds a symmetry layer over the whole clip copying <paramref name="from"/> onto the other side for
+    /// <paramref name="bones"/> and everything below them: what Make symmetrical adds. Unchanged with an
+    /// error when no bone is given or the document has no room for another layer.
+    /// </summary>
+    public static TimelineDocument AddSymmetry(TimelineDocument doc, IEnumerable<string> bones, MotionSide from, out string key, out string? error)
+    {
+        key = string.Empty;
+        ImmutableArray<string> picked = [.. bones.Where(bone => !string.IsNullOrEmpty(bone)).Distinct(StringComparer.Ordinal)];
+        if (picked.IsEmpty)
+        {
+            error = "Select a bone with a twin on the other side.";
+            return doc;
+        }
+        var added = Add(doc, MotionLayerKind.Symmetry, 0, Math.Max(TimelineDocument.MinLength, doc.Length), out key, out error);
+        if (error != null)
+            return doc;
+        var index = IndexOf(added, key);
+        var layer = added.Motion[index] with { Bones = picked, From = from, Name = MotionSymmetry.DefaultName(from) };
+        return added with { Motion = added.Motion.SetItem(index, layer) };
+    }
+
+    /// <summary>
+    /// Sets which side a symmetry layer copies. A layer still named after its old direction is renamed
+    /// after the new one; a name the user gave stays.
+    /// </summary>
+    public static TimelineDocument SetFrom(TimelineDocument doc, string key, MotionSide from)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || doc.Motion[index] is not { Kind: MotionLayerKind.Symmetry } layer || layer.From == from)
+            return doc;
+        var name = layer.Name == MotionSymmetry.DefaultName(layer.From) ? MotionSymmetry.DefaultName(from) : layer.Name;
+        return doc with { Motion = doc.Motion.SetItem(index, layer with { From = from, Name = name }) };
     }
 
     /// <summary>
@@ -338,7 +380,8 @@ internal static class MotionEdits
     public static TimelineDocument SetKey(TimelineDocument doc, string key, int frame, string bone, BoneTransform? value, bool? moved = null)
     {
         var index = IndexOf(doc, key);
-        if (index < 0 || string.IsNullOrEmpty(bone))
+        // A symmetry layer copies the other side and never holds keys.
+        if (index < 0 || string.IsNullOrEmpty(bone) || doc.Motion[index].Kind == MotionLayerKind.Symmetry)
             return doc;
         frame = Math.Clamp(frame, 0, TimelineDocument.MaxFrames);
         var layer = doc.Motion[index];
@@ -488,7 +531,7 @@ internal static class MotionEdits
         ReferenceEquals(a, b) ||
         a.Key == b.Key && a.Kind == b.Kind && a.Name == b.Name && a.Start == b.Start && a.End == b.End && a.FadeIn == b.FadeIn &&
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
-        a.Enabled == b.Enabled && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Keys.Length == b.Keys.Length &&
+        a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) &&
             pair.First.Bones.Count == pair.Second.Bones.Count &&

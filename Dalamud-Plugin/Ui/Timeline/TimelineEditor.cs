@@ -1051,6 +1051,18 @@ internal sealed class TimelineEditor
         return true;
     }
 
+    /// <summary>Make symmetrical: adds a symmetry layer over the whole clip for <paramref name="bones"/> and selects it.</summary>
+    public bool AddSymmetry(IEnumerable<string> bones, MotionSide from)
+    {
+        LastError = null;
+        var next = MotionEdits.AddSymmetry(Document, bones, from, out var key, out var error);
+        LastError = error;
+        if (error != null || !Commit(next))
+            return false;
+        SelectLayer(key);
+        return true;
+    }
+
     /// <summary>
     /// Selects a bone layer, with <paramref name="keyFrame"/> its key there, and with <paramref name="bone"/>
     /// that bone's value in the key alone; the event selection clears.

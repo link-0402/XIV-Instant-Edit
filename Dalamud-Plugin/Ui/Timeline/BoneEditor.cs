@@ -367,6 +367,60 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
     }
 
     /// <summary>
+    /// A symmetry layer's bones: the picked ones, each bringing everything below it, how many bones that
+    /// copies, and the ones on the changed side without a twin. The selected bones can be added; with
+    /// <paramref name="picker"/> (the properties panel) a bone picker chooses them.
+    /// </summary>
+    public void DrawSymmetryBones(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, bool readOnly, bool picker)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Bones");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted(layer.Bones.IsEmpty ? "None yet" : layer.Bones.Length == 1 ? "1 bone" : $"{layer.Bones.Length} bones");
+        foreach (var bone in layer.Bones)
+        {
+            using var id = ImRaii.PushId(bone);
+            using (ImRaii.Disabled(readOnly))
+            {
+                if (Widgets.GhostIconButton("##remove", Dalamud.Interface.FontAwesomeIcon.Times, "Stop copying this bone's branch"))
+                    current.Commit(MotionEdits.SetBones(current.Document, layer.Key, layer.Bones.Remove(bone)));
+            }
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted(AnimationPresentation.BoneName(bone));
+        }
+        if (picker)
+        {
+            DrawPicker(skeleton, layer);
+            Widgets.HintWrapped("Each bone brings everything below it.");
+        }
+        var index = posing.BoneTree(skeleton).Index;
+        string[] chosen = [.. posing.Selection.Bones.Where(index.ContainsKey)];
+        using (ImRaii.Disabled(readOnly || chosen.Length == 0 || chosen.All(layer.Bones.Contains)))
+        {
+            if (ImGui.Button("Add selected"))
+                current.Commit(MotionEdits.SetBones(current.Document, layer.Key, layer.Bones.Concat(chosen)));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Copy the selected bones and everything below them.");
+
+        var (plan, problem, _) = posing.Symmetry(layer, skeleton);
+        if (problem != null)
+        {
+            Widgets.HintWrapped(problem);
+            return;
+        }
+        var from = layer.From == MotionSide.Left ? "left" : "right";
+        Widgets.MutedWrapped(plan.Pairs.Length == 1 ? $"Copies 1 bone from the {from} side." : $"Copies {plan.Pairs.Length} bones from the {from} side.");
+        if (!plan.Unpaired.IsEmpty)
+        {
+            var names = string.Join(", ", plan.Unpaired.Take(5).Select(AnimationPresentation.BoneName));
+            Widgets.HintWrapped($"No twin, left as is: {names}" + (plan.Unpaired.Length > 5 ? $" and {plan.Unpaired.Length - 5} more." : "."));
+        }
+    }
+
+    /// <summary>
     /// The rotation ball over the primary bone: its rings show the bone's own axes as the camera sees
     /// it, or the character's. A drag is one undo step and turns every bone the edit changes (see
     /// <see cref="PoseEdits.Turned"/>). With several of them the rings are the character's: each bone's

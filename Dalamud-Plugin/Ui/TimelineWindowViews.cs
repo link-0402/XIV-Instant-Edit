@@ -33,7 +33,7 @@ internal static partial class TimelineWindowViews
         [TimelineAddKind.Expression, TimelineAddKind.LipSync, TimelineAddKind.Sound, TimelineAddKind.Effect, TimelineAddKind.Prop];
 
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
-    public static readonly ImmutableArray<MotionLayerKind> LayerKinds = [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose];
+    public static readonly ImmutableArray<MotionLayerKind> LayerKinds = [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry];
 
     /// <summary>The bone layer rows' legend when there is no layer yet.</summary>
     public const string BonesLaneName = "Bones";
@@ -62,6 +62,7 @@ internal static partial class TimelineWindowViews
     {
         MotionLayerKind.Offset => Theme.Info,
         MotionLayerKind.Amplitude => Theme.Watching,
+        MotionLayerKind.Symmetry => Theme.MaterialKind,
         _ => Theme.Important,
     };
 
@@ -70,6 +71,7 @@ internal static partial class TimelineWindowViews
     {
         MotionLayerKind.Offset => "Turn, move or scale bones over a section, by keys you set.",
         MotionLayerKind.Amplitude => "Make bones move more or less around their average pose.",
+        MotionLayerKind.Symmetry => "Copy one side's motion onto the other, mirrored.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -100,6 +102,12 @@ internal static partial class TimelineWindowViews
             // An amplitude only scales motion that is there, so it never adds a track.
             if (layer.Kind == MotionLayerKind.Amplitude)
                 continue;
+            // A symmetry gives tracks to the bones it copies onto, as the bake finds them.
+            if (layer.Kind == MotionLayerKind.Symmetry)
+            {
+                moved.UnionWith(CopiedBones(doc, layer, clip));
+                continue;
+            }
             foreach (var key in layer.Keys)
                 foreach (var bone in key.Bones.Keys)
                     if (layer.Bones.IsEmpty || layer.Bones.Contains(bone))
@@ -115,6 +123,9 @@ internal static partial class TimelineWindowViews
     /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude has no keys, only the bones it is limited to.</summary>
     public static string LayerContent(MotionLayer layer)
     {
+        if (layer.Kind == MotionLayerKind.Symmetry)
+            return (layer.From == MotionSide.Left ? "From the left · " : "From the right · ") +
+                   (layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones");
         var bones = layer.Kind == MotionLayerKind.Amplitude
             ? layer.Bones.Length
             : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct(StringComparer.Ordinal).Count();
@@ -344,6 +355,26 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
+    /// The bones a symmetry layer in <paramref name="doc"/> copies onto when saved, as the bake finds them:
+    /// pairs the clip tracks or an earlier layer moves. None before the clip's skeleton is known, or for a
+    /// picked bone the skeleton lacks, which applying the layer reports.
+    /// </summary>
+    private static IEnumerable<string> CopiedBones(TimelineDocument doc, MotionLayer layer, AnimationClip clip)
+    {
+        if (clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+            return [];
+        try
+        {
+            var moving = MotionSymmetry.Animated(skeleton, clip.Resolution.TrackBones, doc.Motion, doc.Motion.IndexOf(layer));
+            return [.. MotionSymmetry.Plan(skeleton, layer, moving).Pairs.Select(pair => skeleton.Bones[pair.Target].Name)];
+        }
+        catch (InvalidDataException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
     /// What stops saving with <paramref name="doc"/>'s bones left out and a repair onto <paramref name="repair"/>,
     /// as the old rebakes refused them; null when nothing does. Bone layers on a bone left out would be lost,
     /// and a repair onto the skeleton the clip was already made for changes nothing.
@@ -357,7 +388,12 @@ internal static partial class TimelineWindowViews
         {
             var left = excluded.ToHashSet(StringComparer.Ordinal);
             var moved = doc.Motion.Where(MotionEvaluator.Active)
-                .SelectMany(layer => layer.Kind == MotionLayerKind.Amplitude ? layer.Bones.AsEnumerable() : layer.Keys.SelectMany(key => key.Bones.Keys))
+                .SelectMany(layer => layer.Kind switch
+                {
+                    MotionLayerKind.Amplitude => layer.Bones.AsEnumerable(),
+                    MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip),
+                    _ => layer.Keys.SelectMany(key => key.Bones.Keys),
+                })
                 .Where(left.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             if (moved.Length > 0)
                 return $"Bone layers move {string.Join(", ", moved.Take(3).Select(AnimationPresentation.BoneName))}" +

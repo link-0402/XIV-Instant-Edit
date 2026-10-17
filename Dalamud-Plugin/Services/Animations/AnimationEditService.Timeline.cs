@@ -409,7 +409,10 @@ internal sealed partial class AnimationEditService
             await resources.CheckAsync(capture.CollectionId, [source.Resource], token);
             // The file the timeline lives in: the clip's PAP, or an expression's own TMB.
             var edited = source.Resource.GamePath;
-            var manifest = await resources.ManifestAsync(capture, [edited, .. replaced?.Keys ?? []], destination, token);
+            // A new mod gets the loop's startup from the same mod too, or the startup's loop, unchanged.
+            var companion = AnimationBakeRules.CompanionClip(capture, source.Startup, source.Resource, destination);
+            var manifest = await resources.ManifestAsync(capture,
+                [edited, .. companion == null ? Array.Empty<string>() : [companion], .. replaced?.Keys ?? []], destination, token);
             if (manifest.Resources.First(r => string.Equals(r.GamePath, edited, StringComparison.OrdinalIgnoreCase)).Hash != source.Resource.Hash)
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
             // A sound copy made from bytes the collection no longer gives would drop the newer sound.
@@ -421,7 +424,8 @@ internal sealed partial class AnimationEditService
             var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
                 journals.DirectoryFor(request.Id), token);
             var (files, reused, owners, copies) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, token);
-            var outputs = ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes);
+            var outputs = AnimationBakeRules.WithCompanion(ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes),
+                manifest, source.Resource, companion);
             // The mod's own sounds the edit changes are written over like the animation, at a fresh path.
             if (replaced is { Count: > 0 })
                 outputs = TimelineSoundUsage.ReplacedOutputs(outputs, manifest.Resources, source.Resource, replaced);

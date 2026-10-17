@@ -28,6 +28,7 @@ internal static class MotionEvaluator
     {
         MotionLayerKind.Amplitude => Math.Abs(layer.Amount - 1) > 1e-6f &&
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
+        MotionLayerKind.Symmetry => layer.Amount > 0 && layer.Components != PoseComponents.None && !layer.Bones.IsEmpty,
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -72,21 +73,21 @@ internal static class MotionEvaluator
     public static float Weight(MotionLayer layer, float frame, float end = 0)
     {
         var weight = Fade(layer, frame, end) * layer.Amount;
-        return layer.Kind == MotionLayerKind.Pose ? Math.Min(1, weight) : weight;
+        return layer.Kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry ? Math.Min(1, weight) : weight;
     }
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
     {
         if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation) ||
-            layer.Interpolation == MotionInterpolation.Custom)
+            layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From))
             throw new InvalidDataException("A bone layer can't be read.");
         var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
         if (layer.Start < 0 || layer.End <= layer.Start || layer.End > TimelineDocument.MaxFrames)
             throw new InvalidDataException($"{name} has no frames on the timeline.");
         if (layer.FadeIn < 0 || layer.FadeOut < 0 || (long)layer.FadeIn + layer.FadeOut > layer.End - layer.Start)
             throw new InvalidDataException($"{name} fades for longer than it lasts.");
-        var most = layer.Kind == MotionLayerKind.Pose ? 1 : MaxAmount;
+        var most = layer.Kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry ? 1 : MaxAmount;
         if (!float.IsFinite(layer.Amount) || layer.Amount < 0 || layer.Amount > most)
             throw new InvalidDataException($"{name} has an amount out of range.");
         if ((layer.Components & ~PoseComponents.All) != 0)
@@ -95,6 +96,8 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} lists a bone twice or a bone without a name.");
         if (layer.Keys.Length > MaxKeys)
             throw new InvalidDataException($"{name} has too many keys.");
+        if (layer.Kind == MotionLayerKind.Symmetry && !layer.Keys.IsEmpty)
+            throw new InvalidDataException($"{name} can't have keys.");
         var previous = -1;
         foreach (var key in layer.Keys)
         {
@@ -146,8 +149,9 @@ internal static class MotionEvaluator
         var index = Index(clip.Skeleton);
         var end = clip.Frame(clip.Samples - 1);
         var loop = clip.Loops ? end : 0;
-        foreach (var layer in layers)
+        for (var at = 0; at < layers.Count; at++)
         {
+            var layer = layers[at];
             token.ThrowIfCancellationRequested();
             if (!Active(layer))
                 continue;
@@ -162,6 +166,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Pose:
                     ApplyPose(clip, layer, Tracks(layer, index, mask, false), Tracks(layer, index, mask, true), WrapOf(layer, loop), end, token);
+                    break;
+                case MotionLayerKind.Symmetry:
+                    ApplySymmetry(clip, layers, at, end, token);
                     break;
             }
         }
@@ -431,25 +438,40 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// One pose with the offset and pose layers applied at <paramref name="frame"/>, in order, the way
+    /// One pose with the offset, pose and symmetry layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
     /// around its average over their section, which one pose does not have. The Bones window turns
     /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
-    /// unknown. Throws for a layer naming a bone the skeleton does not have.
+    /// unknown. <paramref name="trackedBones"/> are the bones the clip has tracks for, as a decode gives them
+    /// (<see cref="MotionClip.SourceTracks"/>), so symmetry layers skip the same pairs they do over the clip.
+    /// Throws for a layer naming a bone the skeleton does not have.
     /// </summary>
     public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers,
-        float frame, float loop = 0, float end = 0)
+        float frame, float loop = 0, float end = 0, IReadOnlyCollection<short>? trackedBones = null)
     {
         if (local.Length != skeleton.Bones.Length)
             throw new InvalidDataException("The pose does not match the skeleton.");
         var pose = local.ToArray();
         var index = Index(skeleton);
         var model = new Quaternion[pose.Length];
-        foreach (var layer in layers)
+        MotionTransform[]? rest = null;
+        for (var at = 0; at < layers.Count; at++)
         {
+            var layer = layers[at];
             if (!Active(layer) || layer.Kind == MotionLayerKind.Amplitude)
                 continue;
+            if (layer.Kind == MotionLayerKind.Symmetry)
+            {
+                var copy = Weight(layer, frame, end);
+                if (copy > 0)
+                {
+                    rest ??= MotionSymmetry.RestModel(skeleton);
+                    var plan = MotionSymmetry.Plan(skeleton, layer, MotionSymmetry.Animated(skeleton, trackedBones, layers, at));
+                    MotionSymmetry.Mirror(skeleton, pose, plan, rest, copy, layer.Components);
+                }
+                continue;
+            }
             var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
             var move = layer.Components.HasFlag(PoseComponents.Position);
             var scale = layer.Components.HasFlag(PoseComponents.Scale);
@@ -572,6 +594,34 @@ internal static class MotionEvaluator
         }
     }
 
+    /// <summary>
+    /// A symmetry layer over the clip, sample by sample. Bone pairs the clip has no track for on either
+    /// side are left alone, so physics still moves them in game.
+    /// </summary>
+    private static void ApplySymmetry(MotionClip clip, IReadOnlyList<MotionLayer> layers, int at, float end, CancellationToken token)
+    {
+        var layer = layers[at];
+        var plan = MotionSymmetry.Plan(clip.Skeleton, layer, MotionSymmetry.Animated(clip.Skeleton, clip.SourceTracks, layers, at));
+        if (plan.Pairs.IsEmpty)
+            return;
+        var rest = MotionSymmetry.RestModel(clip.Skeleton);
+        var pose = new MotionTransform[clip.Bones];
+        var scratch = new SymmetryScratch(plan, clip.Bones);
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var weight = Weight(layer, clip.Frame(i), end);
+            if (weight <= 0)
+                continue;
+            for (var b = 0; b < pose.Length; b++)
+                pose[b] = clip.Get(i, b);
+            MotionSymmetry.Mirror(clip.Skeleton, pose, plan, rest, weight, layer.Components, scratch);
+            foreach (var pair in plan.Pairs)
+                clip.Set(i, pair.Target, pose[pair.Target]);
+        }
+    }
+
     private static bool Inside(MotionLayer layer, float frame, float end) =>
         frame >= layer.Start - FrameTolerance && (frame <= layer.End + FrameTolerance || ReachesEnd(layer, end));
 
@@ -620,7 +670,7 @@ internal static class MotionEvaluator
 
     private static MotionTransform Normalized(MotionTransform value) => value with { Rotation = Quaternion.Normalize(value.Rotation) };
 
-    private static InvalidDataException Missing(string bone) =>
+    internal static InvalidDataException Missing(string bone) =>
         new($"This animation's skeleton has no bone {AnimationPresentation.BoneName(bone)}.");
 
     private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
