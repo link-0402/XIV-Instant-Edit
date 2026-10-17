@@ -81,12 +81,21 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
 
     /// <summary>
     /// Whether a playing binding's tracks and the decoded motion's agree as far as both go: a save keeps a clip's
-    /// tracks in order and adds the bones its layers moved after them, and a motion from Blender adds its own.
+    /// tracks in order, leaves out unticked bones and bones still at the reference, and adds the bones its layers
+    /// moved after them; a motion from Blender adds its own.
     /// </summary>
     internal static bool TracksFit(ReadOnlySpan<short> playing, ReadOnlySpan<short> decoded)
     {
-        var common = Math.Min(playing.Length, decoded.Length);
-        return playing[..common].SequenceEqual(decoded[..common]);
+        // The playing tracks the decode has come in its order, decoded tracks a save left out skipped.
+        var i = 0;
+        for (var j = 0; i < playing.Length && j < decoded.Length; j++)
+            if (playing[i] == decoded[j])
+                i++;
+        // Whatever follows is the bones a save added: none of them is a decoded track.
+        for (; i < playing.Length; i++)
+            if (decoded.Contains(playing[i]))
+                return false;
+        return true;
     }
 
     /// <summary>What a swapped control held before: the clip's own binding and track weights.</summary>
@@ -628,10 +637,13 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
                 if (index.TryGetValue(name, out var bone))
                     left.Add(bone);
         }
+        // Bones the clip left to the reference that nothing moved lose their tracks, as in the saved file,
+        // so they follow the rig that plays them rather than this skeleton's rest.
+        var still = AnimationReferenceChannels.Still(edited, decoded.ReferenceFollowers);
         var tracks = new List<short>();
         var sources = new List<int>();
         for (var t = 0; t < decoded.SourceTracks.Length; t++)
-            if (!left.Contains(decoded.SourceTracks[t]))
+            if (!left.Contains(decoded.SourceTracks[t]) && !still.Contains(decoded.SourceTracks[t]))
             {
                 tracks.Add(decoded.SourceTracks[t]);
                 sources.Add(t);

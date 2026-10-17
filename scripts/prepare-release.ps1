@@ -1,3 +1,6 @@
+# Windows PowerShell 5.1 turns a native command's redirected stderr into a terminating error under
+# ErrorActionPreference Stop, so `gh release view` of a new tag would end the script.
+#Requires -Version 7.2
 [CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
@@ -168,8 +171,21 @@ function Assert-AssetFree {
         Write-Warning "gh not found; can't check that release $ReleaseTag has no $AssetName yet."
         return
     }
-    $names = & gh release view $ReleaseTag --repo link-0402/XIV-Instant-Edit --json assets --jq '.assets[].name' 2>$null
-    if ($LASTEXITCODE -eq 0 -and @($names) -contains $AssetName) {
+    $errors = New-TemporaryFile
+    try {
+        $names = & gh release view $ReleaseTag --repo link-0402/XIV-Instant-Edit --json assets --jq '.assets[].name' 2>$errors
+        $failure = (Get-Content -Raw $errors) ?? ''
+    } finally {
+        Remove-Item $errors -ErrorAction SilentlyContinue
+    }
+    if ($LASTEXITCODE -ne 0) {
+        # A new release has no tag on GitHub yet; anything else (not logged in, offline) leaves the check undone.
+        if ($failure -notmatch 'release not found') {
+            Write-Warning "Could not check release ${ReleaseTag} for ${AssetName}: $($failure.Trim())"
+        }
+        return
+    }
+    if (@($names) -contains $AssetName) {
         throw "Release $ReleaseTag already has $AssetName. Pass the new release's -Tag (or -SkipBlender / -SkipPlugin)."
     }
 }

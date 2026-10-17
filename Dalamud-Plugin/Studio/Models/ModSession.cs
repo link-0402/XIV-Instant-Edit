@@ -542,6 +542,12 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
         }
         else
         {
+            // Two slots writing one file would leave only the last one's image there.
+            if (path.Length > 0 && Graph.FindAll(path).Any(node => node.AuthoredSlot is { } other && other != slot))
+            {
+                Notify($"Another texture slot already writes {Path.GetFileName(path)}. Pick another path.", Severity.Warning);
+                return;
+            }
             slot.GamePath = PathNormalizer.SameGamePath(path, ResourceNaming.AuthoredTexturePath(materialGamePath, slot.Postfix)) ? string.Empty : path;
             if (path.Length > 0 && _host.GameData.VanillaFiles.Exists(path))
                 Notify($"{Path.GetFileName(path)} is a game texture: writing it changes it for everything else that uses it too.", Severity.Warning);

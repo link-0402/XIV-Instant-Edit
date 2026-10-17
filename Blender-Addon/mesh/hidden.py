@@ -115,26 +115,32 @@ def export_off_keys(obj) -> frozenset[str]:
     return frozenset(off)
 
 
-def _key_weights(obj, key) -> np.ndarray | None:
-    """Per vertex, the weight of the vertex group that limits ``key``, or None
-    when no group does."""
-    group = obj.vertex_groups.get(key.vertex_group) if key.vertex_group else None
-    if group is None:
-        return None
-    weights = np.zeros(len(obj.data.vertices))
-    index = group.index
-    for vertex in obj.data.vertices:
-        for element in vertex.groups:
-            if element.group == index:
-                weights[vertex.index] = element.weight
-                break
+def _group_weights(obj, name: str, cache: dict | None = None) -> np.ndarray | None:
+    """Per vertex, the weight in vertex group ``name``, or None when there is no
+    such group. ``cache`` keeps each group's weights across calls on one object."""
+    if cache is not None and name in cache:
+        return cache[name]
+    group = obj.vertex_groups.get(name) if name else None
+    weights = None
+    if group is not None:
+        weights = np.zeros(len(obj.data.vertices))
+        index = group.index
+        for vertex in obj.data.vertices:
+            for element in vertex.groups:
+                if element.group == index:
+                    weights[vertex.index] = element.weight
+                    break
+    if cache is not None:
+        cache[name] = weights
     return weights
 
 
-def shape_positions(obj, extra_key: str = "", off: frozenset[str] = frozenset()) -> np.ndarray:
+def shape_positions(obj, extra_key: str = "", off: frozenset[str] = frozenset(),
+                    weights: dict | None = None) -> np.ndarray:
     """The object's local vertex positions as Blender shows them from its shape
     keys (each key's value, mute, relative key and vertex group, or the pinned
-    key alone), the keys in ``off`` left out and ``extra_key`` blended in fully."""
+    key alone), the keys in ``off`` left out and ``extra_key`` blended in fully.
+    ``weights`` caches vertex group weights between calls on the same object."""
     keys = obj.data.shape_keys
     count = len(obj.data.vertices)
     if keys is None or not keys.use_relative:
@@ -143,6 +149,8 @@ def shape_positions(obj, extra_key: str = "", off: frozenset[str] = frozenset())
         return co.reshape(-1, 3)
     blocks = keys.key_blocks
     coordinates = {}
+    if weights is None:
+        weights = {}
 
     def co(block):
         if block.name not in coordinates:
@@ -153,7 +161,17 @@ def shape_positions(obj, extra_key: str = "", off: frozenset[str] = frozenset())
 
     pinned = obj.active_shape_key if obj.show_only_shape_key else None
     if pinned is not None and not extra_key:
-        return co(pinned if pinned.name not in off else blocks[0]).copy()
+        # Blender's shape lock: the pinned key alone, the reference key while it is muted,
+        # and limited by its vertex group against the reference key.
+        reference = keys.reference_key or blocks[0]
+        if pinned.mute or pinned.name in off:
+            pinned = reference
+        shown = co(pinned).copy()
+        limit = _group_weights(obj, pinned.vertex_group, weights) if pinned != reference else None
+        if limit is not None:
+            base = co(reference)
+            shown = base + (shown - base) * limit[:, None]
+        return shown
     mix = co(blocks[0]).copy()
     for key in blocks[1:]:
         if key.name == extra_key:
@@ -165,8 +183,8 @@ def shape_positions(obj, extra_key: str = "", off: frozenset[str] = frozenset())
         if blend == 0.0:
             continue
         offset = (co(key) - co(key.relative_key)) * blend
-        weights = _key_weights(obj, key)
-        mix += offset if weights is None else offset * weights[:, None]
+        limit = _group_weights(obj, key.vertex_group, weights)
+        mix += offset if limit is None else offset * limit[:, None]
     return mix
 
 
@@ -192,13 +210,16 @@ def _turned(normals: np.ndarray, before: np.ndarray, after: np.ndarray) -> np.nd
     return _unit(_unit(normals) + after - before) * lengths
 
 
-def shape_key_states(obj, off: frozenset[str] = frozenset()) -> dict[str, np.ndarray]:
+def shape_key_states(obj, off: frozenset[str] = frozenset(), weights: dict | None = None) -> dict[str, np.ndarray]:
     """The object's shp_ shape keys, which the game applies, as local vertex
-    positions: the exported shape (``off`` left out) with that key blended in fully."""
+    positions: the exported shape (``off`` left out) with that key blended in fully.
+    ``weights`` caches vertex group weights (see shape_positions)."""
     keys = obj.data.shape_keys
     if keys is None or not keys.use_relative:
         return {}
-    return {key.name: shape_positions(obj, key.name, off)
+    if weights is None:
+        weights = {}
+    return {key.name: shape_positions(obj, key.name, off, weights)
             for key in keys.key_blocks[1:] if key.name.startswith("shp")}
 
 
@@ -375,7 +396,9 @@ class _Mesh:
         mesh.calc_loop_triangles()
         count = len(mesh.vertices)
         off = export_off_keys(obj)
-        basis = shape_positions(obj, off=off)
+        # Vertex group weights, read once for the basis and every shp_ state.
+        weights = {}
+        basis = shape_positions(obj, off=off, weights=weights)
         triangles = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int64)
         mesh.loop_triangles.foreach_get("vertices", triangles)
         triangles = triangles.reshape(-1, 3)
@@ -456,7 +479,7 @@ class _Mesh:
         slot_culled = np.array([material is not None and material.use_backface_culling for material in slots])
         two_sided = np.zeros(count, dtype=bool)
         two_sided[loop_vertices[~slot_culled[np.repeat(polygon_material, polygon_sizes)]]] = True
-        return cls(obj, matrix, basis, shape_key_states(obj, off), normals, two_sided, triangles,
+        return cls(obj, matrix, basis, shape_key_states(obj, off, weights), normals, two_sided, triangles,
                    loop_vertices, polygon_starts, polygon_sizes, edges.reshape(-1, 2),
                    slot_blocks[material_index], [slot_keys[index] for index in material_index.tolist()],
                    np.array(slot_opacity, dtype=np.int64)[material_index], opacities)

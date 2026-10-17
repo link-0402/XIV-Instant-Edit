@@ -129,15 +129,42 @@ internal sealed class AnimationReferenceChannels
         return dropped;
     }
 
-    private static ReferenceComponents Matching(hkQsTransformf value, hkQsTransformf reference)
+    /// <summary>
+    /// The <paramref name="followers"/> (bones of <paramref name="clip"/>'s skeleton) that sit at their reference
+    /// in every sample of <paramref name="clip"/>: the bones whose tracks a save drops (<see cref="Drop"/>), so
+    /// Live leaves them out the same way.
+    /// </summary>
+    public static HashSet<int> Still(Motion.MotionClip clip, IEnumerable<short> followers)
+    {
+        var still = new HashSet<int>();
+        foreach (var bone in followers)
+        {
+            if (bone < 0 || bone >= clip.Bones) continue;
+            var reference = clip.Skeleton.Bones[bone].Reference;
+            var at = true;
+            for (var s = 0; s < clip.Samples && at; s++)
+            {
+                var value = clip.Get(s, bone);
+                at = Matching(value.Position, value.Rotation, value.Scale, reference.Position, reference.Rotation, reference.Scale) == ReferenceComponents.All;
+            }
+            if (at) still.Add(bone);
+        }
+        return still;
+    }
+
+    private static ReferenceComponents Matching(hkQsTransformf value, hkQsTransformf reference) =>
+        Matching(AnimationNative.Translation(value), AnimationNative.Rotation(value), AnimationNative.Scale(value),
+            AnimationNative.Translation(reference), AnimationNative.Rotation(reference), AnimationNative.Scale(reference));
+
+    private static ReferenceComponents Matching(Vector3 position, Quaternion rotation, Vector3 scale,
+        Vector3 referencePosition, Quaternion referenceRotation, Vector3 referenceScale)
     {
         var result = ReferenceComponents.None;
-        if (Vector3.Distance(AnimationNative.Translation(value), AnimationNative.Translation(reference)) <= PositionTolerance)
+        if (Vector3.Distance(position, referencePosition) <= PositionTolerance)
             result |= ReferenceComponents.Translation;
-        if (1 - Math.Abs(Quaternion.Dot(Quaternion.Normalize(AnimationNative.Rotation(value)),
-                Quaternion.Normalize(AnimationNative.Rotation(reference)))) <= RotationTolerance)
+        if (1 - Math.Abs(Quaternion.Dot(Quaternion.Normalize(rotation), Quaternion.Normalize(referenceRotation))) <= RotationTolerance)
             result |= ReferenceComponents.Rotation;
-        if (Vector3.Distance(AnimationNative.Scale(value), AnimationNative.Scale(reference)) <= PositionTolerance)
+        if (Vector3.Distance(scale, referenceScale) <= PositionTolerance)
             result |= ReferenceComponents.Scale;
         return result;
     }

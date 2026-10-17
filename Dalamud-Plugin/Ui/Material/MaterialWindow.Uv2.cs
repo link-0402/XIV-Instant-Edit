@@ -39,14 +39,16 @@ internal sealed partial class MaterialWindow
                 ModStableId = node.SourceModStableId,
                 Sha256 = string.Empty,
             })
-            .DistinctBy(model => (model.GamePath, model.ActualPath.ToLowerInvariant()))
+            // One mod file at two game paths is one model to read, change and save.
+            .DistinctBy(model => model.IsModFile ? model.ActualPath.ToLowerInvariant() : model.GamePath)
             .ToList();
     }
 
     /// <summary>Reads the models and checks their second UV map for this material, once per opened material.</summary>
     private void CheckModels(MaterialSession current)
     {
-        addUv2 = false;
+        // Ticked while a second UV map waits for the save, so applying the pattern again keeps it unless unticked.
+        addUv2 = current.ModelChangesFor(current.Current).Count > 0;
         if (uv2Task != null || uv2 != null || models.Count == 0)
             return;
         var targets = models;
@@ -64,7 +66,8 @@ internal sealed partial class MaterialWindow
                     if (bytes != null)
                         states.Add(new ModelUv2State(model with { Sha256 = PreviewSource.Hash(bytes) }, bytes, ModelUv2.Check(bytes, material)));
                 }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                // A damaged model is left out; the others still get checked.
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
                 {
                     log.Debug(e, "Could not read the model {Model} for the second UV map check.", model.ActualPath);
                 }
@@ -85,6 +88,8 @@ internal sealed partial class MaterialWindow
     private void ForgetModels()
     {
         uv2 = null;
+        // A check still running read the last material's models (or the files before this save): its result is dropped.
+        uv2Task = null;
         addUv2 = false;
     }
 
@@ -92,9 +97,9 @@ internal sealed partial class MaterialWindow
     private List<ModelUv2State> Uv2Fixable(MaterialSession current)
         => Uv2Missing(current).Where(state => state.Check.CanAdd && (state.Model.IsModFile || current.Source.IsGameData)).ToList();
 
-    /// <summary>The models that lack the second UV map, leaving out those already given one for the save.</summary>
+    /// <summary>The models whose file lacks the second UV map, those already given one for the save included (the box shows it ticked).</summary>
     private List<ModelUv2State> Uv2Missing(MaterialSession current)
-        => uv2?.Where(state => state.Check.WithoutUv2 > 0 && !current.HasModelChange(state.Model.GamePath)).ToList() ?? [];
+        => uv2?.Where(state => state.Check.WithoutUv2 > 0).ToList() ?? [];
 
     /// <summary>Under the Scrolling pattern card: the second UV map option, or why the pattern will flash.</summary>
     private void DrawUv2Option(MaterialSession current)
@@ -106,6 +111,11 @@ internal sealed partial class MaterialWindow
         }
         if (uv2?.Any(state => current.HasModelChange(state.Model.GamePath)) == true && current.ModelChangesFor(current.Current).Count > 0)
             ImGui.TextColored(Theme.Muted, "The model has a new second UV map; Save writes it.");
+        // A model whose meshes name this material otherwise (another race's skin), or that couldn't be read.
+        foreach (var state in uv2?.Where(state => state.Check.Meshes == 0) ?? [])
+            ImGui.TextColored(Theme.Muted, state.Check.Blocked is { } why
+                ? $"{Path.GetFileName(state.Model.GamePath)}: its second UV map can't be checked. {why}"
+                : $"{Path.GetFileName(state.Model.GamePath)}: no mesh names this material, so its second UV map can't be checked.");
         var missing = Uv2Missing(current);
         if (missing.Count == 0)
             return;
@@ -125,18 +135,18 @@ internal sealed partial class MaterialWindow
     /// <summary>After Scrolling pattern: adds the second UV maps when asked (a change), or says the part will flash (a warning).</summary>
     private (string? Change, string? Warning) ApplyUv2(MaterialSession current)
     {
+        // Applied again without the box ticked: a second UV map added before goes too.
+        var removed = !addUv2 && current.RemoveModelChanges();
         var fixable = Uv2Fixable(current);
         if (fixable.Count == 0 || !addUv2)
-            return (null, Uv2Missing(current).Count > 0
+            return (removed ? "The model's new second UV map is left out again." : null, Uv2Missing(current).Count > 0
                 ? "The model has no second UV map, so the part flashes instead of showing the pattern."
                   + (fixable.Count > 0 ? " Tick Add a second UV map and apply again." : string.Empty)
                 : null);
-        var meshes = 0;
-        foreach (var state in fixable)
-        {
-            current.AddModelChange(state.Model, ModelUv2.Add(state.Bytes, current.Source.FileName));
-            meshes += state.Check.WithoutUv2;
-        }
+        // Every model is changed or none: a failure on one leaves no change on the others.
+        var changes = fixable.Select(state => (state.Model, ModelUv2.Add(state.Bytes, current.Source.FileName))).ToList();
+        current.AddModelChanges(changes);
+        var meshes = fixable.Sum(state => state.Check.WithoutUv2);
         // The change shows through the preview, even when the material itself didn't change.
         previewDue = Environment.TickCount64 + PreviewDelayMs;
         return ($"Added a second UV map to {(meshes == 1 ? "1 mesh" : $"{meshes} meshes")} of {string.Join(", ", fixable.Select(state => Path.GetFileName(state.Model.GamePath)))}. Save writes it.", null);

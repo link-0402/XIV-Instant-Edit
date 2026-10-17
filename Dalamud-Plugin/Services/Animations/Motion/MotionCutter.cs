@@ -39,7 +39,7 @@ internal static class MotionCutter
         var output = new MotionClip(source.Skeleton, length / (float)TimelineDocument.Fps, samples,
             source.TrackFloats == null ? null : new float[checked(samples * floatTracks)], floatTracks)
         {
-            SourceTracks = source.SourceTracks, BlendHint = source.BlendHint, Loops = source.Loops,
+            SourceTracks = source.SourceTracks, ReferenceFollowers = source.ReferenceFollowers, BlendHint = source.BlendHint, Loops = source.Loops,
         };
         var scale = (double)cuts.Kept / length;
         var blends = new List<Blend>();

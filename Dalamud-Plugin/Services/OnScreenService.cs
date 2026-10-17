@@ -40,6 +40,8 @@ public sealed class OnScreenService : IDisposable
 
     private IReadOnlyList<OnScreenObject> _items = Array.Empty<OnScreenObject>();
     private bool _refreshing;
+    // A refresh with fresh names was asked for while another ran.
+    private bool _freshAgain;
 
     internal OnScreenService(
         IObjectTable objects,
@@ -107,7 +109,11 @@ public sealed class OnScreenService : IDisposable
         lock (_lock)
         {
             if (_refreshing)
+            {
+                // Asked for while one runs (a chat command): run again with fresh names once it ends.
+                _freshAgain |= fresh;
                 return;
+            }
             _refreshing = true;
         }
         if (fresh)
@@ -134,11 +140,16 @@ public sealed class OnScreenService : IDisposable
         if (task.IsFaulted && !_lifetime.IsCancellationRequested)
             _log.Error(task.Exception?.GetBaseException(), "Failed to collect player resource trees.");
 
+        bool again;
         lock (_lock)
         {
             _items = task.IsCompletedSuccessfully ? task.Result : Array.Empty<OnScreenObject>();
             _refreshing = false;
+            again = _freshAgain;
+            _freshAgain = false;
         }
+        if (again && !_lifetime.IsCancellationRequested)
+            RequestRefresh(fresh: true);
     }
 
     /// <summary> Runs on a worker; only <see cref="CollectTrees"/> visits the framework thread. </summary>

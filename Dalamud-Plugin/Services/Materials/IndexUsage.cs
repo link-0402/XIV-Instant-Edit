@@ -21,14 +21,20 @@ public sealed record IndexUsage(float[] RowShare, bool[] RowUsed, int Width, int
 /// </summary>
 public static class LegacyIndexTexture
 {
+    /// <summary>
+    /// An index texture from a legacy normal map's alpha, for a table converted with
+    /// <see cref="ColorTable.ToDawntrail(bool)"/> blendNext: alpha a sits between legacy rows p = floor(a / 17)
+    /// and p + 1, so red picks pair p (rows p and p + 1) and green gives row p its share, 1 - (a / 17 - p).
+    /// </summary>
     public static byte[] FromNormal(DecodedTexture normal)
     {
         var texels = normal.Width * normal.Height;
         var bgra = new byte[texels * 4];
         for (var i = 0; i < texels; i++)
         {
-            var pair = Math.Clamp((int)MathF.Round(normal.Bgra[i * 4 + 3] / 17f), 0, 15);
-            bgra[i * 4 + 1] = 255;
+            var row = normal.Bgra[i * 4 + 3] / 17f;
+            var pair = Math.Clamp((int)MathF.Floor(row), 0, 15);
+            bgra[i * 4 + 1] = (byte)Math.Clamp((int)MathF.Round(255f * (1f - (row - pair))), 0, 255);
             bgra[i * 4 + 2] = (byte)(pair * 17);
             bgra[i * 4 + 3] = 255;
         }

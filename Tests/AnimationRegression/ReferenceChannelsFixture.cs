@@ -110,5 +110,14 @@ internal static class ReferenceChannelsFixture
         List<short> partial = [0, 1];
         check(AnimationReferenceChannels.Drop(partial, expected, reference, [2, -1, 9]).Count == 0 && partial.SequenceEqual(new short[] { 0, 1 }),
             "followers without a track or outside the output skeleton change nothing");
+
+        // Live: the decoded clip, edited, leaves out the same bones the save drops.
+        var decoded = InstantEdit.Services.Animations.Motion.MotionClip.FromPoses(skeleton, 0.1f,
+            [.. Enumerable.Range(0, 3).Select(f => Sample(f, false).Select(AnimationSkeleton.Transform).ToArray())]);
+        check(AnimationReferenceChannels.Still(decoded, [2, -1, 9]).SetEquals([2]),
+            "Live leaves out a follower still at its reference, and ignores bones outside the skeleton");
+        decoded.Set(1, 2, InstantEdit.Services.Animations.Motion.MotionTransform.From(T(0.162f, -0.002f)));
+        check(AnimationReferenceChannels.Still(decoded, [2]).Count == 0,
+            "Live keeps a follower an edit moved, as the save does");
     }
 }

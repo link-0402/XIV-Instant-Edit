@@ -57,7 +57,7 @@ internal static partial class MaterialEditorScenarios
     /// </summary>
     private static void CheckLegacyIndexTexture()
     {
-        byte[] alphas = [0, 17, 34, 120, 255, 255, 34, 0];
+        byte[] alphas = [0, 17, 34, 120, 255, 255, 34, 25];
         var bgra = new byte[alphas.Length * 4];
         for (var i = 0; i < alphas.Length; i++)
             (bgra[i * 4], bgra[i * 4 + 1], bgra[i * 4 + 2], bgra[i * 4 + 3]) = ((byte)128, (byte)128, (byte)255, alphas[i]);
@@ -65,8 +65,20 @@ internal static partial class MaterialEditorScenarios
         var tex = LegacyIndexTexture.FromNormal(normal);
         var index = TextureDecoder.Decode(tex, int.MaxValue);
         var usage = IndexUsageCalc.Compute(index, ColorTableKind.Dawntrail);
-        Require(index.Width == 4 && index.Height == 2 && usage.RowOfTexel.SequenceEqual(new byte[] { 0, 2, 4, 14, 30, 30, 4, 0 }),
+        Require(index.Width == 4 && index.Height == 2 && usage.RowOfTexel.SequenceEqual(new byte[] { 0, 2, 4, 14, 30, 30, 4, 2 }),
             "the index built from the normal map's alpha picks the top row of each legacy row's pair (alpha 120 is row 7)");
+        // Alpha 25 sits about half way from legacy row 1 to row 2: pair 1 (old rows 1 and 2 after a blended
+        // conversion), old row 1 getting 1 - (25/17 - 1), about 53 %.
+        var between = index.Bgra[7 * 4 + 1];
+        Require(index.Bgra[7 * 4 + 2] == 17 && Math.Abs(between - 135) <= 1,
+            "an alpha between two legacy rows blends them through the green channel, as the legacy shader does");
+
+        // The made index goes where nothing is yet: a Dawntrail game texture named like it, or a path the mod maps, is passed over.
+        const string derived = "chara/equipment/e6001/texture/v01_c0201e6001_top_id.tex";
+        HashSet<string> taken = [derived, "chara/equipment/e6001/texture/v01_c0201e6001_top_id_ie.tex"];
+        Require(InstantEdit.Services.Materials.MaterialSession.FreeTexturePath(derived, taken.Contains) == "chara/equipment/e6001/texture/v01_c0201e6001_top_id_ie2.tex"
+                && InstantEdit.Services.Materials.MaterialSession.FreeTexturePath(derived, _ => false) == derived,
+            "a made index takes the derived path only while nothing uses it, else the first free _ie name beside it");
     }
 
     /// <summary>A BGRA image of one colour: the index texture's red picks the pair, green blends its rows.</summary>

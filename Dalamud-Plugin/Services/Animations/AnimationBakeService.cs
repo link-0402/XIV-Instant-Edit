@@ -104,7 +104,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             {
                 Check(token);
                 validateRuntime();
-                var created = new Session(native, source, skeleton, clip, request, motionPath);
+                // Live drops the tracks a save drops, so it needs the same reference channels.
+                var created = new Session(native, source, skeleton, clip, request, motionPath, keepReferenceChannels: true);
                 active.Add(created); return created;
             });
             var completed = false;
@@ -221,8 +222,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         public float ValidationProgress => (float)validationFrame / frames;
 
         /// <param name="keepReferenceChannels">
-        /// Whether the build leaves channels that follow the skeleton's reference pose trackless; a bake sets it.
-        /// A decode or a motion from Blender has no use for the second sampling it takes.
+        /// Whether the build leaves channels that follow the skeleton's reference pose trackless; a bake sets it,
+        /// and a decode, which hands them on for Live. A motion from Blender has no use for the second sampling it takes.
         /// </param>
         public Session(AnimationNative native, byte[] papBytes, byte[] sklb, AnimationClip clip, AnimationBakeRequest request, string motionPath,
             bool keepReferenceChannels = false)
@@ -588,6 +589,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             var clip = new MotionClip(targetDescription, duration, frames, floats, floatSlots.Length)
             {
                 SourceTracks = retarget == null ? [.. sourceTracks] : [.. retarget.MapTracks(sourceTracks)],
+                ReferenceFollowers = referenceChannels == null ? [] : [.. referenceChannels.Followers
+                    .Select(b => retarget?.BoneMap[b] ?? b).Where(b => b >= 0).Select(b => (short)b)],
                 BlendHint = blendHint,
                 Loops = this.clip.IsLoop,
             };

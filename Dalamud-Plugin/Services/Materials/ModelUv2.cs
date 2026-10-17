@@ -39,10 +39,17 @@ internal static class ModelUv2
     public static Uv2Check Check(byte[] bytes, string materialFileName)
     {
         Layout layout;
-        try { layout = Read(bytes); }
+        List<int> meshes;
+        int without;
+        try
+        {
+            layout = Read(bytes);
+            meshes = Targets(bytes, layout, materialFileName).ToList();
+            without = meshes.Count(m => UvElement(bytes, m) is { Type: TypeHalf2 or TypeSingle2 });
+        }
         catch (Exception e) when (e is InvalidDataException or NotSupportedException) { return new Uv2Check(0, 0, e.Message); }
-        var meshes = Targets(bytes, layout, materialFileName).ToList();
-        var without = meshes.Count(m => UvElement(bytes, m) is { Type: TypeHalf2 or TypeSingle2 });
+        // A damaged table that points past the file.
+        catch (Exception e) when (e is ArgumentException or OverflowException) { return new Uv2Check(0, 0, "The model's tables are damaged."); }
         if (without == 0)
             return new Uv2Check(meshes.Count, 0, null);
         if (WhyNot(bytes, layout, meshes) is { } blocked)
@@ -50,6 +57,7 @@ internal static class ModelUv2
         // Some layouts only show while moving the geometry (shared vertex data), so a trial run decides.
         try { Add(bytes, materialFileName); }
         catch (Exception e) when (e is InvalidDataException or NotSupportedException or OverflowException) { return new Uv2Check(meshes.Count, without, e.Message); }
+        catch (ArgumentException) { return new Uv2Check(meshes.Count, without, "The model's tables are damaged."); }
         return new Uv2Check(meshes.Count, without, null);
     }
 
@@ -75,10 +83,15 @@ internal static class ModelUv2
             regions.Add((U32(bytes, 16 + l * 4), U32(bytes, 40 + l * 4), l, true));
             regions.Add((U32(bytes, 28 + l * 4), U32(bytes, 52 + l * 4), l, false));
         }
-        regions.Sort((a, b) => a.Offset != b.Offset ? a.Offset.CompareTo(b.Offset) : a.Vertex == b.Vertex ? a.Lod.CompareTo(b.Lod) : a.Vertex ? -1 : 1);
+        // Empty buffers first at a shared offset, so they start there rather than inside the buffer after them.
+        regions.Sort((a, b) => a.Offset != b.Offset ? a.Offset.CompareTo(b.Offset)
+            : (a.Size == 0) != (b.Size == 0) ? (a.Size == 0 ? -1 : 1)
+            : a.Vertex == b.Vertex ? a.Lod.CompareTo(b.Lod) : a.Vertex ? -1 : 1);
         var start = regions[0].Offset;
         if (start < layout.TablesEnd)
             throw new InvalidDataException("The model's geometry starts inside its tables.");
+        if (start > bytes.Length)
+            throw new InvalidDataException("A buffer runs past the end of the model.");
         var output = new List<byte>(bytes.Length + targets.Count * 1024);
         output.AddRange(bytes.AsSpan(0, (int)start).ToArray());
         var cursor = start;
@@ -188,6 +201,10 @@ internal static class ModelUv2
             cursor = chunk.Offset + chunk.Size;
         }
         output.AddRange(bytes.AsSpan((int)(bufferStart + cursor), (int)(bufferSize - cursor)).ToArray());
+        // The buffer grows by a multiple of 16 bytes (zeros at its end, inside its size), so the buffers
+        // after it keep the 16-byte alignment the game's files have, as ModelMaterialRewriter keeps it.
+        while ((output.Count - bufferSize) % 16 != 0)
+            output.Add(0);
         // Streams with no data (empty meshes, unused slots) move with the bytes before them.
         var growth = placed.Where(p => p.Value.Widened).Select(p => (Offset: p.Key, Grown: Widened(bytes, layout, chunks, p.Key) - p.Value.Size)).ToList();
         for (var m = first; m < first + count; m++)
@@ -333,9 +350,9 @@ internal static class ModelUv2
             throw new InvalidDataException("The model has no valid LOD count.");
         var stringHeader = FileHeaderSize + declarationCount * DeclarationSize;
         Require(stringHeader + 8 <= bytes.Length, "vertex declarations");
-        var stringSize = (int)U32(bytes, stringHeader + 4);
         var stringBlock = stringHeader + 8;
-        Require(stringBlock + (long)stringSize <= bytes.Length, "string table");
+        Require(stringBlock + (long)U32(bytes, stringHeader + 4) <= bytes.Length, "string table");
+        var stringSize = (int)U32(bytes, stringHeader + 4);
         var meshHeader = stringBlock + stringSize;
         Require(meshHeader + MeshHeaderSize <= bytes.Length, "mesh header");
         int meshCount = U16(bytes, meshHeader + 4);
@@ -351,8 +368,10 @@ internal static class ModelUv2
         var cursor = meshHeader + MeshHeaderSize + elementIdCount * ElementIdSize;
         var lodTable = cursor;
         cursor += 3 * LodSize;
+        Require(cursor <= bytes.Length, "LOD table");
         if ((flags2 & 0x10) != 0)
         {
+            Require(cursor + 3 * ExtraLodSize <= bytes.Length, "extra LOD table");
             // Extra LODs list light shaft, glass, material change and crest change meshes.
             for (var l = 0; l < 3; l++)
                 for (var field = 0; field < 8; field += 2)
@@ -371,8 +390,9 @@ internal static class ModelUv2
         var materials = new List<string>(materialCount);
         for (var i = 0; i < materialCount; i++)
         {
-            var offset = (int)U32(bytes, materialTable + i * 4);
-            Require(offset < stringSize, "material name");
+            var raw = U32(bytes, materialTable + i * 4);
+            Require(raw < (uint)stringSize, "material name");
+            var offset = (int)raw;
             var end = Array.IndexOf(bytes, (byte)0, stringBlock + offset, stringSize - offset);
             materials.Add(System.Text.Encoding.UTF8.GetString(bytes, stringBlock + offset, (end < 0 ? stringBlock + stringSize : end) - stringBlock - offset));
         }

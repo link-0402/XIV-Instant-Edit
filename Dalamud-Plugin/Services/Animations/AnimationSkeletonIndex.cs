@@ -75,10 +75,31 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
     /// there: the same bones as "Animation_General Usage", but the IVCS toe and genital bones
     /// rest up to 2 cm elsewhere. An animation sampled on it bakes those rests into every
     /// track that leaves the bone at its reference pose, so it is never a source or a standard.
+    /// Only folders inside the mod count, so a Penumbra root or a mod named Posing doesn't make every
+    /// skeleton in it one; a file with nothing telling where its mod starts is judged on its whole path.
     /// </summary>
     internal static bool IsPosingFile(AnimationResource resource)
-        => new[] { resource.ResolvedPath, resource.RelativePath }.Any(path => !string.IsNullOrEmpty(path) &&
-            path.Replace('\\', '/').Split('/').SkipLast(1).Any(folder => string.Equals(folder.Trim(), "Posing", StringComparison.OrdinalIgnoreCase)));
+        => InModPath(resource) is { Length: > 0 } path &&
+           path.Replace('\\', '/').Split('/').SkipLast(1).Any(folder => string.Equals(folder.Trim(), "Posing", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The file's path inside its mod: its relative path, or its resolved path below the mod root and the mod's folder.</summary>
+    private static string? InModPath(AnimationResource resource)
+    {
+        if (!string.IsNullOrEmpty(resource.RelativePath))
+            return resource.RelativePath;
+        var resolved = resource.ResolvedPath.Replace('\\', '/');
+        if (!string.IsNullOrEmpty(resource.ModRoot))
+        {
+            var root = resource.ModRoot.Replace('\\', '/').TrimEnd('/') + "/";
+            if (resolved.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                var below = resolved[root.Length..];
+                var slash = below.IndexOf('/');
+                return slash < 0 ? below : below[(slash + 1)..];
+            }
+        }
+        return resolved;
+    }
 
     /// <summary>
     /// The fingerprints of posing skeletons (see <see cref="IsPosingFile"/>): a skeleton is one

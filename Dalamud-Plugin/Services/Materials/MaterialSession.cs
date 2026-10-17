@@ -41,7 +41,8 @@ internal sealed class MaterialSession
 
     private readonly Func<MaterialDocument, EditClass, Task> onEdit;
     private readonly Dictionary<string, byte[]> newFiles = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, (PreviewSource Model, byte[] Bytes)> modelChanges = new(StringComparer.OrdinalIgnoreCase);
+    // With: the document the change came with; undoing past it takes the change out of the save.
+    private readonly Dictionary<string, (PreviewSource Model, byte[] Bytes, MaterialDocument With)> modelChanges = new(StringComparer.OrdinalIgnoreCase);
 
     public MaterialSession(MaterialSource source, MaterialDocument initial, Func<MaterialDocument, EditClass, Task> onEdit)
     {
@@ -77,14 +78,37 @@ internal sealed class MaterialSession
     /// (its hash guards the save), <paramref name="bytes"/> the changed file. Only a second UV map for the
     /// scroll shader is added this way, so the change goes with the material while it is on that shader.
     /// </summary>
-    public void AddModelChange(PreviewSource model, byte[] bytes) => modelChanges[PathRules.NormalizeGamePath(model.GamePath)] = (model, bytes);
+    public void AddModelChange(PreviewSource model, byte[] bytes) => AddModelChanges([(model, bytes)]);
 
-    /// <summary>A change to the model at <paramref name="gamePath"/> waits for the save.</summary>
-    public bool HasModelChange(string gamePath) => modelChanges.ContainsKey(PathRules.NormalizeGamePath(gamePath));
+    /// <summary>
+    /// Adds model changes together (see <see cref="AddModelChange"/>), going with the current document: undoing
+    /// past it drops them from the save and redoing brings them back. One model file is changed once, whatever
+    /// game paths load it.
+    /// </summary>
+    public void AddModelChanges(IReadOnlyList<(PreviewSource Model, byte[] Bytes)> changes)
+    {
+        foreach (var (model, bytes) in changes.DistinctBy(change => change.Model.IsModFile
+                     ? change.Model.ActualPath.ToLowerInvariant() : PathRules.NormalizeGamePath(change.Model.GamePath)))
+            modelChanges[PathRules.NormalizeGamePath(model.GamePath)] = (model, bytes, History.Current);
+    }
 
-    /// <summary>The model changes the document needs: those for the scroll shader, while it is on it.</summary>
+    /// <summary>Drops every model change waiting for the save (Scrolling pattern applied again without the second UV map).</summary>
+    public bool RemoveModelChanges()
+    {
+        var had = modelChanges.Count > 0;
+        modelChanges.Clear();
+        return had;
+    }
+
+    /// <summary>A change to the model at <paramref name="gamePath"/> waits for the save (and wasn't undone).</summary>
+    public bool HasModelChange(string gamePath)
+        => modelChanges.TryGetValue(PathRules.NormalizeGamePath(gamePath), out var change) && !History.Undone(change.With);
+
+    /// <summary>The model changes the document needs: those for the scroll shader, while it is on it, whose step wasn't undone.</summary>
     public IReadOnlyList<(PreviewSource Model, byte[] Bytes)> ModelChangesFor(MaterialDocument doc)
-        => doc.ShaderPackage.Equals(ScrollShader, StringComparison.OrdinalIgnoreCase) ? modelChanges.Values.ToList() : [];
+        => doc.ShaderPackage.Equals(ScrollShader, StringComparison.OrdinalIgnoreCase)
+            ? modelChanges.Values.Where(change => !History.Undone(change.With)).Select(change => (change.Model, change.Bytes)).ToList()
+            : [];
 
     /// <summary>Applies an edit as one undo step (or part of the running gesture) and passes it on to the preview.</summary>
     public Task Apply(Func<MaterialDocument, MaterialDocument> edit, string label)
@@ -337,6 +361,24 @@ internal sealed class MaterialSession
             }
         }
         return (doc, notes);
+    }
+
+    /// <summary>
+    /// <paramref name="path"/>, or the first of …_ie.tex, …_ie2.tex and so on beside it, that <paramref name="taken"/>
+    /// says nothing uses yet (a game file, a file the mod maps, a texture made this session).
+    /// </summary>
+    internal static string FreeTexturePath(string path, Func<string, bool> taken)
+    {
+        if (!taken(path))
+            return path;
+        var stem = path.EndsWith(".tex", StringComparison.OrdinalIgnoreCase) ? path[..^".tex".Length] : path;
+        for (var n = 1; n <= 99; n++)
+        {
+            var candidate = n == 1 ? stem + "_ie.tex" : $"{stem}_ie{n}.tex";
+            if (!taken(candidate))
+                return candidate;
+        }
+        throw new IOException("No free path for the new texture was found beside " + path + ".");
     }
 
     /// <summary>The index texture beside a normal map: …_norm.tex or …_n.tex becomes …_id.tex.</summary>

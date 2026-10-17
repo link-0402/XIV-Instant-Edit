@@ -29,6 +29,7 @@ def _load_modules():
 
     context = types.ModuleType(f"{package_name}.context")
     context.ContextValidationError = type("ContextValidationError", (ValueError,), {})
+    context.ContextSceneError = type("ContextSceneError", (context.ContextValidationError,), {})
     context._value = lambda source, name, default="": source.get(name, default)
     context.reattach_context = lambda *_args, **_kwargs: None
     context.context_collections = lambda _scene: []

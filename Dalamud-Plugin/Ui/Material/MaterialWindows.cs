@@ -41,7 +41,15 @@ internal sealed class MaterialWindows : IDisposable
     /// <summary>Opens a row's material in the window that holds it, a free one, or a new one.</summary>
     public void Open(ResourceView row, ActorView actor, IModFileCopies? copies)
     {
-        var target = windows.FirstOrDefault(window => window.Holds(row.GamePath))
+        // A row that can't open says why in the last window; it gets no window of its own.
+        if (MaterialWindow.EditBlock(row) != null)
+        {
+            var shown = last ?? windows[0];
+            shown.Open(row, actor, copies);
+            shown.BringToFront();
+            return;
+        }
+        var target = windows.FirstOrDefault(window => window.Holds(row))
                      ?? windows.FirstOrDefault(window => window.Free && window.IsOpen)
                      ?? windows.FirstOrDefault(window => window.Free)
                      ?? Create();
@@ -50,12 +58,14 @@ internal sealed class MaterialWindows : IDisposable
         last = target;
     }
 
-    /// <summary>Adds windows made while drawing; call before the window system draws.</summary>
+    /// <summary>Adds windows made while drawing and ends closed windows' jobs; call before the window system draws.</summary>
     public void AddJoining()
     {
         foreach (var window in joining)
             system.AddWindow(window);
         joining.Clear();
+        foreach (var window in windows)
+            window.PollClosed();
     }
 
     private MaterialWindow Create()

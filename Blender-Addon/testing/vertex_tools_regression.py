@@ -518,6 +518,26 @@ def check_remove_hidden_vertices() -> None:
             require(len(inner.data.vertices) == 0, "other shape keys count only at their current value")
 
         with temporary_scene_data():
+            # A pinned key is shown as Blender's shape lock shows it: limited by its vertex group, the basis while muted.
+            hidden = module("mesh.hidden")
+            pinned_object = mesh_object("0.0 Pinned", box((0, 0, 0), 1.0), surface=opaque)
+            pinned_object.shape_key_add(name="Basis")
+            pushed = pinned_object.shape_key_add(name="Push")
+            for point in pushed.data:
+                point.co.x += 1.0
+            half = pinned_object.vertex_groups.new(name="Half")
+            half.add(list(range(len(pinned_object.data.vertices))), 0.5, "REPLACE")
+            pushed.vertex_group = "Half"
+            pinned_object.active_shape_key_index = 1
+            pinned_object.show_only_shape_key = True
+            stored = np.array([vertex.co.x for vertex in pinned_object.data.vertices])
+            require(np.allclose(hidden.shape_positions(pinned_object)[:, 0], stored + 0.5),
+                    "a pinned shape key limited by a vertex group moves vertices by the group's weight")
+            pushed.mute = True
+            require(np.allclose(hidden.shape_positions(pinned_object)[:, 0], stored),
+                    "a muted pinned shape key shows the basis")
+
+        with temporary_scene_data():
             shell = mesh_object("0.0 Shell", box((0, 0, 0), 1.0), surface=gear)
             shell.shape_key_add(name="Basis")
             away = shell.shape_key_add(name="shp_open")

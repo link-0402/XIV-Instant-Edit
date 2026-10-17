@@ -144,6 +144,26 @@ def run() -> None:
         assert not expired.exists() and not (history / f"{expired.name}.est.json").exists()
         assert fresh.is_file() and (history / f"{fresh.name}.est.json").is_file()
 
+        # Backups last as long as the plugin's Settings say; a plugin that sends nothing keeps the last value.
+        ten_days = history / f"c0801h0108_hir.mdl.{time.strftime('%Y%m%dT%H%M%S', time.gmtime(time.time() - 10 * 86400))}.000000Z.bak"
+        ten_days.write_bytes(b"model")
+        cache.configure_cache(base, False, 30)
+        cache.configure_cache(base, False)
+        assert cache.backup_retention_days() == 30
+        cache.clean_cache()
+        assert ten_days.is_file(), "a 10-day-old backup stays while the plugin keeps backups 30 days"
+        cache.configure_cache(base, False, 7)
+        cache.clean_cache()
+        assert not ten_days.exists(), "a 10-day-old backup goes once the plugin keeps backups 7 days"
+        for bad in (0, 366, True, 7.5):
+            try:
+                cache.configure_cache(base, False, bad)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"backup retention {bad!r} was accepted")
+        assert cache.backup_retention_days() == 7
+
     print("[PASS] cache staging, ownership boundaries, and cleanup")
 
 

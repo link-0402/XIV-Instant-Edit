@@ -91,6 +91,9 @@ internal sealed class MaterialHistory
 
     public void MarkSaved() => Saved = Current;
 
+    /// <summary>Whether <paramref name="doc"/> was undone: it waits on the redo stack, not before or at the current document.</summary>
+    public bool Undone(MaterialDocument doc) => redo.Any(step => ReferenceEquals(step.Doc, doc));
+
     /// <summary>Starts over from <paramref name="doc"/>, saved, with no steps.</summary>
     public void Reset(MaterialDocument doc)
     {

@@ -2299,7 +2299,7 @@ def _request_export_status(ref, export_id: str) -> tuple[dict | None, bool]:
 
 def _recover_export_receipt(ref, export_id: str, wait_seconds: float) -> tuple[dict | None, bool]:
     """Ask for a lost export's receipt for as long as the plugin still writes it, up to
-    ``wait_seconds``. Returns (receipt, still pending)."""
+    ``wait_seconds``, or until Esc stops the wait (steps.stop_waiting). Returns (receipt, still pending)."""
     deadline = time.monotonic() + wait_seconds
     while True:
         receipt, pending = _request_export_status(ref, export_id)
@@ -2307,7 +2307,16 @@ def _recover_export_receipt(ref, export_id: str, wait_seconds: float) -> tuple[d
             return receipt, False
         if time.monotonic() + EXPORT_STATUS_POLL_SECONDS > deadline:
             return None, True
-        time.sleep(EXPORT_STATUS_POLL_SECONDS)
+        if steps.stop_waiting.wait(EXPORT_STATUS_POLL_SECONDS):
+            return None, True
+
+
+def _waited(seconds: float) -> str:
+    """How long a receipt wait lasted, in words."""
+    if seconds < 60:
+        return f"{round(seconds)} seconds"
+    minutes = round(seconds / 60)
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
 
 
 def _send_plugin_export_to(ref, payload: dict, endpoint: str, *,
@@ -2335,15 +2344,30 @@ def _send_plugin_export_to(ref, payload: dict, endpoint: str, *,
             ) from error
         export_id = str(payload.get("exportId", ""))
         if export_id:
-            receipt, pending = _recover_export_receipt(ref, export_id, receipt_wait)
+            # Without a window the wait runs on Blender's main thread, so it stays short there.
+            if steps.inline_run():
+                receipt_wait = min(receipt_wait, EXPORT_RECEIPT_WAIT_MAIN_THREAD_SECONDS)
+            began = time.monotonic()
+            try:
+                receipt, pending = _recover_export_receipt(ref, export_id, receipt_wait)
+            except PluginResponseError as polled:
+                # The plugin may have written it already: never an expired context to send again for
+                # (the plugin restarting mid-wait answers 401 or 410 here).
+                raise _plugin_transport_error(
+                    polled,
+                    endpoint,
+                    f"The {endpoint.strip('/') or 'plugin'} response was lost, and the plugin couldn't say whether it wrote the export.",
+                    "Check in the game whether the export is there before exporting again: "
+                    "another export would write the model a second time.",
+                    code="export_receipt_unavailable",
+                ) from error
             if receipt is not None:
                 return receipt
             if pending:
-                minutes = max(1, round(receipt_wait / 60))
                 raise _plugin_transport_error(
                     error,
                     endpoint,
-                    f"The plugin is still writing this export after about {minutes} minute(s).",
+                    f"The plugin was still writing this export after {_waited(time.monotonic() - began)}.",
                     "Wait until it shows as done in the game before exporting again: "
                     "another export would write the model a second time.",
                     code="export_still_pending",

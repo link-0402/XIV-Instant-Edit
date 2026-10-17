@@ -197,10 +197,14 @@ public sealed class SettingsWindow : Window
             _config.CacheCleanupDays = Math.Clamp(cleanupDays, Configuration.MinCacheCleanupDays, Configuration.MaxCacheCleanupDays);
         // Saved once the slider is let go, not for every day dragged past.
         if (ImGui.IsItemDeactivatedAfterEdit())
+        {
             Save();
+            // Blender sweeps the shared backups folder too, with these days.
+            SynchronizeCache();
+        }
         Widgets.HintWrapped("All backups, Game Files exports, links between exports and their mods, and Timeline edits " +
                             $"(Undo), {Configuration.MinCacheCleanupDays} to {Configuration.MaxCacheCleanupDays} days. " +
-                            "With automatic cache cleanup off, backups and exports in the cache folder are kept.");
+                            "Model backups, export links and Timeline edits expire even with automatic cache cleanup off.");
 
         Divider();
         Widgets.SectionHeader("Skeleton library", "animations");

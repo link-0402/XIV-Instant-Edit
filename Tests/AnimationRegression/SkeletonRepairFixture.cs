@@ -133,6 +133,11 @@ internal static class SkeletonRepairFixture
               !AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\YAS\Yet Another Skeleton\Animation_General Usage\chara\skl_c0801b0001.sklb", "")) &&
               !AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\Some mod\Posing.sklb", "")),
             "a posing skeleton is one in a folder named Posing, not a file of that name");
+        check(!AnimationSkeletonIndex.IsPosingFile(new(game, @"E:\Posing\Mods\YAS\Animation_General Usage\chara\skl_c0801b0001.sklb", "",
+                  "YAS", @"E:\Posing\Mods", "Animation_General Usage/chara/skl_c0801b0001.sklb")) &&
+              !AnimationSkeletonIndex.IsPosingFile(new(game, @"E:\Posing\Mods\Posing\chara\skl_c0801b0001.sklb", "", ModRoot: @"E:\Posing\Mods")) &&
+              AnimationSkeletonIndex.IsPosingFile(new(game, @"E:\Posing\Mods\YAS\Posing\chara\skl_c0801b0001.sklb", "", ModRoot: @"E:\Posing\Mods")),
+            "only folders inside the mod count: a Penumbra root or a mod named Posing doesn't make its skeletons posing ones");
         var posingFile = In(other, @"G:\Penumbra\YAS\Posing\skl.sklb");
         var leftOut = AnimationSkeletonIndex.Rank(channels, [posingFile, candidate], source, game);
         check(leftOut is { State: SkeletonResolutionState.Matched } && leftOut.Selected!.Skeleton.Fingerprint == source.Fingerprint &&

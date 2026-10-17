@@ -101,13 +101,14 @@ the `2.1.0` tag). Keep the committed ZIP at those bytes until step 2 is done.
    `"archive_url": "https://github.com/link-0402/XIV-Instant-Edit/releases/download/2.1.0/XIV-Instant-Edit-Blender.zip",`
    Check it with `./scripts/verify-blender-repository.ps1 -RepositoryPath Blender-Addon/blender_repo`,
    then commit.
-3. **Merge this branch into main** (`claude/release-zips-fb04ec`: scripts, `.gitignore`,
-   csproj, in-repo `repo.json`, Pages workflow). The in-repo `repo.json` then serves the 2.1.0
-   release asset, which is byte-identical to the committed `latest.zip` on `origin/main`
-   (`sha256:af7486ed…`).
-4. **Push main.** This is the shipping step. Check afterwards: the Pages workflow is green,
-   Blender's "Check for updates" on the raw URL reports no error, and Dalamud still offers the
-   plugin from the in-repo `repo.json`.
+3. **The branch is already merged into local main** (`claude/release-zips-fb04ec`: scripts,
+   `.gitignore`, csproj, in-repo `repo.json`, Pages workflow). Local main has since been bumped to
+   3.0.0, so its `repo.json` points at `releases/download/3.0.0/`, which doesn't exist yet.
+   **Never push main on its own before the 3.0.0 release:** in-repo users would be offered 3.0.0
+   and the download would fail with a 404.
+4. **Push main as step 7 of the 3.0.0 release** ("Release steps from now on"), after its tag and
+   release exist. Check afterwards: the Pages workflow is green, Blender's "Check for updates" on
+   the raw URL reports no error, and Dalamud offers 3.0.0 from the in-repo `repo.json`.
 5. **Stop tracking the ZIPs.** Wait at least 10 minutes, since raw.githubusercontent.com caches
    for 5. Then run
    `git rm --cached Dalamud-Plugin/InstantEdit/latest.zip Blender-Addon/blender_repo/XIV-Instant-Edit.zip`,

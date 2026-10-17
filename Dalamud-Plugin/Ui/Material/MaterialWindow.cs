@@ -49,7 +49,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
 
     private MaterialSession? session;
     private Task<Opened>? opening;
-    private string? openingPath;
+    private string? openingPath, openingFile;
     private (ResourceView Row, ActorView Actor, IModFileCopies? Copies)? pendingOpen;
     private bool openSwitchPopup;
     private bool openNewModPopup;
@@ -57,6 +57,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private string newModName = string.Empty;
     private Task<string?>? working;
     private Func<string?, string>? workDone;
+    // Set by a save that fails after taking the preview down, so the preview comes back.
+    private volatile bool previewAfterFailure;
     private string message = string.Empty;
     private FeedbackSeverity messageSeverity = FeedbackSeverity.Info;
     private long previewDue;
@@ -113,14 +115,20 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     public Vector2? LastPosition { get; private set; }
 
     /// <summary>
-    /// The material at <paramref name="gamePath"/> is open here (closed windows keep theirs) or on its
-    /// way. Two windows on one game path would write into the same loaded material.
+    /// The row's material is open here (closed windows keep theirs) or on its way: its game path, or the
+    /// same mod file at another game path, which loads as the same material. Two windows on it would
+    /// write into the same loaded material.
     /// </summary>
-    public bool Holds(string gamePath)
+    public bool Holds(ResourceView row)
     {
-        var normalized = PathRules.NormalizeGamePath(gamePath);
-        return string.Equals(session?.Source.GamePath, normalized, StringComparison.OrdinalIgnoreCase)
-               || (opening != null && string.Equals(openingPath, normalized, StringComparison.OrdinalIgnoreCase));
+        var normalized = PathRules.NormalizeGamePath(row.GamePath);
+        if (string.Equals(session?.Source.GamePath, normalized, StringComparison.OrdinalIgnoreCase)
+            || (opening != null && string.Equals(openingPath, normalized, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (row.SourceState == ResourceSourceState.GameData || !Path.IsPathRooted(row.ActualPath))
+            return false;
+        return string.Equals(session?.Source.ActualPath, row.ActualPath, StringComparison.OrdinalIgnoreCase)
+               || (opening != null && string.Equals(openingFile, row.ActualPath, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Another material can open here without losing anything: no job running, and empty or closed with nothing unsaved.</summary>
@@ -162,6 +170,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             return;
         previewDue = 0;
         openingPath = PathRules.NormalizeGamePath(row.GamePath);
+        openingFile = row.ActualPath;
         opening = Task.Run(async () =>
         {
             var bytes = row.SourceState == ResourceSourceState.GameData
@@ -209,9 +218,34 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         if (session is not { } current || (!current.PreviewShown && working == null))
             return;
         loadedDoc = current.History.Saved;
-        var stop = working ?? Task.FromResult<string?>(null);
-        _ = stop.ContinueWith(_ => IsOpen ? Task.CompletedTask : current.DiscardAsync(preview), TaskScheduler.Default).Unwrap()
-            .ContinueWith(task => log.Warning(task.Exception!, "Could not stop the material preview."), TaskContinuationOptions.OnlyOnFaulted);
+        if (working is not { } previous)
+        {
+            _ = current.DiscardAsync(preview)
+                .ContinueWith(task => log.Warning(task.Exception!, "Could not stop the material preview."), TaskContinuationOptions.OnlyOnFaulted);
+            return;
+        }
+        // The discard joins the job in flight, so that job's completion runs once the preview is down
+        // (a preview's own then sees it gone), and the window isn't free for another material before.
+        working = Task.Run(async () =>
+        {
+            try { return await previous.ConfigureAwait(false); }
+            finally
+            {
+                try
+                {
+                    if (!IsOpen)
+                        await current.DiscardAsync(preview).ConfigureAwait(false);
+                }
+                catch (Exception e) { log.Warning(e, "Could not stop the material preview."); }
+            }
+        });
+    }
+
+    /// <summary>Ends a closed window's job (see <see cref="OnClose"/>), which <see cref="Draw"/> no longer polls; call every frame.</summary>
+    public void PollClosed()
+    {
+        if (!IsOpen)
+            PollWork();
     }
 
     /// <summary>Puts the loaded material's own values back (on the framework thread, waiting briefly when called elsewhere).</summary>
@@ -334,6 +368,15 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             else
                 Say(FeedbackSeverity.Error, Unwrap(opened.Exception));
         }
+        PollWork();
+        PollTextures();
+        PollModels();
+        PollUsage();
+        PollDye();
+    }
+
+    private void PollWork()
+    {
         if (working is { IsCompleted: true } work)
         {
             working = null;
@@ -342,7 +385,13 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             if (work.IsCompletedSuccessfully)
                 Say(work.Result is null ? FeedbackSeverity.Success : FeedbackSeverity.Warning, done?.Invoke(work.Result) ?? work.Result ?? "Done.");
             else
+            {
                 Say(FeedbackSeverity.Error, Unwrap(work.Exception));
+                // A save that failed took the preview down first: show the unsaved edits again.
+                if (previewAfterFailure)
+                    previewDue = Environment.TickCount64;
+            }
+            previewAfterFailure = false;
             if (openAfterSave)
             {
                 openAfterSave = false;
@@ -353,10 +402,6 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 }
             }
         }
-        PollTextures();
-        PollModels();
-        PollUsage();
-        PollDye();
     }
 
     /// <summary>Makes a freshly read material the open one; the last one's preview comes down first.</summary>
@@ -420,6 +465,9 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         Run(() => current.PreviewStructuralAsync(preview, life.Token),
             warning =>
             {
+                // Closed while it was on its way: the preview was taken down again (see OnClose).
+                if (!current.PreviewShown)
+                    return "The preview was taken down when the window closed.";
                 // The redraw loads the preview's file; the live binding finds it again and adds what changed since.
                 loadedDoc = shown;
                 shownDoc = null;
@@ -576,8 +624,10 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 ImGui.SetTooltip("Moves the material to character.shpk with 32 Dawntrail rows. Each old row fills both rows of its pair.");
         }
         DrawCopyMenuItem(current);
-        // A save may have written the model with the material (its second UV map), so its backups count too.
-        IReadOnlyList<PreviewBackupGroup> backups = current.Source.IsGameData ? [] : previewMods.Backups([current.Source.ToPreviewSource(), .. models]);
+        // A save may have written the model with the material (its second UV map), so its backups count too;
+        // only groups with the material's own backup do, not another tool's backups of the model alone.
+        var own = current.Source.IsGameData ? null : current.Source.ToPreviewSource();
+        IReadOnlyList<PreviewBackupGroup> backups = own == null ? [] : PreviewBackups.Holding(previewMods.Backups([own, .. models]), own);
         using (ImRaii.Disabled(backups.Count == 0 || Busy))
         {
             if (ImGui.MenuItem("Undo last save") && backups.Count > 0)
@@ -638,6 +688,11 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             await current.DiscardAsync(preview, redraw: false).ConfigureAwait(false);
             await ModWrites.WaitAsync(life.Token).ConfigureAwait(false);
             try { result = await current.SaveAsync(previewMods, modName).ConfigureAwait(false); }
+            catch
+            {
+                previewAfterFailure = true;
+                throw;
+            }
             finally { ModWrites.Release(); }
             return result.Warnings.Count == 0 ? null : string.Join(" ", result.Warnings);
         }, warning =>

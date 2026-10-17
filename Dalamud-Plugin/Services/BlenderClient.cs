@@ -56,7 +56,8 @@ public sealed class BlenderClient : IDisposable
     private readonly bool _disposeHttp;
 
     public BlenderClient(IPluginLog log, ExportContextRegistry contexts)
-        : this(log, contexts, new HttpClient
+        // Only ever 127.0.0.1: never through a system proxy, which would see the context capability.
+        : this(log, contexts, new HttpClient(new SocketsHttpHandler { UseProxy = false })
         {
             // Import handoff can include a bounded material-preview bundle. The
             // caller supplies short cancellation tokens for status probes, while
@@ -186,6 +187,7 @@ public sealed class BlenderClient : IDisposable
         int port,
         string cacheDirectory,
         bool automaticCleanup,
+        int backupRetentionDays,
         CancellationToken cancellationToken = default)
     {
         if (port is < 1 or > 65535)
@@ -193,12 +195,14 @@ public sealed class BlenderClient : IDisposable
         if (string.IsNullOrWhiteSpace(cacheDirectory))
             throw new ArgumentException("A cache directory is required.", nameof(cacheDirectory));
 
+        // The add-on sweeps the shared backups folder too, so it keeps backups as long as Settings says.
         var payload = JsonSerializer.Serialize(new
         {
             schema = "instant-edit.cache-settings",
             version = 1,
             cacheDirectory,
             automaticCleanup,
+            backupRetentionDays,
         });
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
         try

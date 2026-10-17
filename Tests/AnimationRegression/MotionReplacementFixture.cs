@@ -100,5 +100,8 @@ internal static class MotionReplacementFixture
               InstantEdit.Services.Animations.Preview.MotionLiveDisplay.TracksFit([0, 3, 5, 7, 9], [0, 3, 5]) &&
               !InstantEdit.Services.Animations.Preview.MotionLiveDisplay.TracksFit(original, [0, 5, 3, 7]),
             "Live takes the playing clip whose tracks begin the motion from Blender's, or the other way round");
+        check(InstantEdit.Services.Animations.Preview.MotionLiveDisplay.TracksFit([0, 5, 9], [0, 3, 5]) &&
+              !InstantEdit.Services.Animations.Preview.MotionLiveDisplay.TracksFit([0, 9, 5], [0, 3, 5]),
+            "Live takes a save that left out a track (unticked, or still at the reference) and added its own after");
     }
 }

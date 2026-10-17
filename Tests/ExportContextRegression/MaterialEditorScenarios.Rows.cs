@@ -128,6 +128,11 @@ internal static partial class MaterialEditorScenarios
                 && converted.Dye is { Length: 32 } && converted.Dye[6].Template == 7 && converted.Dye[7].Template == 7
                 && converted.Flags() is { Kind: ColorTableKind.Dawntrail, HasDyeTable: true },
             "converting a legacy table gives each old row both rows of its Dawntrail pair, dye included");
+        var blended = legacyTable.ToDawntrail(blendNext: true);
+        Require(blended.Rows[6].Diffuse == new Vector3(3 / 16f) && blended.Rows[7].Diffuse == new Vector3(4 / 16f)
+                && blended.Dye is { Length: 32 } && blended.Dye[6].Template == 7 && blended.Dye[7].Template == 0 && blended.Dye[5].Template == 7
+                && blended.Rows[31].Diffuse == blended.Rows[30].Diffuse,
+            "for an index made from the normal map, pair p holds old rows p and p + 1, the last pair its row twice");
 
         var odd = mask.Clone();
         odd.DataSet = odd.DataSet[..2112];
