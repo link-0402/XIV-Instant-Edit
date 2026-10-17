@@ -74,7 +74,7 @@ internal sealed class HandoffActions
         {
             0 => new HandoffAction(icon, label, handoff.ModelBlock(row), () => Start(() => handoff.EditModel(row, mod))),
             1 => new HandoffAction(icon, label, handoff.TextureBlock(row), () => Start(() => handoff.EditTexture(row, mod))),
-            3 => new HandoffAction(icon, label, handoff.MaterialBlock(row), () => Start(() => handoff.EditMaterial(row, mod))),
+            3 => new HandoffAction(icon, label, handoff.MaterialBlock(row), () => Start(() => handoff.EditMaterial(row, mod, new ModEditorCopies(_editor)))),
             _ => new HandoffAction(icon, label, handoff.AnimationBlock(row), () => Start(() => handoff.SendAnimation(row, _owner))),
         };
     }
@@ -119,5 +119,43 @@ internal sealed class HandoffActions
         _mod = ModHandoffBridge.Mod(mod, files, ImportObjectIndex);
         for (var i = 0; i < nodes.Count; i++)
             _rows[nodes[i]] = _mod.Roots[i];
+    }
+}
+
+/// <summary>
+/// A mod window's side of the Material window's "Save as copy into an option": the mod's options,
+/// and its session's write that puts the copy into one. It stops writing once the window closes.
+/// </summary>
+internal sealed class ModEditorCopies : IModFileCopies
+{
+    private readonly ModEditor _editor;
+
+    public ModEditorCopies(ModEditor editor) => _editor = editor;
+
+    public string ModName => _editor.Name;
+
+    public string? Block
+        => !_editor.IsOpen    ? "Its mod window was closed. Open the material from the mod window again."
+         : _editor.Sync.Busy  ? "Wait a moment, until every change is written into the mod."
+         : _editor.Check.Busy ? "Wait until the repair or clean-up is done."
+         : null;
+
+    public IReadOnlyList<ModHandoffOption> Options(IReadOnlyList<string> gamePaths, string sourceRelPath)
+        => _editor.Session.Project is { } project
+            ? ModHandoffCopies.Options(project.Meta, gamePaths, sourceRelPath, (option, path) => _editor.Session.FindReplacement(path, option) != null)
+            : [];
+
+    public ModHandoffCopy SaveCopy(string optionKey, IReadOnlyList<(string GamePath, byte[] Bytes)> files)
+    {
+        if (Block is { } blocked)
+            return ModHandoffCopy.Failed(blocked);
+        var option = OptionRef.Parse(optionKey);
+        var chosen = Options(files.Select(file => file.GamePath).ToList(), string.Empty).FirstOrDefault(o => OptionRef.Parse(o.Key) == option);
+        if (chosen == null)
+            return ModHandoffCopy.Failed("That option is no longer in the mod.");
+        if (chosen.Block is { } no)
+            return ModHandoffCopy.Failed(no);
+        var written = _editor.Session.AddFileCopies(option, files, out var error);
+        return written == null ? ModHandoffCopy.Failed(error) : new ModHandoffCopy(null, chosen.Label, written);
     }
 }

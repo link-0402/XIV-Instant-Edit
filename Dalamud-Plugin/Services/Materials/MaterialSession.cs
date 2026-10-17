@@ -134,6 +134,20 @@ internal sealed class MaterialSession
         return result;
     }
 
+    /// <summary>
+    /// A copy of <paramref name="saved"/> (<paramref name="bytes"/>, with the new textures it reads) went
+    /// into another file of the same mod: Save as copy into an option. That file is the one the session
+    /// saves from now on; the file it was opened from stays as it is.
+    /// </summary>
+    public void SavedAsCopy(MaterialDocument saved, string actualPath, string relativePath, byte[] bytes)
+    {
+        Source = Source with { ActualPath = actualPath, RelativePath = relativePath.Replace('\\', '/'), Sha256 = PreviewSource.Hash(bytes) };
+        foreach (var file in NewFilesFor(saved))
+            newFiles.Remove(file.GamePath);
+        if (ReferenceEquals(History.Current, saved))
+            History.MarkSaved();
+    }
+
     /// <summary>Shows the current document through the temporary-mod preview and redraws the object.</summary>
     public async Task<string?> PreviewStructuralAsync(IMaterialPreview preview, CancellationToken token)
     {

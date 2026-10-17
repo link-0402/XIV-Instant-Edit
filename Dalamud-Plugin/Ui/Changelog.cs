@@ -85,6 +85,7 @@ internal static class ChangelogCatalog
             Entry("Colour rows the index texture never uses are greyed out, and Show where marks the parts that use a pair.", 1),
             Entry("Make a material dyeable, set each row's dye template and what the dye changes, and preview any dye on your character. Bake writes the preview dye into the rows.", 1),
             Entry("Presets make metal, glow, a scrolling pattern, glass, see-through, matcap, dyeable, a detail pattern or velvet in one click, and say what else the effect needs. Clean up removes settings the shader ignores.", 1),
+            Entry("Opened from a mod window, Save as copy into an option puts the edited material into an option you pick. The original file stays as it is.", 1),
             Entry("Animations: expressions like /smile now show up too. Send them to Blender, or open their timeline to bake LivePose face adjustments into them or untick bones."),
             Entry("Timeline: tick Keep on a face to keep it on after the expression ends, until another one replaces it, like the Permanent Facial Expressions mod does. A moving face, like Panting Face's, keeps looping for about 18 minutes, then returns to neutral.", 1),
             Entry("Animations: the listener now finds emotes your race plays from another race's files, like a Miqo'te dancing with a Midlander male's Popotostep mod."),

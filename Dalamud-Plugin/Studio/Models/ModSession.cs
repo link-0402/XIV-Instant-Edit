@@ -1121,6 +1121,33 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     }
 
     /// <summary>
+    /// Puts a copy of files into <paramref name="option"/> as new files of the mod, with the option's
+    /// game paths pointed at them in one write of meta.json; the files it used before stay. How the
+    /// Material window saves a copy of a material into an option. Null, with <paramref name="error"/>
+    /// saying why, when it could not be written: no file is left behind then.
+    /// </summary>
+    public IReadOnlyList<ModHandoffCopiedFile>? AddFileCopies(OptionRef option, IReadOnlyList<(string GamePath, byte[] Bytes)> files, out string error)
+    {
+        error = string.Empty;
+        if (Project is not { } project)
+        {
+            error = "The mod is closed.";
+            return null;
+        }
+
+        IReadOnlyList<ModHandoffCopiedFile> written = [];
+        if (!TryEditStructure(project, meta => written = ModHandoffCopies.Write(project.FolderPath, meta, option, files, project.RelKeysInUse(readDisk: true))))
+        {
+            ModHandoffCopies.Delete(written);
+            error = Status?.Text ?? "The copy could not be written.";
+            return null;
+        }
+        Revision++;
+        Notify($"Saved a copy of {Path.GetFileName(files[0].GamePath)} into {ModHandoffCopies.Label(project.Meta, option)}.", Severity.Info);
+        return written;
+    }
+
+    /// <summary>
     /// Takes the entry <paramref name="option"/> / <paramref name="gamePath"/> out of <paramref name="meta"/>
     /// when it still points at <paramref name="expectedRel"/>; returns the file it pointed at, or null.
     /// <paramref name="changed"/> says it points at another file now (left as it is).

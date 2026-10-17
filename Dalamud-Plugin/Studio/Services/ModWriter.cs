@@ -428,7 +428,7 @@ internal sealed class ModWriter
     private string Disk(string rel) => PathNormalizer.ToDiskPath(_modPath, rel);
 
     /// <summary>Where a replacement naturally goes: at its game path for the default files, in a folder per option otherwise.</summary>
-    private static string ReplacementRel(PenumbraModMeta meta, string gamePath, OptionRef option)
+    internal static string ReplacementRel(PenumbraModMeta meta, string gamePath, OptionRef option)
     {
         var path = PathNormalizer.GamePath(gamePath).Replace('/', '\\');
         if (option.IsDefault)
