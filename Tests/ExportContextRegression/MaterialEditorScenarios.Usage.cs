@@ -9,6 +9,45 @@ internal static partial class MaterialEditorScenarios
     {
         CheckUsage();
         CheckLegacyIndexTexture();
+        CheckNormalBesideMaterial();
+    }
+
+    /// <summary>
+    /// The index for a converted mod material comes from that mod's normal map, from the option the
+    /// material sits in; the character's collection may load another one (in game 2026-10-17 a mod
+    /// window's copy got the vanilla normal map, all alpha 255).
+    /// </summary>
+    private static void CheckNormalBesideMaterial()
+    {
+        const string material = "chara/equipment/e5033/material/v0008/mt_c0101e5033_met_a.mtrl";
+        const string normal = "chara/equipment/e5033/texture/v01_c0101e5033_met_n.tex";
+        var root = Path.Combine(Path.GetTempPath(), "ie-material-beside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var meta = new System.Text.Json.Nodes.JsonObject
+            {
+                ["FileVersion"] = 4, ["Name"] = "Halo",
+                ["DefaultData"] = new System.Text.Json.Nodes.JsonObject { ["Files"] = new System.Text.Json.Nodes.JsonObject { [normal] = "base\\n.tex" } },
+                ["Groups"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject
+                {
+                    ["Type"] = "Single", ["Name"] = "Halo",
+                    ["Options"] = new System.Text.Json.Nodes.JsonArray(
+                        new System.Text.Json.Nodes.JsonObject { ["Name"] = "Red", ["Files"] = new System.Text.Json.Nodes.JsonObject { [material] = "red\\a.mtrl", [normal] = "red\\n.tex" } },
+                        new System.Text.Json.Nodes.JsonObject { ["Name"] = "Blue", ["Files"] = new System.Text.Json.Nodes.JsonObject { [material] = "blue/a.mtrl" } }),
+                }),
+            };
+            File.WriteAllText(Path.Combine(root, "meta.json"), meta.ToJsonString());
+            Require(InstantEdit.Services.PenumbraMods.ModMetadata.MappedFileBeside(root, material, "red/a.mtrl", normal) == "red/n.tex"
+                    && InstantEdit.Services.PenumbraMods.ModMetadata.MappedFileBeside(root, material, "blue/a.mtrl", normal) == "base/n.tex"
+                    && InstantEdit.Services.PenumbraMods.ModMetadata.MappedFileBeside(root, material, "red/a.mtrl", "chara/x.tex") == null
+                    && InstantEdit.Services.PenumbraMods.ModMetadata.MappedFileBeside(Path.Combine(root, "missing"), material, "red/a.mtrl", normal) == null,
+                "a mod material's texture comes from its own option, else the mod's first mapping, else nothing");
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     /// <summary>

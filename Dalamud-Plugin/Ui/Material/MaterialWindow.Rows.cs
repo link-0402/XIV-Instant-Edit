@@ -3,6 +3,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Materials;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Services.Previews;
 using InstantEdit.Studio.Models;
 
@@ -437,11 +438,24 @@ internal sealed partial class MaterialWindow
         var normal = doc.Slots.FirstOrDefault(slot => slot.SamplerId == MaterialDocument.NormalSampler && slot.Path.Length > 0)?.Path;
         var existing = doc.Slots.FirstOrDefault(slot => slot.SamplerId == IndexSampler && slot.Path.Length > 0)?.Path;
         var indexPath = existing ?? (normal == null ? null : MaterialSession.IndexPathFor(normal));
+        var source = current.Source;
         var normalFile = normal != null && resolvedTextures.TryGetValue(normal, out var foundNormal) ? foundNormal : normal;
         var indexFile = existing != null && resolvedTextures.TryGetValue(existing, out var foundIndex) ? foundIndex : existing;
         byte[]? built = null;
         Run(async () =>
         {
+            // A mod material's textures come from its own mod: the character's collection may load other ones (or the mod is off).
+            if (!source.IsGameData && source.ModRootPath.Length > 0)
+            {
+                string? Own(string? gamePath) => gamePath == null
+                    ? null
+                    : ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, gamePath) is { } relative
+                      && Path.Combine(source.ModRootPath, relative.Replace('/', Path.DirectorySeparatorChar)) is var full && File.Exists(full)
+                        ? full
+                        : null;
+                normalFile = Own(normal) ?? normalFile;
+                indexFile = Own(existing) ?? indexFile;
+            }
             if (await ReadTextureAsync(indexFile).ConfigureAwait(false) != null)
                 return null;
             var bytes = await ReadTextureAsync(normalFile).ConfigureAwait(false);
