@@ -10,12 +10,12 @@ the plugin, the add-on still imports and exports MDL, FBX and glTF files.
 ## Requirements
 
 - Blender 4.5 or newer, below 5.3. Blender 4.5 LTS and 5.2 LTS are tested.
-- To edit models from the game: the XIV Instant Edit Dalamud plugin at the same version as the
-  add-on, and Penumbra 1.7.1 or newer. Simple Export / Import works without them.
+- To edit models from the game: the XIV Instant Edit Dalamud plugin, and Penumbra 1.7.1 or newer.
+  Simple Export / Import works without them.
 
 ## Installation
 
-The plugin's first-time setup, or **Settings > Blender add-on** in the plugin, installs the add-on
+The plugin's first-time setup, or **Settings > Editors** in the plugin, installs the add-on
 for you. Blender has to be closed while it does. To install it by hand:
 
 1. In Blender, open **Edit > Preferences > Get Extensions**, then **Repositories > + > Add Remote
@@ -25,8 +25,8 @@ for you. Blender has to be closed while it does. To install it by hand:
    `https://raw.githubusercontent.com/link-0402/XIV-Instant-Edit/main/Blender-Addon/blender_repo/index.json`
 3. Find **XIV Instant Edit** in the list and click **Install**.
 
-Keep the add-on and the plugin on the same version: other combinations aren't supported. Blender's
-updater sometimes misses an update, so compare the versions before reporting a bug.
+The plugin tells you when it needs a newer add-on (**Settings > Editors**). Blender's updater
+sometimes misses an update, so check there before reporting a bug.
 
 Everything is in the **IE - Instant Edit** tab of the 3D Viewport's sidebar (press **N**).
 

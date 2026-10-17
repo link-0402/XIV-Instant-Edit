@@ -1424,8 +1424,8 @@ Spec: docs/superpowers/specs/2026-10-14-timeline-cuts-and-loop-seams-design.md. 
 ## Motion from Blender (pending)
 
 Sending a clip's motion from the Timeline to Blender and bringing the edited action back as the
-clip's motion. Spec: docs/superpowers/specs/2026-10-16-motion-from-blender-design.md. Needs the
-Blender add-on of the same version, with the listener running.
+clip's motion. Spec: docs/superpowers/specs/2026-10-16-motion-from-blender-design.md. Needs a
+Blender add-on the plugin accepts, with the listener running.
 
 - [ ] 1 Round trip: open a body animation in the Timeline, press the arrows button next to the Bones
   button, Send motion to Blender, then Motion from Blender without editing. The line under the toolbar

@@ -1,13 +1,12 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using InstantEdit.Services.Setup;
 
 namespace InstantEdit.Services.Painter;
 
 /// <summary>
 /// Finds Substance Painter and installs the bundled XIV Instant Edit plugin into Painter's user
-/// plugin folder. The plugin's Python files ship inside this assembly, so the installed copy
-/// always matches this plugin version.
+/// plugin folder. The plugin's Python files ship inside this assembly; their own version is
+/// <see cref="ComponentVersions.PainterPluginLatest"/>.
 /// </summary>
 public static class PainterInstallation
 {
@@ -164,17 +163,17 @@ public static class PainterInstallation
         return "";
     }
 
-    /// <summary> The version written by the last install, or empty when the plugin isn't installed. </summary>
+    /// <summary> The installed plugin's own version (its <c>PLUGIN_VERSION</c>), or empty when the plugin isn't installed. </summary>
     public static string InstalledVersion()
     {
         try
         {
-            var config = Path.Combine(PackageDirectory, "config.json");
-            if (!File.Exists(config) || !File.Exists(Path.Combine(PackageDirectory, "__init__.py")))
+            var init = Path.Combine(PackageDirectory, "__init__.py");
+            if (!File.Exists(Path.Combine(PackageDirectory, "config.json")) || !File.Exists(init))
                 return "";
-            return JsonNode.Parse(File.ReadAllText(config))?["version"]?.GetValue<string>() ?? "";
+            return ComponentVersions.ParsePainterPluginVersion(File.ReadAllText(init));
         }
-        catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             return "";
         }
@@ -209,7 +208,7 @@ public static class PainterInstallation
     }
 
     /// <summary> Writes the bundled plugin and its port settings; returns the folder it installed to. </summary>
-    public static string Install(int painterPort, int pluginPort, string version)
+    public static string Install(int painterPort, int pluginPort)
     {
         var target = PackageDirectory;
         Directory.CreateDirectory(target);
@@ -226,26 +225,23 @@ public static class PainterInstallation
             using var file = File.Create(Path.Combine(target, name));
             stream.CopyTo(file);
         }
-        File.WriteAllText(Path.Combine(target, "config.json"), JsonSerializer.Serialize(new
-        {
-            painterPort,
-            pluginPort,
-            version,
-        }, new JsonSerializerOptions { WriteIndented = true }));
+        WriteConfig(target, painterPort, pluginPort);
         return target;
     }
 
     /// <summary> Updates only the ports of an installed plugin, after they change in Settings. </summary>
     public static void UpdatePorts(int painterPort, int pluginPort)
     {
-        var version = InstalledVersion();
-        if (version.Length == 0)
+        if (InstalledVersion().Length == 0)
             return;
-        File.WriteAllText(Path.Combine(PackageDirectory, "config.json"), JsonSerializer.Serialize(new
+        WriteConfig(PackageDirectory, painterPort, pluginPort);
+    }
+
+    // No version here: the plugin reports its own PLUGIN_VERSION.
+    private static void WriteConfig(string folder, int painterPort, int pluginPort)
+        => File.WriteAllText(Path.Combine(folder, "config.json"), JsonSerializer.Serialize(new
         {
             painterPort,
             pluginPort,
-            version,
         }, new JsonSerializerOptions { WriteIndented = true }));
-    }
 }

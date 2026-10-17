@@ -33,7 +33,7 @@ for Blender, which names the local extension folder after the repository URL.
 
 | Script | Output |
 | --- | --- |
-| `scripts/prepare-release.ps1` | Refuses to run with uncommitted add-on, plugin or `Tools` changes (`-AllowDirty` overrides). Builds the plugin with `-p:OutputPath=dist/plugin-build/`. Empties `dist/plugin-build/` first. Copies both assets to `dist/release/`, points the in-repo `repo.json` download links and the tracked `index.json` at release `-Tag` (default: the plugin version), and refuses a tag whose release already holds that asset. `repo.json`'s `AssemblyVersion` must match the csproj. `-SkipPlugin` and `-SkipBlender` work as before. |
+| `scripts/prepare-release.ps1` | Refuses to run with uncommitted add-on, plugin or `Tools` changes (`-AllowDirty` overrides). Builds the plugin with `-p:OutputPath=dist/plugin-build/`. Empties `dist/plugin-build/` first. Copies both assets to `dist/release/`, points the in-repo `repo.json` download links and the tracked `index.json` at release `-Tag` (default: the plugin version), and refuses a tag whose release already holds that asset. `repo.json`'s `AssemblyVersion` must match the csproj. Skips the Blender package when the add-on is already released and unchanged, and refuses unbumped component changes or minimums above the shipped versions (`-CheckOnly` only runs these checks). `-SkipPlugin` and `-SkipBlender` work as before. |
 | `scripts/generate-blender-repository.ps1` | `dist/blender_repo/` holds the package, `index.json` and `index.html`. `-ArchiveUrl` swaps the relative URL for an absolute one. |
 | `scripts/package-blender-addon.ps1` | `dist/blender_repo/XIV-Instant-Edit-Blender.zip` |
 | `scripts/verify-blender-repository.ps1` | Checks size and hash against a local `./` file, `-ArchivePath`, or by downloading an `https` `archive_url`. |
@@ -56,17 +56,30 @@ dev-plugin location with automatic reloading, so building there would hot-reload
 
 ## Release steps from now on
 
-1. Bump the versions as before (csproj, `repo.json`, `blender_manifest.toml`, changelog).
-2. Commit, then run `./scripts/prepare-release.ps1` on the clean tree.
+1. Bump the plugin version (csproj `<Version>`/`<FileVersion>`, `repo.json`) and the changelog.
+   - Bump `blender_manifest.toml`'s `version` only when add-on code changed, and Painter's
+     `PLUGIN_VERSION` (`Tools/SubstancePainter/xiv_instant_edit/__init__.py`) only when Painter
+     plugin code changed.
+   - Raise `BlenderAddonMinimumVersion` / `PainterPluginMinimumVersion` in the csproj only when the
+     plugin needs that newer component code. The plugin accepts any component at or above them.
+2. Commit, then run `./scripts/prepare-release.ps1` on the clean tree. `-CheckOnly` shows what it
+   would ship without building anything.
 3. Commit the rewritten `Blender-Addon/blender_repo/index.json` and `Dalamud-Plugin/repo.json`.
 4. Push the tag before main, so the asset exists before the index that names it ships:
    `git tag <ver>` then `git push origin <ver>`.
 5. Create the release:
    `gh release create <ver> --verify-tag --title "XIV Instant Edit v<ver>" --notes-file <notes> dist/release/XIV-Instant-Edit.zip dist/release/XIV-Instant-Edit-Blender.zip`
+   Leave the Blender ZIP out when the script skipped it.
 6. Check the published asset: `./scripts/verify-blender-repository.ps1 -RepositoryPath Blender-Addon/blender_repo`.
 7. Push main, then bump DalamudPlugins (AssemblyVersion, LastUpdate, changelog).
 
-For a plugin-only hotfix, use `-SkipBlender` and attach only the plugin ZIP.
+The script decides on its own whether the add-on ships. It skips the Blender ZIP when
+`blender_manifest.toml` still has the version the tracked `index.json` hands out and no packaged
+add-on file changed since that release's tag. It refuses to run when add-on files changed without
+a version bump, when Painter plugin files changed since the previous tag without a `PLUGIN_VERSION`
+bump, or when a minimum is above the version users can get after the release. `-SkipBlender` still
+forces a skip (for a plugin-only hotfix), and then unbumped add-on changes only warn. A re-run
+before the release tag exists packages the add-on `index.json` already names for that tag.
 
 ## Migration (each step needs the user's go-ahead)
 

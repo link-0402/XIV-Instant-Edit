@@ -37,9 +37,24 @@ internal static class PainterScenarios
         SkinLookupFollowsTheCollection(Path.Combine(testRoot, "PainterSkin"));
         OptionalSetsStayOutUntilTicked();
         PluginShipsWithTheAssembly();
+        PainterVersionChecks();
     }
 
-    /// <summary> The Painter plugin is embedded for the Settings installer and carries this plugin's version. </summary>
+    /// <summary> Painter is online at or above the declared minimum Painter plugin version, newer included. </summary>
+    private static void PainterVersionChecks()
+    {
+        static PainterConnectionState State(string version) => new PainterStatus(true, version, "", false, "", false).Classify("2.2.0");
+        Require(State("2.2.0") == PainterConnectionState.Online && State("2.3.0") == PainterConnectionState.Online,
+            "a Painter plugin at or above the minimum is online");
+        Require(State("2.1.0") == PainterConnectionState.VersionMismatch && State("") == PainterConnectionState.VersionMismatch,
+            "an older or unknown Painter plugin is a mismatch");
+        Require(PainterStatus.Offline.Classify("2.2.0") == PainterConnectionState.Offline, "an unreachable Painter is offline");
+        Require(PainterStatus.MismatchMessage("2.1.0", "2.2.0") == "The Painter plugin is 2.1.0; this plugin needs 2.2.0 or newer. Update it from Settings." &&
+                PainterStatus.MismatchMessage("", "2.2.0") == "The Painter plugin is an older version; this plugin needs 2.2.0 or newer. Update it from Settings.",
+            "the Painter mismatch text names the installed plugin and the minimum");
+    }
+
+    /// <summary> The Painter plugin is embedded for the Settings installer, and its own version is read from it. </summary>
     private static void PluginShipsWithTheAssembly()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -52,9 +67,8 @@ internal static class PainterScenarios
             Require(resources.Contains("InstantEdit.PainterPlugin." + Path.GetFileName(file)), $"{Path.GetFileName(file)} is embedded for the installer");
         var init = File.ReadAllText(Path.Combine(package, "__init__.py"));
         var match = System.Text.RegularExpressions.Regex.Match(init, "PLUGIN_VERSION = \"([^\"]+)\"");
-        var version = typeof(PainterInstallation).Assembly.GetName().Version!;
-        Require(match.Success && match.Groups[1].Value == $"{version.Major}.{version.Minor}.{version.Build}",
-            "the Painter plugin's PLUGIN_VERSION matches the plugin version");
+        Require(match.Success && match.Groups[1].Value == ComponentVersions.PainterPluginLatest,
+            "the embedded Painter plugin is the source one");
     }
 
     // ---- Synthetic Dawntrail model --------------------------------------------------------------

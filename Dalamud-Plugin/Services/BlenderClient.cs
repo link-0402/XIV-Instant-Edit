@@ -22,14 +22,13 @@ public sealed record BlenderStatus(bool Reachable, string? AddonVersion)
     public bool CacheSettingsSupported { get; init; }
     /// <summary> Imports Blender has queued or is running; -1 when the add-on doesn't say. </summary>
     public int PendingImports { get; init; } = -1;
-    public BlenderConnectionState Classify(string expectedPluginVersion)
+    /// <summary> Online when the add-on is at or above <paramref name="minimumAddonVersion"/> (<see cref="ComponentVersions.BlenderAddonMinimum"/>); newer add-ons are accepted. </summary>
+    public BlenderConnectionState Classify(string minimumAddonVersion)
     {
         if (!Reachable)
             return BlenderConnectionState.Offline;
 
-        var expected = BlenderClient.NormalizeVersion(expectedPluginVersion);
-        var actual = BlenderClient.NormalizeVersion(AddonVersion);
-        return !string.IsNullOrEmpty(expected) && string.Equals(actual, expected, StringComparison.Ordinal)
+        return ComponentVersions.Satisfies(AddonVersion, minimumAddonVersion)
             ? BlenderConnectionState.Online
             : BlenderConnectionState.VersionMismatch;
     }
@@ -98,8 +97,9 @@ public sealed class BlenderClient : IDisposable
         return $"{parsed.Major}.{parsed.Minor}.{parsed.Build}";
     }
 
-    public static string VersionMismatchMessage(string pluginVersion)
-        => $"Version mismatch. Verify Blender addon version is in sync with Plugin version {pluginVersion}.";
+    public static string VersionMismatchMessage(string? addonVersion, string minimum)
+        => $"The Blender add-on is {(string.IsNullOrEmpty(addonVersion) ? "an older version" : addonVersion)}; " +
+           $"this plugin needs {minimum} or newer. Update it in Settings.";
 
     /// <summary>Reads the Blender add-on status and its declared release version.</summary>
     public async Task<BlenderStatus> GetStatusAsync(int port, CancellationToken cancellationToken = default)

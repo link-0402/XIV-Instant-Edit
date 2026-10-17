@@ -5,7 +5,8 @@ browser. This plugin builds the Painter project, and its "Send to game" button e
 textures in FFXIV's channel layout and hands them back to Instant Edit.
 """
 
-# Kept equal to the Dalamud plugin's version; Instant Edit reports a mismatch otherwise.
+# This plugin's own version. Bump it only when these files change; Instant Edit accepts any
+# version at or above its PainterPluginMinimumVersion.
 PLUGIN_VERSION = "2.2.0"
 
 _plugin = None

@@ -13,6 +13,9 @@
     <AssemblyName>InstantEdit</AssemblyName>
     <Version>2.2.0</Version>
     <FileVersion>2.2.0</FileVersion>
+    <!-- The oldest Blender add-on and Painter plugin this build works with. Raise one only when the plugin needs that component's newer code. -->
+    <BlenderAddonMinimumVersion>2.2.0</BlenderAddonMinimumVersion>
+    <PainterPluginMinimumVersion>2.2.0</PainterPluginMinimumVersion>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <Deterministic>true</Deterministic>
@@ -115,7 +118,7 @@
     <EmbeddedResource Include="Services\Animations\TmbLayouts.json" />
     <!-- The Bones window's body artwork, from Brio (GPL-3.0); see THIRD-PARTY-NOTICES.md. -->
     <EmbeddedResource Include="Resources\Pose\*.png" LogicalName="InstantEdit.Pose.%(Filename)%(Extension)" />
-    <!-- The Substance Painter plugin, installed from Settings so it always matches this build. -->
+    <!-- The Substance Painter plugin, installed from Settings. Its PLUGIN_VERSION is its own version (see ComponentVersions). -->
     <EmbeddedResource Include="..\Tools\SubstancePainter\xiv_instant_edit\*.py" LogicalName="InstantEdit.PainterPlugin.%(Filename)%(Extension)" />
     <!-- Run by setup in a windowless Blender to add the GitHub extension repository and install the add-on. -->
     <EmbeddedResource Include="Services\Setup\install_blender_addon.py" LogicalName="InstantEdit.Setup.install_blender_addon.py" />
@@ -126,6 +129,12 @@
     <EmbeddedResource Include="..\Tools\GIMP\*.scm" LogicalName="InstantEdit.EditorScripts.GIMP.%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\Tools\Krita\Plugin\save_flattened_tga.desktop" LogicalName="InstantEdit.EditorScripts.Krita.save_flattened_tga.desktop" />
     <EmbeddedResource Include="..\Tools\Krita\Plugin\save_flattened_tga\*.py" LogicalName="InstantEdit.EditorScripts.Krita.save_flattened_tga/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- Read by ComponentVersions. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="BlenderAddonMinimumVersion" Value="$(BlenderAddonMinimumVersion)" />
+    <AssemblyMetadata Include="PainterPluginMinimumVersion" Value="$(PainterPluginMinimumVersion)" />
   </ItemGroup>
 
   <!-- Dalamud reads a dev plugin's installer icon from images\icon.png beside the DLL; DalamudPackager leaves it out of latest.zip. -->

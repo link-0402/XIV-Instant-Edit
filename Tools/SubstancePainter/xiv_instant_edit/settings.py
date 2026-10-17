@@ -1,4 +1,6 @@
-"""Ports and version, from the config.json Instant Edit writes when it installs this plugin."""
+"""Ports, from the config.json Instant Edit writes when it installs this plugin.
+
+The version is PLUGIN_VERSION; config.json files from older installs may still carry one."""
 
 import json
 import os

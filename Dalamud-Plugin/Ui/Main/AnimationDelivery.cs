@@ -41,8 +41,8 @@ internal sealed class AnimationDelivery
         var status = await _blenderConnection.CheckStatusAsync(port, token).ConfigureAwait(false);
         if (!status.Reachable)
             throw new InvalidOperationException("Blender is offline. Start Blender with the XIV Instant Edit add-on, then send the animation again.");
-        if (status.Classify(pluginVersion) != BlenderConnectionState.Online)
-            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(pluginVersion));
+        if (status.Classify(ComponentVersions.BlenderAddonMinimum) != BlenderConnectionState.Online)
+            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(status.AddonVersion, ComponentVersions.BlenderAddonMinimum));
         if (!await _blender.SupportsAnimationImportAsync(port, token).ConfigureAwait(false))
             throw new InvalidOperationException("The XIV Instant Edit add-on is too old to receive animations. Update the add-on and restart Blender.");
         var armature = AnimationArmature;
@@ -70,8 +70,8 @@ internal sealed class AnimationDelivery
         var status = await _blenderConnection.CheckStatusAsync(port, token).ConfigureAwait(false);
         if (!status.Reachable)
             throw new InvalidOperationException("Blender is offline. Start Blender with the XIV Instant Edit add-on, then try again.");
-        if (status.Classify(pluginVersion) != BlenderConnectionState.Online)
-            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(pluginVersion));
+        if (status.Classify(ComponentVersions.BlenderAddonMinimum) != BlenderConnectionState.Online)
+            throw new InvalidOperationException(BlenderClient.VersionMismatchMessage(status.AddonVersion, ComponentVersions.BlenderAddonMinimum));
         if (!await _blender.SupportsAnimationReadAsync(port, token).ConfigureAwait(false))
             throw new InvalidOperationException("The XIV Instant Edit add-on is too old to send animations back. Update the add-on and restart Blender.");
         var body = AnimationReadFormat.WriteRequest(request, AnimationArmature, null, pluginVersion);
