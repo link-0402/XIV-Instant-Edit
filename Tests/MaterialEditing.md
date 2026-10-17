@@ -18,9 +18,10 @@ Opening:
   which say "Unknown value 0x..." with a help text). Values the shader ignores sit in the
   collapsed "Ignored by this shader" group with a Remove button. (Critique dress: two "Unknown
   value" rows; it has no ignored values, so the group wasn't seen.)
-- [ ] Game Files: a vanilla material row opens the same window ("Game file").
-- [ ] Mod Browser: a mod window's material inspector shows "Open in the Material editor", which
-  opens the same window.
+- [x] Game Files: a vanilla material row opens the same window ("Game file"). (Hairstyle 1; "Not
+  on screen", as it isn't worn.)
+- [x] Mod Browser: a mod window's material inspector shows "Open in the Material editor", which
+  opens the same window. (Strawberry Halo copy.)
 - [x] Opening another material while this one has unsaved changes asks Save first / Discard /
   Cancel. (Cancel keeps the edits.)
 
@@ -83,7 +84,10 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   matchesSnapshot true right after binding.
 - [x] Redraw the character (Penumbra) while bound: no crash; the toolbar shows Live again within a
   second and the edits are back on the character.
-- [ ] Enter and leave GPose, and change zones, while bound: no crash; Live comes back.
+- [x] Enter and leave GPose, and change zones, while bound: no crash; Live comes back. (After a zone
+  change the game handed the same material, still edited, to a new draw object; closing then left
+  the edits in memory. Fixed in 042d85b: snapshots outlive stale bindings; retested, cutoff back to
+  0.5.)
 - [x] Reload the plugin while bound with unsaved edits: no crash; the character shows its own
   material after the reload.
 
@@ -99,8 +103,8 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   redrawing shows the dye again. Change the dye in Glamourer while bound: no crash, and the live
   rows come back within a second. (The dyed Critique dress shows its undyed rows while edited, as
   ruled.)
-- [ ] A redraw, GPose enter/leave and a zone change while rows are edited: no crash; the edited
-  rows come back. (Redraw passed.)
+- [x] A redraw, GPose enter/leave and a zone change while rows are edited: no crash; the edited
+  rows come back.
 
 ## Index usage (Task 10, pending)
 
@@ -125,23 +129,26 @@ The `material` Bridge tool shows the window's state, the live binding and, with
 - [ ] Scrolling pattern: the character redraws on the scroll shader and the pattern visibly moves;
   the new `_fx.tex` sits beside the material after Save (in the mod, or in the new mod). (Redraw on
   characterscroll.shpk with the `_fx.tex` loaded from the preview; movement and Save not checked.)
-- [ ] Glass, See-through and Matcap each look right after their redraw; Undo takes each back in one
-  step. (Glass and See-through apply and undo; Matcap not reached: the game crashed from another
-  Bridge client's script at that point.)
+- [x] Glass, See-through and Matcap each look right after their redraw; Undo takes each back in one
+  step. (All three apply, redraw and undo; Matcap names everything it removed. Detail pattern and
+  Velvet too. Looks not judged on the back-facing harness.)
 - [ ] Dyeable adds a dye table (the rows' Dye section appears); Clean up's hover lists what it
-  removes.
+  removes. (On a material that already has one, Dyeable sets 3 rows to channel 1; adding a table
+  is covered by Dyeable on/off in Task 12.)
 
 ## Dye rows and preview dyes (Task 12, pending)
 
 The dye template reader is checked offline against the game's own stainingtemplate_gud.stm and
 stainingtemplate.stm (43 templates each).
-- [ ] On a dyeable gear material, pick a preview dye for Dye 1: the swatches and the character take
-  it the same frame.
-- [ ] Compare one row's dyed colour with Penumbra's dye preview for the same dye: they match. (Dye
-  field 3 is taken as glow exposure; note here if Penumbra shows it elsewhere.)
-- [ ] A row's Dye section: change its template, channel and fields; Undo takes each back.
-- [ ] Bake: the rows hold the dyed values, and with "No dye" the character still looks dyed.
-- [ ] Untick Dyeable: the dye rows go (the character redraws); tick it again: empty dye rows.
+- [x] On a dyeable gear material, pick a preview dye for Dye 1: the swatches and the character take
+  it the same frame. (Critique dress, Celeste Green: the red dress turned teal at once.)
+- [x] Compare one row's dyed colour with Penumbra's dye preview for the same dye: they match. (Dye
+  field 3 is taken as glow exposure; note here if Penumbra shows it elsewhere.) (Compared with
+  Penumbra.GameData's ColorTableRow.ApplyDye instead of its window: Dawntrail rows take the
+  Exposure flag into Exposure (half 11), as here; only its legacy path writes Scalar3.)
+- [x] A row's Dye section: change its template, channel and fields; Undo takes each back.
+- [x] Bake: the rows hold the dyed values, and with "No dye" the character still looks dyed.
+- [x] Untick Dyeable: the dye rows go (the character redraws); tick it again: empty dye rows.
 
 ## Save as copy into an option (pending)
 
@@ -158,8 +165,9 @@ The places, file names and the meta.json write are checked offline (ModHandoffSc
 
 ## Finish (Task 13, pending)
 
-- [ ] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as
-  one undo step; on a clean material it says there is nothing to clean up.
-- [ ] No crash and no stuck preview after: closing the window with unsaved edits, opening another
-  material, reloading the plugin, entering and leaving GPose, and a zone change. (Closing with
-  edits, opening another and the plugin reload passed.)
+- [x] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as
+  one undo step; on a clean material it says there is nothing to clean up. (DOUX Maeve hair: Shadow
+  cutoff. The list says "Removed ..." under the heading "Clean up removes"; past tense reads oddly.)
+- [x] No crash and no stuck preview after: closing the window with unsaved edits, opening another
+  material, reloading the plugin, entering and leaving GPose, and a zone change. (Zone change fixed
+  in 042d85b.)
