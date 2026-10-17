@@ -98,31 +98,9 @@ internal sealed class MaterialSession
     {
         var saved = Current;
         var bytes = saved.Write();
-        var entry = PreviewModEntry.At(Source.GamePath, bytes);
         var added = NewFilesFor(saved);
-        var addedEntries = added.Select(file => PreviewModEntry.At(file.GamePath, file.Bytes)).ToList();
-        var created = await previews.CreateAsync($"Material Save - {Source.FileName}", "Material written by XIV Instant Edit.",
-            [entry, .. addedEntries], Source.ObjectIndex, FallbackModName, CancellationToken.None).ConfigureAwait(false);
-        var preview = new PreviewMod
-        {
-            Id = Guid.NewGuid(), ModDirectory = created.ModDirectory, ModIdentifier = created.Identifier, CollectionId = created.CollectionId,
-            CollectionName = created.CollectionName, ActorName = Source.ActorName, ObjectIndex = (ushort)Source.ObjectIndex, Created = DateTimeOffset.UtcNow,
-            Files =
-            [
-                new PreviewModFile
-                {
-                    Kind = "material", GamePath = Source.GamePath, PreviewRelativePath = entry.RelativePath, PreviewSha256 = PreviewSource.Hash(bytes),
-                    Source = Source.ToPreviewSource(),
-                },
-                .. added.Select((file, i) => new PreviewModFile
-                {
-                    Kind = "texture", GamePath = file.GamePath, PreviewRelativePath = addedEntries[i].RelativePath, PreviewSha256 = PreviewSource.Hash(file.Bytes),
-                    Source = Source.ToPreviewSource(), NewFile = true,
-                }),
-            ],
-        };
-        var result = await previews.ApplyAsync(preview, newModName, "Material written by XIV Instant Edit.", FallbackModName, "Open the material again")
-            .ConfigureAwait(false);
+        var result = await previews.WriteAsync(SaveWrites(Source, bytes, added), Source.ObjectIndex, newModName, "Material written by XIV Instant Edit.",
+            FallbackModName, "Open the material again").ConfigureAwait(false);
         if (Source.IsGameData && result.FixMod is { } mod && await previews.ModRootAsync().ConfigureAwait(false) is { Length: > 0 } root)
             Source = Source.SavedInto(root, mod, PreviewSource.Hash(bytes));
         else if (!Source.IsGameData)
@@ -132,6 +110,19 @@ internal sealed class MaterialSession
         if (ReferenceEquals(History.Current, saved))
             History.MarkSaved();
         return result;
+    }
+
+    /// <summary>
+    /// Where a save writes: a mod material over its file (unless it already holds these bytes) with its
+    /// new textures added to the same mod; a game material and its new textures into a new mod.
+    /// </summary>
+    internal static PreviewWrites SaveWrites(MaterialSource source, byte[] bytes, IReadOnlyList<(string GamePath, byte[] Bytes)> added)
+    {
+        if (source.IsGameData)
+            return new PreviewWrites([], [], [PreviewModEntry.At(source.GamePath, bytes), .. added.Select(file => PreviewModEntry.At(file.GamePath, file.Bytes))]);
+        var target = source.ToPreviewSource();
+        var unchanged = string.Equals(PreviewSource.Hash(bytes), target.Sha256, StringComparison.OrdinalIgnoreCase);
+        return new PreviewWrites(unchanged ? [] : [(target, bytes)], added.Select(file => (target, PathRules.NormalizeGamePath(file.GamePath), file.Bytes)).ToList(), []);
     }
 
     /// <summary>

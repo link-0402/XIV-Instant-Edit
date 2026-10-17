@@ -73,22 +73,32 @@ internal sealed class PreviewModService(PreviewModWriter writer)
                 gameFiles.Add(new PreviewModEntry("Files/" + PathRules.NormalizeGamePath(file.GamePath), bytes, file.FixGamePaths));
         }
 
+        var result = await WriteAsync(new PreviewWrites(modWrites, additions, gameFiles), preview.ObjectIndex, fixModName, fixModDescription, fallbackName, recheck)
+            .ConfigureAwait(false);
+        var (_, delete) = await writer.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
+        return delete is null ? result : result with { Warnings = [.. result.Warnings, delete] };
+    }
+
+    /// <summary>
+    /// Writes mod files over their sources (backed up, after checking each source still hashes as it
+    /// did) and game files into a new mod named <paramref name="fixModName"/>, with no preview mod.
+    /// </summary>
+    public async Task<PreviewApplyResult> WriteAsync(PreviewWrites writes, int objectIndex, string fixModName, string fixModDescription, string fallbackName,
+        string recheck)
+    {
         var warnings = new List<string>();
-        if (modWrites.Count > 0 || additions.Count > 0)
-            warnings.AddRange(await writer.WritePreviewSourcesAsync(modWrites, preview.ObjectIndex, recheck, additions).ConfigureAwait(false));
+        if (writes.ModWrites.Count > 0 || writes.Additions.Count > 0)
+            warnings.AddRange(await writer.WritePreviewSourcesAsync(writes.ModWrites, objectIndex, recheck, writes.Additions).ConfigureAwait(false));
         string? fixMod = null;
-        if (gameFiles.Count > 0)
+        if (writes.GameFiles.Count > 0)
         {
-            var created = await writer.CreatePreviewModAsync(fixModName, fixModDescription, gameFiles, preview.ObjectIndex, fallbackName,
+            var created = await writer.CreatePreviewModAsync(fixModName, fixModDescription, writes.GameFiles, objectIndex, fallbackName,
                 CancellationToken.None).ConfigureAwait(false);
             fixMod = created.ModDirectory;
             warnings.AddRange(created.Warnings);
         }
-        var (_, delete) = await writer.DeletePreviewModAsync(preview.ModDirectory, preview.ModIdentifier, preview.ObjectIndex).ConfigureAwait(false);
-        if (delete is not null)
-            warnings.Add(delete);
-        return new PreviewApplyResult(modWrites.Select(w => w.Source.ModName).Concat(additions.Select(a => a.Material.ModName)).Distinct().ToList(),
-            modWrites.Count, fixMod, gameFiles.Count, warnings, additions.Count, writer.BackupDays);
+        return new PreviewApplyResult(writes.ModWrites.Select(w => w.Source.ModName).Concat(writes.Additions.Select(a => a.Material.ModName)).Distinct().ToList(),
+            writes.ModWrites.Count, fixMod, writes.GameFiles.Count, warnings, writes.Additions.Count, writer.BackupDays);
     }
 
     /// <summary> Backups of the mod files among <paramref name="sources"/>, grouped by when they were made (one group per apply), newest first. </summary>

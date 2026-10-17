@@ -105,6 +105,15 @@ internal sealed record PreviewModEntry(string RelativePath, byte[] Bytes, IReadO
     }
 }
 
+/// <summary>
+/// What a write puts where: mod files over their sources (backed up), new files into the mod of the
+/// material that reads them, and game files into a new mod.
+/// </summary>
+internal sealed record PreviewWrites(
+    IReadOnlyList<(PreviewSource Source, byte[] Bytes)> ModWrites,
+    IReadOnlyList<(PreviewSource Material, string GamePath, byte[] Bytes)> Additions,
+    IReadOnlyList<PreviewModEntry> GameFiles);
+
 /// <summary> A mod a preview created: where it is and the collection it was enabled in. </summary>
 internal sealed record PreviewModResult(string ModDirectory, Guid Identifier, Guid CollectionId, string CollectionName, IReadOnlyList<string> Warnings);
 
