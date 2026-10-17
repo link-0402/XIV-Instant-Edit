@@ -128,7 +128,7 @@ internal sealed partial class MaterialWindow
             return;
         var result = pendingCleanUp;
         var nothing = result == null || ReferenceEquals(result.Doc, current.Current) || MaterialDocument.Same(result.Doc, current.Current);
-        Widgets.SectionHeader(nothing ? "Nothing to clean up" : "Clean up removes");
+        Widgets.SectionHeader(nothing ? "Nothing to clean up" : "Clean up");
         if (result != null && !nothing)
             foreach (var change in result.Changes)
                 ImGui.BulletText(change);
