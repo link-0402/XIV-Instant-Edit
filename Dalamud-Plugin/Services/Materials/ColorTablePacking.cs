@@ -2,7 +2,7 @@ using System.Numerics;
 
 namespace InstantEdit.Services.Materials;
 
-/// <summary>A pair of rows lit up on the character while its swatch is hovered.</summary>
+/// <summary>Rows lit up on the character while hovered; a row out of range (such as -1) is left alone.</summary>
 public readonly record struct RowHighlight(int RowA, int RowB, Vector3 ColourA, Vector3 ColourB);
 
 /// <summary>

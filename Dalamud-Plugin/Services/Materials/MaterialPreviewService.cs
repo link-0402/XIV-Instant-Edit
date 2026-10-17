@@ -24,14 +24,16 @@ internal sealed record MaterialPreviewRecord
 /// paths at copies in the cache, then the character is redrawn so the game loads them. Nothing
 /// goes into Penumbra's mod folder, so sync plugins don't send it. Each revision gets a new folder,
 /// because the game never reads a path it already loaded again. The record in the config folder
-/// lets the next start remove a preview a crash left behind.
+/// lets the next start remove a preview a crash left behind. Each Material window has its own slot:
+/// its own temporary mod (slot 0 keeps the first name) and record.
 /// </summary>
 internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
 {
-    public const string Tag = "XIV Instant Edit material preview";
+    public const string BaseTag = "XIV Instant Edit material preview";
     public const string CacheFolder = "material-preview";
     public const int Priority = int.MaxValue;
-    private const string RecordFile = "MaterialPreview.json";
+    private const string RecordName = "MaterialPreview";
+    private static readonly Regex RecordSlot = new($"^{RecordName}-([0-9]{{1,3}})\\.json$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private const int VerifyAttempts = 10;
     private static readonly TimeSpan VerifyDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan StaleAge = TimeSpan.FromHours(24);
@@ -44,6 +46,8 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
     private readonly IPluginLog log;
     private readonly Func<string> cacheRoot;
     private readonly string recordPath;
+    private readonly string tag;
+    private readonly int slot;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly CancellationTokenSource life = new();
     private readonly object sync = new();
@@ -56,18 +60,41 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
     private string collectionName = string.Empty;
     private volatile bool disposed;
 
-    public MaterialPreviewService(PenumbraIpc penumbra, PreviewModWriter previewMods, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot)
+    public MaterialPreviewService(PenumbraIpc penumbra, PreviewModWriter previewMods, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot,
+        int slot = 0)
     {
         this.penumbra = penumbra;
         this.previewMods = previewMods;
         this.framework = framework;
         this.log = log;
         this.cacheRoot = cacheRoot;
-        recordPath = Path.Combine(configDirectory, RecordFile);
+        this.slot = slot;
+        tag = slot == 0 ? BaseTag : $"{BaseTag} {slot + 1}";
+        recordPath = Path.Combine(configDirectory, slot == 0 ? $"{RecordName}.json" : $"{RecordName}-{slot + 1}.json");
         record = LoadRecord();
         try { lifecycle = penumbra.SubscribePenumbraLifecycle(OnPenumbraRestarted); }
         catch (Exception e) { log.Warning(e, "Could not watch Penumbra restarts for the material preview."); }
         startup = Task.Run(CleanUpLeftoversAsync);
+    }
+
+    /// <summary> The slots past 0 whose record a crash may have left in <paramref name="configDirectory"/>. </summary>
+    public static IEnumerable<int> RecordedSlots(string configDirectory)
+    {
+        try
+        {
+            return Directory.Exists(configDirectory)
+                ? Directory.EnumerateFiles(configDirectory, $"{RecordName}-*.json")
+                    .Select(file => RecordSlot.Match(Path.GetFileName(file)))
+                    .Where(match => match.Success)
+                    .Select(match => int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) - 1)
+                    .Where(found => found > 0)
+                    .ToArray()
+                : [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
     }
 
     /// <summary> A preview is registered in Penumbra. </summary>
@@ -145,14 +172,14 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
             }
             var current = new MaterialPreviewRecord
             {
-                Tag = Tag, CollectionId = collection.Id, Priority = Priority, SessionFolder = sessionFolder, CreatedUtc = DateTime.UtcNow,
+                Tag = tag, CollectionId = collection.Id, Priority = Priority, SessionFolder = sessionFolder, CreatedUtc = DateTime.UtcNow,
             };
             SaveRecord(current);
             lock (sync) (record, session, revision) = (current, sessionFolder, next);
 
             try
             {
-                var added = await framework.RunOnFrameworkThread(() => penumbra.AddTemporaryModOnFramework(Tag, collection.Id, redirects, Priority))
+                var added = await framework.RunOnFrameworkThread(() => penumbra.AddTemporaryModOnFramework(tag, collection.Id, redirects, Priority))
                     .ConfigureAwait(false);
                 if (added != PenumbraApiEc.Success)
                     throw new IOException($"Penumbra could not add the preview ({added}).");
@@ -256,6 +283,9 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
                 ClearRecord();
                 lock (sync) record = null;
             }
+            // Slot 0 starts with the plugin; a later slot could find another window's long-shown preview stale.
+            if (slot != 0)
+                return;
             string root;
             try { root = Path.Combine(Path.GetFullPath(cacheRoot()), CacheFolder); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return; }

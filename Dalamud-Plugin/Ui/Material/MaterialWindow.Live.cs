@@ -97,15 +97,19 @@ internal sealed partial class MaterialWindow
         highlighted = -1;
     }
 
-    /// <summary>Pulses a pair's rows on the character while its swatch is hovered; puts the plain rows back after.</summary>
-    private void HighlightPair(MaterialDocument doc, int pair)
+    /// <summary>
+    /// Pulses one row on the character while its swatch half, name or copy/paste button is hovered (a
+    /// top row yellow, a bottom row blue, as Show where draws them); the other row of the pair keeps
+    /// its colours, so a blend shows as a weaker pulse. Puts the plain rows back after.
+    /// </summary>
+    private void HighlightRow(MaterialDocument doc, int row)
     {
-        if (pair == highlighted && pair < 0)
+        if (row == highlighted && row < 0)
             return;
-        highlighted = pair;
+        highlighted = row;
         if (!liveTable.Bound || doc.Table is not { Kind: ColorTableKind.Dawntrail } table)
             return;
-        liveTable.Set(ShownTable(table), pair < 0 ? null : new RowHighlight(pair * 2, pair * 2 + 1, HighlightTop, HighlightBottom));
+        liveTable.Set(ShownTable(table), row < 0 ? null : new RowHighlight(row, -1, row % 2 == 0 ? HighlightTop : HighlightBottom, default));
     }
 
     private string LiveState(out System.Numerics.Vector4 colour)
@@ -177,7 +181,7 @@ internal sealed partial class MaterialWindow
             ["shownIsCurrent"] = ReferenceEquals(shownDoc, current.Current),
             ["tableSlots"] = liveTable.Bound ? liveTable.Swapped + " of bound slots show edited rows" : "none bound",
             ["tableUpdate"] = liveTable.LastUpdate,
-            ["highlightedPair"] = highlighted < 0 ? null : highlighted + 1,
+            ["highlightedRow"] = highlighted < 0 ? null : highlighted + 1,
         };
         if (constant is { } id && valid && live.ReadConstant(id) is { } values)
         {

@@ -30,13 +30,13 @@ internal sealed class BridgeTools : IDisposable
     private readonly ModelBackupStore backups;
     private readonly EstEntryStore estEntries;
     private readonly PhysicsWindow physics;
-    private readonly MaterialWindow material;
+    private readonly MaterialWindows material;
     private readonly ICallGateProvider<string, string, string> invoke;
     private readonly ICallGateSubscriber<object> ready;
     private readonly Dictionary<string, Func<JsonObject, JsonNode?>> tools;
 
     public BridgeTools(IDalamudPluginInterface pi, IFramework framework, IPluginLog log, Configuration config, ExportContextRegistry contexts,
-        ModelBackupStore backups, EstEntryStore estEntries, PhysicsWindow physics, MaterialWindow material)
+        ModelBackupStore backups, EstEntryStore estEntries, PhysicsWindow physics, MaterialWindows material)
     {
         this.pi = pi;
         this.framework = framework;
@@ -84,7 +84,7 @@ internal sealed class BridgeTools : IDisposable
             "inputSchema": { "type": "object", "properties": {
               "detail": { "type": "string", "enum": ["summary", "areas", "full"], "description": "summary (default); areas adds each simulator; full adds chains, connectors, springs and collision bits." } } } },
           { "name": "material",
-            "description": "The Material window: the open material's source and document, the temporary-mod preview, and the live binding (where the material sits on the character, snapshot size, last write, whether the loaded material still holds its bind-time values).",
+            "description": "The last opened Material window (with how many windows exist and are open): the open material's source and document, the temporary-mod preview, and the live binding (where the material sits on the character, snapshot size, last write, whether the loaded material still holds its bind-time values).",
             "inputSchema": { "type": "object", "properties": {
               "constant": { "type": "string", "description": "A constant id in hex (such as 0x29AC0223): also read its value from the loaded material and from the document." } } } }
         ]

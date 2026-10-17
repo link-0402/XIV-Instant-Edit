@@ -20,7 +20,8 @@ internal sealed partial class MaterialWindow
     private const string PastePopup = "##row-paste";
 
     private int selectedPair;
-    private DtColorRow? rowClipboard;
+    // Shared, so a row copied in one Material window pastes in another.
+    private static DtColorRow? rowClipboard;
 
     private enum PasteKind
     {
@@ -40,9 +41,11 @@ internal sealed partial class MaterialWindow
         {
             case ColorTableKind.Dawntrail:
                 DrawDyeBar(current, doc, table);
-                HighlightPair(doc, DrawPairs(ShownTable(table)));
+                var swatchRow = DrawPairs(ShownTable(table));
                 ImGui.Spacing();
-                DrawPairEditors(current, doc, table);
+                var editorRow = DrawPairEditors(current, doc, table);
+                // After the editors, so a paste under the mouse pulses the pasted row.
+                HighlightRow(current.Current, swatchRow >= 0 ? swatchRow : editorRow);
                 break;
             case ColorTableKind.Legacy:
                 DrawLegacyRows(current, doc, table);
@@ -55,10 +58,10 @@ internal sealed partial class MaterialWindow
 
     // ---- Pairs ----
 
-    /// <summary>The pair swatches; returns the hovered pair, or -1.</summary>
+    /// <summary>The pair swatches, each half a row; returns the hovered row, or -1.</summary>
     private int DrawPairs(ColorTable table)
     {
-        var hoveredPair = -1;
+        var hoveredRow = -1;
         var spacing = Theme.Scaled(4);
         var width = (ImGui.GetContentRegionAvail().X - spacing * 7) / 8;
         var height = ImGui.GetFrameHeight() * 1.6f;
@@ -71,26 +74,59 @@ internal sealed partial class MaterialWindow
             if (ImGui.InvisibleButton($"##pair-{pair}", new Vector2(width, height)))
                 selectedPair = pair;
             var hovered = ImGui.IsItemHovered();
-            if (hovered)
-                hoveredPair = pair;
             var a = table.Rows[pair * 2];
             var b = table.Rows[pair * 2 + 1];
             var half = height / 2;
+            // Each half is its own row: the top half row 2p, the bottom half row 2p + 1.
+            var bottom = hovered && ImGui.GetMousePos().Y >= position.Y + half;
+            if (hovered)
+                hoveredRow = pair * 2 + (bottom ? 1 : 0);
             DrawSwatches(draw, position, new Vector2(width, half), a);
             DrawSwatches(draw, position + new Vector2(0, half), new Vector2(width, half), b);
-            // Pairs the index texture never selects are drawn at 40%.
+            // Pairs the index texture never selects are drawn at 40%, and so is a used pair's row it never picks.
+            var dim = ImGui.GetColorU32(Theme.WithAlpha(Theme.PanelBg, 0.6f));
             if (usage != null && !usage.PairUsed(pair))
-                draw.AddRectFilled(position, position + new Vector2(width, height), ImGui.GetColorU32(Theme.WithAlpha(Theme.PanelBg, 0.6f)));
+                draw.AddRectFilled(position, position + new Vector2(width, height), dim);
+            else if (usage != null)
+                for (var side = 0; side < 2; side++)
+                    if (!RowUsed(pair * 2 + side))
+                        draw.AddRectFilled(position + new Vector2(0, half * side), position + new Vector2(width, half * (side + 1)), dim);
             var outline = pair == selectedPair ? Theme.Accent : hovered ? Theme.Label : Theme.WithAlpha(Theme.Muted, .5f);
             draw.AddRect(position, position + new Vector2(width, height), ImGui.GetColorU32(outline), Theme.Scaled(3), ImDrawFlags.None, pair == selectedPair ? 2 : 1);
+            if (hovered)
+            {
+                var top = position + new Vector2(0, bottom ? half : 0);
+                draw.AddRect(top, top + new Vector2(width, half), ImGui.GetColorU32(Theme.Text), Theme.Scaled(2), ImDrawFlags.None, 2);
+            }
             var number = (pair + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
             var text = ImGui.CalcTextSize(number);
             draw.AddRectFilled(position + new Vector2(2, 2), position + new Vector2(text.X + 6, text.Y + 2), ImGui.GetColorU32(new Vector4(0, 0, 0, .55f)), Theme.Scaled(2));
             draw.AddText(position + new Vector2(4, 2), ImGui.GetColorU32(Theme.Text), number);
             if (hovered)
-                ImGui.SetTooltip($"Pair {pair + 1}: rows {pair * 2 + 1} and {pair * 2 + 2}.\n{UsageText(pair)}\nTop: row {pair * 2 + 1}. Bottom: row {pair * 2 + 2}.\nBase, shine and glow colours.\nThe pair pulses on the character, top yellow, bottom blue.");
+                RowTooltip(pair, hoveredRow);
         }
-        return hoveredPair;
+        return hoveredRow;
+    }
+
+    /// <summary>The hovered half's row: which it is, how much of its pair it gets, and how it shows on the character.</summary>
+    private void RowTooltip(int pair, int row)
+    {
+        var isTop = row % 2 == 0;
+        var other = isTop ? row + 1 : row - 1;
+        ImGui.SetTooltip($"Row {row + 1}, the {(isTop ? "top" : "bottom")} of pair {pair + 1}.\n{RowUsageText(pair, row)}\n" +
+                         $"It pulses {(isTop ? "yellow" : "blue")} on the character. The {(isTop ? "bottom" : "top")} half is row {other + 1}.\nBase, shine and glow colours.");
+    }
+
+    private bool RowUsed(int row) => usage is not { RowUsed.Length: ColorTable.DtRowCount } read || read.RowUsed[row];
+
+    private string RowUsageText(int pair, int row)
+    {
+        if (usage is not { RowShare.Length: ColorTable.DtRowCount } read || !read.PairUsed(pair))
+            return UsageText(pair);
+        if (!RowUsed(row))
+            return $"{UsageText(pair)} The index never picks this row.";
+        var part = read.PairShare(pair) > 0 ? read.RowShare[row] / read.PairShare(pair) * 100 : 0;
+        return $"{UsageText(pair)} This row gets {part:0}% of it.";
     }
 
     private static void DrawSwatches(ImDrawListPtr draw, Vector2 position, Vector2 size, DtColorRow row)
@@ -104,8 +140,10 @@ internal sealed partial class MaterialWindow
 
     // ---- The selected pair ----
 
-    private void DrawPairEditors(MaterialSession current, MaterialDocument doc, ColorTable table)
+    /// <summary>The selected pair's two rows; returns the row whose name or copy/paste button is hovered, or -1.</summary>
+    private int DrawPairEditors(MaterialSession current, MaterialDocument doc, ColorTable table)
     {
+        var hoveredRow = -1;
         selectedPair = Math.Clamp(selectedPair, 0, PairCount - 1);
         if (usage != null)
         {
@@ -117,26 +155,31 @@ internal sealed partial class MaterialWindow
             ImGui.TextColored(Theme.Hint, usageNote + " Every pair may be in use.");
         using var editors = ImRaii.Table("##pair-editors", 2, ImGuiTableFlags.SizingStretchSame | ImGuiTableFlags.BordersInnerV);
         if (!editors.Success)
-            return;
+            return hoveredRow;
         ImGui.TableNextRow();
         for (var side = 0; side < 2; side++)
         {
             ImGui.TableNextColumn();
             var row = selectedPair * 2 + side;
             using var id = ImRaii.PushId($"row-{row}");
-            DrawRowEditor(current, doc, table, row);
+            if (DrawRowEditor(current, doc, table, row))
+                hoveredRow = row;
         }
+        return hoveredRow;
     }
 
-    private void DrawRowEditor(MaterialSession current, MaterialDocument doc, ColorTable table, int row)
+    /// <summary>One row's fields; true when its name or a copy/paste button is hovered (the row pulses on the character).</summary>
+    private bool DrawRowEditor(MaterialSession current, MaterialDocument doc, ColorTable table, int row)
     {
         var values = table.Rows[row];
         var name = $"Row {row + 1}";
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Text, name);
+        var pulse = ImGui.IsItemHovered();
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Hint, row % 2 == 0 ? "(top, index green 255)" : "(bottom, index green 0)");
-        DrawRowActions(current, row, values, name);
+        pulse |= ImGui.IsItemHovered();
+        pulse |= DrawRowActions(current, row, values, name);
 
         Section("Colour");
         RowColour(current, row, "Base colour", values.Diffuse, colour => values with { Diffuse = colour }, name);
@@ -223,9 +266,11 @@ internal sealed partial class MaterialWindow
             RawValue(current, row, 22, values.Scalar22, v => values with { Scalar22 = v }, name);
             ImGui.TreePop();
         }
+        return pulse;
     }
 
-    private void DrawRowActions(MaterialSession current, int row, DtColorRow values, string name)
+    /// <summary>Copy, paste and reset for one row; true while one of them is hovered or the paste menu is open.</summary>
+    private bool DrawRowActions(MaterialSession current, int row, DtColorRow values, string name)
     {
         var buttons = ImGui.GetFrameHeight() * 3 + ImGui.GetStyle().ItemSpacing.X * 2;
         ImGui.SameLine();
@@ -235,21 +280,25 @@ internal sealed partial class MaterialWindow
             rowClipboard = values;
             Say(FeedbackSeverity.Info, $"Copied {name}.");
         }
+        var hovered = ImGui.IsItemHovered();
         ImGui.SameLine();
         using (ImRaii.Disabled(rowClipboard == null))
         {
             if (Widgets.GhostIconButton("##paste", FontAwesomeIcon.Paste, "Paste onto this row"))
                 ImGui.OpenPopup(PastePopup);
         }
+        hovered |= ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
         ImGui.SameLine();
         if (Widgets.GhostIconButton("##reset-row", FontAwesomeIcon.UndoAlt, "Reset this row to the game's defaults (hold Ctrl)") && ImGui.GetIO().KeyCtrl)
             _ = current.Apply(d => EditRow(d, row, _ => DtColorRow.Default), $"Reset {name}");
+        hovered |= ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
         using var popup = ImRaii.Popup(PastePopup);
         if (!popup.Success || rowClipboard is not { } copied)
-            return;
+            return hovered;
         foreach (var (kind, label) in new[] { (PasteKind.All, "Everything"), (PasteKind.Colours, "Colours only"), (PasteKind.Surface, "Surface only") })
             if (ImGui.MenuItem(label))
                 _ = current.Apply(d => EditRow(d, row, r => Paste(r, copied, kind)), $"Paste onto {name}");
+        return true;
     }
 
     private static DtColorRow Paste(DtColorRow target, DtColorRow copied, PasteKind kind) => kind switch
