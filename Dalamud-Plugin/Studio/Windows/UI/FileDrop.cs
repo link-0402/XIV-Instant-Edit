@@ -18,6 +18,12 @@ internal sealed record DroppedPaths(IReadOnlyList<string> Files, IReadOnlyList<s
 
     public bool IsEmpty => Files.Count == 0 && Folders.Count == 0;
 
+    /// <summary>
+    /// Something dragged that isn't a file on disk, such as a texture from an On Screen row. Only the
+    /// targets that know its type take it; to the others the drag carries no paths.
+    /// </summary>
+    public object? Origin { get; init; }
+
     public string Describe()
     {
         if (Files.Count == 1 && Folders.Count == 0) return Path.GetFileName(Files[0]);
@@ -76,8 +82,8 @@ internal static class FileDrop
         });
     }
 
-    /// <summary>Makes the last drawn item draggable, carrying <paramref name="paths"/>.</summary>
-    public static void Source(DroppedPaths paths, string label)
+    /// <summary>Makes the last drawn item draggable, carrying <paramref name="paths"/>; <paramref name="hint"/> says where it can go.</summary>
+    public static void Source(DroppedPaths paths, string label, string hint = "Drop onto a texture or model tile.")
     {
         if (!ImGui.BeginDragDropSource(ImGuiDragDropFlags.None))
             return;
@@ -85,7 +91,7 @@ internal static class FileDrop
         _internal = paths;
         ImGui.SetDragDropPayload(InternalLabel, ReadOnlySpan<byte>.Empty, ImGuiCond.None);
         ImGui.TextUnformatted(label);
-        ImGui.TextColored(Theme.Muted, "Drop onto a texture or model tile.");
+        ImGui.TextColored(Theme.Muted, hint);
         ImGui.EndDragDropSource();
     }
 
@@ -156,6 +162,9 @@ internal static class FileDrop
 
     /// <summary>Whether files or folders are being dragged over the game right now.</summary>
     public static bool IsDragging => Dragging() != null;
+
+    /// <summary>What is being dragged over the game right now, or null.</summary>
+    public static DroppedPaths? Dragged => Dragging();
 
     /// <summary>The held target the drag rests on, the frame it was last seen there, and since when (ImGui time).</summary>
     private static uint _heldId;

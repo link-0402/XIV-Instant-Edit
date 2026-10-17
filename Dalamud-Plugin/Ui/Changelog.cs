@@ -97,6 +97,7 @@ internal static class ChangelogCatalog
             Entry("On Screen no longer freezes the game for a moment when it refreshes, and the animation listener no longer causes small stutters."),
             Entry("On Screen no longer lists gear your other gear hides, such as legs under a robe. Send my character leaves it out too."),
             Entry("On Screen: drop an image on a texture to replace it. Hold it on the row until the row lights up, then let go. Undo is in the row's menu."),
+            Entry("Drag a texture's name onto another texture's row, on any material or model, to copy it there the same way.", 1),
             Entry("Heels offset: when your gear hides your feet, the legs or body model now gets the offset instead of the hidden shoes."),
             Entry("Optimize textures: a notification now says what each run compressed, resized or cropped."),
             Entry("Part toggles: exports now refuse another slot's tags, like body tags on a necklace, which could never hide, and say which names to use. Toggle groups also keep a mod's own variant materials instead of switching them back to the game's."),

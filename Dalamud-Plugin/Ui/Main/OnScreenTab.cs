@@ -257,6 +257,7 @@ internal sealed class OnScreenTab
         ImGui.Selectable(resource.LabelId, false, ImGuiSelectableFlags.None, new Vector2(labelWidth, ImGui.GetFrameHeight()));
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        _textureTab.DrawTextureSource(resource);
         if (hovered)
             _hoverCards.DrawRowHover(resource, UiText.Safe(item.Slot, item.Type), scope);
         if (context.Length > 0)
@@ -357,6 +358,7 @@ internal sealed class OnScreenTab
             _expansion.Toggle(key, expanded, false);
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+        _textureTab.DrawTextureSource(node);
         if (hovered)
             _hoverCards.DrawRowHover(node, presentation, key);
         DrawRowCells(actor, node, rowLeft);

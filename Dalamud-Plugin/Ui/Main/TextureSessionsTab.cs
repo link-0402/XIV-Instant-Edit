@@ -28,11 +28,12 @@ internal sealed class TextureSessionsTab
     private readonly PreviewService _previews;
     private readonly PainterPanel _painter;
     private readonly StatusFeed _feed;
+    private readonly IDataManager _data;
     private readonly IPluginLog _log;
     private readonly CancellationToken _lifetime;
     private TextureEditRequest? _newTexture;
     /// <summary> The image dropped on a vanilla texture while its new mod is named, or null for an edit. </summary>
-    private string? _newTextureImage;
+    private TextureImage? _newTextureImage;
     private string _textureModName = "";
     private Guid? _discardTexture;
     private bool _cleanUpTextures;
@@ -41,13 +42,14 @@ internal sealed class TextureSessionsTab
     private int _sessionsTabCount = -1;
 
     public TextureSessionsTab(Configuration config, TextureEditService textures, PreviewService previews, PainterPanel painter,
-        StatusFeed feed, IPluginLog log, CancellationToken lifetime)
+        StatusFeed feed, IDataManager data, IPluginLog log, CancellationToken lifetime)
     {
         _config = config;
         _textures = textures;
         _previews = previews;
         _painter = painter;
         _feed = feed;
+        _data = data;
         _log = log;
         _lifetime = lifetime;
     }
@@ -298,7 +300,7 @@ internal sealed class TextureSessionsTab
             Widgets.SectionHeader(image is null ? "Edit a vanilla texture" : "Replace a vanilla texture");
             Widgets.HintWrapped(image is null
                 ? "The first successful save creates a new mod with this name and enables it in the actor's collection."
-                : $"{Path.GetFileName(image)} goes into a new mod with this name, enabled in the actor's collection.");
+                : $"{image.Label} goes into a new mod with this name, enabled in the actor's collection.");
             ImGui.Spacing();
             ImGui.SetNextItemWidth(-1);
             ImGui.InputTextWithHint("##texture-mod-name", "Mod name", ref _textureModName, 120);
@@ -435,13 +437,55 @@ internal sealed class TextureSessionsTab
     }
 
     /// <summary>
-    /// Makes the row a drop target for an image that replaces its texture. The drag has to rest on the
-    /// row for <see cref="TextureDropHold"/> first, so an image carried across the list can't land on
-    /// the wrong texture. Called in the actions cell before its buttons; the cursor is left where it was.
+    /// What replaces a texture: an image file dropped from Explorer, or the texture of another row copied
+    /// onto it. <paramref name="Path"/> is a file on disk, or a game path when <paramref name="FromGame"/>.
+    /// <paramref name="Name"/> is its file name and <paramref name="Label"/> how the status names it.
+    /// <paramref name="Row"/> is the row it was dragged from, if any.
+    /// </summary>
+    private sealed record TextureImage(string Path, bool FromGame, string Name, string Label, ResourceView? Row = null)
+    {
+        public static TextureImage File(string path)
+            => new(path, false, System.IO.Path.GetFileName(path), System.IO.Path.GetFileName(path));
+    }
+
+    /// <summary> The row's texture as something to copy onto another row, or null when it has no file to read. </summary>
+    private static TextureImage? CopySource(ResourceView node)
+    {
+        if (!IsTextureRow(node))
+            return null;
+        var path = node.ActualPath.Length > 0 ? node.ActualPath : node.GamePath;
+        var name = Path.GetFileName(path);
+        if (node.SourceState == ResourceSourceState.GameData && !Path.IsPathRooted(path))
+            return new TextureImage(path, true, name, $"the game's {name}", node);
+        if (node.SourceState is ResourceSourceState.LoadedMod or ResourceSourceState.ExternalResolvedFile && Path.IsPathRooted(path))
+            return new TextureImage(path, false, name, node.SourceModName.Length > 0 ? $"{name} from {node.SourceModName}" : name, node);
+        return null;
+    }
+
+    /// <summary>
+    /// Lets the row's texture be dragged onto another texture row, which takes a copy of it. Called right
+    /// after the row's selectable, which the drag starts from.
+    /// </summary>
+    public void DrawTextureSource(ResourceView node)
+    {
+        // Built only while the row is held, so idle frames allocate nothing.
+        if (!ImGui.IsItemActive() || CopySource(node) is not { } source)
+            return;
+        FileDrop.Source(DroppedPaths.Empty with { Origin = source }, source.Label, "Hold it on another texture's row to copy it there.");
+    }
+
+    /// <summary>
+    /// Makes the row a drop target for an image, or another row's texture, that replaces its texture. The
+    /// drag has to rest on the row for <see cref="TextureDropHold"/> first, so an image carried across the
+    /// list can't land on the wrong texture. Called in the actions cell before its buttons; the cursor is
+    /// left where it was.
     /// </summary>
     public void DrawTextureDrop(ActorView actor, ResourceView node, float rowLeft)
     {
-        if (!FileDrop.IsDragging)
+        if (FileDrop.Dragged is not { } dragging)
+            return;
+        // The row a texture is dragged from isn't a target for it.
+        if (dragging.Origin is TextureImage { Row: { } from } && ReferenceEquals(from, node))
             return;
         var start = ImGui.GetCursorScreenPos();
         // The row from its first cell to this one, within the visible part of the list. The cells'
@@ -457,29 +501,41 @@ internal sealed class TextureSessionsTab
         ImGui.Dummy(max - min);
         var name = Path.GetFileName(node.GamePath);
         var outcome = FileDrop.HeldTarget("##texture-drop", TextureDropHold, paths => TextureDropBlock(node, paths),
-            (paths, ready) => ready ? $"Let go to replace {name} with {paths.Describe()}" : $"Hold here to replace {name}", out var dropped);
+            (paths, ready) => (paths.Origin as TextureImage)?.Label is { } copy
+                ? ready ? $"Let go to copy {copy} onto {name}" : $"Hold here to copy {copy} onto {name}"
+                : ready ? $"Let go to replace {name} with {paths.Describe()}" : $"Hold here to replace {name}", out var dropped);
         ImGui.PopClipRect();
         ImGui.SetCursorScreenPos(start);
         if (outcome == HeldDrop.Dropped)
-            ReplaceTexture(node, actor, dropped.Files[0]);
+            ReplaceTexture(node, actor, dropped.Origin as TextureImage ?? TextureImage.File(dropped.Files[0]));
         else if (outcome == HeldDrop.TooSoon)
-            _feed.SetStatus("Hold the image on the texture until its row lights up, then let go.", FeedbackSeverity.Warning);
+            _feed.SetStatus(dragging.Origin is TextureImage
+                ? "Hold the texture on the other row until it lights up, then let go."
+                : "Hold the image on the texture until its row lights up, then let go.", FeedbackSeverity.Warning);
     }
 
-    /// <summary> Why the dragged files can't replace the row's texture, or null when they can. </summary>
+    /// <summary> Why the dragged files, or the dragged row's texture, can't replace the row's texture, or null when they can. </summary>
     private string? TextureDropBlock(ResourceView node, DroppedPaths paths)
     {
-        if (paths.Files.Count != 1 || paths.Folders.Count != 0)
+        if (paths.Origin is TextureImage copy)
+        {
+            if (string.Equals(copy.Path, node.ActualPath.Length > 0 ? node.ActualPath : node.GamePath, StringComparison.OrdinalIgnoreCase))
+                return $"This row already shows {copy.Name}.";
+        }
+        else if (paths.Files.Count != 1 || paths.Folders.Count != 0)
             return "Drop one image.";
-        if (!FileDrop.IsImage(paths.Files[0]))
+        else if (!FileDrop.IsImage(paths.Files[0]))
             return $"{Path.GetFileName(paths.Files[0])} is not a png, jpeg, tga, dds or .tex image.";
         if (!TextureEditAvailable(node))
             return TextureEditBlock(node) is { Length: > 0 } blocked ? blocked : "This texture has no verified writable mod source.";
         return Busy.IsBusy ? "Another texture change is still running." : null;
     }
 
-    /// <summary> Replaces the row's texture with a dropped image. A vanilla texture first asks for the new mod's name, as editing it does. </summary>
-    private void ReplaceTexture(ResourceView resource, ActorView actor, string image)
+    /// <summary>
+    /// Replaces the row's texture with a dropped image or another row's texture. A vanilla texture first
+    /// asks for the new mod's name, as editing it does.
+    /// </summary>
+    private void ReplaceTexture(ResourceView resource, ActorView actor, TextureImage image)
     {
         var request = TextureRequest(resource, actor);
         if (resource.SourceState == ResourceSourceState.GameData && _textures.FindReusable(request) is null)
@@ -492,17 +548,20 @@ internal sealed class TextureSessionsTab
         RunTextureReplace(request, image);
     }
 
-    private void RunTextureReplace(TextureEditRequest request, string image)
+    private void RunTextureReplace(TextureEditRequest request, TextureImage image)
     {
         if (!Busy.TryEnter()) return;
         var texture = Path.GetFileName(request.GamePath);
-        var file = Path.GetFileName(image);
+        var file = image.Label;
         _feed.SetStatus($"Replacing {texture} with {file}", FeedbackSeverity.Info);
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = await _textures.ReplaceAsync(request, image).ConfigureAwait(false);
+                var result = image.FromGame
+                    ? await _textures.ReplaceAsync(request, image.Name, _ => Task.Run(() => _data.GetFile(image.Path)?.Data
+                        ?? throw new IOException($"{image.Name} could not be read from the game's data."))).ConfigureAwait(false)
+                    : await _textures.ReplaceAsync(request, image.Path).ConfigureAwait(false);
                 // The session's status after the drop says whether the reload and redraw went through.
                 var refresh = _textures.Sessions.FirstOrDefault(s => s.Id == result.SessionId)?.Status ?? "";
                 if (result.Outcome == ExternalTextureOutcome.Applied && refresh.Contains("attention", StringComparison.Ordinal))

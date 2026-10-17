@@ -160,6 +160,25 @@ These checks need the game and Explorer:
   back into that mod.
 - [ ] Reload the plugin after a drop: Undo replace is still offered and works.
 
+## Copying a texture onto another row in On Screen (2026-10-17, pending)
+
+`Tests/BlenderStatusRegression` covers the service side (CopiedTextureAsync). These need the game:
+- [ ] Drag a mod texture's name onto a texture row of another material or model. The drag says
+  "<texture> from <mod>" and "Hold it on another texture's row to copy it there". The target row
+  fills and lights up as for an image, with "Let go to copy <texture> from <mod> onto <target>".
+  Let go: the actor redraws with the copy and the status says "Replaced <target> with ...".
+- [ ] Undo replace in the target row's menu puts its old texture back.
+- [ ] The row being dragged shows no outline. Another row that shows the same file is outlined
+  red: "This row already shows <texture>".
+- [ ] With "Include vanilla" on, drag a Game Data texture onto a mod texture: the game's texture
+  is copied. Drag one onto another Game Data texture: the new mod dialog says "the game's
+  <texture> goes into a new mod".
+- [ ] Copy onto a texture of a different size (e.g. 1024 onto 2048): the target takes the
+  copy's size and keeps its own compression.
+- [ ] Let go too soon: nothing changes and the status says to hold the texture until the row
+  lights up.
+- [ ] Dragging a texture row over a Mod Browser tile: the tile refuses it in red.
+
 ## Implementation validation environment
 
 The local environment uses Blender 5.2.1 LTS. The model export smoke suite fails

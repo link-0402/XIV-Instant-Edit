@@ -1248,7 +1248,15 @@ public sealed class TextureEditService : IDisposable
     /// texture's session opens (or carries on) without the editor, and the image is converted, backed up
     /// and committed as a Painter export is. The session keeps what the drop replaced for <see cref="UndoReplaceAsync"/>.
     /// </summary>
-    internal async Task<ExternalTextureResult> ReplaceAsync(TextureEditRequest request, string image)
+    internal Task<ExternalTextureResult> ReplaceAsync(TextureEditRequest request, string image)
+        => ReplaceAsync(request, Path.GetFileName(image), token => ReadImageFileAsync(image, token));
+
+    /// <summary>
+    /// Puts an image in place of a texture as <see cref="ReplaceAsync(TextureEditRequest, string)"/> does, with
+    /// <paramref name="read"/> giving its bytes: another texture copied onto this one, read from its mod or the
+    /// game's data. <paramref name="name"/> is the image's file name, whose extension says how to decode it.
+    /// </summary>
+    internal async Task<ExternalTextureResult> ReplaceAsync(TextureEditRequest request, string name, Func<CancellationToken, Task<byte[]>> read)
     {
         var id = await StartAsync(request, launchEditor: false).ConfigureAwait(false);
         var session = Sessions.First(s => s.Id == id);
@@ -1256,25 +1264,37 @@ public sealed class TextureEditService : IDisposable
         if (VariantShowing(session, request) is { } variant)
             throw new IOException($"Your character shows this texture's variant \"{variant.Name}\". " +
                 $"Select \"{TextureModBackend.OriginalTextureOptionName}\" in its Penumbra group to replace the texture itself.");
-        var tga = await ReadImageAsTgaAsync(session, image).ConfigureAwait(false);
-        var results = await ApplyExternalAsync([new ExternalTextureSave(id, tga, Path.GetFileName(image))], _life.Token).ConfigureAwait(false);
+        CheckImageName(name);
+        var bytes = await read(_life.Token).ConfigureAwait(false);
+        if (bytes.Length is <= 0 or > TextureFiles.MaxBytes) throw new IOException($"{name} is empty or too large.");
+        var tga = await ReadImageAsTgaAsync(session, name, bytes).ConfigureAwait(false);
+        var results = await ApplyExternalAsync([new ExternalTextureSave(id, tga, name)], _life.Token).ConfigureAwait(false);
         return results.Single();
+    }
+
+    private static void CheckImageName(string name)
+    {
+        if (Path.GetExtension(name).ToLowerInvariant() is not (".png" or ".jpg" or ".jpeg" or ".tga" or ".dds" or ".tex"))
+            throw new IOException($"{name} is not a png, jpeg, tga, dds or .tex image.");
+    }
+
+    private static async Task<byte[]> ReadImageFileAsync(string image, CancellationToken token)
+    {
+        var name = Path.GetFileName(image);
+        CheckImageName(name);
+        var info = new FileInfo(image);
+        if (!info.Exists) throw new IOException($"{name} no longer exists.");
+        if (info.Length is <= 0 or > TextureFiles.MaxBytes) throw new IOException($"{name} is empty or too large.");
+        return await File.ReadAllBytesAsync(image, token).ConfigureAwait(false);
     }
 
     /// <summary>
     /// The image as the 32-bit TGA saves take. PNG, JPEG and TGA are decoded here; DDS and TEX go
     /// through the converter, which reads the game's formats (a TEX with its mip offsets normalized first).
     /// </summary>
-    private async Task<byte[]> ReadImageAsTgaAsync(TextureEditSession s, string image)
+    private async Task<byte[]> ReadImageAsTgaAsync(TextureEditSession s, string name, byte[] bytes)
     {
-        var name = Path.GetFileName(image);
-        var extension = Path.GetExtension(image).ToLowerInvariant();
-        if (extension is not (".png" or ".jpg" or ".jpeg" or ".tga" or ".dds" or ".tex"))
-            throw new IOException($"{name} is not a png, jpeg, tga, dds or .tex image.");
-        var info = new FileInfo(image);
-        if (!info.Exists) throw new IOException($"{name} no longer exists.");
-        if (info.Length is <= 0 or > TextureFiles.MaxBytes) throw new IOException($"{name} is empty or too large.");
-        var bytes = await File.ReadAllBytesAsync(image, _life.Token).ConfigureAwait(false);
+        var extension = Path.GetExtension(name).ToLowerInvariant();
         RgbaImage pixels;
         if (extension is ".dds" or ".tex")
         {
