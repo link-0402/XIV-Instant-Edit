@@ -165,16 +165,19 @@ The places, file names and the meta.json write are checked offline (ModHandoffSc
 
 ## Final review fixes (2026-10-17, need an in-game check)
 
-- [ ] Save on a mod material whose file changed since it was opened (edit it elsewhere first): the
+- [x] Save on a mod material whose file changed since it was opened (edit it elsewhere first): the
   window says it changed, and no "Material Save" mod is left in Penumbra (232c815: Save writes
-  straight into the mod now).
-- [ ] Change a key, then another, and close the window (or open another material and Discard)
+  straight into the mod now). (Also a normal save: written with a backup, no leftover mod.)
+- [x] Change a key, then another, and close the window (or open another material and Discard)
   while the second redraw runs: the preview comes down and the character shows its own material
-  (93e61fc).
-- [ ] Edit colour rows on the top, then change the top in Glamourer: the new item shows its own
-  colours, not the edited rows (2be2c23).
-- [ ] Convert to Dawntrail on a legacy material: a new `_id.tex` from the normal map is listed as a
-  new file, the character keeps its old colour layout, and Save adds the texture (14b6004).
+  (93e61fc). (Both ways.)
+- [x] Edit colour rows on the top, then change the top in Glamourer: the new item shows its own
+  colours, not the edited rows (2be2c23). (Gown to Stellar Blade e0079: both bindings let go.)
+- [x] Convert to Dawntrail on a legacy material: a new `_id.tex` from the normal map is listed as a
+  new file, the character keeps its old colour layout, and Save adds the texture (14b6004). (First
+  try built it from the collection's normal map, all pair 16; bb5d366 reads the mod's own, which
+  gave pairs 8-16. Save added the texture to the material's option. The halo isn't worn, so the
+  look isn't judged.)
 
 ## Finish (Task 13, pending)
 
