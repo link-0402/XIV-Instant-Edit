@@ -36,6 +36,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # The cache, diagnostics and worker suites run outside Blender, and the add-on
+      # modules they import need numpy (Blender bundles it, the runner's Python doesn't).
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install numpy
+        run: python3 -m pip install numpy
+
       - name: Install Blender ${{ matrix.version }}
         run: |
           curl --fail --location --retry 3 \
