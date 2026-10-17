@@ -115,3 +115,10 @@ stainingtemplate.stm (43 templates each).
 - [ ] A row's Dye section: change its template, channel and fields; Undo takes each back.
 - [ ] Bake: the rows hold the dyed values, and with "No dye" the character still looks dyed.
 - [ ] Untick Dyeable: the dye rows go (the character redraws); tick it again: empty dye rows.
+
+## Finish (Task 13, pending)
+
+- [ ] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as
+  one undo step; on a clean material it says there is nothing to clean up.
+- [ ] No crash and no stuck preview after: closing the window with unsaved edits, opening another
+  material, reloading the plugin, entering and leaving GPose, and a zone change.

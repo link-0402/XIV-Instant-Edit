@@ -242,6 +242,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }
         DrawSwitchPopup();
         DrawNewModPopup(current);
+        DrawCleanUpPopup(current);
         HandleShortcuts(current);
         // A control that went away while held never reports letting go.
         if (current.History.InGesture && !ImGui.IsAnyItemActive())
@@ -494,6 +495,13 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                 _ = current.Revert();
             }
         }
+        using (ImRaii.Disabled(Busy || !doc.Editable || ShaderPackages.Get(doc.ShaderPackage) == null))
+        {
+            if (ImGui.MenuItem("Clean up ignored settings"))
+                StartCleanUp(current);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Removes keys and values this shader ignores. Shows the list first.");
         if (doc.Table is { Kind: ColorTableKind.Legacy })
         {
             using (ImRaii.Disabled(Busy || !doc.Editable))
