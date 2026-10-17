@@ -414,8 +414,8 @@ internal static class TextureCompressionScenarios
         TexInfo Info(uint format, int width, int height, uint attributes = Type2D) => TextureCost.Read(Tex(format, width, height, 1, attributes: attributes))!.Value;
         Require(SingleColor.Shrinkable(Info(Bgra, 4096, 4096)) && SingleColor.Shrinkable(Info(Bc7, 2048, 1024)) && SingleColor.Shrinkable(Info(Bc1, 64, 64)) &&
                 SingleColor.Shrinkable(Info(Bc5, 1024, 1024)) && SingleColor.Shrinkable(Info(Bgra, 1022, 1024)),
-            "single colors: uncompressed and BC1/3/5/7 textures larger than 32 × 32 can shrink, whatever their size");
-        Require(!SingleColor.Shrinkable(Info(Bgra, 32, 32)) && !SingleColor.Shrinkable(Info(Bgra, 16, 64)) && !SingleColor.Shrinkable(Info(TextureCost.Bc4, 1024, 1024)) &&
+            "single colors: uncompressed and BC1/3/5/7 textures larger than 16 × 16 can shrink, whatever their size");
+        Require(!SingleColor.Shrinkable(Info(Bgra, 16, 16)) && !SingleColor.Shrinkable(Info(Bgra, 8, 32)) && !SingleColor.Shrinkable(Info(TextureCost.Bc4, 1024, 1024)) &&
                 !SingleColor.Shrinkable(Info(0x1131, 1024, 1024)) && !SingleColor.Shrinkable(Info(Bgra, 512, 512, 0x02000000 | Type2D)),
             "single colors: textures no larger than the shrunk size, single-channel formats and cube maps stay as they are");
 
@@ -467,9 +467,9 @@ internal static class TextureCompressionScenarios
         var small = SingleColor.Tex((1, 2, 3, 4));
         var header = InstantEdit.Services.TextureFiles.ReadTex(small);
         var (pixels, width, height) = TextureCost.TopLevelBgra(small);
-        Require(header is { Format: Bgra, Width: SingleColor.Size, Height: SingleColor.Size, Mips: 1 } && width == 32 && height == 32 &&
-                SingleColor.ColorOf(pixels, width, height, false) == (1, 2, 3, 4) && small.Length == 80 + 32 * 32 * 4,
-            "single colors: the shrunk texture is a valid 32 × 32 BGRA32 TEX of the color, for Penumbra to encode");
+        Require(header is { Format: Bgra, Width: SingleColor.Size, Height: SingleColor.Size, Mips: 1 } && width == 16 && height == 16 &&
+                SingleColor.ColorOf(pixels, width, height, false) == (1, 2, 3, 4) && small.Length == 80 + 16 * 16 * 4,
+            "single colors: the shrunk texture is a valid 16 × 16 BGRA32 TEX of the color, for Penumbra to encode");
 
         var quad = new byte[2 * 2 * 4];
         for (var p = 0; p < 4; p++)
@@ -736,8 +736,8 @@ internal static class TextureCompressionScenarios
                 texts[13] == "2 restored files are skipped. Hover for which." &&
                 TextureCompressionViews.Backups((2, 8L << 20), true, 30) == "Backups: 8.00 MiB, kept for 30 days." &&                TextureCompressionViews.LeftRestored(run) == string.Empty,
             "texture optimization card: how long originals stay, and the worn files left as restored");
-        Require(texts[10] == "2 textures optimized (1 of one color, shrunk to 32 × 32) so far, 7.00 MiB smaller in total." &&
-                texts[11].StartsWith("Last run: 2 textures optimized (1 of one color, shrunk to 32 × 32), 6.00 MiB smaller, ", StringComparison.Ordinal) &&
+        Require(texts[10] == "2 textures optimized (1 of one color, shrunk to 16 × 16) so far, 7.00 MiB smaller in total." &&
+                texts[11].StartsWith("Last run: 2 textures optimized (1 of one color, shrunk to 16 × 16), 6.00 MiB smaller, ", StringComparison.Ordinal) &&
                 !texts[7].Contains("one color", StringComparison.Ordinal),
             "texture optimization card: textures shrunk for holding one color are counted in the totals and the last run");
         Require(texts.All(text => !text.Contains('…') && !text.Contains("...", StringComparison.Ordinal)),

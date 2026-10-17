@@ -110,21 +110,18 @@ public class TextureSlot
     /// <summary>
     /// When true, this slot is filled with a placeholder texture instead of a local file (or
     /// variant folder) — a quick way to bind a slot without a source image of your own. Which
-    /// placeholder depends on the texture role: a mask can use a generated white square (sized
-    /// via <see cref="WhiteDummySize"/>) or a bundled metal texture; a normal map always uses a
-    /// bundled flat (no-bump) map, since a white square is the wrong "no bump" colour for one.
-    /// See the DummyTextureLibrary service for the available options per role.
+    /// placeholder depends on the texture role: a mask can use a white or a metal square; a normal
+    /// map always uses a flat (no-bump) one, since white is the wrong "no bump" colour for one.
+    /// Every placeholder is generated, 16 × 16. See the DummyTextureLibrary service for the
+    /// available options per role.
     /// </summary>
     public bool UseWhiteDummy { get; set; }
 
     /// <summary>
     /// Which placeholder fills this slot when <see cref="UseWhiteDummy"/> is set. Empty selects
-    /// the role's default (the generated option, where the role has one).
+    /// the role's default (white, where the role offers it).
     /// </summary>
     public string DummyPreset { get; set; } = string.Empty;
-
-    /// <summary>Side length in pixels of the generated dummy texture (power of two, 16–4096).</summary>
-    public int WhiteDummySize { get; set; } = 32;
 
     /// <summary>
     /// When set, this slot writes no texture of its own: the material points at this game path,
@@ -162,6 +159,5 @@ public class TextureSlot
         UseVariants    = UseVariants,
         UseWhiteDummy  = UseWhiteDummy,
         DummyPreset    = DummyPreset,
-        WhiteDummySize = WhiteDummySize,
     };
 }

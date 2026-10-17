@@ -86,7 +86,7 @@ internal sealed record CompressionRestore(int Restored, IReadOnlyList<string> Ch
 /// player is free (see <see cref="CompressionTrigger"/>). A run reads the player's resource tree and
 /// has Penumbra encode each uncompressed 2D texture (BC5 for index maps, BC7 otherwise; mipmaps only
 /// when the original has them). A texture that holds one color (<see cref="SingleColor"/>), whether
-/// compressed already or not, is shrunk to 32 × 32 pixels of that color first. The result is
+/// compressed already or not, is shrunk to 16 × 16 pixels of that color first. The result is
 /// decoded again and kept only when <see cref="CompressionCheck"/> finds that what the shaders read
 /// stays the same. The original is copied into the cache folder first, then the new file replaces it
 /// in its mod; the mods are reloaded and the player redrawn once. When hair refitting is on too, hair
@@ -720,7 +720,7 @@ internal sealed class TextureCompressionService : IDisposable
     private sealed record Outcome(CompressedTexture? Entry, string? Kept);
 
     /// <summary>
-    /// One texture: one that holds one color becomes a 32 × 32 texture of that color, Penumbra encodes
+    /// One texture: one that holds one color becomes a 16 × 16 texture of that color, Penumbra encodes
     /// it and decodes the result, the check compares what its shaders read, and a passing texture is
     /// backed up, remembered and written over its mod file.
     /// </summary>

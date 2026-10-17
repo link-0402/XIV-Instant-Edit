@@ -377,9 +377,7 @@ internal sealed class ModWriter
             return TextureIntent(tex.SourcePath, tex.Compression, uses);
 
         var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
-        return option.IsGenerated
-            ? $"dummy:{TextureCache.KeyForGenerated("white", tex.WhiteDummySize, TextureCompressionInfo.ForPlaceholder(tex.Compression))}"
-            : Intent("bundled", Path.Combine(_req.PluginDirectory, option.ResourcePath!));
+        return $"dummy:{TextureCache.KeyForGenerated(option, DummyTextureLibrary.Size, TextureCompressionInfo.ForPlaceholder(tex.Compression))}";
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1034,40 +1032,23 @@ internal sealed class ModWriter
         return $"{sourceName}{format}{(cached ? " (converted before, reused)" : string.Empty)}";
     }
 
-    /// <summary>
-    /// A slot's placeholder: the generated white square, or a bundled ready-made .tex taken as it
-    /// is — see <see cref="DummyTextureLibrary"/>.
-    /// </summary>
+    /// <summary>A slot's placeholder: a generated square of one colour — see <see cref="DummyTextureLibrary"/>.</summary>
     private bool DummyTexture(TextureSlot tex, out Content content, out string error, out string detail)
     {
         var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
         error = string.Empty;
         content = null!;
 
-        if (option.IsGenerated)
-        {
-            var compression = TextureCompressionInfo.ForPlaceholder(tex.Compression);
-            var dummyKey = TextureCache.KeyForGenerated("white", tex.WhiteDummySize, compression);
-            var cached = _textures.Get(dummyKey);
-            if (cached == null && TextureConverter.CreateWhiteDummy(tex.WhiteDummySize, compression, out cached, out error))
-                _textures.Store(dummyKey, cached);
+        var compression = TextureCompressionInfo.ForPlaceholder(tex.Compression);
+        var dummyKey = TextureCache.KeyForGenerated(option, DummyTextureLibrary.Size, compression);
+        var cached = _textures.Get(dummyKey);
+        if (cached == null && TextureConverter.CreateDummy(option, compression, out cached, out error))
+            _textures.Store(dummyKey, cached);
 
-            detail = $"white {tex.WhiteDummySize}x{tex.WhiteDummySize} dummy";
-            if (cached == null)
-                return false;
-            content = Content.Of(cached);
-            return true;
-        }
-
-        var fullPath = Path.Combine(_req.PluginDirectory, option.ResourcePath!);
-        detail = $"{option.Label} (bundled dummy)";
-        if (!File.Exists(fullPath))
-        {
-            error = $"bundled dummy texture missing ({fullPath})";
+        detail = $"{option.Label.ToLowerInvariant()} {DummyTextureLibrary.Size}x{DummyTextureLibrary.Size} dummy";
+        if (cached == null)
             return false;
-        }
-
-        content = Content.FromFile(fullPath);
+        content = Content.Of(cached);
         return true;
     }
 

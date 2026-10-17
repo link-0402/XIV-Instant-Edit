@@ -19,9 +19,6 @@ internal sealed class TextureSlotEditor
     private enum SourceMode { File, Variants, Dummy }
 
     private static readonly string[] SourceModeLabels = { "File", "Variants", "Dummy" };
-    private static readonly int[]    DummySizes       = { 16, 32, 64, 128, 256, 512, 1024, 2048, 4096 };
-    private static readonly string[] DummySizeLabels  = DummySizes.Select(s => $"{s} × {s}").ToArray();
-    private const int DefaultDummySize = 32;
 
     private readonly ISetUpSession _session;
     private readonly TextureThumbnailCache _thumbnails;
@@ -50,7 +47,7 @@ internal sealed class TextureSlotEditor
             SourceMode.Variants => "A folder of images — each becomes one option of a switch group in the mod.",
             _ => options.Count > 1
                 ? "A placeholder texture — pick which one. No source image needed."
-                : $"A bundled placeholder texture ({DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).Label}). No source image needed.",
+                : $"A placeholder texture ({DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).Label}). No source image needed.",
         };
     }
 
@@ -247,22 +244,16 @@ internal sealed class TextureSlotEditor
     /// </summary>
     private static bool DrawCompression(TextureSlot tex)
     {
-        bool bundled = tex.UseWhiteDummy && !DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).IsGenerated;
         bool edited = false;
         int index = TextureCompressionInfo.IndexOf(tex.Compression);
 
-        using (Gui.Disabled(bundled))
+        if (ImGui.Combo("##format", ref index, TextureCompressionInfo.Labels, TextureCompressionInfo.Labels.Length))
         {
-            if (ImGui.Combo("##format", ref index, TextureCompressionInfo.Labels, TextureCompressionInfo.Labels.Length))
-            {
-                tex.Compression = TextureCompressionInfo.Order[index];
-                edited = true;
-            }
+            tex.Compression = TextureCompressionInfo.Order[index];
+            edited = true;
         }
 
-        Gui.Tooltip(bundled
-            ? "Not applicable — this bundled placeholder is copied in as-is."
-            : "How this texture is compressed in the mod.\n\n"
+        Gui.Tooltip("How this texture is compressed in the mod.\n\n"
             + "Auto — compressed, unless that would visibly change it. Then it stays uncompressed.\n"
             + "BC7 — what the game uses itself, and the best quality. Slow to compress: a 4096×4096 image "
             + "takes the better part of a minute, even across every core.\n"
@@ -275,7 +266,7 @@ internal sealed class TextureSlotEditor
         return edited;
     }
 
-    /// <summary>Which placeholder fills the slot, and the size of a generated one.</summary>
+    /// <summary>Which placeholder fills the slot.</summary>
     private static bool DrawDummyChoice(TextureSlot tex, bool compact, float reserveRight)
     {
         bool edited = false;
@@ -294,26 +285,11 @@ internal sealed class TextureSlotEditor
                 edited = true;
             }
             Gui.Tooltip("Which placeholder texture fills this slot.");
-            ImGui.SameLine();
-        }
-
-        if (resolved.IsGenerated)
-        {
-            int sizeIdx = Array.IndexOf(DummySizes, tex.WhiteDummySize);
-            if (sizeIdx < 0) sizeIdx = Array.IndexOf(DummySizes, DefaultDummySize);
-            ImGui.SetNextItemWidth(Theme.S(110));
-            if (ImGui.Combo("##DummySize", ref sizeIdx, DummySizeLabels, DummySizeLabels.Length))
-            {
-                tex.WhiteDummySize = DummySizes[sizeIdx];
-                edited = true;
-            }
-            Gui.Tooltip("Size of the generated white texture.");
         }
         else
         {
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, compact ? resolved.Label : $"Bundled \"{resolved.Label}\" texture — no size or format options.");
-            Gui.Tooltip($"Bundled placeholder texture — {resolved.Label}. Copied in as-is.");
+            ImGui.TextColored(Theme.Muted, resolved.Label);
         }
 
         // Keep the BC7 checkbox at the same place as on file rows.
