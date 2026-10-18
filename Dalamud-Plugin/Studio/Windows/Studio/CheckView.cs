@@ -11,6 +11,7 @@ using InstantEdit.Studio.Services.Backups;
 using InstantEdit.Studio.Services.Check;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Studio;
 
@@ -267,6 +268,9 @@ internal sealed partial class CheckView
                     }
                     ImGui.EndCombo();
                 }
+                else if (!Check.Busy && ComboWheel.Steps() is var steps and not 0
+                         && ComboWheel.Pick(candidates, candidate => candidate.Label == current, steps).Label is var picked && picked != current)
+                    selection.Choose(repair.Id, picked);
             }
             ImGui.Unindent(Theme.S(24));
         }

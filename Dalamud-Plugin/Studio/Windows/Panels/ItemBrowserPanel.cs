@@ -8,6 +8,7 @@ using Dalamud.Interface;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Panels;
 
@@ -214,7 +215,7 @@ internal sealed class ItemBrowserPanel
     private bool DrawGearFilters()
     {
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.Combo("##Slot", ref _slotIndex, _slotLabels, _slotLabels.Length))
+        if (ComboWheel.Combo("##Slot", ref _slotIndex, _slotLabels))
         {
             Reload();
             SaveBrowserState();
@@ -226,7 +227,7 @@ internal sealed class ItemBrowserPanel
     private bool DrawWeaponFilters()
     {
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.Combo("##WeaponCategory", ref _weaponCategory, _weaponCategories, _weaponCategories.Length))
+        if (ComboWheel.Combo("##WeaponCategory", ref _weaponCategory, _weaponCategories))
             ApplyFilter();
         Gui.Tooltip("Weapon class");
         return true;
@@ -236,7 +237,7 @@ internal sealed class ItemBrowserPanel
     private bool DrawAnimationFilters()
     {
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.Combo("##AnimationList", ref _animationList, AnimationLists, AnimationLists.Length))
+        if (ComboWheel.Combo("##AnimationList", ref _animationList, AnimationLists))
             ApplyFilter();
         Gui.Tooltip("Emotes come with their start and end. Other animations are every other action timeline the game has, by name.");
 
@@ -286,7 +287,7 @@ internal sealed class ItemBrowserPanel
 
         var labels = races.Select(rg => rg.DisplayName).ToArray();
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.Combo("##FeatureRace", ref raceIdx, labels, labels.Length))
+        if (ComboWheel.Combo("##FeatureRace", ref raceIdx, labels))
         {
             _featureRace = races[raceIdx].RaceCode;
             ApplyFilter();

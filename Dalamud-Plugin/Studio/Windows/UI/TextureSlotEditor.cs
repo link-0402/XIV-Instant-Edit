@@ -5,6 +5,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.UI;
 
@@ -102,7 +103,7 @@ internal sealed class TextureSlotEditor
 
         int modeIdx = (int)mode;
         ImGui.SetNextItemWidth(Theme.S(86));
-        if (ImGui.Combo("##mode", ref modeIdx, SourceModeLabels, SourceModeLabels.Length))
+        if (ComboWheel.Combo("##mode", ref modeIdx, SourceModeLabels))
         {
             mode = (SourceMode)modeIdx;
             SetMode(tex, mode);
@@ -247,7 +248,7 @@ internal sealed class TextureSlotEditor
         bool edited = false;
         int index = TextureCompressionInfo.IndexOf(tex.Compression);
 
-        if (ImGui.Combo("##format", ref index, TextureCompressionInfo.Labels, TextureCompressionInfo.Labels.Length))
+        if (ComboWheel.Combo("##format", ref index, TextureCompressionInfo.Labels))
         {
             tex.Compression = TextureCompressionInfo.Order[index];
             edited = true;
@@ -278,7 +279,7 @@ internal sealed class TextureSlotEditor
             var labels = options.Select(o => o.Label).ToArray();
             int idx = Math.Max(0, options.ToList().FindIndex(o => o.Key == resolved.Key));
             ImGui.SetNextItemWidth(Theme.S(compact ? 130 : 150));
-            if (ImGui.Combo("##DummyPreset", ref idx, labels, labels.Length))
+            if (ComboWheel.Combo("##DummyPreset", ref idx, labels))
             {
                 tex.DummyPreset = options[idx].Key;
                 resolved = options[idx];

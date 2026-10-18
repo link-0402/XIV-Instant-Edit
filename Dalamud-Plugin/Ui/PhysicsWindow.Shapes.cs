@@ -194,7 +194,12 @@ internal sealed partial class PhysicsWindow
         ImGui.SetNextItemWidth(Theme.Scaled(220));
         using var combo = ImRaii.Combo($"##{label}", bone.Length == 0 ? "Pick a bone" : AnimationPresentation.BoneName(bone), ImGuiComboFlags.HeightLarge);
         if (!combo.Success)
+        {
+            var current = bone;
+            if (ComboWheel.Steps() is var steps and not 0 && skeleton.Body.Length > 0)
+                bone = ComboWheel.Pick(skeleton.Body, candidate => candidate.Name == current, steps).Name;
             return;
+        }
         ImGui.SetNextItemWidth(-1);
         if (ImGui.IsWindowAppearing())
             ImGui.SetKeyboardFocusHere();

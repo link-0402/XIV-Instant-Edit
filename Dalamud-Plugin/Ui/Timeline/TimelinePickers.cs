@@ -233,7 +233,11 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("What the prop plays after it appears.");
         if (!combo.Success)
+        {
+            if (ComboWheel.Steps() is var steps and not 0)
+                pickerWeapon = ComboWheel.Pick([WeaponAsListed, WeaponNone, .. timelines.Select(timeline => timeline.Id)], pickerWeapon, steps);
             return;
+        }
         if (ImGui.Selectable("As its emote plays it", pickerWeapon == WeaponAsListed))
             pickerWeapon = WeaponAsListed;
         if (ImGui.Selectable("None, the prop stays still", pickerWeapon == WeaponNone))

@@ -12,6 +12,7 @@ using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Studio.Services.Resources;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Studio;
 
@@ -918,7 +919,7 @@ internal sealed class ResourceActions
         starts.AddRange(MaterialPresets.Names.Select(n => $"Preset: {n}"));
         m.Start = Math.Clamp(m.Start, 0, starts.Count - 1);
         ImGui.SetNextItemWidth(Theme.S(360));
-        ImGui.Combo("##mtrlstart", ref m.Start, starts.ToArray(), starts.Count);
+        ComboWheel.Combo("##mtrlstart", ref m.Start, starts.ToArray());
 
         Gui.Label("Into", "Which part of the mod carries it: its default files, or one option of a group.");
         DrawOptionCombo("##mtrloption", project.Meta, ref m.Option);
@@ -1195,6 +1196,17 @@ internal sealed class ResourceActions
             }
             ImGui.EndCombo();
         }
+        else if (ComboWheel.Steps() is var steps and not 0)
+        {
+            // "A new group" (null), then the groups that can take new options.
+            ModGroupView?[] choices = [null, .. meta.Groups.Where(g => PenumbraModMeta.WhyNoNewOption(g) == null)];
+            if (ComboWheel.Pick(choices, g => g?.Id == group?.Id, steps) is var picked && picked?.Id != group?.Id)
+            {
+                _addGroup = picked?.Id;
+                if (picked != null)
+                    SuggestSharedPath(meta, picked);
+            }
+        }
 
         if (group == null)
         {
@@ -1377,6 +1389,13 @@ internal sealed class ResourceActions
                 }
             }
             ImGui.EndCombo();
+        }
+        else if (ComboWheel.Steps() is var steps and not 0 && meta.FileCarriers().ToList() is { Count: > 0 } carriers)
+        {
+            var current = option;
+            var picked = ComboWheel.Pick(carriers, carrier => carrier == current, steps);
+            changed = picked != current;
+            option = picked;
         }
         return changed;
     }

@@ -193,6 +193,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         using (var combo = ImRaii.Combo("##layer-interpolation", TimelineWindowViews.EaseName(layer.Interpolation)))
         {
             if (combo.Success)
+            {
                 foreach (var mode in TimelineWindowViews.LayerEases)
                 {
                     if (ImGui.Selectable(TimelineWindowViews.EaseName(mode), mode == layer.Interpolation) && mode != layer.Interpolation)
@@ -200,6 +201,9 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                     if (ImGui.IsItemHovered())
                         ImGui.SetTooltip(TimelineWindowViews.EaseHint(mode));
                 }
+            }
+            else if (ComboWheel.Scroll(TimelineWindowViews.LayerEases, layer.Interpolation, out var picked))
+                current.Commit(MotionEdits.Replace(current.Document, layer with { Interpolation = picked }));
         }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("How bones go from one key to the next. A key can have its own way.");
@@ -236,6 +240,14 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                         if (ImGui.IsItemHovered())
                             ImGui.SetTooltip(TimelineWindowViews.EaseHint(mode));
                     }
+                }
+                else if (ComboWheel.Steps() is var steps and not 0)
+                {
+                    // The layer's way (null) comes first, as in the list.
+                    MotionInterpolation?[] modes = [null, .. TimelineWindowViews.LayerEases, MotionInterpolation.Custom];
+                    if (ComboWheel.Pick(modes, key.Ease, steps) is var mode && mode != key.Ease)
+                        current.Commit(MotionEdits.SetEase(current.Document, layer.Key, key.Frame, mode,
+                            mode == MotionInterpolation.Custom ? MotionEvaluator.CurveOf(layer, key) ?? MotionCurve.Linear : null));
                 }
             }
             DrawEaseCurve(current, layer, key, readOnly);

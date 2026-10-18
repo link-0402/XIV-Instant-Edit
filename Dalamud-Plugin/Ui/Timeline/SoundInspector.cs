@@ -57,9 +57,13 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
             ImGui.SetNextItemWidth(Theme.Scaled(170));
             using var combo = ImRaii.Combo("##sound-plays", TimelineWindowViews.PlaysText(loop));
             if (combo.Success)
+            {
                 foreach (var option in new[] { 1.0, -1.0 })
                     if (ImGui.Selectable(TimelineWindowViews.PlaysText(option), option == loop) && option != loop)
                         current.Replace(TimelineUi.With(ev, LoopField, option));
+            }
+            else if (ComboWheel.Scroll([1.0, -1.0], loop, out var picked))
+                current.Replace(TimelineUi.With(ev, LoopField, picked));
         }
         TimelineUi.Tip("Once plays the sound once. Keep looping keeps it going while the animation loops.");
         DrawSoundCutChoice(current, ev, editable);
@@ -91,6 +95,8 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
                         if (ImGui.Selectable(TimelineWindowViews.WhichText(shown.Ids[i], shown.Ids), ev.Pin == shown.Ids[i]) && ev.Pin != shown.Ids[i])
                             current.Replace(ev with { Pin = shown.Ids[i] });
                 }
+                else if (ComboWheel.Scroll([null, .. shown.Ids], ev.Pin, out var pin))
+                    current.Replace(ev with { Pin = pin });
             }
             TimelineUi.Tip("Random plays one of the file's sounds by its chance. Only plays the same one every time, from a copy of the file.");
         }
@@ -429,10 +435,15 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
         ImGui.SetNextItemWidth(Theme.Scaled(170));
         using (var combo = ImRaii.Combo("##sound-channel", TimelineWindowViews.ChannelName(bus)))
         {
+            var options = TimelineWindowViews.KnownChannels.Contains(bus) ? TimelineWindowViews.KnownChannels : [bus, .. TimelineWindowViews.KnownChannels];
             if (combo.Success)
-                foreach (var option in TimelineWindowViews.KnownChannels.Contains(bus) ? TimelineWindowViews.KnownChannels : [bus, .. TimelineWindowViews.KnownChannels])
+            {
+                foreach (var option in options)
                     if (ImGui.Selectable(TimelineWindowViews.ChannelName(option), option == bus) && option != bus)
                         SetSoundEdit(current, key, edit with { Bus = option });
+            }
+            else if (ComboWheel.Scroll(options, bus, out var picked))
+                SetSoundEdit(current, key, edit with { Bus = picked });
         }
         TimelineUi.Tip("Which of the game's volume sliders the sound follows.");
         TimelineUi.Fact("Loop");

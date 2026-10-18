@@ -241,6 +241,15 @@ internal sealed class GameFilesTab
                         _gameFilter.Race = race.Code;
                     }
                 }
+                else if (ComboWheel.Steps() is var steps and not 0)
+                {
+                    (GameRaceMode Mode, ushort Race)[] entries =
+                        [(GameRaceMode.Player, 0), (GameRaceMode.Npc, 0), (GameRaceMode.All, 0), .. GameRaces.All.Select(race => (GameRaceMode.One, race.Code))];
+                    (_gameFilter.Races, var code) = ComboWheel.Pick(entries,
+                        e => e.Mode == _gameFilter.Races && (e.Mode != GameRaceMode.One || e.Race == _gameFilter.Race), steps);
+                    if (_gameFilter.Races == GameRaceMode.One)
+                        _gameFilter.Race = code;
+                }
             }
             ImGui.SameLine(0, Theme.Gap);
         }

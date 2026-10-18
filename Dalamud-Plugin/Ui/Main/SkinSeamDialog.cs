@@ -609,7 +609,19 @@ internal sealed class SkinSeamDialog
         var changed = false;
         using (var combo = ImRaii.Combo(id, preview))
         {
-            if (combo.Success)
+            if (!combo.Success)
+            {
+                // The wheel follows the list as shown: grouped by mod.
+                if (ComboWheel.Steps() is var steps and not 0 && report.Parts.Count > 0)
+                {
+                    var order = report.Parts.Select((part, index) => (Part: part, Index: index)).GroupBy(p => p.Part.Mod, StringComparer.Ordinal)
+                        .SelectMany(group => group.Select(p => p.Index)).ToList();
+                    var next = ComboWheel.Pick(order, selected, steps);
+                    changed = next != selected;
+                    selected = next;
+                }
+            }
+            else
                 foreach (var group in report.Parts.Select((part, index) => (Part: part, Index: index)).GroupBy(p => p.Part.Mod, StringComparer.Ordinal))
                 {
                     ImGui.TextColored(Theme.Muted, group.Key);

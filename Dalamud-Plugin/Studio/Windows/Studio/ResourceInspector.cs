@@ -12,6 +12,7 @@ using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Studio.Services.Resources;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Studio;
 
@@ -324,7 +325,7 @@ internal sealed class ResourceInspector
             Gui.Label("Format", "What the image is compressed to in the mod.");
             int index = TextureCompressionInfo.IndexOf(replacement.Compression);
             ImGui.SetNextItemWidth(Theme.S(140));
-            if (ImGui.Combo("##replcompression", ref index, TextureCompressionInfo.Labels, TextureCompressionInfo.Labels.Length))
+            if (ComboWheel.Combo("##replcompression", ref index, TextureCompressionInfo.Labels))
             {
                 replacement.Compression = TextureCompressionInfo.Order[index];
                 _session.TouchReplacements();
@@ -519,7 +520,7 @@ internal sealed class ResourceInspector
             Gui.Label("From a preset");
             float buttonW = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.Magic, "Make");
             ImGui.SetNextItemWidth(-(buttonW + ImGui.GetStyle().ItemSpacing.X));
-            ImGui.Combo("##authorpreset", ref _preset, MaterialPresets.Names, MaterialPresets.Names.Length);
+            ComboWheel.Combo("##authorpreset", ref _preset, MaterialPresets.Names);
             ImGui.SameLine();
             if (Gui.IconTextButton(FontAwesomeIcon.Magic, "Make", "Start from this preset's shader and texture slots."))
                 _session.AuthorMaterial(node.GamePath, option, MaterialPresets.All[Math.Clamp(_preset, 0, MaterialPresets.All.Count - 1)], isNew: !node.IsModContent);
@@ -534,7 +535,7 @@ internal sealed class ResourceInspector
         Gui.Label("Shader", "Which shader the game draws it with.");
         int shader = Math.Max(0, ShaderInfo.All.ToList().FindIndex(d => d.Type == material.ShaderType));
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.Combo("##shader", ref shader, ShaderInfo.Labels, ShaderInfo.Labels.Length))
+        if (ComboWheel.Combo("##shader", ref shader, ShaderInfo.Labels))
         {
             _session.ChangeShader(replacement, ShaderInfo.All[shader].Type);
             if (clones)
@@ -547,7 +548,7 @@ internal sealed class ResourceInspector
         Gui.Label("Preset", "Load a preset's shader and texture slots. Its textures and their paths are kept.");
         float loadW = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.FileImport, "Load");
         ImGui.SetNextItemWidth(-(loadW + ImGui.GetStyle().ItemSpacing.X));
-        ImGui.Combo("##loadpreset", ref _preset, MaterialPresets.Names, MaterialPresets.Names.Length);
+        ComboWheel.Combo("##loadpreset", ref _preset, MaterialPresets.Names);
         ImGui.SameLine();
         if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Load", "Switch to this preset. Texture slots and their paths are kept; missing slots are added."))
         {

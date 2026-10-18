@@ -303,13 +303,16 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         ImGui.SetNextItemWidth(-1);
         using var combo = ImRaii.Combo("##layer-bone", preview, ImGuiComboFlags.HeightLarge);
         if (!combo.Success)
+        {
+            if (ComboWheel.Steps() is var steps and not 0 && PickerBones(skeleton, layer, out _) is { Count: > 0 } bones)
+                posing.Selection.Only(ComboWheel.Pick(bones, primary!, steps));
             return;
+        }
         ImGui.SetNextItemWidth(-1);
         if (ImGui.IsWindowAppearing())
             ImGui.SetKeyboardFocusHere();
         ImGui.InputTextWithHint("##bone-search", "Search bones", ref boneFilter, 64);
-        var own = layer.Keys.SelectMany(key => key.Bones.Keys).Concat(layer.Bones).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        foreach (var bone in own.Concat(skeleton.Bones.Select(b => b.Name).Where(name => !own.Contains(name))))
+        foreach (var bone in PickerBones(skeleton, layer, out var own))
         {
             var label = AnimationPresentation.BoneName(bone);
             if (boneFilter.Length > 0 && !label.Contains(boneFilter, StringComparison.OrdinalIgnoreCase))
@@ -322,6 +325,14 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             if (own.Contains(bone) && ImGui.IsItemHovered())
                 ImGui.SetTooltip("This layer already changes it.");
         }
+    }
+
+    /// <summary> The picker's bones in order: the layer's own (<paramref name="own"/>), then the rest of the skeleton. </summary>
+    private static List<string> PickerBones(SkeletonDescription skeleton, MotionLayer layer, out HashSet<string> own)
+    {
+        var mine = layer.Keys.SelectMany(key => key.Bones.Keys).Concat(layer.Bones).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        own = mine;
+        return [.. mine, .. skeleton.Bones.Select(b => b.Name).Where(name => !mine.Contains(name))];
     }
 
     /// <summary>

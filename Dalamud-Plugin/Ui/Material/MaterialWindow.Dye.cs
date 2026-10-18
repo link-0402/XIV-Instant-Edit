@@ -96,7 +96,15 @@ internal sealed partial class MaterialWindow
         ImGui.SetNextItemWidth(Theme.Scaled(150));
         using var combo = ImRaii.Combo($"##stain-{channel}", name, ImGuiComboFlags.HeightLarge);
         if (!combo.Success)
+        {
+            if (ComboWheel.Steps() is var steps and not 0)
+            {
+                var next = ComboWheel.Pick((int[])[0, .. stainNames.Select(stain => stain.Id)], chosen, steps);
+                if (next != chosen)
+                    SetPreviewStain(doc, channel, next);
+            }
             return;
+        }
         if (ImGui.Selectable("No dye##stain-none", chosen == 0))
             SetPreviewStain(doc, channel, 0);
         foreach (var (id, stainName, colour) in stainNames)
@@ -130,15 +138,25 @@ internal sealed partial class MaterialWindow
                     if (ImGui.Selectable(option == 0 ? "None##template-0" : $"Template {option}##template-{option}", option == template) && option != template)
                         _ = current.Apply(d => EditDye(d, row, r => r.WithTemplate(option)), $"{name} dye template");
             }
+            else if (ComboWheel.Steps() is var steps and not 0)
+            {
+                var picked = ComboWheel.Pick((int[])[0, .. stains?.Templates ?? []], template, steps);
+                if (picked != template)
+                    _ = current.Apply(d => EditDye(d, row, r => r.WithTemplate(picked)), $"{name} dye template");
+            }
         }
         if (RowLabel("Dye channel", "Which of the item's dyes the row takes."))
         {
             var channel = dye.Channel;
             using var combo = ImRaii.Combo("##dye-channel", $"Dye {channel + 1}");
             if (combo.Success)
+            {
                 for (var option = 0; option < 2; option++)
                     if (ImGui.Selectable($"Dye {option + 1}", option == channel) && option != channel)
                         _ = current.Apply(d => EditDye(d, row, r => r.WithChannel(option)), $"{name} dye channel");
+            }
+            else if (ComboWheel.Scroll(ref channel, 2))
+                _ = current.Apply(d => EditDye(d, row, r => r.WithChannel(channel)), $"{name} dye channel");
         }
         var stain = dye.Channel < previewStains.Length ? previewStains[dye.Channel] : 0;
         DyePack? pack = null;
