@@ -240,6 +240,45 @@ internal static class TextureFiles
         return bytes;
     }
 
+    /// <summary>A BGRA32 TEX of the given pixels with a full mip chain, each level the 2 × 2 average of the one above.</summary>
+    public static byte[] BgraTexWithMips(byte[] bgra, int width, int height)
+    {
+        var levels = new List<(byte[] Pixels, int Width, int Height)> { (bgra, width, height) };
+        var mips = FullMipCount(width, height);
+        while (levels.Count < mips)
+        {
+            var (above, w, h) = levels[^1];
+            var (nw, nh) = (Math.Max(1, w / 2), Math.Max(1, h / 2));
+            var next = new byte[nw * nh * 4];
+            for (var y = 0; y < nh; y++)
+                for (var x = 0; x < nw; x++)
+                {
+                    int x0 = Math.Min(2 * x, w - 1), x1 = Math.Min(2 * x + 1, w - 1), y0 = Math.Min(2 * y, h - 1), y1 = Math.Min(2 * y + 1, h - 1);
+                    for (var c = 0; c < 4; c++)
+                    {
+                        var sum = above[(y0 * w + x0) * 4 + c] + above[(y0 * w + x1) * 4 + c] + above[(y1 * w + x0) * 4 + c] + above[(y1 * w + x1) * 4 + c];
+                        next[(y * nw + x) * 4 + c] = (byte)((sum + 2) / 4);
+                    }
+                }
+            levels.Add((next, nw, nh));
+        }
+        var bytes = new byte[80 + levels.Sum(level => level.Pixels.Length)];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x00800000);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), Uncompressed);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8), checked((ushort)width));
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(10), checked((ushort)height));
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(12), 1);
+        bytes[14] = (byte)levels.Count;
+        var offset = 80;
+        for (var mip = 0; mip < levels.Count; mip++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28 + mip * 4), (uint)offset);
+            levels[mip].Pixels.CopyTo(bytes, offset);
+            offset += levels[mip].Pixels.Length;
+        }
+        return bytes;
+    }
+
     public static int FullMipCount(int w, int h) => Math.Min(13, 1 + System.Numerics.BitOperations.Log2((uint)Math.Max(w, h)));
 
     /// <summary>
