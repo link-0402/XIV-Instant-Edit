@@ -174,7 +174,7 @@ internal sealed partial class MaterialWindow
             legacyPack = foundLegacy;
         var fields = legacyShader ? LegacyDyeFields : DyeFields;
         ImGui.TextColored(Theme.Label, "The dye changes");
-        using var grid = ImRaii.Table("##dye-fields", 3, ImGuiTableFlags.SizingStretchSame);
+        using var grid = ImRaii.Table("##dye-fields", legacyShader ? 2 : 3, ImGuiTableFlags.SizingStretchSame);
         if (!grid.Success)
             return;
         for (var bit = 0; bit < fields.Length; bit++)
