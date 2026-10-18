@@ -244,6 +244,9 @@ internal sealed partial class PhysicsWindow
                         ImGui.SetTooltip(detail);
                 }
             }
+            else if (ComboWheel.Steps() is var steps and not 0
+                     && ComboWheel.Pick(PhysicsGroups.Choices, choice => choice.Group == simulator.Group, steps).Group is var picked && picked != simulator.Group)
+                Change(current, () => simulator.Group = picked);
         }
         Tip("The game turns physics off by group: tops can turn off chest physics, and hats hair physics.");
         var known = PhysicsGroups.Choices.FirstOrDefault(choice => choice.Group == simulator.Group);
@@ -296,6 +299,13 @@ internal sealed partial class PhysicsWindow
                     for (var c = 0; c < chains.Count; c++)
                         if (ImGui.Selectable($"{PhysicsValidation.ChainLabel(chains[c], c)}##chain-{c}", chainChoice == c))
                             chainChoice = c;
+                }
+                else
+                {
+                    // Entry 0 is "All chains".
+                    var entry = chainChoice < 0 || chainChoice >= chains.Count ? 0 : chainChoice + 1;
+                    if (ComboWheel.Scroll(ref entry, chains.Count + 1))
+                        chainChoice = entry - 1;
                 }
             }
             if (mirrored)
@@ -500,9 +510,13 @@ internal sealed partial class PhysicsWindow
             ImGui.SetNextItemWidth(Theme.Scaled(110));
             using var combo = ImRaii.Combo("##type", TypeLabel(references[0].Type));
             if (combo.Success)
+            {
                 foreach (var type in Enum.GetValues<PhybCollisionType>())
                     if (ImGui.Selectable(TypeLabel(type), references[0].Type == type) && references.Any(reference => reference.Type != type))
                         Change(current, () => references.ForEach(reference => reference.Type = type));
+            }
+            else if (ComboWheel.Scroll(Enum.GetValues<PhybCollisionType>(), references[0].Type, out var picked))
+                Change(current, () => references.ForEach(reference => reference.Type = picked));
         }
     }
 

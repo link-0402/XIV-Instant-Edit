@@ -220,6 +220,7 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
             using (var combo = ImRaii.Combo("##made-for", resolution.Selected is null ? "Choose the skeleton it was made for" : AnimationPresentation.SkeletonLabel(chosen)))
             {
                 if (combo.Success)
+                {
                     foreach (var candidate in resolution.Candidates)
                     {
                         if (ImGui.Selectable($"{AnimationPresentation.SkeletonLabel(candidate)} · {Path.GetFileName(candidate.Source.Resource.ResolvedPath)}##{AnimationSkeletonIndex.SelectionId(candidate)}",
@@ -228,6 +229,9 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
                         if (ImGui.IsItemHovered())
                             ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
                     }
+                }
+                else if (ComboWheel.Scroll(resolution.Candidates, resolution.Selected!, out var picked))
+                    posing.ChooseSkeleton(fresh, picked);
             }
             if (resolution.Selected is null)
                 Widgets.HintWrapped(resolution.Reason ?? "Several skeletons fit. Choose the one this animation was made for.");

@@ -477,6 +477,12 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                                 : $"No {AnimationBones.StandardName(standard)} skeleton for this model is in the skeleton library.");
                 }
             }
+            else if (ComboWheel.Steps() is var steps and not 0)
+            {
+                // "Keep its own" (null), then the standards this model has; the greyed-out ones are skipped.
+                SkeletonStandard?[] targets = [null, .. Enum.GetValues<SkeletonStandard>().Where(standard => AnimationBones.Standard(clip, standard) is not null)];
+                repairTarget = ComboWheel.Pick(targets, repairTarget, steps);
+            }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Repair moves every bone to the index other players' skeletons use, whatever your skeleton mod adds.\n" +

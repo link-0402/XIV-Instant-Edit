@@ -14,6 +14,7 @@ using InstantEdit.Studio.Services.Stash;
 using InstantEdit.Studio.Services.Unity;
 using InstantEdit.Studio.Windows.Import;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows;
 
@@ -522,7 +523,7 @@ public sealed class PackageImportWindow : Window, IDisposable
         {
             ImGui.SetNextItemWidth(-1);
             int roleIndex = (int)asset.Role;
-            if (ImGui.Combo("##Role", ref roleIndex, RoleLabels, RoleLabels.Length))
+            if (ComboWheel.Combo("##Role", ref roleIndex, RoleLabels))
                 asset.Role = (SimsTextureRole)roleIndex;
             Gui.Tooltip(asset.RoleFromCasPart
                 ? "Role taken from the CAS part that references this texture."

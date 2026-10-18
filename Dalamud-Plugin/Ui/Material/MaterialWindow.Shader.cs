@@ -23,9 +23,14 @@ internal sealed partial class MaterialWindow
         using (var combo = ImRaii.Combo("##material-shader", known?.DisplayName ?? doc.ShaderPackage))
         {
             if (combo.Success)
+            {
                 foreach (var def in ShaderInfo.All)
                     if (ImGui.Selectable($"{def.DisplayName}##{def.ShaderPackName}", ReferenceEquals(def, known)) && !ReferenceEquals(def, known))
                         SwitchShader(current, def);
+            }
+            else if (ComboWheel.Steps() is var steps and not 0 && ComboWheel.Pick(ShaderInfo.All, def => ReferenceEquals(def, known), steps) is var picked
+                     && !ReferenceEquals(picked, known))
+                SwitchShader(current, picked);
         }
         Tip("Which shader the game draws it with. Switching keeps what the new shader can use.");
 
@@ -89,7 +94,11 @@ internal sealed partial class MaterialWindow
         var preview = ShaderLabels.KeyValue(key.Id, value) + (key.Values.Contains(value) ? string.Empty : " (not in this shader)");
         using var combo = ImRaii.Combo("##value", preview);
         if (!combo.Success)
+        {
+            if (ComboWheel.Scroll(key.Values, value, out var picked))
+                _ = current.Apply(d => d.WithKey(key.Id, picked), label.Label);
             return;
+        }
         foreach (var option in key.Values)
         {
             var text = ShaderLabels.KeyValue(key.Id, option) + (option == key.Default ? " (default)" : string.Empty);

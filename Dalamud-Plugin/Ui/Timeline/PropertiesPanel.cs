@@ -382,7 +382,12 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectLookEditor 
                 ImGui.SetNextItemWidth(Theme.Scaled(170));
                 using var combo = ImRaii.Combo("##value", TimelineWindowViews.FieldText(field, value));
                 if (!combo.Success)
+                {
+                    if (ComboWheel.Steps() is var steps and not 0 && field.Options.Length > 0
+                        && ComboWheel.Pick(field.Options, entry => entry.Value == value, steps).Value is var picked && picked != value)
+                        current.Replace(TimelineUi.With(ev, field, picked));
                     break;
+                }
                 foreach (var (label, option) in field.Options)
                     if (ImGui.Selectable(label, option == value) && option != value)
                         current.Replace(TimelineUi.With(ev, field, option));

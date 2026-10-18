@@ -179,9 +179,13 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
                 ImGui.SetNextItemWidth(Theme.Scaled(120));
                 using var combo = ImRaii.Combo("##place", TimelineWindowViews.PlacementName(blend.Placement));
                 if (combo.Success)
+                {
                     foreach (var place in Enum.GetValues<JoinPlacement>())
                         if (ImGui.Selectable(TimelineWindowViews.PlacementName(place), place == blend.Placement) && place != blend.Placement && !readOnly)
                             set(blend with { Placement = place });
+                }
+                else if (!readOnly && ComboWheel.Scroll(Enum.GetValues<JoinPlacement>(), blend.Placement, out var picked))
+                    set(blend with { Placement = picked });
             }
         }
         var total = used.Before + used.After;
@@ -222,9 +226,17 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
         ImGui.SetNextItemWidth(Theme.Scaled(120));
         using var combo = ImRaii.Combo("##ease-side", sides[cuts.EaseEnd ? 1 : 0]);
         if (combo.Success)
+        {
             for (var i = 0; i < sides.Length; i++)
                 if (ImGui.Selectable(sides[i], (i == 1) == cuts.EaseEnd) && (i == 1) != cuts.EaseEnd && !readOnly)
                     current.SetEase(cuts.Ease, atEnd: i == 1);
+        }
+        else
+        {
+            var side = cuts.EaseEnd ? 1 : 0;
+            if (!readOnly && ComboWheel.Scroll(ref side, sides.Length))
+                current.SetEase(cuts.Ease, atEnd: side == 1);
+        }
     }
 
     private static void Title(FontAwesomeIcon icon, string text)

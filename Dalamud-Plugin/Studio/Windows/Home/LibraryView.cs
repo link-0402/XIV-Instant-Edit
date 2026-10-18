@@ -9,6 +9,7 @@ using InstantEdit.Studio.Services.Library;
 using InstantEdit.Studio.Services.Project;
 using InstantEdit.Studio.Windows.Studio;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Home;
 
@@ -221,21 +222,21 @@ internal sealed class LibraryView
 
         float spacing0 = ImGui.GetStyle().ItemSpacing.X;
         ImGui.SetNextItemWidth(Theme.S(170));
-        ImGui.Combo("##searchin", ref _searchIn, SearchInLabels, SearchInLabels.Length);
+        ComboWheel.Combo("##searchin", ref _searchIn, SearchInLabels);
         ImGui.SameLine();
         ImGui.SetNextItemWidth(Math.Max(Theme.S(160), ImGui.GetContentRegionAvail().X - Theme.S(170 + 150 + 40) - spacing0 * 3));
         ImGui.InputTextWithHint("##search", SearchHints[_searchIn], ref _search, 256);
         ImGui.SameLine();
         var collection = _library.PlayerCollection();
         ImGui.SetNextItemWidth(Theme.S(170));
-        ImGui.Combo("##show", ref _show, ShowLabels, ShowLabels.Length);
+        ComboWheel.Combo("##show", ref _show, ShowLabels);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(collection is { } shownIn
                 ? $"Active and Disabled go by {shownIn.Name}, the collection your character uses."
                 : "Active and Disabled go by the collection your character uses.");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(Theme.S(150));
-        ImGui.Combo("##sort", ref _sort, SortLabels, SortLabels.Length);
+        ComboWheel.Combo("##sort", ref _sort, SortLabels);
         ImGui.SameLine();
         using (Gui.Disabled(_library.IsListing))
         {

@@ -74,7 +74,7 @@ internal sealed partial class MaterialWindow
             ImGui.SetNextItemWidth(Theme.Scaled(200));
             var target = (int)presetTarget;
             var labels = TargetLabels.Select((label, i) => i == 2 ? $"Pair {selectedPair + 1}" : label).ToArray();
-            if (ImGui.Combo("##preset-target", ref target, labels, labels.Length))
+            if (ComboWheel.Combo("##preset-target", ref target, labels))
                 presetTarget = (RowTarget)target;
             Tip(usage == null ? "Used rows needs the index texture; without it every row changes." : "Used rows are the ones the index texture picks.");
         }

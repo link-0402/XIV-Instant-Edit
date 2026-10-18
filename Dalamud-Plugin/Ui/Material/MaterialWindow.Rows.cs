@@ -393,7 +393,7 @@ internal sealed partial class MaterialWindow
         var changed = false;
         using var combo = ImRaii.Combo(id, value < info.Count ? $"{value}" : $"{value} (not in the game)", ImGuiComboFlags.HeightLarge);
         if (!combo.Success)
-            return false;
+            return ComboWheel.Scroll(ref value, info.Count);
         using var align = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f));
         var size = Theme.Scaled(48);
         var step = size + ImGui.GetStyle().ItemSpacing.Y;

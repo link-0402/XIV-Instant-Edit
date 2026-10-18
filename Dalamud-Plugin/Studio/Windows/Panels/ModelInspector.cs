@@ -8,6 +8,7 @@ using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Windows.Build;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Panels;
 
@@ -361,7 +362,7 @@ internal sealed class ModelInspector
 
                 ImGui.TableNextColumn();
                 ImGui.SetNextItemWidth(-1);
-                if (ImGui.Combo("##uses", ref choice, options, options.Length))
+                if (ComboWheel.Combo("##uses", ref choice, options))
                 {
                     onSet(slot, choice switch
                     {
@@ -586,7 +587,7 @@ internal sealed class ModelInspector
         Gui.Label("Preset");
         float applyW = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.Redo, "Apply");
         ImGui.SetNextItemWidth(-(applyW + ImGui.GetStyle().ItemSpacing.X));
-        ImGui.Combo("##ApplyPreset", ref _presetIndex, MaterialPresets.Names, MaterialPresets.Names.Length);
+        ComboWheel.Combo("##ApplyPreset", ref _presetIndex, MaterialPresets.Names);
         ImGui.SameLine();
         if (Gui.IconTextButton(FontAwesomeIcon.Redo, "Apply", "Replaces this material's shader and texture slots with the preset's."))
             _tree.AskPreset(item, index, _presetIndex);

@@ -164,9 +164,17 @@ internal sealed class AnimationSendDialog
             ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(320), ImGui.GetContentRegionAvail().X * 0.7f));
             using var combo = ImRaii.Combo("Clip", ClipLabel(clips[state.Clip]));
             if (combo.Success)
+            {
                 for (var i = 0; i < clips.Length; i++)
                     if (ImGui.Selectable($"{ClipLabel(clips[i])}##clip-{i}", i == state.Clip))
                         state.Clip = i;
+            }
+            else
+            {
+                var pick = state.Clip;
+                if (ComboWheel.Scroll(ref pick, clips.Length))
+                    state.Clip = pick;
+            }
         }
         if (clips.Length > 1)
             Widgets.HintWrapped("This file holds several clips, such as a loop and its start. Each is sent as its own action.");
@@ -267,12 +275,16 @@ internal sealed class AnimationSendDialog
             ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(320), ImGui.GetContentRegionAvail().X));
             using var combo = ImRaii.Combo("##animation-skeleton", selected is null ? "Choose the skeleton it was made for" : SkeletonLabel(selected));
             if (combo.Success)
+            {
                 foreach (var candidate in resolution.Candidates)
                 {
                     if (ImGui.Selectable($"{SkeletonLabel(candidate)}##{AnimationSkeletonIndex.SelectionId(candidate)}", candidate == selected))
                         choose(candidate);
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip(candidate.Rationale + "\n" + candidate.Source.Resource.ResolvedPath);
                 }
+            }
+            else if (ComboWheel.Scroll(resolution.Candidates, selected!, out var picked))
+                choose(picked);
         }
         if (selected is null)
             Widgets.HintWrapped(resolution.Reason ?? "Several skeletons fit. Choose the one this animation was made for.");

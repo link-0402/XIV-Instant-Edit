@@ -101,7 +101,7 @@ internal static class Gui
     {
         Label(label, help);
         ImGui.SetNextItemWidth(width);
-        bool changed = ImGui.Combo(id, ref index, items, items.Length);
+        bool changed = InstantEdit.Ui.ComboWheel.Combo(id, ref index, items);
         Tooltip(help);
         return changed;
     }

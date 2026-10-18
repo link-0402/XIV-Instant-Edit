@@ -12,6 +12,7 @@ using InstantEdit.Studio.Services.Backups;
 using InstantEdit.Studio.Services.CleanUp;
 using InstantEdit.Studio.Windows.UI;
 using Penumbra.Api.Enums;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Studio;
 
@@ -366,12 +367,12 @@ internal sealed partial class CheckView
                 ImGui.TableNextColumn();
                 ImGui.SetNextItemWidth(-1);
                 var cap = choice.Cap;
-                if (ImGui.Combo("##cap", ref cap, SizeCapLabels, SizeCapLabels.Length))
+                if (ComboWheel.Combo("##cap", ref cap, SizeCapLabels))
                     _textureChoices[candidate.RelPath] = (_textureChoices[candidate.RelPath].Ticked, choice.Format, cap);
                 ImGui.TableNextColumn();
                 ImGui.SetNextItemWidth(-1);
                 var format = choice.Format;
-                if (ImGui.Combo("##format", ref format, FormatLabels, FormatLabels.Length))
+                if (ComboWheel.Combo("##format", ref format, FormatLabels))
                     _textureChoices[candidate.RelPath] = (_textureChoices[candidate.RelPath].Ticked, format, _textureChoices[candidate.RelPath].Cap);
                 ImGui.PopID();
             }

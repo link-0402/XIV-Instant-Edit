@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Bindings.ImGui;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Windows.UI;
+using ComboWheel = InstantEdit.Ui.ComboWheel;
 
 namespace InstantEdit.Studio.Windows.Build;
 
@@ -21,7 +23,18 @@ internal static class PackPlaceUi
         var preview = place == null && inherited != null ? inherited : session.Label(place);
         ImGui.SetNextItemWidth(width);
         if (!ImGui.BeginCombo(id, preview, ImGuiComboFlags.HeightLarge))
-            return false;
+        {
+            if (ComboWheel.Steps() is not (var steps and not 0))
+                return false;
+            // As listed: going with what it belongs to (null), the default files, then every group's options.
+            List<string?> places = inherited != null ? [null] : [];
+            places.Add(PackPlace.Default);
+            foreach (var group in session.Groups)
+                foreach (var option in group.Options)
+                    places.Add(PackPlace.Of(group.Id, option.Id));
+            picked = ComboWheel.Pick(places, place, steps);
+            return picked != place;
+        }
 
         if (inherited != null && ImGui.Selectable(inherited, place == null))
         {
@@ -79,6 +92,13 @@ internal static class PackPlaceUi
                 if (ImGui.Selectable($"{group.Name}  ({group.Options.Count} options)##{group.Id}", group == current))
                     (picked, pick) = (true, group.Id);
             ImGui.EndCombo();
+        }
+        else if (ComboWheel.Steps() is var steps and not 0)
+        {
+            // "A group of its own" (null), then the pack's groups.
+            Guid?[] groups = [null, .. session.Groups.Select(group => (Guid?)group.Id)];
+            pick = ComboWheel.Pick(groups, current?.Id, steps);
+            picked = pick != current?.Id;
         }
         if (picked)
             set(pick);
