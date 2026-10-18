@@ -318,6 +318,8 @@ if (-not $SkipPlugin) {
         Copy-Item -LiteralPath $pluginPackage -Destination $pluginAsset -Force
         $assets += $pluginAsset
         $pluginUrl = Update-RepoJson $repoJson $pluginVersion $Tag
+        # The first release lived at the repository root; users who added that URL still read it.
+        Copy-Item -LiteralPath $repoJson -Destination (Join-Path $repoRoot 'repo.json') -Force
     }
 }
 
