@@ -997,6 +997,25 @@ def draw_mesh_part_context_menu(self, context: Context) -> None:
     remove.mesh_part_instance = button.mesh_part_instance
 
 
+# The Material tab's slot list, in Cycles and EEVEE alike.
+_MATERIAL_SLOT_LIST = "MATERIAL_UL_matslots"
+
+
+def draw_material_specials_menu(self, _context: Context) -> None:
+    """Add Bake to Copy to the menu beside the Material tab's slots."""
+    layout = self.layout
+    layout.separator()
+    layout.operator("xiv_ie.bake_mesh_copy", icon="DUPLICATE")
+
+
+def draw_material_slot_context_menu(self, context: Context) -> None:
+    """Add Bake to Copy to Blender's right-click menu of a Material tab slot."""
+    ui_list = getattr(context, "ui_list", None)
+    if ui_list is None or ui_list.bl_idname != _MATERIAL_SLOT_LIST:
+        return
+    draw_material_specials_menu(self, context)
+
+
 def _draw_mesh_groups(layout, context: Context) -> None:
     """Draw the compact Mesh Studio overview adapted from Yet Another Addon."""
     parts = scene_parts()

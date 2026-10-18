@@ -28,7 +28,7 @@ from .mesh.export import (check_triangulation, check_uv_layers, check_weights, d
                           get_export_stats, ShapeExports)
 from .mesh.hidden import hidden_vertices, remove_vertices
 from .mesh.racial_scaling import apply_deformer
-from .mesh.objects import visible_meshobj
+from .mesh.objects import baked_copy, visible_meshobj
 from .mesh.armatures import available_armatures, combine_armatures
 from .mesh.vertex_data import (
     ACTIONS as VERTEX_DATA_ACTIONS,
@@ -935,6 +935,54 @@ class XIVIE_OT_duplicate_backfaces(Operator):
             return {"CANCELLED"}
         self.report({"INFO"}, f"Added part {self.mesh_group}.{self.mesh_part + 1} with flipped normals")
         _redraw(context)
+        return {"FINISHED"}
+
+
+def _bake_targets(context: Context) -> list:
+    """The meshes Bake to Copy works on: the Material tab's object first, then the other selected meshes."""
+    targets = [obj for obj in (context.object, *context.selected_objects) if obj is not None and obj.type == "MESH"]
+    return list(dict.fromkeys(targets))
+
+
+class XIVIE_OT_bake_mesh_copy(Operator):
+    bl_idname = "xiv_ie.bake_mesh_copy"
+    bl_label = "Bake to Copy"
+    bl_description = (
+        "Copy the selected meshes with their shape keys and modifiers applied, as an export and "
+        "import would, keep the Armature modifier, and hide the originals"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to bake a copy")
+            return False
+        if not _bake_targets(context):
+            cls.poll_message_set("Select a mesh")
+            return False
+        return True
+
+    def execute(self, context: Context):
+        originals = _bake_targets(context)
+        copies = []
+        for obj in originals:
+            try:
+                copies.append(baked_copy(obj))
+            except RuntimeError as error:
+                _remove_objects(copies)
+                self.report({"ERROR"}, f"Could not bake {obj.name}: {error}")
+                return {"CANCELLED"}
+        _share_local_views(context, list(zip(originals, copies)))
+        for obj in originals:
+            obj.hide_set(True)
+        for copy in copies:
+            copy.select_set(True)
+        context.view_layer.objects.active = copies[0]
+        if len(copies) == 1:
+            self.report({"INFO"}, f"Baked {copies[0].name} and hid {originals[0].name}")
+        else:
+            self.report({"INFO"}, f"Baked {len(copies)} copies and hid the originals")
         return {"FINISHED"}
 
 
