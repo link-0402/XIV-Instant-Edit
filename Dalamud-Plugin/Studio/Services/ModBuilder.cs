@@ -149,6 +149,9 @@ internal sealed class ModBuilder
 
             var defaults = Carrier(PackPlace.Default);
             var groups = GroupsOut(report);
+            groups.AddRange(PartToggleGroupsOut(groups, report));
+            report.CurrentSubjectKey = 0;
+            report.CurrentItemName   = string.Empty;
             // Named as the user typed it; only the folder needs a name Windows can store.
             ModMetaWriter.Write(modPath, string.IsNullOrWhiteSpace(_req.DisplayName) ? _req.ModName : _req.DisplayName, defaults, groups, _req.Meta);
             int written = groups.Count(g => g.Options.Count > 0);
@@ -297,6 +300,73 @@ internal sealed class ModBuilder
         return result;
     }
 
+    /// <summary>The attributes of every gear model the build writes, by slot and set: the items that wrote them, and their names.</summary>
+    private readonly Dictionary<(EquipSlot Slot, ushort SetId), (List<ItemBuildRequest> Items, HashSet<string> Attributes)> _partAttributes = new();
+
+    /// <summary>Notes the attributes of a gear item's model files, for its part toggle group. A file that can't be read adds none.</summary>
+    private void NotePartAttributes(ItemBuildRequest item, IEnumerable<string?> sources)
+    {
+        if (item.Subject is not GearSubject gear)
+            return;
+        var key = (gear.Item.Slot, gear.Item.ModelId);
+        if (!_partAttributes.TryGetValue(key, out var noted))
+            _partAttributes[key] = noted = (new List<ItemBuildRequest>(), new HashSet<string>(StringComparer.Ordinal));
+        if (!noted.Items.Contains(item))
+            noted.Items.Add(item);
+        foreach (var source in sources)
+        {
+            if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+                continue;
+            try
+            {
+                noted.Attributes.UnionWith(ModelLayoutReader.ReadFile(source).Attributes);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+            {
+                StudioServices.Log.Debug(ex, "[Studio] Could not read the attributes of {0}", source);
+            }
+        }
+    }
+
+    /// <summary>
+    /// One IMC group per gear model whose parts carry the slot's variant tags, set above every other
+    /// group so its mask wins (see <see cref="PartToggleGroups"/>). Two items of one model share it.
+    /// </summary>
+    private List<ModGroupOut> PartToggleGroupsOut(IReadOnlyList<ModGroupOut> groups, BuildReport report)
+    {
+        var result = new List<ModGroupOut>();
+        var names = new HashSet<string>(groups.Select(g => g.Name), StringComparer.OrdinalIgnoreCase);
+        int priority = groups.Select(g => g.Priority).DefaultIfEmpty(0).Max() + 1;
+        foreach (var ((slot, setId), (items, attributes)) in _partAttributes)
+        {
+            var first = items[0];
+            report.CurrentSubjectKey = first.Subject.Key;
+            report.CurrentItemName   = first.Subject.DisplayName;
+            var target = new Target(TargetKind.Item, first.Subject.Key);
+            // Variants written for this model point at v0001, which the group's entry has to say too.
+            bool forcesMaterial = items.Any(i => i.Materials.Count > 0 && i.ImcOverrides != null);
+            var name = $"{first.Subject.DisplayName} Parts";
+            for (int n = 2; names.Contains(name); n++)
+                name = $"{first.Subject.DisplayName} Parts ({n})";
+            var plan = PartToggleGroups.Plan(name, slot, setId, attributes,
+                items.Select(i => i.ImcOverrides).FirstOrDefault(v => v != null), forcesMaterial, priority);
+
+            foreach (var tag in plan.OtherSlotTags)
+                report.Add(BuildOutcome.Skipped, BuildCategory.Meta, $"Part toggle {tag}", null,
+                    $"a {SlotInfo.DisplayLabelMap[slot].ToLowerInvariant()} model only toggles {SlotInfo.VariantAttributePrefix(slot)} tags, so it never hides. Rename it to {PartToggleGroups.Renamed(slot, tag)}", target);
+            if (plan.Problem != null)
+                report.Add(BuildOutcome.Skipped, BuildCategory.Meta, "Part toggles", null, $"no toggle group: {plan.Problem}", target);
+            if (plan.Group is not { } group)
+                continue;
+
+            names.Add(name);
+            result.Add(group);
+            report.Add(BuildOutcome.Ok, BuildCategory.Meta, name, null,
+                $"IMC toggle group · parts {string.Join(", ", group.Options.Select(o => o.Name))}", target);
+        }
+        return result;
+    }
+
     /// <summary>The group a slot of variants fills, and the option each of its files goes into.</summary>
     private (PackGroup? Group, Func<string, string?> PlaceOf) VariantPlaces(Guid? groupId)
     {
@@ -368,6 +438,8 @@ internal sealed class ModBuilder
 
             if (subject is GearSubject gear && !nativeRaces.Contains(model.RaceGender))
                 Claim(place, model.RaceGender, EqdpInfo.Model(gear.Item.Slot));
+            if (subject is GearSubject && !model.UseDummy)
+                NotePartAttributes(item, model.UseVariants ? model.VariantPaths : new[] { model.SourcePath });
         }
 
         // ── Pass 1: textures, once per Material ──────────────────────────
@@ -441,6 +513,11 @@ internal sealed class ModBuilder
                 var matGamePath = subject.MaterialGamePath(raceName, race);
                 Step($"{raceName}.mtrl");
 
+                // This item's models use the file whoever writes it — a shared material on a second
+                // item of the same set is written once — so the race's claim is made either way.
+                if (subject is GearSubject materialGear && race is { } materialRace)
+                    Claim(mat.Option, materialRace, EqdpInfo.Material(materialGear.Item.Slot));
+
                 // Two copies resolving to the same file (a name that pins its own race) are
                 // written once — shared across every item in the pack, not just this one.
                 if (!writtenMaterials.Add($"{Known(mat.Option)}|{matGamePath}"))
@@ -449,9 +526,6 @@ internal sealed class ModBuilder
                         "already written by another material or item", new Target(TargetKind.Material, subject.Key, s));
                     continue;
                 }
-
-                if (subject is GearSubject materialGear && race is { } materialRace)
-                    Claim(mat.Option, materialRace, EqdpInfo.Material(materialGear.Item.Slot));
 
                 item.VanillaTemplates.TryGetValue(BuildRequest.TemplateKey(effectiveName, race), out var template);
                 var label = race != null && materialRaces.Count > 1 ? $"{raceName}.mtrl ({race.Value.DisplayName})" : $"{raceName}.mtrl";
@@ -462,6 +536,9 @@ internal sealed class ModBuilder
         }
 
         // ── Eqdp ─────────────────────────────────────────────────────────
+        // A race whose vanilla model is switched off needs an entry even when it claims nothing.
+        foreach (var race in item.VanillaModelsOff)
+            Claim(PackPlace.Default, race, 0);
         AddEqdpOverrides(item, eqdpClaims, report);
     }
 
@@ -474,6 +551,9 @@ internal sealed class ModBuilder
     /// The default files' entry holds what they claim; an option's entry replaces it while the option
     /// is picked, so it holds the default files' claims as well as its own, and is only written where
     /// it adds something.
+    ///
+    /// A race whose vanilla model is switched off starts from nothing for the slot instead of what
+    /// the game grants, so its default entry is written even though it claims nothing.
     /// </summary>
     private void AddEqdpOverrides(ItemBuildRequest item, Dictionary<string, Dictionary<RaceGender, ushort>> claims, BuildReport report)
     {
@@ -486,9 +566,11 @@ internal sealed class ModBuilder
         {
             foreach (var (race, claimed) in placeClaims.OrderBy(c => c.Key.RaceCode, StringComparer.Ordinal))
             {
-                ushort vanilla  = (ushort)(item.VanillaEqdp.GetValueOrDefault(race.RaceCode) & EqdpInfo.Mask(slot));
-                ushort baseline = place.Length == 0 ? vanilla : (ushort)(vanilla | always.GetValueOrDefault(race));
-                ushort entry    = (ushort)(baseline | claimed);
+                ushort game     = (ushort)(item.VanillaEqdp.GetValueOrDefault(race.RaceCode) & EqdpInfo.Mask(slot));
+                bool   off      = item.VanillaModelsOff.Contains(race);
+                ushort vanilla  = off ? (ushort)0 : game;
+                ushort baseline = place.Length == 0 ? game : (ushort)(vanilla | always.GetValueOrDefault(race));
+                ushort entry    = (ushort)((place.Length == 0 ? vanilla : baseline) | claimed);
                 if (entry == baseline)
                     continue;   // the game (or the default files) already say this race has them
 
@@ -500,8 +582,13 @@ internal sealed class ModBuilder
                     Entry      = entry,
                 });
                 var where = place.Length == 0 ? string.Empty : $" · {_req.Groups.SelectMany(g => g.Options.Select(o => (g, o))).Where(x => PackPlace.Of(x.g.Id, x.o.Id) == place).Select(x => $"{x.g.Name} › {x.o.Name}").FirstOrDefault()}";
-                report.Add(BuildOutcome.Ok, BuildCategory.Meta, $"Eqdp · {race.DisplayName}{where}", null,
-                    $"{EqdpInfo.Describe(slot, (ushort)(entry & ~vanilla))} of its own for this item",
+                ushort added = (ushort)(entry & ~vanilla);
+                var detail = off && place.Length == 0
+                    ? added != 0
+                        ? $"vanilla model switched off · {EqdpInfo.Describe(slot, added)} of its own for this item"
+                        : "vanilla model switched off, so it uses another race's"
+                    : $"{EqdpInfo.Describe(slot, added)} of its own for this item";
+                report.Add(BuildOutcome.Ok, BuildCategory.Meta, $"Eqdp · {race.DisplayName}{where}", null, detail,
                     new Target(TargetKind.Item, gear.Key));
             }
         }
@@ -537,21 +624,9 @@ internal sealed class ModBuilder
             foreach (var model in item.Models)
                 steps += model.UseVariants && !model.UseDummy ? Math.Max(1, model.VariantPaths.Count) : 1;
             foreach (var tex in item.Materials.SelectMany(m => m.Textures))
-                steps += tex.UseVariants && !tex.UseWhiteDummy && !tex.IsShared ? Math.Max(1, CountImages(tex.SourcePath)) : 1;
+                steps += tex.UseVariants && !tex.UseWhiteDummy && !tex.IsShared ? Math.Max(1, TextureSources.VariantImages(tex).Count) : 1;
         }
         return steps;
-    }
-
-    private static int CountImages(string folder)
-    {
-        try
-        {
-            return Directory.Exists(folder) ? TextureSources.EnumerateImages(folder).Count() : 0;
-        }
-        catch (Exception)
-        {
-            return 0;
-        }
     }
 
     private static string LocalPath(string modPath, string gamePath)
@@ -610,7 +685,7 @@ internal sealed class ModBuilder
         try
         {
             data = File.ReadAllBytes(sourcePath);
-            referenced = ModelMaterialRewriter.ReadMaterials(data);
+            referenced = ModelMaterialRewriter.ReadMeshMaterials(data);
         }
         catch (Exception ex)
         {
@@ -630,12 +705,13 @@ internal sealed class ModBuilder
 
         try
         {
-            var rewritten = ModelMaterialRewriter.Rewrite(data, plan);
+            var rewritten = ModelMaterialRewriter.RewriteMeshes(data, plan);
 
             // Check the result the way the game reads it, not the way it was written: a material
             // name the string table cannot resolve looks fine in the bytes and loads as nothing.
-            var resolved = ModelMaterialRewriter.ReadMaterialsStrict(rewritten);
-            if (resolved.Any(string.IsNullOrEmpty))
+            var resolved = ModelMaterialRewriter.ReadMeshMaterialsStrict(rewritten);
+            if (resolved.Any(string.IsNullOrEmpty)
+                || plan.Where((name, i) => name != null && (i >= resolved.Count || resolved[i] != name)).Any())
             {
                 File.Copy(sourcePath, targetPath, true);
                 return (true, "copied as it is — the rewritten model would not resolve all of its material names");
@@ -649,7 +725,7 @@ internal sealed class ModBuilder
             return (true, $"copied as it is — its materials could not be switched ({ex.Message})");
         }
 
-        return (false, $"{changes} of {referenced.Count} mesh material(s) pointed at this mod's own");
+        return (false, $"{changes} of {referenced.Count} mesh(es) pointed at this mod's materials");
     }
 
     /// <summary>
@@ -1128,19 +1204,12 @@ internal sealed class ModBuilder
             report.Add(BuildOutcome.Failed, BuildCategory.Variant, textureName, gamePath, "its group of options is gone — pick one for it", source);
             return false;
         }
-        var folder = tex.SourcePath;
-        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-        {
-            Step(textureName);
-            report.Add(BuildOutcome.Failed, BuildCategory.Variant, textureName, gamePath, $"variant folder not found ({folder})", source);
-            return false;
-        }
-
-        var images = TextureSources.EnumerateImages(folder).ToList();
+        var images = TextureSources.VariantImages(tex);
         if (images.Count == 0)
         {
             Step(textureName);
-            report.Add(BuildOutcome.Failed, BuildCategory.Variant, textureName, gamePath, "no image files found in variant folder", source);
+            report.Add(BuildOutcome.Failed, BuildCategory.Variant, textureName, gamePath,
+                tex.VariantPaths.Count == 0 && !Directory.Exists(tex.SourcePath) ? "no variant files set" : "no image files found for its variants", source);
             return false;
         }
 

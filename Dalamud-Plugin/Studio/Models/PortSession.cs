@@ -101,6 +101,16 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         if (!ModpackLoading.CanResolve(cfg.ModpackItems, animations))
             return false;
 
+        if (cfg.MaterialLinkLayout < 1)
+        {
+            // Links saved per material slot of the file: every mesh takes what its slot had.
+            foreach (var models in cfg.ModelsByItem.Values)
+                foreach (var model in models)
+                    ModelMaterialLinks.ConvertSlotsToMeshes(model, ReadMeshSlots);
+            cfg.MaterialLinkLayout = 1;
+            cfg.Save();
+        }
+
         var folded = new List<string>();
         bool pruned = false;
         int unreadable = 0;
@@ -145,6 +155,19 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
                    "Their set-ups are kept and come back the next time the plugin loads.", Severity.Warning);
         Revision++;
         return true;
+    }
+
+    /// <summary>The material slot each mesh of a local .mdl uses, or null when it cannot be read.</summary>
+    private static IReadOnlyList<int>? ReadMeshSlots(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? ModelMaterialRewriter.ReadMeshMaterialSlots(File.ReadAllBytes(path)) : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private PortItem LoadItem(PortSubject subject, out List<string> unused)
@@ -377,6 +400,14 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         return _host.GameData.Exists(path) ? (path, source) : (own, null);
     }
 
+    /// <summary>Switches a race's own vanilla model of this gear on or off (see <see cref="VanillaModels"/>).</summary>
+    public void SetVanillaModel(PortItem item, RaceGender race, bool on)
+    {
+        if (on) item.Meta.VanillaModelsOff.Remove(race.RaceCode);
+        else    item.Meta.VanillaModelsOff.Add(race.RaceCode);
+        MarkDirty();
+    }
+
     /// <summary>The race a feature port was opened for, which cannot be removed: it is what the port replaces.</summary>
     public static bool IsBaseRace(PortItem item, RaceGender race) => item.Subject.BaseRace == race;
 
@@ -600,14 +631,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     {
         if (CopiedMaterial is not { } source || CopiedFrom is not { } from) return;
 
-        var copy = source.Clone();
-        copy.Name = UniqueMaterialName(item, RetargetMaterialName(source.Name, from, item.Subject));
-        foreach (var tex in copy.Textures)
-        {
-            tex.SharedGamePath = !keepTexturePaths ? string.Empty
-                : tex.IsShared ? tex.SharedGamePath   // already shared: keep pointing at the original
-                : from.TextureGamePath(MaterialNaming.ComposeTextureName(source.Name, tex.Postfix));
-        }
+        var copy = MaterialCopy.For(source, from, item.Subject, item.Materials.Select(m => m.Name), keepTexturePaths);
 
         int at = afterIndex >= 0 && afterIndex < item.Materials.Count ? afterIndex + 1 : item.Materials.Count;
         item.Materials.Insert(at, copy);
@@ -630,41 +654,20 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         return race is { } rg ? _host.GameData.MaterialRaceFor(item.Subject, rg) : null;
     }
 
-    /// <summary>Swaps the source subject's naming stem for the target's, when the name follows it.</summary>
-    private static string RetargetMaterialName(string name, PortSubject from, PortSubject to)
-    {
-        static string Stem(PortSubject s, RaceGender? race)
-        {
-            var n = s.DefaultMaterialName(1, race);   // "mt_c0201h0005_hir_a"
-            int cut = n.LastIndexOf('_');
-            return cut > 0 ? n[..cut] : n;            // "mt_c0201h0005_hir"
-        }
+    /// <summary>
+    /// The materials of the pack's other items a mesh part of <paramref name="item"/> can be set to,
+    /// in the order the items are listed. The build writes a copy of the one picked for this item.
+    /// </summary>
+    public List<(PortItem Item, MaterialSetup Material)> SharableMaterials(PortItem item)
+        => Items.Where(other => other != item && other.Animation == null)
+                .SelectMany(other => other.Materials.Select(m => (other, m)))
+                .ToList();
 
-        // Gear is named per gender, so a copied name can follow either of the two stems.
-        foreach (var race in new RaceGender?[] { null, RaceInfo.BaseFor(PlayerGender.Female) })
-        {
-            var fromStem = Stem(from, race);
-            if (name.StartsWith(fromStem, StringComparison.OrdinalIgnoreCase))
-                return Stem(to, race) + name[fromStem.Length..];
-        }
-        return name;
-    }
-
-    /// <summary>Makes a name unique within the item, by bumping a trailing "_a" letter (or adding one).</summary>
-    private static string UniqueMaterialName(PortItem item, string name)
-    {
-        bool Taken(string n) => item.Materials.Any(m => string.Equals(m.Name, n, StringComparison.OrdinalIgnoreCase));
-        if (!Taken(name)) return name;
-
-        bool lettered = name.Length > 2 && name[^2] == '_' && char.IsAsciiLetterLower(name[^1]);
-        var stem = lettered ? name[..^2] : name;
-        for (char c = lettered ? (char)(name[^1] + 1) : 'b'; c <= 'z'; c++)
-            if (!Taken($"{stem}_{c}"))
-                return $"{stem}_{c}";
-        for (int i = 2; ; i++)
-            if (!Taken($"{name}_{i}"))
-                return $"{name}_{i}";
-    }
+    /// <summary>The material a shared link names, if its item is still in the pack and still has it.</summary>
+    public (PortItem Item, MaterialSetup Material)? FindShared(PortItem owner, uint itemKey, Guid material)
+        => itemKey != owner.Key && FindItem(itemKey) is { Animation: null } other && other.Materials.Find(m => m.Id == material) is { } found
+            ? (other, found)
+            : null;
 
     public void RemoveMaterial(PortItem item, int index)
     {
@@ -833,6 +836,13 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
                     materials[m].Textures[t].Option = PlaceOf(source, source.Materials[m], source.Materials[m].Textures[t]);
             }
 
+            // Mesh parts set to another item's material get a copy of it written for this item, in
+            // this item's folder and going where the item goes, that points at the original's textures.
+            var sharedCopies = MaterialCopy.AddShared(subject, materials, models,
+                (key, id) => FindShared(source, key, id) is { } found ? (found.Item.Subject, found.Material) : null,
+                PlaceOf(source));
+            var copiedFrom = sharedCopies.ToDictionary(c => c.Copy, c => (c.From, c.Source.Name));
+
             // Which races each material is written for, and so which names exist: gear follows the
             // gender of its models, hair every configured race (see GameDataService.MaterialRaces).
             var materialRaces = gameData.MaterialRaces(subject, models);
@@ -845,16 +855,20 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
                 if (MaterialPresetLibrary.FindPresetPath(mat.ShaderType, mat.Textures.Select(t => t.Type).ToHashSet()) != null)
                     continue;
 
+                // A shared copy clones what its original clones: the vanilla material of the original's item.
+                var (lookIn, lookFor) = copiedFrom.TryGetValue(mat, out var origin) ? origin : (subject, mat.Name);
                 foreach (var race in materialRaces)
                 {
                     var tkey = BuildRequest.TemplateKey(mat.Name, race);
                     if (!templates.ContainsKey(tkey))
-                        templates[tkey] = gameData.FindVanillaMaterial(subject, mat.Name, race);
+                        templates[tkey] = gameData.FindVanillaMaterial(lookIn, lookFor, race);
                 }
             }
 
+            // Gear's variants are read even without materials of its own: a part toggle group starts
+            // from them. The build only writes them as overrides when it writes materials.
             List<ModImcOverride>? imc = null;
-            if (subject is GearSubject gear && materials.Count > 0)
+            if (subject is GearSubject gear)
                 imc = gameData.GetImcOverridesForcingV1(gear.Item.Slot, gear.Item.ModelId);
             else if (subject is WeaponSubject weapon && materials.Count > 0)
                 imc = gameData.GetWeaponImcOverridesForcingV1(weapon.Model);
@@ -903,12 +917,17 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
 
             // What the game already grants each race for this item, so the build only adds what is
             // missing: every configured race, plus the base races its materials are named after.
+            // Races whose own vanilla model is switched off fall back to another race's, so they are
+            // looked up too: their entry loses the slot's bits.
+            var nativeRaces = gameData.GetNativeRaces(subject);
+            var modelsOff = VanillaModels.Off(source, nativeRaces);
             var vanillaEqdp = new Dictionary<string, ushort>();
             if (subject is GearSubject eqdpGear)
             {
                 bool accessory = SlotInfo.IsAccessory(eqdpGear.Item.Slot);
                 var races = models.Select(m => m.RaceGender)
                     .Concat(materialRaces.OfType<RaceGender>())
+                    .Concat(modelsOff)
                     .Distinct();
                 foreach (var race in races)
                     vanillaEqdp[race.RaceCode] = gameData.VanillaEqdp(race, accessory, eqdpGear.Item.ModelId);
@@ -920,8 +939,9 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
                 Subject            = subject,
                 Models             = models,
                 Materials          = materials,
-                ModelMaterialSlots = source.IdentitySlots(),
-                NativeRaces        = gameData.GetNativeRaces(subject),
+                ModelMaterialSlots = Enumerable.Range(0, materials.Count).Select(i => new ModelMaterialSlot { MaterialIndex = i }).ToList(),
+                NativeRaces        = nativeRaces,
+                VanillaModelsOff   = modelsOff,
                 MaterialRaces      = materialRaces,
                 MaterialRaceByModel = materialRaceByModel,
                 VanillaEqdp        = vanillaEqdp,

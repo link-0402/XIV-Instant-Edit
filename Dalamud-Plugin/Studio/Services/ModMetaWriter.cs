@@ -27,6 +27,16 @@ public sealed class ModGroupOut
     public required string Name { get; init; }
     public string Description { get; init; } = string.Empty;
     public bool Multi { get; init; }
+
+    /// <summary>Penumbra picks a higher priority group's entries over a lower one's.</summary>
+    public int Priority { get; init; }
+
+    /// <summary>Which options are on before the player picks: single, the option's index; multi and IMC, one bit per option.</summary>
+    public long DefaultSettings { get; init; }
+
+    /// <summary>Set for an IMC group, whose options switch attribute bits instead of carrying files.</summary>
+    public ModImcGroupOut? Imc { get; init; }
+
     public List<ModOptionOut> Options { get; } = new();
 }
 
@@ -36,6 +46,22 @@ public sealed class ModOptionOut
     public required string Name { get; init; }
     public string Description { get; init; } = string.Empty;
     public ModCarrier Contents { get; init; } = new();
+
+    /// <summary>An IMC group's option: the attribute bits it switches.</summary>
+    public ushort AttributeMask { get; init; }
+}
+
+/// <summary>
+/// The IMC entry an IMC group writes to every variant of a gear model, with the group's mask.
+/// <see cref="OnlyAttributes"/> keeps each variant's own entry and changes only its mask; otherwise
+/// every variant gets <see cref="Entry"/>, with the v0001 material the build writes to.
+/// </summary>
+public sealed class ModImcGroupOut
+{
+    public required EquipSlot      Slot           { get; init; }
+    public required ushort         SetId          { get; init; }
+    public required ModImcOverride Entry          { get; init; }
+    public bool                    OnlyAttributes { get; init; }
 }
 
 /// <summary>
@@ -184,13 +210,15 @@ public static class ModMetaWriter
     private static void WriteGroup(Utf8JsonWriter j, ModGroupOut group)
     {
         j.WriteStartObject();
-        j.WriteString("Type", group.Multi ? "Multi" : "Single");
+        j.WriteString("Type", group.Imc != null ? "Imc" : group.Multi ? "Multi" : "Single");
         j.WriteString("Id", group.Id.ToString());
         j.WriteString("Name", group.Name);
         j.WriteString("Description", group.Description);
-        j.WriteNumber("Priority", 0);
+        j.WriteNumber("Priority", group.Priority);
         j.WriteNumber("Page", 0);
-        j.WriteNumber("DefaultSettings", 0); // single: the first option; multi: none picked
+        j.WriteNumber("DefaultSettings", group.DefaultSettings);
+        if (group.Imc is { } imc)
+            WriteImcGroup(j, imc);
 
         j.WriteStartArray("Options");
         foreach (var option in group.Options)
@@ -199,11 +227,37 @@ public static class ModMetaWriter
             j.WriteString("Id", option.Id.ToString());
             j.WriteString("Name", option.Name);
             j.WriteString("Description", option.Description);
-            WriteContents(j, option.Contents);
+            if (group.Imc != null)
+                j.WriteNumber("AttributeMask", option.AttributeMask);
+            else
+                WriteContents(j, option.Contents);
             j.WriteEndObject();
         }
         j.WriteEndArray();
 
+        j.WriteEndObject();
+    }
+
+    /// <summary>An IMC group's identifier and entry, as Penumbra's ImcModGroup writes them; the mask is the options' alone.</summary>
+    private static void WriteImcGroup(Utf8JsonWriter j, ModImcGroupOut imc)
+    {
+        j.WriteBoolean("AllVariants", true);
+        j.WriteBoolean("OnlyAttributes", imc.OnlyAttributes);
+        j.WriteStartObject("Identifier");
+        j.WriteNumber("PrimaryId", imc.SetId);
+        j.WriteNumber("SecondaryId", 0);
+        j.WriteNumber("Variant", 1);
+        j.WriteString("ObjectType", SlotInfo.IsAccessory(imc.Slot) ? "Accessory" : "Equipment");
+        j.WriteString("EquipSlot", SlotInfo.LabelMap[imc.Slot]);
+        j.WriteString("BodySlot", "Unknown");
+        j.WriteEndObject();
+        j.WriteStartObject("DefaultEntry");
+        j.WriteNumber("MaterialId", 1); // the v0001 folder this tool writes to
+        j.WriteNumber("DecalId", imc.Entry.DecalId);
+        j.WriteNumber("VfxId", imc.Entry.VfxId);
+        j.WriteNumber("MaterialAnimationId", imc.Entry.MaterialAnimationId);
+        j.WriteNumber("AttributeMask", 0);
+        j.WriteNumber("SoundId", imc.Entry.SoundId);
         j.WriteEndObject();
     }
 

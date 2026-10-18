@@ -89,9 +89,16 @@ internal sealed class TextureThumbnailCache : IDisposable
             return;
         }
 
+        // Picked variant files: the first one, with how many there are.
+        if (tex.UseVariants && tex.VariantPaths.Count > 0)
+        {
+            DrawImageSet(tex.VariantPaths[0], tex.VariantPaths.Count, side);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(tex.SourcePath))
         {
-            Placeholder(side, FontAwesomeIcon.Image, Theme.Faint, "No source set");
+            Placeholder(side, FontAwesomeIcon.Image, Theme.Faint, tex.UseVariants ? "No variant files yet" : "No source set");
             return;
         }
 
@@ -114,9 +121,15 @@ internal sealed class TextureThumbnailCache : IDisposable
             return;
         }
 
-        DrawFile(listing.FirstImage, side, $"{listing.Count} variant image(s) — first shown");
+        DrawImageSet(listing.FirstImage, listing.Count, side);
+    }
+
+    /// <summary>The first of a set of variant images, with the set's image count over it.</summary>
+    private void DrawImageSet(string first, int count, float side)
+    {
+        DrawFile(first, side, $"{count} variant image(s) — first shown");
         var min = ImGui.GetItemRectMin();
-        var countText = listing.Count.ToString();
+        var countText = count.ToString();
         var size = ImGui.CalcTextSize(countText) + new Vector2(Theme.S(6), Theme.S(2));
         var draw = ImGui.GetWindowDrawList();
         draw.AddRectFilled(min, min + size, ImGui.GetColorU32(new Vector4(0, 0, 0, 0.75f)), Theme.S(3));

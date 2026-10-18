@@ -9,7 +9,8 @@ namespace InstantEdit.Studio.Models;
 /// of what the game ships: a null or missing value means "leave the vanilla value alone", so no
 /// manipulation is written for it.
 ///
-/// Eqdp is not here: it follows the configured race models and is derived at build time.
+/// Eqdp is not here: it follows the configured race models (and <see cref="VanillaModelsOff"/>)
+/// and is derived at build time.
 /// </summary>
 [Serializable]
 public class ItemMeta
@@ -32,12 +33,20 @@ public class ItemMeta
     /// </summary>
     public string? Option { get; set; }
 
-    public bool IsEmpty => EqpEntry == null && EstByRace.Count == 0 && string.IsNullOrEmpty(Option);
+    /// <summary>
+    /// Races (by race code, "0801") whose own vanilla model of this gear is switched off, so they
+    /// fall back to another race's model - the one this port writes. Ignored for a race the port
+    /// writes a model for itself.
+    /// </summary>
+    public HashSet<string> VanillaModelsOff { get; set; } = new();
+
+    public bool IsEmpty => EqpEntry == null && EstByRace.Count == 0 && string.IsNullOrEmpty(Option) && VanillaModelsOff.Count == 0;
 
     public ItemMeta Clone() => new()
     {
-        EqpEntry  = EqpEntry,
-        EstByRace = EstByRace.ToDictionary(kv => kv.Key, kv => kv.Value),
-        Option    = Option,
+        EqpEntry         = EqpEntry,
+        EstByRace        = EstByRace.ToDictionary(kv => kv.Key, kv => kv.Value),
+        Option           = Option,
+        VanillaModelsOff = new HashSet<string>(VanillaModelsOff),
     };
 }

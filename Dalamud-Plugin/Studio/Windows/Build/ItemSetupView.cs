@@ -343,7 +343,9 @@ internal sealed class ItemSetupView
             Title         = TextureTypeInfo.DisplayName(tex.Type),
             Subtitle      = text,
             SubtitleColor = color,
-            Detail        = !tex.IsShared && !tex.UseWhiteDummy && !string.IsNullOrWhiteSpace(tex.SourcePath) ? tex.SourcePath : tex.IsShared ? tex.SharedGamePath : gamePath,
+            Detail        = tex.IsShared ? tex.SharedGamePath
+                          : tex.UseVariants && !tex.UseWhiteDummy && tex.VariantPaths.Count > 0 ? string.Join(", ", tex.VariantPaths.Select(Path.GetFileName))
+                          : !tex.UseWhiteDummy && !string.IsNullOrWhiteSpace(tex.SourcePath) ? tex.SourcePath : gamePath,
             Icon          = FontAwesomeIcon.Image,
             IconColor     = Theme.Accent,
             DrawThumb     = ShowThumbs ? side => _thumbs.Draw(tex, side) : null,
@@ -374,8 +376,10 @@ internal sealed class ItemSetupView
             return ($"Shared · {Path.GetFileName(tex.SharedGamePath)}", Theme.Accent);
         if (tex.UseWhiteDummy)
             return ($"Placeholder · {DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).Label}", Theme.Accent);
+        if (tex.UseVariants && tex.VariantPaths.Count > 0)
+            return ($"Variants · {tex.VariantPaths.Count} file(s)", null);
         if (string.IsNullOrWhiteSpace(tex.SourcePath))
-            return ("No image set — drop one here", Theme.Faint);
+            return (tex.UseVariants ? "No variant files — drop images here" : "No image set — drop one here", Theme.Faint);
         if (tex.UseVariants)
             return ($"Variants · {Path.GetFileName(tex.SourcePath.TrimEnd('\\', '/'))}", null);
         return ($"Texture · {Path.GetFileName(tex.SourcePath)}", null);

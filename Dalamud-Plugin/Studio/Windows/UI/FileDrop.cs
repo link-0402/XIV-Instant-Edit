@@ -278,6 +278,19 @@ internal static class FileDrop
         return "Drop one image, or one folder of images for variants.";
     }
 
+    /// <summary>
+    /// Why paths cannot fill a texture slot that can take variants: one image is its file, and
+    /// several images, folders of images, or both are its variants.
+    /// </summary>
+    public static string? RejectForTextureSlot(DroppedPaths p)
+    {
+        if (p.Files.FirstOrDefault(f => !IsImage(f)) is { } foreign)
+            return $"{Path.GetFileName(foreign)} is not a png, jpeg, tga, dds or .tex image.";
+        if (p.Files.Count == 0 && !p.Folders.Any(f => SafeFiles(f).Any(IsImage)))
+            return p.Folders.Count == 1 ? "That folder has no images in it." : "Those folders have no images in them.";
+        return null;
+    }
+
     /// <summary>Why paths cannot replace the file at <paramref name="gamePath"/>: one file of a type that can stand in for it.</summary>
     public static string? RejectForResource(DroppedPaths p, string gamePath)
     {

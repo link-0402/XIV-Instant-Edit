@@ -126,7 +126,8 @@ internal static class PortValidator
             issues.Add(new(Severity.Info, itemTarget,
                 $"{subject.DisplayName}: no race models — the mod will only replace this {subject.KindLabel.ToLowerInvariant()}'s materials and textures."));
 
-        ValidateModels(item, gameData, models, issues);
+        ValidateModels(session, item, gameData, models, issues);
+        ValidateVanillaModelsKept(item, gameData, issues);
         ValidateMeta(item, gameData, issues);
         ValidateMaterials(item, gameData, templates, images, issues);
         ValidateWrittenMaterials(item, session, gameData, issues);
@@ -157,7 +158,7 @@ internal static class PortValidator
         }
     }
 
-    private static void ValidateModels(PortItem item, GameDataService gameData, ModelFileCache models, List<PortIssue> issues)
+    private static void ValidateModels(PortSession session, PortItem item, GameDataService gameData, ModelFileCache models, List<PortIssue> issues)
     {
         var subject = item.Subject;
         // Hair ported to a race that has no vanilla hair of this id: the game may never ask for it.
@@ -183,7 +184,7 @@ internal static class PortValidator
                         $"{who}: the build generates this model ({item.Materials.Count} empty mesh part(s)) — model it in Blender before release."));
             }
             else if (model.UseVariants)
-                ValidateModelVariants(item, model, gameData, models, target, who, issues);
+                ValidateModelVariants(session, item, model, gameData, models, target, who, issues);
             else if (string.IsNullOrWhiteSpace(model.SourcePath) && !subject.MultiRace)
                 issues.Add(new(Severity.Info, target, $"{who}: no model file set — only materials and textures will be replaced."));
             else if (string.IsNullOrWhiteSpace(model.SourcePath))
@@ -196,7 +197,7 @@ internal static class PortValidator
             {
                 if (model.IsVanillaDummy)
                     issues.Add(new(Severity.Info, target, $"{who}: still the empty dummy — model it in Blender before release."));
-                ValidateModelMaterials(item, model, model.SourcePath, model.MaterialLinks, gameData, models, target, who, issues);
+                ValidateModelMaterials(session, item, model, model.SourcePath, -1, gameData, models, target, who, issues);
             }
         }
     }
@@ -206,8 +207,8 @@ internal static class PortValidator
     /// references the material names it was exported with, so a part left on one of those loads
     /// whatever the game already has at that name — never a .mtrl this mod writes.
     /// </summary>
-    private static void ValidateModelMaterials(PortItem item, RaceModelEntry model, string path,
-        IReadOnlyList<int>? links, GameDataService gameData, ModelFileCache models, Target target, string who, List<PortIssue> issues)
+    private static void ValidateModelMaterials(PortSession session, PortItem item, RaceModelEntry model, string path,
+        int variant, GameDataService gameData, ModelFileCache models, Target target, string who, List<PortIssue> issues)
     {
         var facts = models.Read(path);
         var file = Path.GetFileName(path);
@@ -219,27 +220,42 @@ internal static class PortValidator
             return;
         }
 
+        var links = model.LinksOf(variant);
         var written = ModelMaterialLinks.WrittenNames(item.Subject, item.Materials,
             gameData.MaterialRaceFor(item.Subject, model.RaceGender));
-        if (written.Count == 0 || facts.Materials.Count == 0)
+        if (facts.Materials.Count == 0)
             return;
 
         var kept = new List<string>();
+        var gone = new List<string>();
         for (int slot = 0; slot < facts.Materials.Count; slot++)
         {
             var referenced = facts.Materials[slot];
+            if (ModelMaterialLinks.Stored(links, slot) == ModelMaterialLinks.Shared)
+            {
+                // Set to another item's material: the build writes a copy of it, if that material is still in the pack.
+                if (model.SharedLink(variant, slot) is not { } shared || session.FindShared(item, shared.Item, shared.Material) == null)
+                    gone.Add($"{slot} ({referenced.TrimStart('/')})");
+                continue;
+            }
+            if (written.Count == 0)
+                continue;
             if (ModelMaterialLinks.IsSharedFeature(referenced))
                 continue;   // a shared body material (bibo / bibopube / piercings, etc.) — not this item's to assign
 
             if (ModelMaterialLinks.Resolve(ModelMaterialLinks.Stored(links, slot), slot, facts.Materials, written) < 0
                 && ModelMaterialLinks.IndexOfName(written, referenced) < 0)
-                kept.Add($"{slot + 1} ({referenced.TrimStart('/')})");
+                kept.Add($"{slot} ({referenced.TrimStart('/')})");
         }
 
         if (kept.Count > 0)
             issues.Add(new(Severity.Warning, target,
-                $"{who}: mesh part(s) {string.Join(", ", kept)} of \"{file}\" keep a material this mod does not write — " +
+                $"{who}: mesh(es) {string.Join(", ", kept)} of \"{file}\" keep a material this mod does not write — " +
                 "the game loads whatever it already has at that name. Assign one of this item's materials to them."));
+        if (gone.Count > 0)
+            issues.Add(new(Severity.Warning, target,
+                $"{who}: mesh(es) {string.Join(", ", gone)} of \"{file}\" are set to another item's material that is no longer in the pack — " +
+                "they keep the file's own. Pick a material for them again."));
     }
 
     /// <summary>The metadata overrides: EST skeletons per race. EQP and EST entries are meant to differ
@@ -272,7 +288,7 @@ internal static class PortValidator
         }
     }
 
-    private static void ValidateModelVariants(PortItem item, RaceModelEntry model, GameDataService gameData,
+    private static void ValidateModelVariants(PortSession session, PortItem item, RaceModelEntry model, GameDataService gameData,
         ModelFileCache models, Target target, string who, List<PortIssue> issues)
     {
         if (model.VariantPaths.Count == 0)
@@ -289,7 +305,7 @@ internal static class PortValidator
             else if (!path.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase))
                 issues.Add(new(Severity.Warning, target, $"{who}: variant \"{Path.GetFileName(path)}\" is not a .mdl file."));
             else
-                ValidateModelMaterials(item, model, path, model.VariantLinks(i), gameData, models, target, who, issues);
+                ValidateModelMaterials(session, item, model, path, i, gameData, models, target, who, issues);
         }
     }
 
@@ -382,23 +398,19 @@ internal static class PortValidator
 
         if (tex.UseVariants)
         {
-            if (string.IsNullOrWhiteSpace(tex.SourcePath) || !Directory.Exists(tex.SourcePath))
+            if (tex.VariantPaths.Count > 0)
             {
-                issues.Add(new(Severity.Error, target, $"{who}: variant folder not found."));
+                var missing = tex.VariantPaths.Where(p => !File.Exists(p)).Select(Path.GetFileName).ToList();
+                if (missing.Count > 0)
+                    issues.Add(new(Severity.Error, target, $"{who}: variant file(s) not found: {string.Join(", ", missing)}."));
                 return;
             }
 
-            bool anyImage;
-            try
-            {
-                anyImage = Directory.EnumerateFiles(tex.SourcePath).Any(f => ImageExtensions.Contains(Path.GetExtension(f)));
-            }
-            catch (Exception)
-            {
-                anyImage = false;
-            }
-
-            if (!anyImage)
+            if (string.IsNullOrWhiteSpace(tex.SourcePath))
+                issues.Add(new(Severity.Error, target, $"{who}: no variant files set — add or drop at least two images."));
+            else if (!Directory.Exists(tex.SourcePath))
+                issues.Add(new(Severity.Error, target, $"{who}: variant folder not found."));
+            else if (TextureSources.VariantImages(tex).Count == 0)
                 issues.Add(new(Severity.Error, target, $"{who}: variant folder has no images."));
             return;
         }
@@ -431,6 +443,29 @@ internal static class PortValidator
             issues.Add(new(Severity.Info, target,
                 $"{who}: {facts.Size} takes the better part of a minute to compress with BC7 the first time — later builds reuse it " +
                 "unless the image changes. BC3 is far quicker, and the game's own textures of this kind are usually smaller."));
+    }
+
+    /// <summary>
+    /// Gear races that keep their own vanilla model although they would otherwise fall back to a
+    /// model this port writes (Miqo'te female next to a Midlander female model): they never see it.
+    /// </summary>
+    private static void ValidateVanillaModelsKept(PortItem item, GameDataService gameData, List<PortIssue> issues)
+    {
+        if (item.Subject is not GearSubject || item.Models.Count == 0)
+            return;
+
+        var native = gameData.GetNativeRaces(item.Subject);
+        var kept = native
+            .Where(rg => VanillaModels.CanTurnOff(item, rg) && !VanillaModels.IsOff(item, rg))
+            .Where(rg => item.Models.Exists(m => m.RaceGender == VanillaModels.FallbackRace(item, rg, native)))
+            .OrderBy(rg => rg.RaceCode, StringComparer.Ordinal)
+            .ToList();
+        if (kept.Count == 0)
+            return;
+
+        issues.Add(new(Severity.Info, new Target(TargetKind.Item, item.Key),
+            $"{item.Subject.DisplayName}: {string.Join(", ", kept.Select(rg => rg.DisplayName))} keep{(kept.Count == 1 ? "s" : "")} " +
+            "a vanilla model of their own, so your model does not show on them. Untick them under the item's races to switch it off."));
     }
 
     /// <summary>The .mtrl files an item writes: one per material, and per race copy for hair.</summary>

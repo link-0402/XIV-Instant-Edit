@@ -65,4 +65,31 @@ internal static unsafe class ModelVisibility
         hiddenFiles.ExceptWith(drawnFiles);
         return new HiddenGearModels(models, hiddenFiles);
     }
+
+    /// <summary>
+    /// The material a person's draw object keeps per gear slot for the body skin (Human.SlotSkinMaterials, the
+    /// body's _a.mtrl), by the slot's model, where none of that model's own materials is it. Penumbra lists it under
+    /// the gear model though no mesh of the model uses it. The extra body models share the same material object as
+    /// their own, so this goes by model. Call on the framework thread.
+    /// </summary>
+    public static IReadOnlyDictionary<nint, nint> SlotSkinMaterials(CharacterBase* drawObject)
+    {
+        var byModel = new Dictionary<nint, nint>();
+        if (drawObject == null || drawObject->GetModelType() != CharacterBase.ModelType.Human || drawObject->Models == null)
+            return byModel;
+        var skin = ((Human*)drawObject)->SlotSkinMaterials;
+        for (var slot = 0; slot < skin.Length && slot < drawObject->SlotCount; slot++)
+        {
+            var handle = skin[slot].Value;
+            var model = drawObject->Models[slot];
+            if (handle == null || handle->Material == null || model == null || model->Materials == null)
+                continue;
+            var own = false;
+            for (var i = 0; i < model->MaterialCount && !own; i++)
+                own = model->Materials[i] == handle->Material;
+            if (!own)
+                byModel[(nint)model] = (nint)handle->Material;
+        }
+        return byModel;
+    }
 }

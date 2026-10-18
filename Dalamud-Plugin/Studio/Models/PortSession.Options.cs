@@ -217,7 +217,7 @@ internal sealed partial class PortSession
             {
                 foreach (var tex in material.Textures.Where(t => t.UseVariants && !t.UseWhiteDummy && !t.IsShared))
                 {
-                    var files = ReadFolder(tex.SourcePath);
+                    var files = TextureSources.VariantImages(tex);
                     _variantFiles[tex] = files;
                     if (files.Count == 0)
                         continue;
@@ -255,18 +255,6 @@ internal sealed partial class PortSession
                 added = true;
             }
             return added;
-        }
-    }
-
-    private static List<string> ReadFolder(string folder)
-    {
-        try
-        {
-            return !string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder) ? TextureSources.EnumerateImages(folder).ToList() : new List<string>();
-        }
-        catch (Exception)
-        {
-            return new List<string>();
         }
     }
 

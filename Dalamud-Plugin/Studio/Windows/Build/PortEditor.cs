@@ -46,10 +46,23 @@ internal sealed class PortEditor
     // Drop rules
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The drop rule for a race model: one .mdl sets File mode, several (or a folder) make a variant group.</summary>
+    /// <summary>
+    /// The drop rule for a race model: one .mdl sets File mode, several (or a folder) make a variant
+    /// group. On a race already set to variants, whatever is dropped is added to its files — the file
+    /// stash drags one file at a time.
+    /// </summary>
     public FileDropRule ModelDropRule(PortItem item, RaceModelEntry model) => new(FileDrop.RejectForModel, paths =>
     {
         var files = FileDrop.ModelFiles(paths);
+        if (model.UseVariants && !model.UseDummy)
+        {
+            var added = files.Where(f => !model.VariantPaths.Contains(f, StringComparer.OrdinalIgnoreCase)).ToList();
+            model.VariantPaths.AddRange(added);
+            model.IsVanillaDummy = false;
+            _session.MarkDirty();
+            _session.Notify($"{item.Subject.DisplayName} / {model.RaceGender.DisplayName}: {added.Count} variant file(s) added, {model.VariantPaths.Count} in all.", Severity.Info);
+            return;
+        }
         if (files.Count == 1 && paths.Folders.Count == 0)
         {
             model.SourcePath  = files[0];
@@ -61,7 +74,7 @@ internal sealed class PortEditor
             // A dropped set replaces the list outright, so the old per-variant material
             // choices no longer belong to any file.
             model.VariantPaths = files;
-            model.VariantMaterialLinks.Clear();
+            model.ClearVariantLinks();
             model.UseVariants  = true;
             model.UseDummy     = false;
         }
@@ -82,9 +95,20 @@ internal sealed class PortEditor
         });
     }
 
-    /// <summary>Picks the image a texture slot is made from.</summary>
+    /// <summary>Picks the image a texture slot is made from, or images to add to its variants.</summary>
     public void BrowseTexture(TextureSlot tex)
     {
+        if (tex.UseVariants && !tex.UseWhiteDummy)
+        {
+            Gui.Dialogs.OpenFileDialog("Variant images", "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}", (ok, picked) =>
+            {
+                if (!ok || picked.Count == 0) return;
+                TextureSources.AddVariantImages(tex, picked);
+                _session.MarkDirty();
+            }, 64, string.Empty, false);
+            return;
+        }
+
         Gui.Dialogs.OpenFileDialog("Texture image", "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}", (ok, path) =>
         {
             if (!ok) return;

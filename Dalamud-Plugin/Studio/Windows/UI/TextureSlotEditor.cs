@@ -45,29 +45,81 @@ internal sealed class TextureSlotEditor
         return mode switch
         {
             SourceMode.File     => "One image file (png / jpeg / tga / dds), converted to .tex — or a .tex, used as it is.",
-            SourceMode.Variants => "A folder of images — each becomes one option of a switch group in the mod.",
+            SourceMode.Variants => "Several images — each becomes one option of a switch group in the mod.",
             _ => options.Count > 1
                 ? "A placeholder texture — pick which one. No source image needed."
                 : $"A placeholder texture ({DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).Label}). No source image needed.",
         };
     }
 
-    /// <summary>The drop rule for a slot's path field: an image sets File mode, a folder sets Variants.</summary>
-    public FileDropRule DropRule(TextureSlot tex) => new(FileDrop.RejectForTexture, paths =>
+    /// <summary>
+    /// The drop rule for a slot: one image sets File mode, unless the slot already takes variants.
+    /// Several images, or folders (their images), are added to the slot's variants.
+    /// </summary>
+    public FileDropRule DropRule(TextureSlot tex) => new(FileDrop.RejectForTextureSlot, paths =>
     {
-        if (paths.Folders.Count == 1)
-        {
-            tex.SourcePath = paths.Folders[0];
-            SetMode(tex, SourceMode.Variants);
-        }
-        else
+        if (paths.Files.Count == 1 && paths.Folders.Count == 0 && ModeOf(tex) != SourceMode.Variants)
         {
             tex.SourcePath = paths.Files[0];
             SetMode(tex, SourceMode.File);
+            _session.MarkDirty();
+            _session.Notify($"{TextureTypeInfo.DisplayName(tex.Type)} ← {paths.Describe()}", Severity.Info);
+            return;
         }
+
+        SetMode(tex, SourceMode.Variants);
+        int added = TextureSources.AddVariantImages(tex, paths.Folders.Concat(paths.Files));
         _session.MarkDirty();
-        _session.Notify($"{TextureTypeInfo.DisplayName(tex.Type)} ← {paths.Describe()}", Severity.Info);
+        _session.Notify($"{TextureTypeInfo.DisplayName(tex.Type)}: {added} variant image(s) added, {tex.VariantPaths.Count} in all.", Severity.Info);
     });
+
+    /// <summary>The variant files, one row each with a remove button, then a button that adds more (and takes drops).</summary>
+    private bool DrawVariantList(TextureSlot tex)
+    {
+        bool edited = false;
+        var drop = DropRule(tex);
+
+        // A set-up from before files could be picked still reads its folder until files are added.
+        if (tex.VariantPaths.Count == 0 && !string.IsNullOrWhiteSpace(tex.SourcePath))
+        {
+            ImGui.TextColored(Theme.Muted, $"folder {System.IO.Path.GetFileName(tex.SourcePath.TrimEnd('\\', '/'))}");
+            Gui.Tooltip($"{tex.SourcePath}\n\nIts images are the variants. Adding files turns them into a list of their own.");
+        }
+        else if (tex.VariantPaths.Count == 0)
+        {
+            Gui.Hint("(no files yet — add or drop images, or a folder of them)");
+        }
+
+        int remove = -1;
+        for (int i = 0; i < tex.VariantPaths.Count; i++)
+        {
+            var path = tex.VariantPaths[i];
+            ImGui.PushID(i);
+            if (Gui.IconButton(FontAwesomeIcon.Trash, "Remove", "Remove this file", danger: true))
+                remove = i;
+            ImGui.SameLine();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(System.IO.File.Exists(path) ? Theme.Muted : Theme.Bad, System.IO.Path.GetFileName(path));
+            Gui.Tooltip(path);
+            ImGui.PopID();
+        }
+        if (remove >= 0)
+        {
+            tex.VariantPaths.RemoveAt(remove);
+            edited = true;
+        }
+
+        var startFrom = tex.VariantPaths.Count > 0 ? tex.VariantPaths[^1] : tex.SourcePath;
+        Gui.PickMultipleFiles("AddTextureVariants", "Add file(s)", "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}", picked =>
+        {
+            TextureSources.AddVariantImages(tex, picked);
+            _session.MarkDirty();
+        }, startFrom);
+        Gui.Tooltip("Or drop images, or a folder of them, on this button — they are added to the list.");
+        if (FileDrop.Target(drop.Reject, out var dropped))
+            drop.OnDrop(dropped);
+        return edited;
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Compact (tree row)
@@ -119,11 +171,32 @@ internal sealed class TextureSlotEditor
         {
             edited |= DrawDummyChoice(tex, compact: true, rightW);
         }
+        else if (mode == SourceMode.Variants)
+        {
+            // One button: how many files there are; clicking adds more, and it takes drops.
+            var images = tex.VariantPaths.Count;
+            var label = images > 0 ? $"{images} image(s) · add more"
+                      : !string.IsNullOrWhiteSpace(tex.SourcePath) ? $"folder {System.IO.Path.GetFileName(tex.SourcePath.TrimEnd('\\', '/'))} · add more"
+                      : "add images, or drop them here";
+            var drop = DropRule(tex);
+            if (ImGui.Button($"{label}##addvariants", new Vector2(Math.Max(Theme.S(60), ImGui.GetContentRegionAvail().X - rightW), 0)))
+            {
+                Gui.Dialogs.OpenFileDialog("Variant images", "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}", (ok, picked) =>
+                {
+                    if (!ok || picked.Count == 0) return;
+                    TextureSources.AddVariantImages(tex, picked);
+                    _session.MarkDirty();
+                }, 64, string.Empty, false);
+            }
+            Gui.Tooltip("Each image becomes one option of a switch group in the mod. Click to add images, or drop images or a folder "
+                      + "of them here. Select the texture to remove files.");
+            if (FileDrop.Target(drop.Reject, out var dropped))
+                drop.OnDrop(dropped);
+        }
         else
         {
             string src = tex.SourcePath;
-            if (Gui.PathPicker("src", ref src, mode == SourceMode.Variants ? "folder of images — or drop one here" : "image file — or drop one here",
-                    mode == SourceMode.Variants ? PathKind.Folder : PathKind.File, "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}",
+            if (Gui.PathPicker("src", ref src, "image file — or drop one here", PathKind.File, "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}",
                     picked => { tex.SourcePath = picked; _session.MarkDirty(); }, reserveRight: rightW, drop: DropRule(tex)))
             {
                 tex.SourcePath = src;
@@ -207,12 +280,16 @@ internal sealed class TextureSlotEditor
             Gui.Label("Placeholder");
             edited |= DrawDummyChoice(tex, compact: false, 0);
         }
+        else if (mode == SourceMode.Variants)
+        {
+            Gui.Label("Files", "Each image becomes one option of a switch group in the mod, named after the file.");
+            edited |= DrawVariantList(tex);
+        }
         else
         {
-            Gui.Label(mode == SourceMode.Variants ? "Folder" : "File");
+            Gui.Label("File");
             string src = tex.SourcePath;
-            if (Gui.PathPicker("fullsrc", ref src, mode == SourceMode.Variants ? "folder of variant images" : "png / jpeg / tga / dds / .tex file",
-                    mode == SourceMode.Variants ? PathKind.Folder : PathKind.File, "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}",
+            if (Gui.PathPicker("fullsrc", ref src, "png / jpeg / tga / dds / .tex file", PathKind.File, "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}",
                     picked => { tex.SourcePath = picked; _session.MarkDirty(); }, drop: DropRule(tex)))
             {
                 tex.SourcePath = src;

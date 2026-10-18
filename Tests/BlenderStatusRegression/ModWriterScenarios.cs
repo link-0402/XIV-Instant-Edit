@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
 using InstantEdit.Studio;
+using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Models.Project;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Project;
@@ -31,6 +32,8 @@ internal static class ModWriterScenarios
             await OptionsWhoseFoldersCollideGetPlacesOfTheirOwn(root);  // writers-4
             await AFailedMergeStillRecordsTheWrittenFiles(root);        // writers-6
             await ABuildNamesTheModAsTyped(root);                       // writers-7
+            await ASwitchedOffVanillaModelLosesItsEqdpBits(root);
+            await ABuiltModelsPartTagsBecomeAToggleGroup(root);
             AStoppedWatcherIsNoticed(root);                             // glue-6
         }
         finally
@@ -173,6 +176,94 @@ internal static class ModWriterScenarios
         var meta = Path.Combine(modRoot, "Top_ Red_Blue", "meta.json");
         Require(report.FatalError == null && File.Exists(meta), $"the build makes the mod's folder from the safe name ({report.FatalError})");
         Require((string?)JsonNode.Parse(File.ReadAllText(meta))?["Name"] == typed, "and names the mod as typed in meta.json");
+    }
+
+    /// <summary>
+    /// A gear race whose own vanilla model is switched off (Miqo'te female) gets an Eqdp entry with the
+    /// slot's bits cleared, so it falls back to the port's model; the other slots' bits are not its to write.
+    /// </summary>
+    private static async Task ASwitchedOffVanillaModelLosesItsEqdpBits(string root)
+    {
+        var miqoF = new RaceGender(PlayerRace.Miqote, PlayerGender.Female);
+        var midF  = new RaceGender(PlayerRace.Midlander, PlayerGender.Female);
+        var mask  = EqdpInfo.Mask(EquipSlot.Body);
+        var modRoot = Path.Combine(root, "VanillaOff");
+        Directory.CreateDirectory(modRoot);
+        var request = new BuildRequest
+        {
+            ModRoot         = modRoot,
+            ModName         = "Vanilla Off",
+            DisplayName     = "Vanilla Off",
+            PluginDirectory = root,
+            Meta            = new ModMetaInfo(),
+            Items           = new List<ItemBuildRequest>
+            {
+                new()
+                {
+                    Subject            = new GearSubject(new GameDataService.GameItem { RowId = 1, Name = "Top", ModelId = 6000, Slot = EquipSlot.Body }),
+                    Models             = new List<RaceModelEntry>(),
+                    Materials          = new List<MaterialSetup>(),
+                    ModelMaterialSlots = new List<ModelMaterialSlot>(),
+                    NativeRaces        = new HashSet<RaceGender> { midF, miqoF },
+                    VanillaModelsOff   = new[] { miqoF },
+                    VanillaEqdp        = new Dictionary<string, ushort> { [miqoF.RaceCode] = (ushort)(mask | 0x3), [midF.RaceCode] = mask },
+                },
+            },
+        };
+        var report = await new BuildJob(request).Task;
+        Require(report.FatalError == null, $"a build with a vanilla model switched off runs ({report.FatalError})");
+        var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(modRoot, "Vanilla Off", "meta.json")))!;
+        var eqdp = (meta["DefaultData"]?["Manipulations"] as JsonArray ?? new JsonArray())
+            .Where(m => (string?)m?["Type"] == "Eqdp").Select(m => m!["Manipulation"]!).ToList();
+        Require(eqdp.Count == 1 && (string?)eqdp[0]["Race"] == "Miqote" && (string?)eqdp[0]["Gender"] == "Female"
+                && (int?)eqdp[0]["Entry"] == 0 && (int?)eqdp[0]["SetId"] == 6000 && (string?)eqdp[0]["Slot"] == "Body",
+            $"one Eqdp entry clears Miqo'te female's body bits, and nothing else is written ({eqdp.Count} entries)");
+    }
+
+    /// <summary>A body model the build copies, its parts tagged atr_tv_a and atr_tv_b, gets an IMC group with both parts in it.</summary>
+    private static async Task ABuiltModelsPartTagsBecomeAToggleGroup(string root)
+    {
+        var midF = new RaceGender(PlayerRace.Midlander, PlayerGender.Female);
+        var modRoot = Path.Combine(root, "PartToggles");
+        Directory.CreateDirectory(modRoot);
+        var source = Path.Combine(root, "tagged_top.mdl");
+        File.WriteAllBytes(source, ModCheckFixtures.Mdl(["/mt_c0201e6000_top_a.mtrl"], [
+            new ModCheckFixtures.Mesh(0, new ModCheckFixtures.Submesh("atr_tv_a"), new ModCheckFixtures.Submesh("atr_tv_b", "atr_top")),
+        ]));
+        ModImcOverride Variant(byte variant) => new()
+        {
+            Slot = EquipSlot.Body, SetId = 6000, Variant = variant, DecalId = 0, VfxId = 0, MaterialAnimationId = 0, AttributeMask = 0x3FF, SoundId = 0,
+        };
+        var request = new BuildRequest
+        {
+            ModRoot         = modRoot,
+            ModName         = "Part Toggles",
+            DisplayName     = "Part Toggles",
+            PluginDirectory = root,
+            Meta            = new ModMetaInfo(),
+            Items           = new List<ItemBuildRequest>
+            {
+                new()
+                {
+                    Subject            = new GearSubject(new GameDataService.GameItem { RowId = 1, Name = "Top", ModelId = 6000, Slot = EquipSlot.Body }),
+                    Models             = new List<RaceModelEntry> { new() { Race = midF.Race, Gender = midF.Gender, SourcePath = source } },
+                    Materials          = new List<MaterialSetup>(),
+                    ModelMaterialSlots = new List<ModelMaterialSlot>(),
+                    NativeRaces        = new HashSet<RaceGender> { midF },
+                    ImcOverrides       = new List<ModImcOverride> { Variant(1), Variant(2) },
+                },
+            },
+        };
+        var report = await new BuildJob(request).Task;
+        Require(report.FatalError == null, $"a build of a tagged model runs ({report.FatalError})");
+        var meta = JsonNode.Parse(File.ReadAllText(Path.Combine(modRoot, "Part Toggles", "meta.json")))!;
+        var group = (meta["Groups"] as JsonArray)?.SingleOrDefault();
+        Require((string?)group?["Type"] == "Imc" && (string?)group?["Name"] == "Top Parts" && (bool?)group?["OnlyAttributes"] == true,
+            "the model's part tags make an IMC group, which changes only the mask when the item writes no materials");
+        Require((group?["Options"] as JsonArray)?.Select(o => ((string?)o?["Name"], (int?)o?["AttributeMask"])).SequenceEqual(new (string?, int?)[] { ("A", 1), ("B", 2) }) == true
+                && (int?)group?["DefaultSettings"] == 3,
+            "with one option per tag, both on");
+        Require(meta["DefaultData"]?["Manipulations"] == null, "and no variant overrides are written for an item without materials");
     }
 
     private static void AStoppedWatcherIsNoticed(string root)

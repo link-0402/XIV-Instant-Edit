@@ -10,6 +10,12 @@ namespace InstantEdit.Studio.Models;
 [Serializable]
 public class MaterialSetup
 {
+    /// <summary>
+    /// Stays the same through renames and reordering, so a mesh part of another item can be set to
+    /// this material (see <see cref="SharedMaterialLink"/>). A copy pasted as a material of its own gets a new one.
+    /// </summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+
     /// <summary>Display name of the material.</summary>
     public string Name { get; set; } = "Material";
 
@@ -26,6 +32,7 @@ public class MaterialSetup
     {
         var copy = new MaterialSetup
         {
+            Id         = Id,
             Name       = Name,
             ShaderType = ShaderType,
             Option     = Option,
@@ -108,6 +115,13 @@ public class TextureSlot
     public bool UseVariants { get; set; }
 
     /// <summary>
+    /// The image files that become variants when <see cref="UseVariants"/> is set. Empty reads the
+    /// images of the folder in <see cref="SourcePath"/> instead, as set-ups did before files could be
+    /// picked — see <see cref="Services.TextureSources.VariantImages"/>.
+    /// </summary>
+    public List<string> VariantPaths { get; set; } = new();
+
+    /// <summary>
     /// When true, this slot is filled with a placeholder texture instead of a local file (or
     /// variant folder) — a quick way to bind a slot without a source image of your own. Which
     /// placeholder depends on the texture role: a mask can use a white or a metal square; a normal
@@ -157,6 +171,7 @@ public class TextureSlot
         CompressBc7     = CompressBc7,
         CompressionMode = CompressionMode,
         UseVariants    = UseVariants,
+        VariantPaths   = new List<string>(VariantPaths),
         UseWhiteDummy  = UseWhiteDummy,
         DummyPreset    = DummyPreset,
     };

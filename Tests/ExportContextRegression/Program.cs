@@ -185,6 +185,7 @@ try
     Scenarios.Run(() => LibraryFilterScenarios.Run(testRoot));
     Scenarios.Run(() => ModLibraryScenarios.Run(testRoot));
     Scenarios.Run(() => ModBuildScenarios.Run(testRoot));
+    Scenarios.Run(MeshMaterialScenarios.Run);
     Scenarios.Run(MaterialEditorScenarios.RunRows);
     Scenarios.Run(MaterialEditorScenarios.RunPackages);
     Scenarios.Run(MaterialEditorScenarios.RunLabels);

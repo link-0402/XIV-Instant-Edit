@@ -40,6 +40,12 @@ internal sealed class ItemBuildRequest
     public required HashSet<RaceGender>     NativeRaces        { get; init; }
 
     /// <summary>
+    /// Native races whose own vanilla model the user switched off (gear): their Eqdp entry loses the
+    /// slot's model and material bits, so they fall back to another race's model, like a race without one.
+    /// </summary>
+    public IReadOnlyList<RaceGender>        VanillaModelsOff   { get; init; } = Array.Empty<RaceGender>();
+
+    /// <summary>
     /// The races a copy of each material is written for: for gear one per gender, named after that
     /// gender's base race, plus any race the game gives a material of its own; for hair every
     /// configured race; for anything else a single entry. Resolved on the render thread because the
@@ -59,6 +65,8 @@ internal sealed class ItemBuildRequest
     /// missing here falls back to itself.
     /// </summary>
     public IReadOnlyDictionary<string, RaceGender> MaterialRaceByModel { get; init; } = new Dictionary<string, RaceGender>();
+
+    /// <summary>Every IMC variant of the item pointed at v0001: written when the item has materials, and read for its part toggle group either way.</summary>
     public List<ModImcOverride>?            ImcOverrides       { get; init; }
 
     /// <summary>Equipment parameters the user changed from the game's own (gear only).</summary>

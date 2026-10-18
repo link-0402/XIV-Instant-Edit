@@ -56,6 +56,13 @@ internal sealed class StashView
     private bool _openRemove;
     private string _message = string.Empty;
 
+    /// <summary>Rows marked to be dragged together, in the order they were marked: files of one kind only.</summary>
+    private readonly StashMarks _marked = new();
+
+    /// <summary>The markable rows in the order drawn: last frame's, for Shift + click ranges, and this frame's.</summary>
+    private List<(string File, StashKind Kind)> _lastOrder = new();
+    private List<(string File, StashKind Kind)> _rowOrder = new();
+
     public StashView(StudioHost host, TextureThumbnailCache thumbnails)
     {
         _host = host;
@@ -80,6 +87,7 @@ internal sealed class StashView
         _scan = _manifest == null ? Task.Run(() => SafeScan(folder)) : null;
         _listing.Invalidate();   // the list may have gained it
         _message = string.Empty;
+        _marked.Clear();
         _exists.Clear();
         _imageCounts.Clear();
         _thumbnails.ForgetMemoryEntries();
@@ -283,6 +291,9 @@ internal sealed class StashView
             return;
         }
 
+        (_lastOrder, _rowOrder) = (_rowOrder, _lastOrder);
+        _rowOrder.Clear();
+
         DrawHeader(_folder, _manifest);
         DrawTabs(_manifest);
         ImGui.SetNextItemWidth(-1);
@@ -318,6 +329,17 @@ internal sealed class StashView
             Reveal(folder);
 
         ImGui.TextColored(Theme.Accent, "Drag any row onto a texture or model tile in the build window, or in a mod window.");
+        if (_marked.Count > 1)
+        {
+            ImGui.TextColored(Theme.Muted, $"{_marked.Count} files marked — drag one of them to drag them all.");
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Clear##stashunmark"))
+                _marked.Clear();
+        }
+        else
+        {
+            Gui.Hint("Ctrl or Shift + click marks several files of one kind, to drag them together.");
+        }
         if (manifest.Truncated)
             ImGui.TextColored(Theme.Warn, $"This folder holds more than {StashManifest.MaxScanFiles} files; only the first {StashManifest.MaxScanFiles} are listed.");
         if (!string.IsNullOrEmpty(_message))
@@ -442,7 +464,7 @@ internal sealed class StashView
                 PurposeLabel(entry.Purpose), byLayout?.Contains(entry) == true ? "matched by layout" : string.Empty,
                 entry.Detail, string.Join(", ", entry.Groups),
             }.Where(s => s.Length > 0));
-            DrawRow(Path.GetFileName(entry.Path), detail, DroppedPaths.File(full), full, false, FontAwesomeIcon.File, entry.NeedsConversion, entry.Path);
+            DrawRow(Path.GetFileName(entry.Path), detail, DroppedPaths.File(full), full, false, FontAwesomeIcon.File, entry.NeedsConversion, entry.Path, StashKind.Texture);
         }
     }
 
@@ -513,16 +535,23 @@ internal sealed class StashView
                 _                   => FontAwesomeIcon.File,
             };
             DrawRow(Path.GetFileName(entry.Path), detail, DroppedPaths.File(full), entry.Kind == StashKind.Texture ? full : null,
-                false, icon, entry.NeedsConversion, entry.Path);
+                false, icon, entry.NeedsConversion, entry.Path, entry.Kind);
         }
     }
 
-    /// <summary>One draggable row: thumbnail or icon, name, detail, and a reveal button.</summary>
+    /// <summary>
+    /// One draggable row: thumbnail or icon, name, detail, and a reveal button. A file row of
+    /// <paramref name="kind"/> can be marked; dragging a marked row drags every marked file.
+    /// </summary>
     private void DrawRow(string label, string detail, DroppedPaths paths, string? preview, bool previewIsFolder, FontAwesomeIcon icon,
-        bool warn, string? id = null)
+        bool warn, string? id = null, StashKind? kind = null)
     {
         var target = paths.Folders.Concat(paths.Files).First();
         bool exists = Exists(target, previewIsFolder);
+        var file = kind != null && paths.Folders.Count == 0 && paths.Files.Count == 1 ? paths.Files[0] : null;
+        bool marked = file != null && _marked.Contains(file, kind!.Value);
+        if (file != null)
+            _rowOrder.Add((file, kind!.Value));
         ImGui.PushID(id ?? target);
 
         float thumb = ImGui.GetFrameHeight() * 1.6f;
@@ -533,10 +562,17 @@ internal sealed class StashView
         ImGui.SameLine();
 
         ImGui.BeginGroup();
-        ImGui.Selectable($"{label}##row", false, ImGuiSelectableFlags.None,
-            new Vector2(ImGui.GetContentRegionAvail().X - ImGui.GetFrameHeight() - ImGui.GetStyle().ItemSpacing.X, 0));
+        if (ImGui.Selectable($"{label}##row", marked, ImGuiSelectableFlags.None,
+                new Vector2(ImGui.GetContentRegionAvail().X - ImGui.GetFrameHeight() - ImGui.GetStyle().ItemSpacing.X, 0)) && file != null)
+            _marked.Click(file, kind!.Value, ImGui.GetIO().KeyCtrl, ImGui.GetIO().KeyShift, _lastOrder);
         if (exists)
-            FileDrop.Source(paths, label);
+        {
+            var together = marked && _marked.Count > 1 ? _marked.Files.Where(f => Exists(f, false)).ToList() : null;
+            if (together is { Count: > 1 })
+                FileDrop.Source(new DroppedPaths(together, Array.Empty<string>()), $"{together.Count} files");
+            else
+                FileDrop.Source(paths, label);
+        }
         if (ImGui.IsItemHovered() && !ImGui.IsMouseDragging(ImGuiMouseButton.Left))
             ImGui.SetTooltip(exists ? $"{target}\n\nDrag onto a tile in the build window or a mod window." : $"{target}\n\nThis file is gone.");
         ImGui.SameLine();
@@ -574,7 +610,7 @@ internal sealed class StashView
                 foreach (var purpose in PurposeOrder)
                 {
                     if (!full.TryGetValue(purpose, out var path)) continue;
-                    DrawRow(Path.GetFileName(path), PurposeLabel(purpose), DroppedPaths.File(path), path, false, FontAwesomeIcon.Image, false, $"{i}/{purpose}");
+                    DrawRow(Path.GetFileName(path), PurposeLabel(purpose), DroppedPaths.File(path), path, false, FontAwesomeIcon.Image, false, $"{i}/{purpose}", StashKind.Texture);
                 }
 
                 using (Gui.Disabled(target == null))

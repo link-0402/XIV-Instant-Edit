@@ -5,6 +5,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\Dalamud-Plugin\InstantEdit.csproj" />
     <ProjectReference Include="..\TestSupport\TestSupport.csproj" />
+    <Compile Include="..\ExportContextRegression\Support\ModCheckFixtures.cs" Link="Support\ModCheckFixtures.cs" />
     <Reference Include="Dalamud">
       <HintPath>$(DalamudDevPath)\Dalamud.dll</HintPath>
       <Private>true</Private>

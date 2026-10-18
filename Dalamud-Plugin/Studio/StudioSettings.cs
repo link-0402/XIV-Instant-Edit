@@ -42,6 +42,12 @@ public sealed class StudioSettings
     /// <summary>Per-race model set-ups keyed by item row ID.</summary>
     public Dictionary<uint, List<RaceModelEntry>> ModelsByItem { get; set; } = new();
 
+    /// <summary>
+    /// How <see cref="RaceModelEntry.MaterialLinks"/> are counted: 0 = per material slot of the file
+    /// (set-ups saved before meshes got their own rows), 1 = per mesh. Converted on load.
+    /// </summary>
+    public int MaterialLinkLayout { get; set; }
+
     /// <summary>Dummy-model material slot assignments keyed by item row ID.</summary>
     public Dictionary<uint, List<ModelMaterialSlot>> ModelMaterialSlotsByItem { get; set; } = new();
 

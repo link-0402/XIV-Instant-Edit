@@ -134,7 +134,8 @@ internal sealed class ModelInspector
         var nativeRaces = _host.GameData.GetNativeRaces(subject);
         ImGui.TextColored(Theme.Muted, subject is GearSubject ? "Races with their own model" : $"Races that have {subject.KindLabel.ToLowerInvariant()} {((FeatureSubject)subject).Id}");
         Gui.Tooltip(subject is GearSubject
-            ? "Races not listed fall back to another race's model. Adding a model for one of them adds an Eqdp override automatically."
+            ? "Races not listed fall back to another race's model. Adding a model for one of them adds an Eqdp override automatically.\n\n"
+            + "Untick a race to switch its own model off, so it falls back too."
             : "Adding a race that does not ship this id may not work: the game might never ask for the file.");
 
         if (ImGui.BeginTable("##NativeRaces", 2, ImGuiTableFlags.SizingStretchSame))
@@ -143,12 +144,41 @@ internal sealed class ModelInspector
             {
                 ImGui.TableNextColumn();
                 bool native = nativeRaces.Contains(rg);
-                Gui.Icon(native ? FontAwesomeIcon.Check : FontAwesomeIcon.Minus, native ? Theme.Good : Theme.Faint);
-                ImGui.SameLine();
-                ImGui.TextColored(native ? Theme.Muted : Theme.Faint, rg.DisplayName);
+                if (native && subject is GearSubject)
+                    DrawVanillaModelTick(item, rg, nativeRaces);
+                else
+                {
+                    Gui.Icon(native ? FontAwesomeIcon.Check : FontAwesomeIcon.Minus, native ? Theme.Good : Theme.Faint);
+                    ImGui.SameLine();
+                    ImGui.TextColored(native ? Theme.Muted : Theme.Faint, rg.DisplayName);
+                }
             }
             ImGui.EndTable();
         }
+    }
+
+    /// <summary>
+    /// A race with its own vanilla model of this gear: ticked keeps it, unticked switches it off so
+    /// the race falls back to another race's model. A race the port writes a model for is fixed.
+    /// </summary>
+    private void DrawVanillaModelTick(PortItem item, RaceGender rg, HashSet<RaceGender> nativeRaces)
+    {
+        bool writes = item.Models.Exists(m => m.RaceGender == rg);
+        bool on = !VanillaModels.IsOff(item, rg);
+        using (Gui.Disabled(!VanillaModels.CanTurnOff(item, rg)))
+        {
+            if (!on) ImGui.PushStyleColor(ImGuiCol.Text, Theme.Accent);
+            if (ImGui.Checkbox($"{rg.DisplayName}##vanilla{rg.RaceCode}", ref on))
+                _session.SetVanillaModel(item, rg, on);
+            if (!on) ImGui.PopStyleColor();
+        }
+        Gui.Tooltip(writes
+            ? "This mod writes this race's model."
+            : rg.RaceCode == "0101"
+                ? "Every race falls back to this one, so it keeps its model."
+                : on
+                    ? $"Uses its own vanilla model. Untick to use {VanillaModels.FallbackRace(item, rg, nativeRaces).DisplayName}'s."
+                    : $"Uses {VanillaModels.FallbackRace(item, rg, nativeRaces).DisplayName}'s model. An Eqdp entry is added.");
     }
 
     /// <summary>
@@ -285,8 +315,7 @@ internal sealed class ModelInspector
             return;
 
         ImGui.Spacing();
-        DrawMaterialWiring(item, model, model.SourcePath, model.MaterialLinks,
-            (slot, value) => ModelMaterialLinks.Store(model.MaterialLinks, slot, value), "file");
+        DrawMaterialWiring(item, model, model.SourcePath, -1, "file");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -298,11 +327,12 @@ internal sealed class ModelInspector
     /// made anywhere else references the names it was exported with, so without this the .mtrl files
     /// the build writes would sit in the mod unused.
     /// </summary>
-    private void DrawMaterialWiring(PortItem item, RaceModelEntry model, string path,
-        IReadOnlyList<int>? stored, Action<int, int> onSet, string id)
+    private void DrawMaterialWiring(PortItem item, RaceModelEntry model, string path, int variant, string id)
     {
+        var stored = model.LinksOf(variant);
         var facts = _host.ModelFiles.Read(path);
-        Gui.Label("Materials in this file", "One row per material slot of the file \u2014 the mesh parts reference these by name.");
+        Gui.Label("Meshes in this file", "One row per mesh of the file, numbered as Penumbra and Blender number them. " +
+                                         "Meshes that share a material can be given different ones \u2014 the build splits it for them.");
 
         if (!facts.Ok)
         {
@@ -313,15 +343,19 @@ internal sealed class ModelInspector
 
         if (facts.Materials.Count == 0)
         {
-            Gui.Hint("(this file has no material slots)");
+            Gui.Hint("(this file has no meshes)");
             return;
         }
 
         var written = ModelMaterialLinks.WrittenNames(item.Subject, item.Materials,
             _host.GameData.MaterialRaceFor(item.Subject, model.RaceGender));
-        if (written.Count == 0)
+        // Materials of the pack's other items, listed after this item's own: the build writes a copy
+        // of the one picked for this item, sharing the original's textures.
+        var sharable = _session.SharableMaterials(item);
+        if (written.Count == 0 && sharable.Count == 0)
             Gui.HintWrapped("This item has no materials yet \u2014 add some and they can be assigned here.");
 
+        int sharedParts = 0;
         ImGui.PushID(id);
         if (ImGui.BeginTable("##wiring", 2, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.PadOuterX))
         {
@@ -338,41 +372,91 @@ internal sealed class ModelInspector
                 ImGui.TableNextRow();
                 ImGui.PushID(slot);
 
+                // A part set to another item's material: which one, and whether it is still in the pack.
+                var sharedLink = link == ModelMaterialLinks.Shared ? model.SharedLink(variant, slot) : null;
+                int sharedChoice = sharedLink == null ? -1
+                    : sharable.FindIndex(s => s.Item.Key == sharedLink.Item && s.Material.Id == sharedLink.Material);
+                bool sharedGone = link == ModelMaterialLinks.Shared && sharedChoice < 0;
+                if (sharedChoice >= 0)
+                    sharedParts++;
+
                 ImGui.TableNextColumn();
                 ImGui.AlignTextToFramePadding();
                 bool sharedFeature = ModelMaterialLinks.IsSharedFeature(referenced);
-                bool kept = resolved < 0 && !sharedFeature;
-                ImGui.TextColored(kept && written.Count > 0 ? Theme.Warn : Theme.Muted, Short(referenced));
-                Gui.Tooltip($"Mesh part {slot + 1} references {referenced}."
-                         + (kept && written.Count > 0 ? "\n\nLeft as it is, so this mod does not supply its material."
+                bool kept = resolved < 0 && sharedChoice < 0 && !sharedFeature;
+                bool warn = kept && (written.Count > 0 || sharedGone);
+                ImGui.TextColored(Theme.Faint, $"{slot}");
+                ImGui.SameLine();
+                ImGui.TextColored(warn ? Theme.Warn : Theme.Muted, Short(referenced));
+                Gui.Tooltip($"Mesh {slot} references {referenced}."
+                         + (warn ? "\n\nLeft as it is, so this mod does not supply its material."
                           : sharedFeature ? "\n\nA shared body material (bibo / bibopube / piercings, etc.) — left alone on purpose."
                           : string.Empty));
 
                 // The options read as what happens, so "Automatic" says which material it lands on.
                 int auto = ModelMaterialLinks.Resolve(ModelMaterialLinks.Auto, slot, facts.Materials, written);
-                var options = new string[written.Count + 2];
-                options[0] = auto >= 0 ? $"Automatic \u2192 {Short(written[auto])}" : "Automatic \u2014 keep";
-                options[1] = "Keep the file's own";
-                for (int m = 0; m < written.Count; m++)
-                    options[m + 2] = Short(written[m]);
+                int count = 2 + written.Count + sharable.Count;
+                string Option(int i) => i switch
+                {
+                    0 => auto >= 0 ? $"Automatic \u2192 {Short(written[auto])}" : "Automatic \u2014 keep",
+                    1 => "Keep the file's own",
+                    _ when i - 2 < written.Count => Short(written[i - 2]),
+                    _ => SharedName(item, sharable[i - 2 - written.Count]),
+                };
 
                 int choice = link == ModelMaterialLinks.Auto ? 0
+                           : link == ModelMaterialLinks.Shared ? (sharedChoice >= 0 ? 2 + written.Count + sharedChoice : -1)
                            : link == ModelMaterialLinks.Keep || link >= written.Count ? 1
                            : link + 2;
 
                 ImGui.TableNextColumn();
                 ImGui.SetNextItemWidth(-1);
-                if (ComboWheel.Combo("##uses", ref choice, options))
+                int picked = choice;
+                if (ImGui.BeginCombo("##uses", choice >= 0 ? Option(choice) : "Gone \u2014 keeps the file's own", ImGuiComboFlags.HeightLarge))
                 {
-                    onSet(slot, choice switch
+                    for (int i = 0; i < 2 + written.Count; i++)
+                        if (ImGui.Selectable($"{Option(i)}##o{i}", i == choice))
+                            picked = i;
+
+                    // Other items' materials after a separator, each with the item it comes from.
+                    if (sharable.Count > 0)
                     {
-                        0 => ModelMaterialLinks.Auto,
-                        1 => ModelMaterialLinks.Keep,
-                        _ => choice - 2,
-                    });
+                        ImGui.Separator();
+                        for (int s = 0; s < sharable.Count; s++)
+                        {
+                            int i = 2 + written.Count + s;
+                            if (ImGui.Selectable($"{Option(i)}##o{i}", i == choice))
+                                picked = i;
+                        }
+                    }
+                    ImGui.EndCombo();
+                }
+                else
+                {
+                    ComboWheel.Scroll(ref picked, count);
+                }
+
+                if (picked != choice && picked >= 0)
+                {
+                    if (picked == 0)
+                        model.SetLink(variant, slot, ModelMaterialLinks.Auto);
+                    else if (picked == 1)
+                        model.SetLink(variant, slot, ModelMaterialLinks.Keep);
+                    else if (picked - 2 < written.Count)
+                        model.SetLink(variant, slot, picked - 2);
+                    else
+                    {
+                        var (other, material) = sharable[picked - 2 - written.Count];
+                        model.SetSharedLink(variant, slot, other.Key, material.Id);
+                    }
                     _session.MarkDirty();
                 }
-                Gui.Tooltip(resolved >= 0
+                Gui.Tooltip(sharedChoice >= 0
+                    ? $"The build writes a copy of {sharable[sharedChoice].Material.Name} from {sharable[sharedChoice].Item.Subject.DisplayName} " +
+                      "for this item, in its own folder, and puts it into this mesh part. The copy shares the original's textures and settings."
+                    : sharedGone
+                    ? "Set to a material of another item that is no longer in the pack, so this mesh part keeps the name the file was made with."
+                    : resolved >= 0
                     ? $"The build writes {written[resolved]} into this mesh part."
                     : "This mesh part keeps the name the file was made with.");
 
@@ -383,13 +467,17 @@ internal sealed class ModelInspector
         ImGui.PopID();
 
         var plan = ModelMaterialLinks.Plan(facts.Materials, stored, written);
-        int changes = ModelMaterialLinks.CountChanges(facts.Materials, plan);
+        int changes = ModelMaterialLinks.CountChanges(facts.Materials, plan) + sharedParts;
         ImGui.TextColored(changes > 0 ? Theme.Muted : Theme.Faint,
             changes > 0
-                ? $"{changes} of {facts.Materials.Count} mesh part(s) repointed on build"
+                ? $"{changes} of {facts.Materials.Count} mesh(es) repointed on build"
                 : "the file is copied with its own material names");
         Gui.Tooltip("The file on disk is never modified \u2014 the copy written into the mod is.");
     }
+
+    /// <summary>Another item's material as the wiring lists it: the name its copy for <paramref name="item"/> starts from, and that item.</summary>
+    private static string SharedName(PortItem item, (PortItem Item, MaterialSetup Material) shared)
+        => $"{MaterialCopy.RetargetName(shared.Material.Name, shared.Item.Subject, item.Subject)}  ({shared.Item.Subject.DisplayName})";
 
     /// <summary>A material reference as the rows show it: no leading slash, no extension.</summary>
     private static string Short(string reference)
@@ -467,9 +555,7 @@ internal sealed class ModelInspector
 
             if (open)
             {
-                int index = i;
-                DrawMaterialWiring(item, model, path, model.VariantLinks(index),
-                    (slot, value) => ModelMaterialLinks.Store(model.EditVariantLinks(index), slot, value), "variant");
+                DrawMaterialWiring(item, model, path, i, "variant");
                 ImGui.TreePop();
             }
             ImGui.PopID();
@@ -488,7 +574,7 @@ internal sealed class ModelInspector
             model.IsVanillaDummy = false;
             _session.MarkDirty();
         }, startFrom);
-        Gui.Tooltip("Or drop .mdl files / a folder of them on this button — dropping replaces the list.");
+        Gui.Tooltip("Or drop .mdl files / a folder of them on this button — they are added to the list.");
         if (FileDrop.Target(drop.Reject, out var dropped))
             drop.OnDrop(dropped);
     }

@@ -37,8 +37,9 @@ internal static class MeshSlotFolding
         foreach (var slot in slots)
         {
             int idx = Math.Clamp(slot.MaterialIndex, 0, materials.Count - 1);
-            used.Add(idx);
             var copy = materials[idx].Clone();
+            if (!used.Add(idx))
+                copy.Id = Guid.NewGuid();   // a second slot of the same material is a material of its own now
             if (!string.IsNullOrWhiteSpace(slot.NameOverride))
                 copy.Name = slot.NameOverride;
             folded.Add(copy);

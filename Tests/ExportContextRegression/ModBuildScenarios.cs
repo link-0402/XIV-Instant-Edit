@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
+using InstantEdit.Studio.Services.Stash;
 using static InstantEdit.TestSupport.Assertions;
 
 /// <summary>
@@ -28,8 +29,88 @@ internal static class ModBuildScenarios
         ModWindowsTakeWeaponsNotAnimations();
         VariantNamesAreBuildWide();              // writers-3
         MaterialLinksFollowTheirMaterials();        // models-1
+        SharedMaterialsAreCopiedForTheItem();
+        TextureVariantsArePickedFiles(root);
+        StashRowsAreMarkedByKind();
         SamePathInAnotherOptionIsNoConflict();      // models-3
         FolderNamesWindowsCanStore();               // writers-7
+        VanillaModelsCanBeSwitchedOff();
+        PartTagsMakeAnImcGroup(root);
+    }
+
+    private static ModImcOverride Variant(EquipSlot slot, byte variant, byte vfx = 0)
+        => new() { Slot = slot, SetId = 6000, Variant = variant, DecalId = 0, VfxId = vfx, MaterialAnimationId = 0, AttributeMask = 0x3FF, SoundId = 0 };
+
+    /// <summary>
+    /// A gear model's parts tagged with the slot's variant attributes get an IMC group, as the Blender
+    /// add-on's Attribute Toggle Group makes: one option per tag, all on, the group over the mod's own entries.
+    /// </summary>
+    private static void PartTagsMakeAnImcGroup(string root)
+    {
+        var variants = new List<ModImcOverride> { Variant(EquipSlot.Body, 1), Variant(EquipSlot.Body, 2) };
+        var plan = PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000,
+            new[] { "atr_tv_c", "atr_tv_a", "atr_nv_b", "atr_top", "atr_tv_k", "atrx_glow" }, variants, forcesMaterial: true, priority: 1);
+        var group = plan.Group;
+        Require(group is { Imc: { OnlyAttributes: false, Slot: EquipSlot.Body, SetId: 6000 }, Priority: 1, DefaultSettings: 3 } && plan.Problem == null,
+            "a body's atr_tv_ tags make an IMC group with every part on, which points the variants at v0001 like the rest of the build");
+        Require(group!.Options.Select(o => (o.Name, o.AttributeMask)).SequenceEqual(new[] { ("A", (ushort)1), ("C", (ushort)4) }),
+            "one option per tag, named after its suffix and switching that suffix's bit");
+        Require(plan.OtherSlotTags.SequenceEqual(new[] { "atr_nv_b" }) && PartToggleGroups.Renamed(EquipSlot.Body, "atr_nv_b") == "atr_tv_b",
+            "another slot's tag is reported with the name it needs; the game's own and custom tags are left alone");
+        Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, variants, true, 1).Group!.Id == group.Id,
+            "the group keeps its id from build to build");
+
+        var mixed = new List<ModImcOverride> { Variant(EquipSlot.Body, 1), Variant(EquipSlot.Body, 2, vfx: 3) };
+        Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, mixed, true, 1) is { Group: null, Problem: not null },
+            "variants with different effects get no group when the build points them at v0001: it would undo them");
+        Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, mixed, false, 1).Group?.Imc?.OnlyAttributes == true,
+            "without materials of its own the group changes only the mask, and every variant keeps the game's entry");
+        Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, null, false, 1) is { Group: null, Problem: not null },
+            "an item without an IMC file gets no group, and says why");
+        Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_top" }, variants, true, 1) is { Group: null, Problem: null },
+            "a model without part tags gets no group and no warning");
+        Require(PartToggleGroups.Plan("Ring Parts", EquipSlot.RingLeft, 6000, new[] { "atr_rv_b" }, new List<ModImcOverride> { Variant(EquipSlot.RingLeft, 1) }, true, 1).Group != null,
+            "a left ring toggles atr_rv_ tags, as both rings do in game");
+
+        var mod = Path.Combine(root, "Part Toggles");
+        Directory.CreateDirectory(mod);
+        ModMetaWriter.Write(mod, "Part Toggles", new ModCarrier(), new[] { group });
+        var written = JsonNode.Parse(File.ReadAllText(Path.Combine(mod, "meta.json")))!["Groups"]![0]!;
+        Require((string?)written["Type"] == "Imc" && (bool?)written["AllVariants"] == true && (bool?)written["OnlyAttributes"] == false
+                && (int?)written["Priority"] == 1 && (int?)written["DefaultSettings"] == 3,
+            "the group is written as Penumbra's IMC group, over every variant");
+        var identifier = written["Identifier"]!;
+        Require((int?)identifier["PrimaryId"] == 6000 && (string?)identifier["ObjectType"] == "Equipment" && (string?)identifier["EquipSlot"] == "Body"
+                && (string?)identifier["BodySlot"] == "Unknown" && (int?)identifier["Variant"] == 1,
+            "its identifier names the item's set and slot");
+        Require((int?)written["DefaultEntry"]?["MaterialId"] == 1 && (int?)written["DefaultEntry"]?["AttributeMask"] == 0,
+            "its entry points at v0001 and leaves the mask to the options");
+        Require((int?)written["Options"]?[1]?["AttributeMask"] == 4 && written["Options"]?[1]?["Files"] == null,
+            "its options carry masks and no files");
+    }
+
+    /// <summary>
+    /// A gear race with its own vanilla model (Miqo'te female) can be switched off, so it falls back
+    /// to the Midlander female model the port writes (the build's Eqdp entry: BlenderStatusRegression).
+    /// </summary>
+    private static void VanillaModelsCanBeSwitchedOff()
+    {
+        var miqoF = new RaceGender(PlayerRace.Miqote, PlayerGender.Female);
+        var midF  = new RaceGender(PlayerRace.Midlander, PlayerGender.Female);
+        var midM  = RaceInfo.BaseFor(PlayerGender.Male);
+        var native = new HashSet<RaceGender> { midM, midF, miqoF };
+
+        var item = new PortItem(new GearSubject(new GameDataService.GameItem { RowId = 1, Name = "Top", ModelId = 6000, Slot = EquipSlot.Body }));
+        item.Models.Add(new RaceModelEntry { Race = midF.Race, Gender = midF.Gender });
+        Require(!VanillaModels.IsOff(item, miqoF), "every vanilla model starts on");
+        Require(!VanillaModels.CanTurnOff(item, midF) && !VanillaModels.CanTurnOff(item, midM),
+            "a race the port writes, and Midlander male, can't be switched off");
+
+        item.Meta.VanillaModelsOff.Add(miqoF.RaceCode);
+        Require(VanillaModels.IsOff(item, miqoF) && VanillaModels.Off(item, native).SequenceEqual(new[] { miqoF }),
+            "unticked, Miqo'te female's vanilla model is off");
+        Require(VanillaModels.FallbackRace(item, miqoF, native) == midF, "and it falls back to the port's Midlander female model");
+        Require(item.Meta.Clone().VanillaModelsOff.Contains(miqoF.RaceCode) && !item.Meta.IsEmpty, "the choice is saved with the item's metadata");
     }
 
     private static void ExistingFolderIsRefused(string root)
@@ -248,6 +329,119 @@ internal static class ModBuildScenarios
         var plan = ModelMaterialLinks.Plan(referenced, removed.MaterialLinks, written);
         Require(plan[0] == "/c.mtrl" && plan[1] == "/b.mtrl" && plan[2] == null,
             "the build writes the remapped picks onto the right .mtrl files");
+    }
+
+    private static void SharedMaterialsAreCopiedForTheItem()
+    {
+        var race = new RaceGender(PlayerRace.Midlander, PlayerGender.Male);
+        var top    = new FeatureSubject(SubjectKind.Hair, race, 5);
+        var bottom = new FeatureSubject(SubjectKind.Hair, race, 6);
+
+        var bikini = new MaterialSetup { Name = "Bikini" };
+        bikini.Textures.Add(new TextureSlot { Type = TextureType.Diffuse, Postfix = "d", SourcePath = "bikini.png" });
+        bikini.Textures.Add(new TextureSlot { Type = TextureType.Normal, Postfix = "n", SharedGamePath = "chara/common/texture/shared_n.tex" });
+        var other = new MaterialSetup { Name = "Other" };
+
+        // The bottoms have one material of their own, also called "Bikini"; parts 0 and 2 use the top's.
+        var materials = new List<MaterialSetup> { new() { Name = "Bikini" } };
+        var model = new RaceModelEntry
+        {
+            MaterialLinks = new List<int> { ModelMaterialLinks.Shared, 0, ModelMaterialLinks.Shared, ModelMaterialLinks.Keep },
+            VariantMaterialLinks = new List<List<int>> { new() { ModelMaterialLinks.Shared } },
+        };
+        model.SharedLinks.Add(new SharedMaterialLink { Slot = 0, Item = top.Key, Material = bikini.Id });
+        model.SharedLinks.Add(new SharedMaterialLink { Slot = 2, Item = top.Key, Material = bikini.Id });
+        model.SharedLinks.Add(new SharedMaterialLink { Slot = 3, Item = top.Key, Material = other.Id });             // part 3 was set to Keep since
+        model.SharedLinks.Add(new SharedMaterialLink { Variant = 0, Slot = 0, Item = top.Key, Material = Guid.NewGuid() });   // gone
+
+        (PortSubject, MaterialSetup)? Find(uint key, Guid id)
+            => key == top.Key && id == bikini.Id ? (top, bikini) : key == top.Key && id == other.Id ? (top, other) : null;
+        var copies = MaterialCopy.AddShared(bottom, materials, new[] { model }, Find, "place");
+
+        Require(copies.Count == 1 && materials.Count == 2 && materials[1] == copies[0].Copy,
+            "one copy per material linked to, however many mesh parts use it, appended to the item's materials");
+        var copy = materials[1];
+        Require(copy.Name == "Bikini_b" && copy.Id != bikini.Id && copy.Option == "place",
+            "the copy is named uniquely within the item, is a material of its own and goes where the item goes");
+        Require(copy.Textures[0].SharedGamePath == top.TextureGamePath(MaterialNaming.ComposeTextureName("Bikini", "d"))
+                && copy.Textures[1].SharedGamePath == "chara/common/texture/shared_n.tex",
+            "the copy points at the textures the original writes, and at what an already shared slot points at");
+        Require(bikini.Textures[0].SharedGamePath == string.Empty, "the original is left as it is");
+        Require(model.MaterialLinks.SequenceEqual(new[] { 1, 0, 1, ModelMaterialLinks.Keep }),
+            "parts set to the shared material point at its copy; the others stay");
+        Require(model.VariantMaterialLinks[0][0] == ModelMaterialLinks.Keep, "a part set to a material that is gone keeps the file's own");
+        Require(model.SharedLinks.Count == 0, "the build's copy of the model has no shared links left");
+
+        var setUp = new RaceModelEntry();
+        setUp.SetSharedLink(-1, 1, top.Key, bikini.Id);
+        setUp.SetSharedLink(0, 0, top.Key, bikini.Id);
+        setUp.SetLink(-1, 1, 0);
+        Require(setUp.MaterialLinks[1] == 0 && setUp.SharedLink(-1, 1) == null && setUp.SharedLink(0, 0) != null,
+            "picking one of the item's own materials drops the part's shared link, and only that one");
+        setUp.VariantPaths.AddRange(new[] { "a.mdl", "b.mdl" });
+        setUp.SetSharedLink(1, 2, top.Key, other.Id);
+        setUp.RemoveVariant(0);
+        Require(setUp.SharedLinks.Count == 1 && setUp.SharedLink(0, 2)?.Material == other.Id,
+            "removing a variant file drops its shared links and moves the later files' up");
+        Require(setUp.Clone().SharedLinks.Single() is { Variant: 0, Slot: 2 } cloned && cloned != setUp.SharedLinks[0],
+            "a model's clone carries its shared links as copies");
+    }
+
+    private static void TextureVariantsArePickedFiles(string root)
+    {
+        var folder = Path.Combine(root, "Variant Images");
+        var other  = Path.Combine(root, "More Images");
+        Directory.CreateDirectory(folder);
+        Directory.CreateDirectory(other);
+        foreach (var name in new[] { "red.png", "blue.png", "notes.txt" })
+            File.WriteAllBytes(Path.Combine(folder, name), new byte[] { 1 });
+        foreach (var name in new[] { "Red.dds", "green.tga" })
+            File.WriteAllBytes(Path.Combine(other, name), new byte[] { 1 });
+
+        var legacy = new TextureSlot { UseVariants = true, SourcePath = folder };
+        Require(TextureSources.VariantImages(legacy).Select(Path.GetFileName).SequenceEqual(new[] { "blue.png", "red.png" }),
+            "a slot set up with a folder still reads the folder's images");
+
+        var tex = new TextureSlot { UseVariants = true };
+        Require(TextureSources.VariantImages(tex).Count == 0, "a slot with no files and no folder has no variants");
+        int added = TextureSources.AddVariantImages(tex, new[] { Path.Combine(folder, "red.png"), Path.Combine(folder, "notes.txt") });
+        Require(added == 1 && tex.VariantPaths.Count == 1, "picked image files are added; other files are not");
+        added = TextureSources.AddVariantImages(tex, new[] { folder, other });
+        Require(added == 2 && tex.VariantPaths.Select(Path.GetFileName).SequenceEqual(new[] { "red.png", "blue.png", "green.tga" }),
+            "a dropped folder adds its images to the list, skipping files already there and files named like one (each name is an option)");
+        Require(TextureSources.VariantImages(tex).Count == 3, "the picked files are the variants");
+
+        added = TextureSources.AddVariantImages(legacy, new[] { Path.Combine(other, "green.tga") });
+        Require(added == 1 && legacy.VariantPaths.Count == 3 && legacy.SourcePath.Length == 0,
+            "adding to a slot that read a folder makes the folder's images its list first");
+        Require(new TextureSlot { VariantPaths = { "a.png" } }.Clone().VariantPaths.SequenceEqual(new[] { "a.png" }),
+            "a slot's clone keeps its variant files");
+    }
+
+    private static void StashRowsAreMarkedByKind()
+    {
+        const StashKind Tex = StashKind.Texture, Mdl = StashKind.Model;
+        var order = new List<(string, StashKind)> { ("a.png", Tex), ("m.mdl", Mdl), ("b.png", Tex), ("c.png", Tex), ("d.png", Tex) };
+        var marks = new InstantEdit.Studio.Services.Stash.StashMarks();
+
+        marks.Click("a.png", Tex, ctrl: false, shift: false, order);
+        marks.Click("c.png", Tex, ctrl: true, shift: false, order);
+        Require(marks.Files.SequenceEqual(new[] { "a.png", "c.png" }), "Ctrl + click adds a row to the marked ones");
+        marks.Click("A.PNG", Tex, ctrl: true, shift: false, order);
+        Require(marks.Files.SequenceEqual(new[] { "c.png" }), "Ctrl + click on a marked row takes it away");
+
+        marks.Click("a.png", Tex, ctrl: false, shift: false, order);
+        marks.Click("c.png", Tex, ctrl: false, shift: true, order);
+        Require(marks.Files.SequenceEqual(new[] { "a.png", "b.png", "c.png" }), "Shift + click marks the range, skipping rows of another kind");
+        marks.Click("b.png", Tex, ctrl: false, shift: true, order);
+        Require(marks.Files.SequenceEqual(new[] { "a.png", "b.png" }), "another Shift + click changes the range from the same start");
+
+        marks.Click("m.mdl", Mdl, ctrl: true, shift: false, order);
+        Require(marks.Kind == Mdl && marks.Files.SequenceEqual(new[] { "m.mdl" }), "marking a file of another kind starts over with it");
+        Require(!marks.Contains("a.png", Tex) && marks.Contains("M.MDL", Mdl), "a row counts as marked only for the kind marked");
+
+        marks.Click("d.png", Tex, ctrl: false, shift: false, order);
+        Require(marks.Count == 1, "a plain click marks just that row");
     }
 
     private static void SamePathInAnotherOptionIsNoConflict()

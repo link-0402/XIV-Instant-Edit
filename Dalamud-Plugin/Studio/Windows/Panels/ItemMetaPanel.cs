@@ -67,7 +67,9 @@ internal sealed class ItemMetaPanel
                    "A race this item writes files for needs those bits, or the game keeps loading another race's. " +
                    "Follows the race models and materials — nothing to set here.");
 
-        if (item.Models.Count == 0 && item.Materials.Count == 0)
+        var native = gameData.GetNativeRaces(item.Subject);
+        var modelsOff = VanillaModels.Off(item, native);
+        if (item.Models.Count == 0 && item.Materials.Count == 0 && modelsOff.Count == 0)
         {
             Gui.Hint("(nothing set up yet, so no entries are needed)");
             return;
@@ -75,7 +77,6 @@ internal sealed class ItemMetaPanel
 
         // Exactly what the build claims: a model for every race it writes one for, and a material
         // for each base race the materials are named after (male c0101, female c0201).
-        var native = gameData.GetNativeRaces(item.Subject);
         var claims = new Dictionary<RaceGender, ushort>();
         foreach (var model in item.Models.Where(m => !native.Contains(m.RaceGender)))
             claims[model.RaceGender] = (ushort)(claims.GetValueOrDefault(model.RaceGender) | EqdpInfo.Model(slot));
@@ -94,11 +95,20 @@ internal sealed class ItemMetaPanel
                 : $"{model.RaceGender.DisplayName}: has a vanilla model, no model entry needed");
         }
 
+        // Switched off: the entry drops the race's own bits, so it always counts as written.
+        foreach (var race in modelsOff)
+        {
+            added++;
+            Gui.Icon(FontAwesomeIcon.Minus, Theme.Accent);
+            ImGui.SameLine();
+            ImGui.TextColored(Theme.Muted, $"{race.DisplayName}: vanilla model off, uses {VanillaModels.FallbackRace(item, race, native).DisplayName}'s");
+        }
+
         foreach (var (race, claimed) in claims.OrderBy(c => c.Key.RaceCode, StringComparer.Ordinal))
         {
             ushort vanilla = (ushort)(gameData.VanillaEqdp(race, accessory, gear.Item.ModelId) & EqdpInfo.Mask(slot));
             ushort missing = (ushort)(claimed & ~vanilla);
-            if (missing != 0) added++;
+            if (missing != 0 && !modelsOff.Contains(race)) added++;
 
             if ((claimed & EqdpInfo.Material(slot)) == 0)
                 continue;   // the model side is already listed above

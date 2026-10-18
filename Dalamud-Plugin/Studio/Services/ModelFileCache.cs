@@ -4,9 +4,10 @@ using System.IO;
 
 namespace InstantEdit.Studio.Services;
 
-/// <summary>What the editor needs to know about a local .mdl: the materials its mesh parts reference.</summary>
+/// <summary>What the editor needs to know about a local .mdl: the materials its meshes reference.</summary>
 internal sealed class ModelFileFacts
 {
+    /// <summary>The material each mesh of the first LOD uses, one entry per mesh (shared names repeat).</summary>
     public IReadOnlyList<string> Materials { get; init; } = Array.Empty<string>();
 
     /// <summary>Why the file could not be read, or null when it was.</summary>
@@ -51,7 +52,7 @@ internal sealed class ModelFileCache
         ModelFileFacts facts;
         try
         {
-            facts = new ModelFileFacts { Materials = ModelMaterialRewriter.ReadMaterials(File.ReadAllBytes(path)) };
+            facts = new ModelFileFacts { Materials = ModelMaterialRewriter.ReadMeshMaterials(File.ReadAllBytes(path)) };
         }
         catch (Exception ex)
         {

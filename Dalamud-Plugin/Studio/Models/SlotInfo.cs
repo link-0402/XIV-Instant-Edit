@@ -119,7 +119,7 @@ public static class SlotInfo
     /// <summary>Where the slot's two bits (material, model) sit in a 16-bit EQDP entry.</summary>
     public static int EqdpShift(EquipSlot slot) => (int)slot % 5 * 2;
 
-    /// <summary>The prefix of the variant attributes (atr_?v_a to atr_?v_j) an IMC attribute mask turns on for the slot.</summary>
+    /// <summary>The prefix of the variant attributes (atr_?v_a to atr_?v_j) an IMC attribute mask turns on for the slot. Both rings use atr_rv_, as the game does.</summary>
     public static string VariantAttributePrefix(EquipSlot slot) => slot switch
     {
         EquipSlot.Head      => "atr_mv_",
@@ -130,7 +130,6 @@ public static class SlotInfo
         EquipSlot.Earring   => "atr_ev_",
         EquipSlot.Neck      => "atr_nv_",
         EquipSlot.Wrists    => "atr_wv_",
-        EquipSlot.RingRight => "atr_rv_",
-        _                   => "atr_lv_",
+        _                   => "atr_rv_",
     };
 }

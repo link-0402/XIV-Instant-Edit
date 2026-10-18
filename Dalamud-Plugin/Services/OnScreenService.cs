@@ -203,14 +203,15 @@ public sealed class OnScreenService : IDisposable
             return null;
         var paths = _penumbra.GetResourcePaths(index);
         return new JoinedTree(localPlayer.ObjectIndex, localPlayer.Address, localPlayer.Name.TextValue ?? "Unknown",
-            ActorPresentationCategory.Player, tree, paths.Length > 0 ? paths[0] : null, HiddenGearOf(localPlayer));
+            ActorPresentationCategory.Player, tree, paths.Length > 0 ? paths[0] : null, HiddenGearOf(localPlayer),
+            SlotSkinMaterialsOf(localPlayer));
     }
 
     /// <summary> An immutable, pruned and attributed copy of one joined tree; null when nothing in it is kept. </summary>
     private OnScreenObject? ToOnScreenObject(JoinedTree entry)
     {
         IReadOnlyList<ResourceNode> roots = (entry.Tree.Nodes ?? [])
-            .Select(node => CopyPrunedNode(node, entry.HiddenGear))
+            .Select(node => CopyPrunedNode(node, entry.HiddenGear, entry.SlotSkinMaterials))
             .Where(node => node is not null)
             .Cast<ResourceNode>()
             .OrderBy(node => SectionOrder(node.ResourceSection))
@@ -270,7 +271,7 @@ public sealed class OnScreenService : IDisposable
                     continue;
 
                 joined.Add(new JoinedTree(index, candidate.Address, candidate.Name.TextValue ?? "Unknown", category, tree, paths,
-                    HiddenGearOf(candidate)));
+                    HiddenGearOf(candidate), SlotSkinMaterialsOf(candidate)));
             }
             catch (Exception e)
             {
@@ -386,6 +387,12 @@ public sealed class OnScreenService : IDisposable
             ? ModelVisibility.HiddenGear(((NativeCharacter*)candidate.Address)->GetCharacterBase())
             : HiddenGearModels.None;
 
+    /// <summary> A character's per-slot skin materials (<see cref="ModelVisibility.SlotSkinMaterials"/>); none when it isn't drawn as a person. Call on the framework thread. </summary>
+    private static unsafe IReadOnlyDictionary<nint, nint> SlotSkinMaterialsOf(IGameObject candidate)
+        => candidate is ICharacter && candidate.Address != nint.Zero
+            ? ModelVisibility.SlotSkinMaterials(((NativeCharacter*)candidate.Address)->GetCharacterBase())
+            : new Dictionary<nint, nint>();
+
     private static bool IsSupportedOwnedObject(IGameObject candidate)
         => candidate.ObjectKind is ObjectKind.Companion or ObjectKind.Mount or ObjectKind.FollowMount ||
            candidate is IBattleNpc { BattleNpcKind: BattleNpcSubKind.Pet };
@@ -440,7 +447,8 @@ public sealed class OnScreenService : IDisposable
         ActorPresentationCategory Category,
         ResourceTreeDto Tree,
         Dictionary<string, HashSet<string>>? ResolvedPaths,
-        HiddenGearModels HiddenGear);
+        HiddenGearModels HiddenGear,
+        IReadOnlyDictionary<nint, nint> SlotSkinMaterials);
 
     /// <summary>
     /// Penumbra's tree DTO serializes its hierarchy and exposes a game path only when
@@ -564,10 +572,13 @@ public sealed class OnScreenService : IDisposable
             ? PathRules.NormalizeGamePath(actualPath)
             : actualPath;
 
-    private ResourceNode? CopyPrunedNode(ResourceNodeDto node, HiddenGearModels hiddenGear)
+    private ResourceNode? CopyPrunedNode(ResourceNodeDto node, HiddenGearModels hiddenGear, IReadOnlyDictionary<nint, nint> slotSkinMaterials)
     {
+        // Penumbra lists a gear slot's skin material under its model, though none of the model's meshes use it.
+        var skinMaterial = node.Type == ResourceType.Mdl ? slotSkinMaterials.GetValueOrDefault(node.ObjectAddress) : nint.Zero;
         var children = (node.Children ?? [])
-            .Select(child => CopyPrunedNode(child, hiddenGear))
+            .Where(child => skinMaterial == nint.Zero || child.Type != ResourceType.Mtrl || child.ObjectAddress != skinMaterial)
+            .Select(child => CopyPrunedNode(child, hiddenGear, slotSkinMaterials))
             .Where(child => child is not null)
             .Cast<ResourceNode>()
             .OrderBy(child => SectionOrder(child.ResourceSection))

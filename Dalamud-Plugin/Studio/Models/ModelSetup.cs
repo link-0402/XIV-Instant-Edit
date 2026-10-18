@@ -50,8 +50,8 @@ public class RaceModelEntry
     public List<string> VariantPaths { get; set; } = new();
 
     /// <summary>
-    /// Which of the item's materials each material slot of <see cref="SourcePath"/> is switched to,
-    /// one entry per slot of that file — see <see cref="ModelMaterialLinks"/>. Slots past the end of
+    /// Which of the item's materials each mesh of <see cref="SourcePath"/> is switched to, one entry
+    /// per mesh of that file's first LOD — see <see cref="ModelMaterialLinks"/>. Meshes past the end of
     /// the list (including the whole list of a model nobody opened) read as
     /// <see cref="ModelMaterialLinks.Auto"/>.
     /// </summary>
@@ -63,6 +63,13 @@ public class RaceModelEntry
     /// changed on its own.
     /// </summary>
     public List<List<int>> VariantMaterialLinks { get; set; } = new();
+
+    /// <summary>
+    /// The mesh parts set to a material of another item in the pack: their entry in
+    /// <see cref="MaterialLinks"/> (or a variant's list) is <see cref="ModelMaterialLinks.Shared"/>,
+    /// and the material it means is here.
+    /// </summary>
+    public List<SharedMaterialLink> SharedLinks { get; set; } = new();
 
     public RaceGender RaceGender => new(Race, Gender);
 
@@ -78,6 +85,27 @@ public class RaceModelEntry
         return VariantMaterialLinks[index];
     }
 
+    /// <summary>The links of the model's own file (<paramref name="variant"/> -1) or of one variant file.</summary>
+    public IReadOnlyList<int>? LinksOf(int variant) => variant < 0 ? MaterialLinks : VariantLinks(variant);
+
+    /// <summary>The material of another item a mesh part is set to, or null.</summary>
+    public SharedMaterialLink? SharedLink(int variant, int slot)
+        => SharedLinks.Find(l => l.Variant == variant && l.Slot == slot);
+
+    /// <summary>Sets a mesh part to <see cref="ModelMaterialLinks.Auto"/>, <see cref="ModelMaterialLinks.Keep"/> or one of the item's own materials.</summary>
+    public void SetLink(int variant, int slot, int value)
+    {
+        ModelMaterialLinks.Store(variant < 0 ? MaterialLinks : EditVariantLinks(variant), slot, value);
+        SharedLinks.RemoveAll(l => l.Variant == variant && l.Slot == slot);
+    }
+
+    /// <summary>Sets a mesh part to a material of another item: the build writes a copy of it for this item.</summary>
+    public void SetSharedLink(int variant, int slot, uint item, Guid material)
+    {
+        SetLink(variant, slot, ModelMaterialLinks.Shared);
+        SharedLinks.Add(new SharedMaterialLink { Variant = variant, Slot = slot, Item = item, Material = material });
+    }
+
     /// <summary>Drops a variant's links along with the variant itself, so the rest stay on their own files.</summary>
     public void RemoveVariant(int index)
     {
@@ -85,6 +113,17 @@ public class RaceModelEntry
             VariantPaths.RemoveAt(index);
         if (index >= 0 && index < VariantMaterialLinks.Count)
             VariantMaterialLinks.RemoveAt(index);
+        SharedLinks.RemoveAll(l => l.Variant == index);
+        foreach (var link in SharedLinks)
+            if (link.Variant > index)
+                link.Variant--;
+    }
+
+    /// <summary>Forgets every variant file's links, when the list of files is replaced.</summary>
+    public void ClearVariantLinks()
+    {
+        VariantMaterialLinks.Clear();
+        SharedLinks.RemoveAll(l => l.Variant >= 0);
     }
 
     /// <summary>Where this race's model goes in the mod — see <see cref="PackPlace"/>. Null goes with the item.</summary>
@@ -106,7 +145,31 @@ public class RaceModelEntry
         VariantPaths         = VariantPaths.ToList(),
         MaterialLinks        = MaterialLinks.ToList(),
         VariantMaterialLinks = VariantMaterialLinks.Select(l => l.ToList()).ToList(),
+        SharedLinks          = SharedLinks.Select(l => l.Clone()).ToList(),
     };
+}
+
+/// <summary>
+/// A mesh part of a race model set to a material of another item in the pack — a top's material on
+/// the matching bottoms, say. The build writes a copy of that material for this item, named for it
+/// and in its own folder, that points at the original's textures.
+/// </summary>
+[Serializable]
+public class SharedMaterialLink
+{
+    /// <summary>The variant file the mesh part belongs to, or -1 for the model's own file.</summary>
+    public int Variant { get; set; } = -1;
+
+    /// <summary>The mesh's index in that file (see <see cref="RaceModelEntry.MaterialLinks"/>).</summary>
+    public int Slot { get; set; }
+
+    /// <summary>The item the material belongs to (its key).</summary>
+    public uint Item { get; set; }
+
+    /// <summary>The material's <see cref="MaterialSetup.Id"/>.</summary>
+    public Guid Material { get; set; }
+
+    public SharedMaterialLink Clone() => new() { Variant = Variant, Slot = Slot, Item = Item, Material = Material };
 }
 
 /// <summary>

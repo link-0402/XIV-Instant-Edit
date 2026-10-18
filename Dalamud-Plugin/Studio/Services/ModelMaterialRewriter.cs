@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace InstantEdit.Studio.Services;
@@ -45,6 +46,13 @@ public static class ModelMaterialRewriter
     private const int LodVertexDataOffset = 52;
     private const int LodIndexDataOffset = 56;
 
+    // The material count is kept twice: in the file header and in the model header.
+    private const int FileHeaderMaterialCount = 14;
+    private const int ModelHeaderMaterialCount = 10;
+
+    // Byte position inside one mesh struct of the material slot it uses.
+    private const int MeshMaterialIndex = 8;
+
     /// <summary>The material each mesh part references, in the file's own slot order.</summary>
     /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
     public static IReadOnlyList<string> ReadMaterials(byte[] data) => Parse(data).Materials;
@@ -65,6 +73,106 @@ public static class ModelMaterialRewriter
             names[i] = starts.TryGetValue(mdl.MaterialOffsets[i], out var name) ? name : string.Empty;
         return names;
     }
+
+    /// <summary>
+    /// The material each mesh of the first LOD uses, in mesh order. Meshes that share one material
+    /// slot each get their own entry, so they can be given different materials by
+    /// <see cref="RewriteMeshes"/>.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
+    public static IReadOnlyList<string> ReadMeshMaterials(byte[] data)
+    {
+        var mdl = Parse(data);
+        return MainMeshes(mdl).Select(m => NameAt(mdl.Materials, mdl.MeshMaterials[m])).ToArray();
+    }
+
+    /// <summary>The same, resolved the way the game does — see <see cref="ReadMaterialsStrict"/>.</summary>
+    /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
+    public static IReadOnlyList<string> ReadMeshMaterialsStrict(byte[] data)
+    {
+        var mdl = Parse(data);
+        var starts = WalkStrings(mdl.StringData, mdl.StringCount);
+        return MainMeshes(mdl).Select(m =>
+        {
+            int slot = mdl.MeshMaterials[m];
+            return slot < mdl.MaterialOffsets.Length && starts.TryGetValue(mdl.MaterialOffsets[slot], out var name) ? name : string.Empty;
+        }).ToArray();
+    }
+
+    /// <summary>The material slot each mesh of the first LOD uses, in mesh order.</summary>
+    /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
+    public static IReadOnlyList<int> ReadMeshMaterialSlots(byte[] data)
+    {
+        var mdl = Parse(data);
+        return MainMeshes(mdl).Select(m => (int)mdl.MeshMaterials[m]).ToArray();
+    }
+
+    /// <summary>
+    /// Returns the file with each mesh of the first LOD pointed at <paramref name="newNames"/> (one
+    /// entry per mesh, as <see cref="ReadMeshMaterials"/> lists them), where a null entry leaves that
+    /// mesh on its own material. A material slot whose meshes all end up on one name is renamed in
+    /// place; when they end up on different names, the first mesh's name takes the slot and the others
+    /// get slots of their own, appended (or an existing slot already carrying that name). The other
+    /// LODs' meshes stay on their slot. Returns the input unchanged when nothing needs rewriting.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
+    public static byte[] RewriteMeshes(byte[] data, IReadOnlyList<string?> newNames)
+    {
+        var mdl = Parse(data);
+        var meshes = MainMeshes(mdl).ToArray();
+
+        var wanted = new string?[meshes.Length];
+        for (int i = 0; i < meshes.Length; i++)
+        {
+            var name = i < newNames.Count ? newNames[i] : null;
+            int slot = mdl.MeshMaterials[meshes[i]];
+            wanted[i] = !string.IsNullOrEmpty(name) ? name : slot < mdl.Materials.Length ? mdl.Materials[slot] : null;
+        }
+
+        // First pass: each slot takes the name of the first mesh that uses it.
+        var materials = mdl.Materials.ToList();
+        var renamed = new bool[materials.Count];
+        for (int i = 0; i < meshes.Length; i++)
+        {
+            int slot = mdl.MeshMaterials[meshes[i]];
+            if (wanted[i] == null || slot >= materials.Count || renamed[slot])
+                continue;
+            materials[slot] = wanted[i]!;
+            renamed[slot] = true;
+        }
+
+        // Second pass: meshes whose slot went to another name move to a slot of their own.
+        var meshMaterials = (ushort[])mdl.MeshMaterials.Clone();
+        for (int i = 0; i < meshes.Length; i++)
+        {
+            int slot = mdl.MeshMaterials[meshes[i]];
+            if (wanted[i] == null || slot >= materials.Count || string.Equals(materials[slot], wanted[i], StringComparison.Ordinal))
+                continue;
+            int other = materials.FindIndex(n => string.Equals(n, wanted[i], StringComparison.Ordinal));
+            if (other < 0)
+            {
+                other = materials.Count;
+                materials.Add(wanted[i]!);
+            }
+            meshMaterials[meshes[i]] = checked((ushort)other);
+        }
+
+        bool changed = materials.Count != mdl.Materials.Length
+                    || !materials.SequenceEqual(mdl.Materials, StringComparer.Ordinal)
+                    || !meshMaterials.SequenceEqual(mdl.MeshMaterials);
+        return changed ? Write(data, mdl, materials.ToArray(), meshMaterials) : data;
+    }
+
+    /// <summary>The meshes of the first LOD — every mesh when the LOD table does not say.</summary>
+    private static IEnumerable<int> MainMeshes(ModelLayout mdl)
+    {
+        bool valid = mdl.Lod0MeshCount > 0 && mdl.Lod0MeshIndex + mdl.Lod0MeshCount <= mdl.MeshMaterials.Length;
+        return valid
+            ? Enumerable.Range(mdl.Lod0MeshIndex, mdl.Lod0MeshCount)
+            : Enumerable.Range(0, mdl.MeshMaterials.Length);
+    }
+
+    private static string NameAt(string[] names, int index) => index < names.Length ? names[index] : string.Empty;
 
     /// <summary>Every string the block's own count reaches, by the offset it starts at.</summary>
     private static Dictionary<uint, string> WalkStrings(byte[] strings, int count)
@@ -102,8 +210,18 @@ public static class ModelMaterialRewriter
             changed = true;
         }
 
-        if (!changed)
-            return data;
+        return changed ? Write(data, mdl, materials, mdl.MeshMaterials) : data;
+    }
+
+    /// <summary>
+    /// Writes the file with <paramref name="materials"/> as its material slots (the same count, or
+    /// more — new slots go at the end of the table) and <paramref name="meshMaterials"/> as each
+    /// mesh's slot.
+    /// </summary>
+    private static byte[] Write(byte[] data, ModelLayout mdl, string[] materials, ushort[] meshMaterials)
+    {
+        if (materials.Length < mdl.Materials.Length || materials.Length > ushort.MaxValue)
+            throw new InvalidDataException("the material slots cannot be rewritten to that count");
 
         // ── The string block, laid out the way the game's own files are ──────
         var blob = new List<byte>();
@@ -113,24 +231,33 @@ public static class ModelMaterialRewriter
         var shapeOffsets     = Append(blob, mdl.ShapeNames);
         int stringCount = mdl.Attributes.Length + mdl.Bones.Length + materials.Length + mdl.ShapeNames.Length;
 
-        // Pad to the block's own 4 bytes, then on until the whole file after it has moved by a
-        // multiple of 16 — every alignment further down is measured from the start of the file.
-        int size = blob.Count;
-        while (size % 4 != 0 || (size - (int)mdl.StringSize) % 16 != 0)
-            size++;
-        int delta = size - (int)mdl.StringSize;
+        // New slots each add an entry to the material offset table, which sits inside the model data.
+        int grown = (materials.Length - mdl.Materials.Length) * 4;
 
+        // Pad to the block's own 4 bytes, then on until the whole file after the material table has
+        // moved by a multiple of 16 — every alignment further down is measured from the start of the
+        // file. What sits between the block and the table is 4-byte data, which stays 4-aligned.
+        int size = blob.Count;
+        while (size % 4 != 0 || (size - (int)mdl.StringSize + grown) % 16 != 0)
+            size++;
+        int head  = size - (int)mdl.StringSize;      // how far the model data up to the material table moves
+        int delta = head + grown;                     // how far everything after it moves
+
+        long tableEnd = mdl.MaterialOffsetsPos + mdl.Materials.Length * 4L;
         var result = new byte[data.Length + delta];
         Array.Copy(data, 0, result, 0, mdl.StringDataPos);
         blob.CopyTo(result, (int)mdl.StringDataPos);          // the padding stays zero
-        Array.Copy(data, mdl.ModelDataPos, result, mdl.ModelDataPos + delta, data.Length - mdl.ModelDataPos);
+        Array.Copy(data, mdl.ModelDataPos, result, mdl.ModelDataPos + head, tableEnd - mdl.ModelDataPos);
+        Array.Copy(data, tableEnd, result, tableEnd + delta, data.Length - tableEnd);
 
         // RuntimeSize covers the string block onwards, so it moves with it; StackSize does not.
         WriteU32(result, 8, (uint)(mdl.RuntimeSize + delta));
+        WriteU16(result, FileHeaderMaterialCount, (ushort)materials.Length);
         WriteU16(result, mdl.StringHeaderPos, (ushort)stringCount);
         WriteU32(result, mdl.StringHeaderPos + 4, (uint)size);
+        WriteU16(result, mdl.ModelDataPos + head + ModelHeaderMaterialCount, (ushort)materials.Length);
 
-        // Everything past the string block moved: the file header's vertex/index offsets…
+        // Everything past the material table moved: the file header's vertex/index offsets…
         for (int i = 0; i < 3; i++)
         {
             Shift(result, 16 + i * 4, delta);
@@ -140,14 +267,17 @@ public static class ModelMaterialRewriter
         // …and the same offsets repeated per LOD, plus its edge geometry.
         for (int lod = 0; lod < 3; lod++)
         {
-            long at = mdl.LodsPos + delta + lod * LodStructSize;
+            long at = mdl.LodsPos + head + lod * LodStructSize;
             Shift(result, at + LodEdgeGeometryDataOffset, delta);
             Shift(result, at + LodVertexDataOffset, delta);
             Shift(result, at + LodIndexDataOffset, delta);
         }
 
-        WriteOffsets(result, mdl.AttributeOffsetsPos + delta, attributeOffsets);
-        WriteOffsets(result, mdl.MaterialOffsetsPos + delta, materialOffsets);
+        for (int m = 0; m < meshMaterials.Length; m++)
+            WriteU16(result, mdl.MeshesPos + head + m * MeshStructSize + MeshMaterialIndex, meshMaterials[m]);
+
+        WriteOffsets(result, mdl.AttributeOffsetsPos + head, attributeOffsets);
+        WriteOffsets(result, mdl.MaterialOffsetsPos + head, materialOffsets);
         WriteOffsets(result, mdl.BoneOffsetsPos + delta, boneOffsets);
         for (int i = 0; i < shapeOffsets.Length; i++)
             WriteU32(result, mdl.ShapesPos + delta + i * ShapeStructSize, shapeOffsets[i]);
@@ -185,6 +315,14 @@ public static class ModelMaterialRewriter
         public long MaterialOffsetsPos;
         public long BoneOffsetsPos;
         public long ShapesPos;
+        public long MeshesPos;
+
+        /// <summary>The first LOD's range of meshes, as its LOD struct gives it.</summary>
+        public int Lod0MeshIndex;
+        public int Lod0MeshCount;
+
+        /// <summary>The material slot each mesh uses, for every mesh of the file.</summary>
+        public ushort[] MeshMaterials = Array.Empty<ushort>();
 
         public string[] Attributes = Array.Empty<string>();
         public string[] Materials  = Array.Empty<string>();
@@ -254,9 +392,18 @@ public static class ModelMaterialRewriter
 
             ms.Position += elementIdCount * (long)ElementIdStructSize;
             long lodsPos = ms.Position;
-            ms.Position += 3L * LodStructSize;
+            ushort lod0MeshIndex = br.ReadUInt16();
+            ushort lod0MeshCount = br.ReadUInt16();
+            ms.Position = lodsPos + 3L * LodStructSize;
             if ((flags2 & 0x10) != 0)
                 ms.Position += 3L * ExtraLodStructSize;
+
+            long meshesPos = ms.Position;
+            if (meshesPos + meshCount * (long)MeshStructSize > ms.Length)
+                throw new InvalidDataException("the mesh table runs past the end of the file");
+            var meshMaterials = new ushort[meshCount];
+            for (int m = 0; m < meshCount; m++)
+                meshMaterials[m] = BitConverter.ToUInt16(data, (int)(meshesPos + m * MeshStructSize + MeshMaterialIndex));
             ms.Position += meshCount * (long)MeshStructSize;
 
             long attributeOffsetsPos = ms.Position;
@@ -304,6 +451,10 @@ public static class ModelMaterialRewriter
                 MaterialOffsetsPos  = materialOffsetsPos,
                 BoneOffsetsPos      = boneOffsetsPos,
                 ShapesPos           = shapesPos,
+                MeshesPos           = meshesPos,
+                Lod0MeshIndex       = lod0MeshIndex,
+                Lod0MeshCount       = lod0MeshCount,
+                MeshMaterials       = meshMaterials,
                 Attributes          = attributes,
                 Materials           = materials,
                 MaterialOffsets     = materialOffsets,

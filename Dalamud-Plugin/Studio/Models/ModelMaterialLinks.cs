@@ -5,13 +5,14 @@ using System.Linq;
 namespace InstantEdit.Studio.Models;
 
 /// <summary>
-/// How the material slots of a source .mdl map onto the item's configured materials.
+/// How the meshes of a source .mdl map onto the item's configured materials.
 ///
 /// A model made anywhere else still references the material names it was exported with, so the
 /// .mtrl files this tool writes would sit in the mod unused. The build rewrites those references
-/// (see <c>ModelMaterialRewriter</c>); this is the mapping it follows, kept per race model — and
-/// per variant file — as one entry per material slot of that file: <see cref="Auto"/>,
-/// <see cref="Keep"/>, or an index into the item's Materials.
+/// (see <c>ModelMaterialRewriter.RewriteMeshes</c>); this is the mapping it follows, kept per race
+/// model — and per variant file — as one entry per mesh of that file's first LOD (a "slot" below):
+/// <see cref="Auto"/>, <see cref="Keep"/>, or an index into the item's Materials. Meshes that share
+/// a material in the file can be given different ones; the build splits the material for them.
 ///
 /// Slots the user never touched are simply absent from the stored list, which reads as
 /// <see cref="Auto"/>, so a model dropped in and left alone still comes out wired.
@@ -23,6 +24,13 @@ internal static class ModelMaterialLinks
 
     /// <summary>Leave the file's own reference alone — a mesh part that keeps a vanilla material, say.</summary>
     public const int Keep = -1;
+
+    /// <summary>
+    /// A material of another item in the pack, named in the model's <see cref="RaceModelEntry.SharedLinks"/>.
+    /// The build turns it into an index of the copy it writes for this item (see <see cref="MaterialCopy.AddShared"/>);
+    /// everywhere else it reads as not one of the item's own.
+    /// </summary>
+    public const int Shared = -3;
 
     /// <summary>
     /// The name each of the item's materials is written under for <paramref name="race"/>, in the
@@ -69,6 +77,54 @@ internal static class ModelMaterialLinks
         for (int i = 0; i < links.Count; i++)
             if (links[i] >= 0)
                 links[i] = map(links[i]);
+    }
+
+    /// <summary>
+    /// Converts links saved when they were kept per material slot of the file into one per mesh:
+    /// each mesh takes what its slot had, shared links included. <paramref name="meshSlots"/> gives
+    /// a file's slot per mesh, or null when it cannot be read — that file's list stays as it is.
+    /// </summary>
+    public static void ConvertSlotsToMeshes(RaceModelEntry model, Func<string, IReadOnlyList<int>?> meshSlots)
+    {
+        ConvertFile(model, -1, model.SourcePath, meshSlots);
+        for (int v = 0; v < model.VariantPaths.Count; v++)
+            ConvertFile(model, v, model.VariantPaths[v], meshSlots);
+    }
+
+    private static void ConvertFile(RaceModelEntry model, int variant, string path, Func<string, IReadOnlyList<int>?> meshSlots)
+    {
+        var links = model.LinksOf(variant);
+        var shared = model.SharedLinks.Where(l => l.Variant == variant).ToList();
+        if ((links == null || links.Count == 0) && shared.Count == 0)
+            return;
+        if (string.IsNullOrWhiteSpace(path) || meshSlots(path) is not { } slots)
+            return;
+
+        var converted = slots.Select(s => Stored(links, s)).ToList();
+        model.SharedLinks.RemoveAll(l => l.Variant == variant);
+        for (int mesh = 0; mesh < slots.Count; mesh++)
+        {
+            if (converted[mesh] != Shared)
+                continue;
+            if (shared.Find(l => l.Slot == slots[mesh]) is { } link)
+            {
+                var copy = link.Clone();
+                copy.Slot = mesh;
+                model.SharedLinks.Add(copy);
+            }
+            else
+            {
+                converted[mesh] = Keep;
+            }
+        }
+
+        if (variant < 0)
+            model.MaterialLinks = converted;
+        else
+        {
+            model.EditVariantLinks(variant);
+            model.VariantMaterialLinks[variant] = converted;
+        }
     }
 
     /// <summary>The material at <paramref name="index"/> was removed: picks of it keep the file's own name, later ones move up.</summary>
@@ -125,12 +181,18 @@ internal static class ModelMaterialLinks
         if (IsSharedFeature(name))
             return Keep;
 
-        // Position among only the slots that are not themselves a shared group, so those slots
-        // don't consume a position that belongs to one of the item's own materials.
-        int position = 0;
+        // Position among the distinct names before this one's first use, leaving out shared groups:
+        // meshes that share a material in the file land on the same one, and shared groups don't
+        // consume a position that belongs to one of the item's own materials.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < slot; i++)
+        {
+            if (SameName(referenced[i], name))
+                break;
             if (!IsSharedFeature(referenced[i]))
-                position++;
+                seen.Add(Normalize(referenced[i]));
+        }
+        int position = seen.Count;
 
         return position < written.Count ? position : Keep;
     }
