@@ -213,9 +213,17 @@ map), Limsa inn.
   (3.5 / 3.2) and is now part of the conversion; 50% overshoots. Roughness from the reflection blur
   (Penumbra's formula) helped the centre a little and the edges not at all, so the G-buffer-exact
   2^(-gloss/15) stays.
-- [ ] Through the editor after a Release build: Convert to Dawntrail on a characterlegacy material is
-  one undo step, the new `_ie.tex` mask saves with the material, the rows show legacy labels before
-  converting, and pasting a legacy row onto a character.shpk material keeps its base colour.
+- [x] Through the editor (Release with cd68f73 + 03f077c, a Bridge copy of the zelda mod, 2026-10-18):
+  before converting, the rows show Shine strength and Gloss with the legacy dye fields, and no exposure,
+  sheen or metal. Convert to Dawntrail is one undo step: character.shpk, rows at base brightness 1,
+  roughness 40%, sheen 25% (spread 4), shader id 12, the mask slot on `…_dwn_s_ie.tex`. Undo gives the
+  legacy material back with nothing new to save; Redo brings it back; Save wrote the material and added
+  the mask to the same option of the copy, and the game then loaded both from it. The convert message
+  is replaced at once by "Shown on the character. Nothing is saved yet." (minor). Penumbra drops a test
+  copy's temporary settings when a save reloads the mod, so set them again before looking.
+- [ ] Pasting a row copied on characterlegacy.shpk onto a character.shpk row keeps its base colour
+  (covered by the regression scenarios; not clicked in game). The legacy dye grid now has two columns,
+  as "Shine strength" was cut off in three (not seen in game yet).
 
 ## Half 11 is the base brightness (2026-10-18)
 
