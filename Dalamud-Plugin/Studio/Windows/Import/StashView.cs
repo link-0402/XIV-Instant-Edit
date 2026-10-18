@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -34,7 +35,7 @@ internal sealed class StashView
     };
 
     private static readonly TexturePurpose[] PurposeOrder =
-        { TexturePurpose.Diffuse, TexturePurpose.Normal, TexturePurpose.Mask, TexturePurpose.Occlusion, TexturePurpose.Emission, TexturePurpose.Other };
+        { TexturePurpose.Diffuse, TexturePurpose.Normal, TexturePurpose.Mask, TexturePurpose.Occlusion, TexturePurpose.Emission, TexturePurpose.Matcap, TexturePurpose.Other };
 
     private readonly StudioHost _host;
     private readonly TextureThumbnailCache _thumbnails;
@@ -361,6 +362,45 @@ internal sealed class StashView
             return;
         }
 
+        var items = ItemsOf(folder, manifest);
+        if (items == null)
+        {
+            Gui.Icon(FontAwesomeIcon.Spinner, Theme.Accent);
+            ImGui.SameLine();
+            Gui.Hint("Sorting textures into items");
+            DrawTexturesByPurpose(folder, manifest, textures);
+            return;
+        }
+
+        // One block per item, its textures by purpose; then matcaps; then what belongs to no item.
+        var shown = textures.ToHashSet();
+        for (int i = 0; i < items.Items.Count; i++)
+        {
+            var item = items.Items[i];
+            var rows = item.Textures.Where(shown.Contains).ToList();
+            if (rows.Count == 0 || !ImGui.CollapsingHeader($"{item.Name} ({rows.Count})##item{i}", ImGuiTreeNodeFlags.DefaultOpen))
+                continue;
+            if (item.Models.Count > 0)
+                Gui.Hint($"On {string.Join(", ", item.Models)}");
+            DrawTextureRows(folder, rows, item.ByLayout);
+        }
+
+        var matcaps = items.Matcaps.Where(shown.Contains).ToList();
+        if (matcaps.Count > 0 && ImGui.CollapsingHeader($"Matcaps ({matcaps.Count})##items-matcaps", ImGuiTreeNodeFlags.DefaultOpen))
+            DrawTextureRows(folder, matcaps, null);
+
+        var loose = items.Loose.Where(shown.Contains).ToList();
+        if (loose.Count > 0 && ImGui.CollapsingHeader($"{(items.Items.Count > 0 ? "Not part of an item" : "Textures")} ({loose.Count})##items-loose",
+                ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            DrawSwatchFolders(folder, manifest, loose.Where(t => t.Purpose == TexturePurpose.Diffuse));
+            DrawTextureRows(folder, loose, null);
+        }
+    }
+
+    /// <summary>The plain list, by purpose, while the textures are being sorted into items.</summary>
+    private void DrawTexturesByPurpose(string folder, StashManifest manifest, List<StashEntry> textures)
+    {
         foreach (var purpose in PurposeOrder)
         {
             var group = textures.Where(t => t.Purpose == purpose).ToList();
@@ -368,21 +408,89 @@ internal sealed class StashView
                 continue;
             if (!ImGui.CollapsingHeader($"{PurposeLabel(purpose)} ({group.Count})##purpose{purpose}", ImGuiTreeNodeFlags.DefaultOpen))
                 continue;
-
-            // Diffuse swatches that share a folder can go in together, as one variant group.
             if (purpose == TexturePurpose.Diffuse)
-            {
-                foreach (var shared in group.GroupBy(t => Path.GetDirectoryName(Full(folder, t.Path)) ?? folder, StringComparer.OrdinalIgnoreCase)
-                             .Where(g => g.Count() > 1))
-                {
-                    int images = Images(shared.Key);
-                    if (images < 2) continue;
-                    DrawRow($"{Path.GetFileName(shared.Key)} (folder)", $"{images} images, drops as a variant group",
-                        DroppedPaths.Folder(shared.Key), shared.Key, true, FontAwesomeIcon.Folder, false);
-                }
-            }
-
+                DrawSwatchFolders(folder, manifest, group);
             DrawRows(folder, group);
+        }
+    }
+
+    /// <summary>
+    /// Diffuse swatches that share a folder can go in together, as one variant group; a folder that
+    /// also holds normals, masks or matcaps is a texture set, and would drop them all as swatches.
+    /// </summary>
+    private void DrawSwatchFolders(string folder, StashManifest manifest, IEnumerable<StashEntry> diffuses)
+    {
+        foreach (var shared in diffuses.GroupBy(t => StashManifest.FolderOf(t.Path), StringComparer.OrdinalIgnoreCase)
+                     .Where(g => g.Count() > 1 && manifest.HoldsOnlyDiffuses(g.Key)))
+        {
+            var full = Full(folder, shared.Key);
+            int images = Images(full);
+            if (images < 2) continue;
+            DrawRow($"{Path.GetFileName(full)} (folder)", $"{images} images, drops as a variant group",
+                DroppedPaths.Folder(full), full, true, FontAwesomeIcon.Folder, false);
+        }
+    }
+
+    /// <summary>Texture rows that say what each texture is for.</summary>
+    private void DrawTextureRows(string folder, IReadOnlyList<StashEntry> entries, ISet<StashEntry>? byLayout)
+    {
+        foreach (var entry in entries)
+        {
+            var full = Full(folder, entry.Path);
+            var detail = string.Join(" · ", new[]
+            {
+                PurposeLabel(entry.Purpose), byLayout?.Contains(entry) == true ? "matched by layout" : string.Empty,
+                entry.Detail, string.Join(", ", entry.Groups),
+            }.Where(s => s.Length > 0));
+            DrawRow(Path.GetFileName(entry.Path), detail, DroppedPaths.File(full), full, false, FontAwesomeIcon.File, entry.NeedsConversion, entry.Path);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Items, worked out off the render thread: reading images and materials takes a moment.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private StashManifest? _itemsFor;
+    private Task<TextureItemList?>? _items;
+    private CancellationTokenSource? _itemsCancel;
+
+    /// <summary>The shown manifest's textures by item, or null while they are being sorted.</summary>
+    private TextureItemList? ItemsOf(string folder, StashManifest manifest)
+    {
+        if (!ReferenceEquals(_itemsFor, manifest))
+        {
+            _itemsCancel?.Cancel();
+            _itemsCancel?.Dispose();
+            _itemsCancel = new CancellationTokenSource();
+            var cancel = _itemsCancel.Token;
+            _itemsFor = manifest;
+            _items = Task.Run(() => SafeItems(manifest, folder, cancel), cancel);
+        }
+        return _items is { IsCompletedSuccessfully: true } done ? done.Result : null;
+    }
+
+    /// <summary>Everything loose, for a sort that failed: the rows still show, by purpose.</summary>
+    private static TextureItemList Fallback(StashManifest manifest)
+    {
+        var list = new TextureItemList();
+        list.Loose.AddRange(manifest.Entries.Where(e => e.Kind == StashKind.Texture).OrderBy(e => e.Purpose));
+        return list;
+    }
+
+    private static TextureItemList? SafeItems(StashManifest manifest, string folder, CancellationToken cancel)
+    {
+        try
+        {
+            return TextureItems.Build(manifest, folder, layout: true, cancel);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            StudioServices.Log.Warning(ex, "[Studio] Could not sort the stash's textures into items in {0}", folder);
+            return Fallback(manifest);
         }
     }
 
@@ -526,6 +634,7 @@ internal sealed class StashView
         TexturePurpose.Mask      => "Mask / specular",
         TexturePurpose.Occlusion => "Ambient occlusion",
         TexturePurpose.Emission  => "Emission",
+        TexturePurpose.Matcap    => "Matcap",
         _                        => "Other",
     };
 

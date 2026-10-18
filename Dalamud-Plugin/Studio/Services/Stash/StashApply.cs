@@ -9,8 +9,8 @@ internal static class StashApply
 {
     /// <summary>
     /// The slot each texture goes into: diffuse, normal, and a mask into the mask slot (or the
-    /// specular slot of a material that has no mask slot). Occlusion and emission have no slot of
-    /// their own and are left out. A diffuse that is a folder goes in as a variant folder.
+    /// specular slot of a material that has no mask slot). Occlusion, emission and matcaps have no
+    /// slot of their own and are left out. A diffuse that is a folder goes in as a variant folder.
     /// </summary>
     public static IReadOnlyList<(TextureType Type, string Path, bool Folder)> Plan(
         IReadOnlyDictionary<TexturePurpose, string> textures, IReadOnlyCollection<TextureType> materialHas)

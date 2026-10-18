@@ -30,6 +30,8 @@ internal static class PackageImportScenarios
         PurposeFromUnityProperties();
         PurposeFromFileNames();
         PropertyBeatsFileName();
+        SetNamesFollowTextureSets();
+        TexturesAreSortedIntoItems(root);
         UnityManifestGroupsTexturesByMaterial(root);
         SimsManifestUsesCasRoles(root);
         ManifestRoundTrips(root);
@@ -234,6 +236,15 @@ internal static class PackageImportScenarios
         Require(TexturePurposes.FromUnityProperty("_OcclusionMap") == TexturePurpose.Occlusion, "_OcclusionMap is occlusion");
         Require(TexturePurposes.FromUnityProperty("_EmissionMap") == TexturePurpose.Emission, "_EmissionMap is emission");
         Require(TexturePurposes.FromUnityProperty("_Foo") == null, "an unknown property says nothing");
+        Require(TexturePurposes.FromUnityProperty("_MatCapTex") == TexturePurpose.Matcap && TexturePurposes.FromUnityProperty("_MatCap2ndTex") == TexturePurpose.Matcap
+                && TexturePurposes.FromUnityProperty("_Matcap") == TexturePurpose.Matcap, "lilToon's and Poiyomi's matcap slots hold matcaps");
+        Require(TexturePurposes.FromUnityProperty("_ShadowBorderMask") == TexturePurpose.Occlusion, "lilToon's AO map is occlusion");
+        Require(TexturePurposes.FromUnityProperty("_Main2ndBlendMask") == null, "a layer's blend mask is not the material's mask");
+        Require(TexturePurposes.MostCommon(new TexturePurpose?[] { null, TexturePurpose.Matcap, null, null }) == TexturePurpose.Matcap,
+            "a texture's one telling use speaks for it");
+        Require(TexturePurposes.MostCommon(new TexturePurpose?[] { TexturePurpose.Matcap, TexturePurpose.Diffuse, TexturePurpose.Diffuse }) == TexturePurpose.Diffuse,
+            "the purpose most of its uses give it wins, whatever comes first");
+        Require(TexturePurposes.MostCommon(new TexturePurpose?[] { null }) == null, "uses that say nothing give nothing");
     }
 
     private static void PurposeFromFileNames()
@@ -245,9 +256,128 @@ internal static class PackageImportScenarios
             ("skin_mask.png", TexturePurpose.Mask), ("Z.UV1_Pattern mask.png", TexturePurpose.Mask),
             ("skin_d.png", TexturePurpose.Diffuse), ("Albedo.png", TexturePurpose.Diffuse),
             ("UV1_Black.png", TexturePurpose.Other),
+            ("0a51e805-77cf-4516-bc7f-e8b980857650_base_resized.jpg", TexturePurpose.Other), ("Outfit_Preview.png", TexturePurpose.Other),
+            (Path.Combine("Thumbnails", "body_d.png"), TexturePurpose.Other),
+            ("Hair_MatCap.png", TexturePurpose.Matcap), ("matcap2.png", TexturePurpose.Matcap),
+            (Path.Combine("09. Matcap", "LKVK_Metal 1.png"), TexturePurpose.Matcap), (Path.Combine("09. Matcap", "LKVK_Metal_Normal.png"), TexturePurpose.Normal),
         };
         foreach (var (name, expected) in cases)
             Require(TexturePurposes.FromFileName(name) == expected, $"{name} is read as {expected} (got {TexturePurposes.FromFileName(name)})");
+
+        PurposeFromSiblings();
+    }
+
+    /// <summary>A VRChat outfit's loose texture folder (Sera Yura by LookVook): diffuses only named by their siblings, matcaps only by their looks.</summary>
+    private static void PurposeFromSiblings()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "sera");
+        (string Name, TexturePurpose Expected)[] cases =
+        {
+            ("0a51e805-77cf-4516-bc7f-e8b980857650_base_resized.jpg", TexturePurpose.Other),
+            ("Sera_Yura_Bikini.png", TexturePurpose.Diffuse), ("Sera_Yura_Bikini_AO.png", TexturePurpose.Occlusion),
+            ("Sera_Yura_Bikini_Mask.png", TexturePurpose.Mask), ("Sera_Yura_Bikini_Normal.png", TexturePurpose.Normal),
+            ("Sera_Yura_Skirt.png", TexturePurpose.Diffuse), ("Sera_Yura_Skirt_Mixed_AO.png", TexturePurpose.Occlusion),
+            ("Sera_Yura_Skirt_Normal.png", TexturePurpose.Normal),
+            ("Sera_Yura_Shirt.png", TexturePurpose.Diffuse), ("Sera_Yura_Shirt_Alpha.png", TexturePurpose.Diffuse),
+            ("Sera_Yura_Shirt_AO.png", TexturePurpose.Occlusion), ("Sera_Yura_Shirt_Normal.png", TexturePurpose.Normal),
+            ("Sera_Yura_Elbow_Glove&Stocking.png", TexturePurpose.Diffuse), ("Sera_Yura_Elbow_Glove&Stocking_Latex.png", TexturePurpose.Diffuse),
+            ("Sera_Yura_Elbow_Glove&Stocking_Cow.png", TexturePurpose.Diffuse), ("Sera_Yura_Elbow_Glove&Stocking_Mask2.png", TexturePurpose.Mask),
+            ("Sera_Yura_Elbow_Glove&Stocking_Latex_Normal.png", TexturePurpose.Normal), ("Sera_Yura_Elbow_Glove&Stocking_Normal.png", TexturePurpose.Normal),
+            ("Sera_Yura_Bell_Choker.png", TexturePurpose.Other), ("Sera_Yura_Logo.png", TexturePurpose.Other),
+            ("LKVK_Gloss 1.png", TexturePurpose.Matcap), ("LKVK_Gloss 2.png", TexturePurpose.Matcap), ("LKVK_Glow 1.png", TexturePurpose.Matcap),
+            ("LKVK_Metal 1.png", TexturePurpose.Matcap), ("LKVK_Metal_Normal.png", TexturePurpose.Normal),
+            ("LKVK_Hologram 1.png", TexturePurpose.Matcap), ("LKVK_Latex.png", TexturePurpose.Matcap), ("LKVK_Light.png", TexturePurpose.Matcap),
+            ("LKVK_Can_Gold.png", TexturePurpose.Matcap),
+            ("LKVK_Check.png", TexturePurpose.Other), ("LKVK_Cow.png", TexturePurpose.Other), ("LV-017.png", TexturePurpose.Other),
+            // A gloss map beside its diffuse keeps its role.
+            ("Hair_Diffuse.png", TexturePurpose.Diffuse), ("Hair_Gloss.png", TexturePurpose.Mask), ("Hair_Glow.png", TexturePurpose.Emission),
+        };
+        var read = TexturePurposes.FromFileNames(cases.Select(c => Path.Combine(folder, c.Name)));
+        foreach (var (name, expected) in cases)
+        {
+            var got = read[Path.Combine(folder, name)];
+            Require(got == expected, $"beside its folder, {name} is read as {expected} (got {got})");
+        }
+
+        var alone = TexturePurposes.FromFileNames(new[] { Path.Combine(folder, "Body.png"), Path.Combine(folder, "Other", "Body_Normal.png") });
+        Require(alone[Path.Combine(folder, "Body.png")] == TexturePurpose.Other, "only files in the same folder make a set");
+
+        var manifest = new StashManifest();
+        foreach (var (path, purpose) in new[]
+                 {
+                     ("Body.png", TexturePurpose.Diffuse), ("Body_Normal.png", TexturePurpose.Normal), ("Shirt.png", TexturePurpose.Diffuse),
+                     ("swatches/red.png", TexturePurpose.Diffuse), ("swatches/blue.png", TexturePurpose.Diffuse),
+                 })
+            manifest.Entries.Add(new StashEntry { Path = path, Kind = StashKind.Texture, Purpose = purpose });
+        manifest.Entries.Add(new StashEntry { Path = "swatches/readme.txt", Kind = StashKind.Other });
+        Require(!manifest.HoldsOnlyDiffuses(""), "a folder with a normal map beside its diffuses is a texture set, not a swatch folder");
+        Require(manifest.HoldsOnlyDiffuses("swatches") && manifest.HoldsOnlyDiffuses("SWATCHES"),
+            "a folder of only diffuses is a swatch folder, whatever else that is not a texture sits in it");
+    }
+
+    private static void SetNamesFollowTextureSets()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "sets");
+        (string Name, string Set)[] cases =
+        {
+            ("Sera_Yura_Bikini.png", "Sera_Yura_Bikini"), ("Sera_Yura_Bikini_AO.png", "Sera_Yura_Bikini"),
+            ("Sera_Yura_Elbow_Glove&Stocking.png", "Sera_Yura_Elbow_Glove&Stocking"),
+            ("Sera_Yura_Elbow_Glove&Stocking_Latex_Normal.png", "Sera_Yura_Elbow_Glove&Stocking"),
+            ("Sera_Yura_Elbow_Glove&Stocking_Mask2.png", "Sera_Yura_Elbow_Glove&Stocking"),
+            ("Sera_Yura_Bell_L.png", "Sera_Yura_Bell_L"), ("Sera_Yura_Bell_R.png", "Sera_Yura_Bell_R"),
+            ("baroque_top_id.tex", "baroque_top"), ("baroque_top_m.tex", "baroque_top"), ("baroque_top_n.tex", "baroque_top"),
+            ("baroque_glove_n.tex", "baroque_glove"), ("Hair_Diffuse.png", "Hair"), ("Hair_Gloss.png", "Hair"),
+            ("LKVK_Metal 1.png", "LKVK_Metal 1"),
+        };
+        var sets = TexturePurposes.SetNames(cases.Select(c => Path.Combine(folder, c.Name)));
+        foreach (var (name, set) in cases)
+        {
+            var got = sets[Path.Combine(folder, name)];
+            Require(got == set, $"{name} is in the set {set} (got {got})");
+        }
+    }
+
+    /// <summary>A loose folder: two items by name, a texture without a telling name that shares one's layout, a matcap, a preview and a logo.</summary>
+    private static void TexturesAreSortedIntoItems(string root)
+    {
+        var folder = Path.Combine(root, "items");
+        if (Directory.Exists(folder))
+            Directory.Delete(folder, true);
+        Directory.CreateDirectory(folder);
+        // Painted where an item's UV islands are, empty elsewhere.
+        void Image(string name, int x0, int y0, int seed)
+        {
+            var random = new Random(seed);
+            using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(256, 256);
+            for (int y = y0; y < y0 + 128; y++)
+                for (int x = x0; x < x0 + 128; x++)
+                    image[x, y] = new SixLabors.ImageSharp.PixelFormats.Rgba32((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256), 255);
+            SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, Path.Combine(folder, name));
+        }
+        Image("Outfit_Shirt.png", 0, 0, 1);
+        Image("Outfit_Shirt_Normal.png", 0, 0, 2);
+        Image("Outfit_Shirt_AO.png", 0, 0, 3);
+        Image("Outfit_Gloves.png", 128, 128, 4);
+        Image("Outfit_Gloves_Normal.png", 128, 128, 5);
+        Image("tex9.png", 0, 0, 6);
+        Image("Logo.png", 0, 128, 7);
+        Image("LKVK_Gloss 1.png", 64, 64, 8);
+        Image("0a51e805-77cf-4516-bc7f-e8b980857650_base_resized.png", 0, 0, 9);
+
+        var manifest = StashManifest.Scan(folder);
+        var items = TextureItems.Build(manifest, folder);
+        Require(items.Items.Select(i => i.Name).SequenceEqual(new[] { "Gloves", "Shirt" }),
+            $"texture sets are items, named without the start they all share (got {string.Join(", ", items.Items.Select(i => i.Name))})");
+        var shirt = items.Items.Last();
+        Require(shirt.Textures.Select(t => t.Path).SequenceEqual(new[] { "Outfit_Shirt.png", "Outfit_Shirt_Normal.png", "Outfit_Shirt_AO.png", "tex9.png" }),
+            $"an item lists its textures by purpose; a texture painted where the item is joins it (got {string.Join(", ", shirt.Textures.Select(t => t.Path))})");
+        Require(shirt.ByLayout.Select(t => t.Path).SequenceEqual(new[] { "tex9.png" }), "a texture that joined by its layout says so");
+        Require(items.Matcaps.Select(t => t.Path).SequenceEqual(new[] { "LKVK_Gloss 1.png" }), "matcaps are listed apart from the items");
+        Require(items.Loose.Select(t => t.Path).Order().SequenceEqual(new[] { "0a51e805-77cf-4516-bc7f-e8b980857650_base_resized.png", "Logo.png" }),
+            "a texture painted elsewhere, and a store picture whatever its layout, belong to no item");
+
+        var byName = TextureItems.Build(manifest, folder, layout: false);
+        Require(byName.Loose.Any(t => t.Path == "tex9.png") && byName.Items.All(i => i.ByLayout.Count == 0), "without the layout pass, only names group");
     }
 
     private static void PropertyBeatsFileName()

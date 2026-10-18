@@ -100,6 +100,29 @@ internal sealed class StashManifest
     [JsonIgnore]
     public bool Truncated { get; private set; }
 
+    /// <summary>Folders (relative, "" for the top) that list a texture other than a diffuse; worked out on first use.</summary>
+    private HashSet<string>? _mixedFolders;
+
+    /// <summary>
+    /// Whether every texture listed directly in <paramref name="relativeFolder"/> ('/'-separated, ""
+    /// for the top) is a diffuse: a folder of swatches that can go in as variants, not a texture set
+    /// whose normals, masks and matcaps would go in with them.
+    /// </summary>
+    public bool HoldsOnlyDiffuses(string relativeFolder)
+    {
+        _mixedFolders ??= Entries.Where(e => e.Kind == StashKind.Texture && e.Purpose != TexturePurpose.Diffuse)
+                                 .Select(e => FolderOf(e.Path))
+                                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return !_mixedFolders.Contains(relativeFolder);
+    }
+
+    /// <summary>The folder part of an entry's relative path, "" for the top.</summary>
+    public static string FolderOf(string relativePath)
+    {
+        int slash = relativePath.LastIndexOf('/');
+        return slash < 0 ? string.Empty : relativePath[..slash];
+    }
+
     /// <summary>
     /// The files a folder holds, for one without a manifest (an older extraction, or a folder of loose
     /// files the user opened): kinds by extension, purposes by folder and name. Hidden folders are
@@ -130,6 +153,7 @@ internal sealed class StashManifest
         }
 
         var unity = metas.Count > 0 ? UnityFolder.Read(files, metas) : null;
+        var byName = TexturePurposes.FromFileNames(files.Where(f => KindOf(f) == StashKind.Texture));
         foreach (var file in files)
         {
             var entry = NewEntry(folder, file);
@@ -139,10 +163,9 @@ internal sealed class StashManifest
                     entry.Groups.Add(group);
             if (entry.Kind == StashKind.Texture)
             {
-                var fromProperty = used.Select(u => u.Purpose).FirstOrDefault(p => p != null);
                 entry.Purpose = unity != null
-                    ? TexturePurposes.Classify(null, fromProperty, unity.TextureTypeOf(file), file)
-                    : FromFolder(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(file)) ?? "") ?? TexturePurposes.FromFileName(file);
+                    ? TexturePurposes.Classify(null, TexturePurposes.MostCommon(used.Select(u => u.Purpose)), unity.TextureTypeOf(file), byName[file])
+                    : FromFolder(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(file)) ?? "") ?? byName[file];
             }
             manifest.Entries.Add(entry);
         }
@@ -275,6 +298,7 @@ internal sealed class StashManifest
             }
 
         var assets = scan.Assets.ToDictionary(a => a.Guid, StringComparer.OrdinalIgnoreCase);
+        var byName = TexturePurposes.FromFileNames(extraction.FileByGuid.Values.Where(f => KindOf(f) == StashKind.Texture));
         foreach (var (guid, file) in extraction.FileByGuid.OrderBy(p => p.Value, StringComparer.OrdinalIgnoreCase))
         {
             var entry = NewEntry(root, file);
@@ -287,8 +311,8 @@ internal sealed class StashManifest
             }
             if (entry.Kind == StashKind.Texture)
             {
-                var fromProperty = used.Select(u => u.Purpose).FirstOrDefault(p => p != null);
-                entry.Purpose = TexturePurposes.Classify(null, fromProperty, assets.GetValueOrDefault(guid)?.TextureType ?? -1, file);
+                entry.Purpose = TexturePurposes.Classify(null, TexturePurposes.MostCommon(used.Select(u => u.Purpose)),
+                    assets.GetValueOrDefault(guid)?.TextureType ?? -1, byName[file]);
             }
             manifest.Entries.Add(entry);
         }
