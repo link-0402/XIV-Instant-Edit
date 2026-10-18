@@ -197,6 +197,26 @@ The places, file names and the meta.json write are checked offline (ModHandoffSc
   while the paste menu is open. `material` shows "highlightedRow".
 - [ ] Unload the plugin with two previews shown: both temporary mods go and the character redraws.
 
+## Legacy shader to character.shpk (2026-10-18)
+
+Side by side through a temporary Penumbra mod with files made by `LegacyConversion` offline (no Release
+build): Leonhart Bottoms (`mt_c0201e0436_dwn_a.mtrl`, characterlegacy.shpk, Compatibility, white shine
+map), Limsa inn.
+
+- [x] The converted material matches the original on surfaces facing the camera (mean difference 1.6
+  levels against 1.1 between two captures of the same material).
+- [x] Copying the rows onto character.shpk as they are (exposure 0) reproduces the report: the skirt
+  goes flat black.
+- [x] Shader id 12 and 0 look the same here; 12 is kept (legacy writes lighting type 44 = 32 + 12).
+- [~] Silhouette: legacy reflects the room at the shine colour, character.shpk at 4%, so the edges came
+  out darker (8.5 / 6.6 levels). A white sheen at 25% of the row's shine (aperture 4) halves that
+  (3.5 / 3.2) and is now part of the conversion; 50% overshoots. Roughness from the reflection blur
+  (Penumbra's formula) helped the centre a little and the edges not at all, so the G-buffer-exact
+  2^(-gloss/15) stays.
+- [ ] Through the editor after a Release build: Convert to Dawntrail on a characterlegacy material is
+  one undo step, the new `_ie.tex` mask saves with the material, the rows show legacy labels before
+  converting, and pasting a legacy row onto a character.shpk material keeps its base colour.
+
 ## Finish (Task 13, pending)
 
 - [x] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as

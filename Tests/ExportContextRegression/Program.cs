@@ -196,6 +196,7 @@ try
     Scenarios.Run(MaterialEditorScenarios.RunUsage);
     Scenarios.Run(MaterialEditorScenarios.RunPresets);
     Scenarios.Run(MaterialEditorScenarios.RunDye);
+    Scenarios.Run(MaterialEditorScenarios.RunLegacyConversion);
     Scenarios.Run(() => SimsImportScenarios.Run(testRoot));
     Scenarios.Run(() => PackageImportScenarios.Run(testRoot));
     Scenarios.Run(() => AnimationPackScenarios.Run(testRoot));

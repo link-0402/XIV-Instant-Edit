@@ -89,8 +89,26 @@ public sealed class StainTemplates
         return row;
     }
 
-    /// <summary>A copy of a Dawntrail table with each dyed row dyed by the stain its channel picks (0 = no dye).</summary>
-    public ColorTable Dyed(ColorTable table, IReadOnlyList<int> stains)
+    /// <summary>
+    /// A 32-row row on characterlegacy.shpk dyed: it takes legacy templates, and bits 3 and 4 dye the
+    /// gloss (half 3) and the shine strength (half 7). A black shine leaves the row's own.
+    /// </summary>
+    public static DtColorRow ApplyLegacyDye(DtColorRow row, DtDyeRow dye, LegacyDyePack pack)
+    {
+        bool On(int bit) => (dye.Flags & (1 << bit)) != 0;
+        if (On(0)) row.Diffuse = pack.Diffuse;
+        if (On(1) && pack.Specular != Vector3.Zero) row.Specular = pack.Specular;
+        if (On(2)) row.Emissive = pack.Emissive;
+        if (On(3)) row.Scalar3 = pack.Gloss;
+        if (On(4)) row.Scalar7 = pack.SpecularMask;
+        return row;
+    }
+
+    /// <summary>
+    /// A copy of a Dawntrail-sized table with each dyed row dyed by the stain its channel picks (0 = no
+    /// dye); <paramref name="legacyShader"/> for characterlegacy.shpk, which dyes with the legacy templates.
+    /// </summary>
+    public ColorTable Dyed(ColorTable table, IReadOnlyList<int> stains, bool legacyShader = false)
     {
         if (table is not { Kind: ColorTableKind.Dawntrail, Dye: { } dyeRows })
             return table;
@@ -99,7 +117,11 @@ public sealed class StainTemplates
         {
             var dye = dyeRows[i];
             var stain = dye.Channel < stains.Count ? stains[dye.Channel] : 0;
-            if (dye.Flags != 0 && stain > 0 && TryGet(dye.Template, stain, out var pack))
+            if (dye.Flags == 0 || stain <= 0)
+                continue;
+            if (legacyShader && TryGetLegacy(dye.Template, stain, out var legacy))
+                copy.Rows[i] = ApplyLegacyDye(copy.Rows[i], dye, legacy);
+            else if (!legacyShader && TryGet(dye.Template, stain, out var pack))
                 copy.Rows[i] = ApplyDye(copy.Rows[i], dye, pack);
         }
         return copy;

@@ -20,8 +20,8 @@ internal sealed partial class MaterialWindow
     private const string PastePopup = "##row-paste";
 
     private int selectedPair;
-    // Shared, so a row copied in one Material window pastes in another.
-    private static DtColorRow? rowClipboard;
+    // Shared, so a row copied in one Material window pastes in another. Legacy: copied on characterlegacy.shpk, whose rows mean other things.
+    private static (DtColorRow Row, bool Legacy)? rowClipboard;
 
     private enum PasteKind
     {
@@ -40,8 +40,11 @@ internal sealed partial class MaterialWindow
         switch (table.Kind)
         {
             case ColorTableKind.Dawntrail:
+                var legacyShader = LegacyConversion.IsLegacyShader(doc.ShaderPackage);
+                if (legacyShader)
+                    DrawLegacyShaderNote(current, doc);
                 DrawDyeBar(current, doc, table);
-                var swatchRow = DrawPairs(ShownTable(table));
+                var swatchRow = DrawPairs(ShownTable(table), legacyShader);
                 ImGui.Spacing();
                 var editorRow = DrawPairEditors(current, doc, table);
                 // After the editors, so a paste under the mouse pulses the pasted row.
@@ -59,7 +62,7 @@ internal sealed partial class MaterialWindow
     // ---- Pairs ----
 
     /// <summary>The pair swatches, each half a row; returns the hovered row, or -1.</summary>
-    private int DrawPairs(ColorTable table)
+    private int DrawPairs(ColorTable table, bool legacyShader)
     {
         var hoveredRow = -1;
         var spacing = Theme.Scaled(4);
@@ -81,8 +84,8 @@ internal sealed partial class MaterialWindow
             var bottom = hovered && ImGui.GetMousePos().Y >= position.Y + half;
             if (hovered)
                 hoveredRow = pair * 2 + (bottom ? 1 : 0);
-            DrawSwatches(draw, position, new Vector2(width, half), a);
-            DrawSwatches(draw, position + new Vector2(0, half), new Vector2(width, half), b);
+            DrawSwatches(draw, position, new Vector2(width, half), a, legacyShader);
+            DrawSwatches(draw, position + new Vector2(0, half), new Vector2(width, half), b, legacyShader);
             // A line between the rows, so a pair of matching rows still reads as two.
             draw.AddLine(position + new Vector2(0, half), position + new Vector2(width, half), ImGui.GetColorU32(new Vector4(0, 0, 0, .6f)), Theme.Scaled(1));
             // Pairs the index texture never selects are drawn at 40%, and so is a used pair's row it never picks.
@@ -131,13 +134,14 @@ internal sealed partial class MaterialWindow
         return $"{UsageText(pair)} This row gets {part:0}% of it.";
     }
 
-    private static void DrawSwatches(ImDrawListPtr draw, Vector2 position, Vector2 size, DtColorRow row)
+    private static void DrawSwatches(ImDrawListPtr draw, Vector2 position, Vector2 size, DtColorRow row, bool legacyShader)
     {
         var third = size.X / 3;
         Vector4 Shown(Vector3 colour) => new(Math.Clamp(colour.X, 0, 1), Math.Clamp(colour.Y, 0, 1), Math.Clamp(colour.Z, 0, 1), 1);
         draw.AddRectFilled(position, position + new Vector2(third, size.Y), ImGui.GetColorU32(Shown(row.Diffuse)));
         draw.AddRectFilled(position + new Vector2(third, 0), position + new Vector2(third * 2, size.Y), ImGui.GetColorU32(Shown(row.Specular)));
-        draw.AddRectFilled(position + new Vector2(third * 2, 0), position + size, ImGui.GetColorU32(Shown(row.Emissive * row.Exposure)));
+        // Legacy shaders don't read half 11.
+        draw.AddRectFilled(position + new Vector2(third * 2, 0), position + size, ImGui.GetColorU32(Shown(legacyShader ? row.Emissive : row.Emissive * row.Exposure)));
     }
 
     // ---- The selected pair ----
@@ -181,7 +185,13 @@ internal sealed partial class MaterialWindow
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Hint, row % 2 == 0 ? "(top, index green 255)" : "(bottom, index green 0)");
         pulse |= ImGui.IsItemHovered();
-        pulse |= DrawRowActions(current, table, row, values, name);
+        var legacyShader = LegacyConversion.IsLegacyShader(doc.ShaderPackage);
+        pulse |= DrawRowActions(current, table, row, values, name, legacyShader);
+        if (legacyShader)
+        {
+            DrawLegacyShaderRow(current, table, row, values, name);
+            return pulse;
+        }
 
         Section("Colour");
         RowColour(current, row, "Base colour", values.Diffuse, colour => values with { Diffuse = colour }, name);
@@ -202,25 +212,7 @@ internal sealed partial class MaterialWindow
         RowPercent(current, row, "Sheen tint", "How much the sheen takes the base colour.", values.SheenTint, v => values with { SheenTint = v }, name);
         RowSlider(current, row, "Sheen spread", "Lower spreads the sheen wider.", values.SheenAperture, 0f, 20f, v => values with { SheenAperture = v }, name);
 
-        Section("Pattern");
-        if (RowLabel("Detail pattern", "Which detail pattern the row uses (0 to 63)."))
-        {
-            var tile = values.TileIndex;
-            // One pick is one undo step, so no gesture tracking: the last item may be a list entry in the popup.
-            if (SlicePicker("##tile", ref tile, 63, TextureArraySlices.ArrayKind.PatternColour, TextureArraySlices.ArrayKind.PatternNormal))
-                _ = current.Apply(d => EditRow(d, row, r => r with { TileIndex = tile }), $"{name} detail pattern");
-        }
-        RowPercent(current, row, "Detail strength", "How strongly the pattern shows.", values.TileAlpha, v => values with { TileAlpha = v }, name);
-        var (scaleU, scaleV, rotation, shear) = TileTransform.Decompose(values.TileUU, values.TileUV, values.TileVU, values.TileVV);
-        // Mods store scales well past 64 (250 is common), so the drags must not clamp them on a touch.
-        RowTransform(current, row, "Detail scale across", "How often the pattern repeats across.", scaleU, -1024f, 1024f,
-            v => Compose(values, v, scaleV, rotation, shear), name);
-        RowTransform(current, row, "Detail scale down", "How often the pattern repeats down.", scaleV, -1024f, 1024f,
-            v => Compose(values, scaleU, v, rotation, shear), name);
-        RowTransform(current, row, "Detail rotation", "Turns the pattern, in degrees.", rotation, -180f, 180f,
-            v => Compose(values, scaleU, scaleV, v, shear), name);
-        RowTransform(current, row, "Detail shear", "Slants the pattern, in degrees.", shear, -80f, 80f,
-            v => Compose(values, scaleU, scaleV, rotation, v), name);
+        DrawRowPattern(current, row, values, name);
 
         Section("Reflection");
         if (RowLabel("Reflection map", "Which reflection texture the row uses."))
@@ -252,13 +244,7 @@ internal sealed partial class MaterialWindow
                 style = Math.Clamp(style, 0, 31);
                 Track(current, changed, d => EditRow(d, row, r => r with { ShaderId = style }), $"{name} lighting style");
             }
-            if (RowLabel("Detail matrix", "The pattern transform as stored: UU, UV, VU, VV."))
-            {
-                var matrix = new Vector4(values.TileUU, values.TileUV, values.TileVU, values.TileVV);
-                var changed = ImGui.DragFloat4("##matrix", ref matrix, 0.05f, 0, 0, "%.2f");
-                Track(current, changed, d => EditRow(d, row, r => r with { TileUU = matrix.X, TileUV = matrix.Y, TileVU = matrix.Z, TileVV = matrix.W }),
-                    $"{name} detail matrix");
-            }
+            DrawDetailMatrix(current, row, values, name);
             RawValue(current, row, 3, values.Scalar3, v => values with { Scalar3 = v }, name);
             RawValue(current, row, 7, values.Scalar7, v => values with { Scalar7 = v }, name);
             RawValue(current, row, 15, values.Scalar15, v => values with { Scalar15 = v }, name);
@@ -270,15 +256,78 @@ internal sealed partial class MaterialWindow
         return pulse;
     }
 
+    /// <summary>
+    /// A row as characterlegacy.shpk reads it: the old fields in the new table's halves (gloss in 3,
+    /// shine strength in 7) and no exposure, sheen, metal or reflection.
+    /// </summary>
+    private void DrawLegacyShaderRow(MaterialSession current, ColorTable table, int row, DtColorRow values, string name)
+    {
+        Section("Colour");
+        RowColour(current, row, "Base colour", values.Diffuse, colour => values with { Diffuse = colour }, name);
+        RowColour(current, row, "Shine colour", values.Specular, colour => values with { Specular = colour }, name);
+        RowSlider(current, row, "Shine strength", "How strong the shine is.", values.Scalar7, 0f, 4f, v => values with { Scalar7 = v }, name);
+        RowColour(current, row, "Glow colour", values.Emissive, colour => values with { Emissive = colour }, name);
+
+        Section("Surface");
+        RowSlider(current, row, "Gloss", "Higher gives a smaller, sharper shine.", values.Scalar3, 0f, 100f, v => values with { Scalar3 = v }, name);
+
+        DrawRowPattern(current, row, values, name);
+
+        if (table.Dye != null)
+        {
+            Section("Dye");
+            DrawRowDye(current, table, row, name);
+        }
+
+        if (ImGui.TreeNode("Advanced##row-advanced"))
+        {
+            DrawDetailMatrix(current, row, values, name);
+            ImGui.TreePop();
+        }
+    }
+
+    private void DrawRowPattern(MaterialSession current, int row, DtColorRow values, string name)
+    {
+        Section("Pattern");
+        if (RowLabel("Detail pattern", "Which detail pattern the row uses (0 to 63)."))
+        {
+            var tile = values.TileIndex;
+            // One pick is one undo step, so no gesture tracking: the last item may be a list entry in the popup.
+            if (SlicePicker("##tile", ref tile, 63, TextureArraySlices.ArrayKind.PatternColour, TextureArraySlices.ArrayKind.PatternNormal))
+                _ = current.Apply(d => EditRow(d, row, r => r with { TileIndex = tile }), $"{name} detail pattern");
+        }
+        RowPercent(current, row, "Detail strength", "How strongly the pattern shows.", values.TileAlpha, v => values with { TileAlpha = v }, name);
+        var (scaleU, scaleV, rotation, shear) = TileTransform.Decompose(values.TileUU, values.TileUV, values.TileVU, values.TileVV);
+        // Mods store scales well past 64 (250 is common), so the drags must not clamp them on a touch.
+        RowTransform(current, row, "Detail scale across", "How often the pattern repeats across.", scaleU, -1024f, 1024f,
+            v => Compose(values, v, scaleV, rotation, shear), name);
+        RowTransform(current, row, "Detail scale down", "How often the pattern repeats down.", scaleV, -1024f, 1024f,
+            v => Compose(values, scaleU, v, rotation, shear), name);
+        RowTransform(current, row, "Detail rotation", "Turns the pattern, in degrees.", rotation, -180f, 180f,
+            v => Compose(values, scaleU, scaleV, v, shear), name);
+        RowTransform(current, row, "Detail shear", "Slants the pattern, in degrees.", shear, -80f, 80f,
+            v => Compose(values, scaleU, scaleV, rotation, v), name);
+    }
+
+    private static void DrawDetailMatrix(MaterialSession current, int row, DtColorRow values, string name)
+    {
+        if (!RowLabel("Detail matrix", "The pattern transform as stored: UU, UV, VU, VV."))
+            return;
+        var matrix = new Vector4(values.TileUU, values.TileUV, values.TileVU, values.TileVV);
+        var changed = ImGui.DragFloat4("##matrix", ref matrix, 0.05f, 0, 0, "%.2f");
+        Track(current, changed, d => EditRow(d, row, r => r with { TileUU = matrix.X, TileUV = matrix.Y, TileVU = matrix.Z, TileVV = matrix.W }),
+            $"{name} detail matrix");
+    }
+
     /// <summary>Copy, paste and discard for one row; true while one of them is hovered or the paste menu is open.</summary>
-    private bool DrawRowActions(MaterialSession current, ColorTable table, int row, DtColorRow values, string name)
+    private bool DrawRowActions(MaterialSession current, ColorTable table, int row, DtColorRow values, string name, bool legacyShader)
     {
         var buttons = ImGui.GetFrameHeight() * 3 + ImGui.GetStyle().ItemSpacing.X * 2;
         ImGui.SameLine();
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - buttons));
         if (Widgets.GhostIconButton("##copy", FontAwesomeIcon.Copy, "Copy this row"))
         {
-            rowClipboard = values;
+            rowClipboard = (values, legacyShader);
             Say(FeedbackSeverity.Info, $"Copied {name}.");
         }
         var hovered = ImGui.IsItemHovered();
@@ -304,18 +353,21 @@ internal sealed partial class MaterialWindow
         }
         hovered |= ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
         using var popup = ImRaii.Popup(PastePopup);
-        if (!popup.Success || rowClipboard is not { } copied)
+        if (!popup.Success || rowClipboard is not { } clip)
             return hovered;
+        var copied = LegacyConversion.RowForShader(clip.Row, clip.Legacy, legacyShader);
         foreach (var (kind, label) in new[] { (PasteKind.All, "Everything"), (PasteKind.Colours, "Colours only"), (PasteKind.Surface, "Surface only") })
             if (ImGui.MenuItem(label))
-                _ = current.Apply(d => EditRow(d, row, r => Paste(r, copied, kind)), $"Paste onto {name}");
+                _ = current.Apply(d => EditRow(d, row, r => Paste(r, copied, kind, legacyShader)), $"Paste onto {name}");
         return true;
     }
 
-    private static DtColorRow Paste(DtColorRow target, DtColorRow copied, PasteKind kind) => kind switch
+    private static DtColorRow Paste(DtColorRow target, DtColorRow copied, PasteKind kind, bool legacyShader) => (kind, legacyShader) switch
     {
-        PasteKind.Colours => target with { Diffuse = copied.Diffuse, Specular = copied.Specular, Emissive = copied.Emissive, Exposure = copied.Exposure },
-        PasteKind.Surface => target with
+        (PasteKind.Colours, true) => target with { Diffuse = copied.Diffuse, Specular = copied.Specular, Scalar7 = copied.Scalar7, Emissive = copied.Emissive },
+        (PasteKind.Surface, true) => target with { Scalar3 = copied.Scalar3 },
+        (PasteKind.Colours, _) => target with { Diffuse = copied.Diffuse, Specular = copied.Specular, Emissive = copied.Emissive, Exposure = copied.Exposure },
+        (PasteKind.Surface, _) => target with
         {
             Roughness = copied.Roughness, Metalness = copied.Metalness, Anisotropy = copied.Anisotropy,
             SheenRate = copied.SheenRate, SheenTint = copied.SheenTint, SheenAperture = copied.SheenAperture,
@@ -504,6 +556,8 @@ internal sealed partial class MaterialWindow
                     ConvertToDawntrail(current, doc);
             }
         }
+        else if (LegacyConversion.IsLegacyShader(doc.ShaderPackage))
+            DrawLegacyShaderNote(current, doc);
         else
         {
             Widgets.HintWrapped("An old 16-row table. Convert to Dawntrail in the menu to use the newer rows.");
@@ -576,20 +630,46 @@ internal sealed partial class MaterialWindow
         return doc.WithTable(table);
     }
 
+    /// <summary>characterlegacy.shpk: a note that its rows use the old fields, and the conversion.</summary>
+    private void DrawLegacyShaderNote(MaterialSession current, MaterialDocument doc)
+    {
+        Widgets.HintWrapped("Legacy shader: these rows use the old fields.");
+        using (ImRaii.Disabled(Busy))
+        {
+            if (ImGui.Button("Convert to Dawntrail##legacy-shader-convert"))
+                ConvertToDawntrail(current, doc);
+        }
+        Tip("Moves it to character.shpk and keeps the look.");
+    }
+
     /// <summary>
-    /// A legacy material moves to character.shpk with Dawntrail rows. Legacy shaders pick rows with the
-    /// normal map's alpha, so unless the material has an index texture that loads, one is made from the
-    /// normal map; the conversion and the texture land as one undo step.
+    /// A legacy material moves to character.shpk with Dawntrail rows, as one undo step with the textures
+    /// it needs. A 16-row table's rows were picked with the normal map's alpha, so unless the material has
+    /// an index texture that loads, one is made from the normal map. A characterlegacy.shpk material
+    /// also gets a new mask, as character.shpk reads the mask's channels differently
+    /// (<see cref="LegacyConversion"/>).
     /// </summary>
     private void ConvertToDawntrail(MaterialSession current, MaterialDocument doc)
     {
+        var legacyShader = LegacyConversion.IsLegacyShader(doc.ShaderPackage);
+        if (doc.Table is { Kind: ColorTableKind.Opaque })
+        {
+            Say(FeedbackSeverity.Warning, "This colour table has a layout the editor doesn't know, so it can't be converted.");
+            return;
+        }
+        var oldTable = doc.Table is { Kind: ColorTableKind.Legacy };
         var normal = doc.Slots.FirstOrDefault(slot => slot.SamplerId == MaterialDocument.NormalSampler && slot.Path.Length > 0)?.Path;
         var existing = doc.Slots.FirstOrDefault(slot => slot.SamplerId == IndexSampler && slot.Path.Length > 0)?.Path;
+        var mask = doc.Slots.FirstOrDefault(slot => slot.SamplerId == MaskSampler && slot.Path.Length > 0)?.Path;
         var indexPath = existing ?? (normal == null ? null : MaterialSession.IndexPathFor(normal));
+        var maskPath = mask ?? MaskPathFor(normal ?? current.Source.GamePath);
+        var kind = LegacyConversion.MaskKind(doc);
         var source = current.Source;
-        var normalFile = normal != null && resolvedTextures.TryGetValue(normal, out var foundNormal) ? foundNormal : normal;
-        var indexFile = existing != null && resolvedTextures.TryGetValue(existing, out var foundIndex) ? foundIndex : existing;
-        byte[]? built = null;
+        string? Resolved(string? path) => path != null && resolvedTextures.TryGetValue(path, out var found) ? found : path;
+        var (normalFile, indexFile, maskFile) = (Resolved(normal), Resolved(existing), Resolved(mask));
+        byte[]? builtIndex = null;
+        byte[]? builtMask = null;
+        var failed = false;
         Run(async () =>
         {
             // A mod material's textures come from its own mod: the character's collection may load other ones (or the mod is off).
@@ -603,22 +683,42 @@ internal sealed partial class MaterialWindow
                         : null;
                 normalFile = Own(normal) ?? normalFile;
                 indexFile = Own(existing) ?? indexFile;
+                maskFile = Own(mask) ?? maskFile;
             }
-            if (await ReadTextureAsync(indexFile).ConfigureAwait(false) != null)
+            // A made texture goes where nothing is yet: over a game texture of that name it would change every
+            // material that reads it, and a path the mod maps already would stop the save.
+            bool Taken(string path) => data.FileExists(path) || current.NewFiles.ContainsKey(path) ||
+                                       !source.IsGameData && source.ModRootPath.Length > 0 &&
+                                       ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, path) != null;
+            if (legacyShader)
+            {
+                var maskBytes = mask != null && current.NewFiles.TryGetValue(mask, out var made) ? made : await ReadTextureAsync(maskFile).ConfigureAwait(false);
+                if (mask != null && maskBytes == null)
+                {
+                    failed = true;
+                    return "The mask couldn't be read, so nothing was converted.";
+                }
+                try
+                {
+                    builtMask = LegacyConversion.MaskTexture(kind, maskBytes == null ? null : TextureDecoder.Decode(maskBytes, int.MaxValue));
+                }
+                catch (Exception e) when (e is InvalidDataException or NotSupportedException or ArgumentException)
+                {
+                    failed = true;
+                    return "The mask's format can't be read, so nothing was converted.";
+                }
+                maskPath = MaterialSession.FreeTexturePath(maskPath, Taken);
+            }
+            if (!oldTable || await ReadTextureAsync(indexFile).ConfigureAwait(false) != null)
                 return null;
             var bytes = await ReadTextureAsync(normalFile).ConfigureAwait(false);
             if (bytes == null || indexPath == null)
                 return "The normal map couldn't be read, so no index texture was made. The whole model shows pair 1 until you add one.";
-            // A made index goes where nothing is yet: over a game texture of that name it would change every
-            // material that reads it, and a path the mod maps already would stop the save.
             if (existing == null)
-                indexPath = MaterialSession.FreeTexturePath(indexPath, path =>
-                    data.FileExists(path) || current.NewFiles.ContainsKey(path) ||
-                    !source.IsGameData && source.ModRootPath.Length > 0 &&
-                    ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, path) != null);
+                indexPath = MaterialSession.FreeTexturePath(indexPath, Taken);
             try
             {
-                built = LegacyIndexTexture.FromNormal(TextureDecoder.Decode(bytes, int.MaxValue));
+                builtIndex = LegacyIndexTexture.FromNormal(TextureDecoder.Decode(bytes, int.MaxValue));
             }
             catch (Exception e) when (e is InvalidDataException or NotSupportedException or ArgumentException)
             {
@@ -627,18 +727,34 @@ internal sealed partial class MaterialWindow
             return null;
         }, warning =>
         {
-            if (built != null)
-                current.AddNewFile(indexPath!, built);
+            if (failed)
+                return warning!;
+            if (builtIndex != null)
+                current.AddNewFile(indexPath!, builtIndex);
+            if (builtMask != null)
+                current.AddNewFile(maskPath, builtMask);
             IReadOnlyList<string> notes = [];
             _ = current.Apply(d =>
             {
-                var (converted, changed) = ConvertedToDawntrail(d, built != null ? indexPath : null);
+                var (converted, changed) = legacyShader
+                    ? LegacyConversion.ToCharacter(d, builtMask != null ? maskPath : null, builtIndex != null ? indexPath : null)
+                    : ConvertedToDawntrail(d, builtIndex != null ? indexPath : null);
                 notes = changed;
                 return converted;
             }, "Convert to Dawntrail");
-            var text = built != null ? $"Converted to Dawntrail rows, with an index texture made from the normal map ({indexPath})." : "Converted to Dawntrail rows.";
+            var text = legacyShader ? $"Moved to character.shpk, with a new mask ({maskPath})."
+                : builtIndex != null ? $"Converted to Dawntrail rows, with an index texture made from the normal map ({indexPath})." : "Converted to Dawntrail rows.";
+            if (legacyShader && builtIndex != null)
+                text += $" The index texture was made from the normal map ({indexPath}).";
             return string.Join(" ", new[] { text, warning }.Concat(notes).Where(part => !string.IsNullOrEmpty(part)));
         });
+    }
+
+    /// <summary>Where a made mask goes when the material has none: beside the normal map, …_mask.tex.</summary>
+    private static string MaskPathFor(string path)
+    {
+        var index = MaterialSession.IndexPathFor(path.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) ? path[..^".mtrl".Length] + ".tex" : path);
+        return index[..^"_id.tex".Length] + "_mask.tex";
     }
 
     private static (MaterialDocument Doc, IReadOnlyList<string> Notes) ConvertedToDawntrail(MaterialDocument doc, string? indexPath)

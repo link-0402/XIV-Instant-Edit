@@ -15,6 +15,9 @@ internal sealed partial class MaterialWindow
     private static readonly string[] DyeFields =
         ["Base", "Shine", "Glow", "Exposure", "Metalness", "Roughness", "Sheen", "Sheen tint", "Sheen spread", "Anisotropy", "Reflection map", "Reflection"];
 
+    // What the same bits dye on characterlegacy.shpk.
+    private static readonly string[] LegacyDyeFields = ["Base", "Shine", "Glow", "Gloss", "Shine strength"];
+
     private Task<(StainTemplates? Templates, IReadOnlyList<(int Id, string Name, Vector4 Colour)> Names)>? dyeLoad;
     private StainTemplates? stains;
     private IReadOnlyList<(int Id, string Name, Vector4 Colour)> stainNames = [];
@@ -56,7 +59,9 @@ internal sealed partial class MaterialWindow
 
     /// <summary>The table as the character shows it: dyed rows take the preview dyes.</summary>
     private ColorTable ShownTable(ColorTable table)
-        => stains != null && table.Dye != null && previewStains.Any(stain => stain > 0) ? stains.Dyed(table, previewStains) : table;
+        => stains != null && table.Dye != null && previewStains.Any(stain => stain > 0) ? stains.Dyed(table, previewStains, LegacyShaderShown) : table;
+
+    private bool LegacyShaderShown => session != null && LegacyConversion.IsLegacyShader(session.Current.ShaderPackage);
 
     /// <summary>The Dyeable switch, a preview dye per channel and Bake, above the pairs.</summary>
     private void DrawDyeBar(MaterialSession current, MaterialDocument doc, ColorTable table)
@@ -78,7 +83,7 @@ internal sealed partial class MaterialWindow
         {
             if (ImGui.Button("Bake##rows-bake") && stains != null)
             {
-                var baked = stains.Dyed(table, previewStains);
+                var baked = stains.Dyed(table, previewStains, LegacyConversion.IsLegacyShader(doc.ShaderPackage));
                 _ = current.Apply(d => d.WithTable(baked), "Bake dye");
                 Say(FeedbackSeverity.Info, "The preview dyes are now the rows' own colours. The dye rows stay.");
             }
@@ -127,6 +132,8 @@ internal sealed partial class MaterialWindow
     private void DrawRowDye(MaterialSession current, ColorTable table, int row, string name)
     {
         var dye = table.Dye![row];
+        var legacyShader = LegacyShaderShown;
+        var templates = (legacyShader ? stains?.LegacyTemplates : stains?.Templates) ?? [];
         if (RowLabel("Template", "Which dye template the row follows."))
         {
             var template = dye.Template;
@@ -134,13 +141,13 @@ internal sealed partial class MaterialWindow
             using var combo = ImRaii.Combo("##dye-template", preview, ImGuiComboFlags.HeightLarge);
             if (combo.Success)
             {
-                foreach (var option in (int[])[0, .. stains?.Templates ?? []])
+                foreach (var option in (int[])[0, .. templates])
                     if (ImGui.Selectable(option == 0 ? "None##template-0" : $"Template {option}##template-{option}", option == template) && option != template)
                         _ = current.Apply(d => EditDye(d, row, r => r.WithTemplate(option)), $"{name} dye template");
             }
             else if (ComboWheel.Steps() is var steps and not 0)
             {
-                var picked = ComboWheel.Pick((int[])[0, .. stains?.Templates ?? []], template, steps);
+                var picked = ComboWheel.Pick((int[])[0, .. templates], template, steps);
                 if (picked != template)
                     _ = current.Apply(d => EditDye(d, row, r => r.WithTemplate(picked)), $"{name} dye template");
             }
@@ -160,23 +167,38 @@ internal sealed partial class MaterialWindow
         }
         var stain = dye.Channel < previewStains.Length ? previewStains[dye.Channel] : 0;
         DyePack? pack = null;
-        if (stains != null && stain > 0 && stains.TryGet(dye.Template, stain, out var found))
+        LegacyDyePack? legacyPack = null;
+        if (stains != null && stain > 0 && !legacyShader && stains.TryGet(dye.Template, stain, out var found))
             pack = found;
+        if (stains != null && stain > 0 && legacyShader && stains.TryGetLegacy(dye.Template, stain, out var foundLegacy))
+            legacyPack = foundLegacy;
+        var fields = legacyShader ? LegacyDyeFields : DyeFields;
         ImGui.TextColored(Theme.Label, "The dye changes");
         using var grid = ImRaii.Table("##dye-fields", 3, ImGuiTableFlags.SizingStretchSame);
         if (!grid.Success)
             return;
-        for (var bit = 0; bit < DyeFields.Length; bit++)
+        for (var bit = 0; bit < fields.Length; bit++)
         {
             ImGui.TableNextColumn();
             var on = (dye.Flags & (1 << bit)) != 0;
             var flag = bit;
-            if (ImGui.Checkbox($"{DyeFields[bit]}##dye-{bit}", ref on))
-                _ = current.Apply(d => EditDye(d, row, r => r.WithFlags((ushort)(on ? r.Flags | (1 << flag) : r.Flags & ~(1 << flag)))), $"{name} dye {DyeFields[flag].ToLowerInvariant()}");
+            if (ImGui.Checkbox($"{fields[bit]}##dye-{bit}", ref on))
+                _ = current.Apply(d => EditDye(d, row, r => r.WithFlags((ushort)(on ? r.Flags | (1 << flag) : r.Flags & ~(1 << flag)))), $"{name} dye {fields[flag].ToLowerInvariant()}");
             if (pack != null && ImGui.IsItemHovered())
                 ImGui.SetTooltip($"The preview dye gives {DyeValue(pack, bit)}.");
+            if (legacyPack != null && ImGui.IsItemHovered())
+                ImGui.SetTooltip($"The preview dye gives {LegacyDyeValue(legacyPack, bit)}.");
         }
     }
+
+    private static string LegacyDyeValue(LegacyDyePack pack, int bit) => bit switch
+    {
+        0 => Rgb(pack.Diffuse),
+        1 => pack.Specular == Vector3.Zero ? "no shine, so the row keeps its own" : Rgb(pack.Specular),
+        2 => Rgb(pack.Emissive),
+        3 => $"{pack.Gloss:0.#}",
+        _ => $"{pack.SpecularMask * 100:0}%",
+    };
 
     private static string DyeValue(DyePack pack, int bit) => bit switch
     {

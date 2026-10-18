@@ -68,12 +68,12 @@ internal static partial class MaterialEditorScenarios
 
     private static void CheckLegacyToDawntrail()
     {
-        var legacy = new LegacyColorRow { Diffuse = new Vector3(0.5f), Specular = new Vector3(0.25f), Gloss = 20f, TileIndex = 9, TileUU = 16f, TileVV = 16f };
+        var legacy = new LegacyColorRow { Diffuse = new Vector3(0.5f), SpecularMask = 1f, Specular = Vector3.One, Gloss = 20f, TileIndex = 9, TileUU = 16f, TileVV = 16f };
         var dt = legacy.ToDawntrail();
         Require(MathF.Abs(dt.Roughness - float.Exp2(-20f / 15f)) < 1e-3f && dt.Metalness == 0f && dt.Exposure == 1f
-                && dt.Diffuse == legacy.Diffuse && dt.Specular == legacy.Specular && dt.TileIndex == 9
-                && dt.SheenRate == DtColorRow.Default.SheenRate,
-            "a legacy row with gloss 20 converts to roughness 2^(-20/15), no metal, default sheen");
+                && dt.Diffuse == legacy.Diffuse && Vector3.Distance(dt.Specular, legacy.Specular) < 1e-3f && dt.TileIndex == 9
+                && MathF.Abs(dt.SheenRate - 0.25f) < 1e-3f,
+            "a legacy row with gloss 20 converts to roughness 2^(-20/15), no metal; a white full-strength shine stays white with a 25% sheen");
 
         legacy.Gloss = 0f;
         Require(MathF.Abs(legacy.ToDawntrail().Roughness - 1f) < 1e-3f, "gloss 0 converts to roughness 1");
@@ -125,12 +125,12 @@ internal static partial class MaterialEditorScenarios
         var converted = legacyTable!.ToDawntrail();
         Require(converted.Kind == ColorTableKind.Dawntrail && converted.Rows.Length == 32
                 && converted.Rows[6].Diffuse == new Vector3(3 / 16f) && converted.Rows[7].Diffuse == new Vector3(3 / 16f)
-                && converted.Dye is { Length: 32 } && converted.Dye[6].Template == 7 && converted.Dye[7].Template == 7
+                && converted.Dye is { Length: 32 } && converted.Dye[6].Template == 1007 && converted.Dye[7].Template == 1007
                 && converted.Flags() is { Kind: ColorTableKind.Dawntrail, HasDyeTable: true },
-            "converting a legacy table gives each old row both rows of its Dawntrail pair, dye included");
+            "converting a legacy table gives each old row both rows of its Dawntrail pair, dye included (template t is t + 1000 in the Dawntrail file)");
         var blended = legacyTable.ToDawntrail(blendNext: true);
         Require(blended.Rows[6].Diffuse == new Vector3(3 / 16f) && blended.Rows[7].Diffuse == new Vector3(4 / 16f)
-                && blended.Dye is { Length: 32 } && blended.Dye[6].Template == 7 && blended.Dye[7].Template == 0 && blended.Dye[5].Template == 7
+                && blended.Dye is { Length: 32 } && blended.Dye[6].Template == 1007 && blended.Dye[7].Template == 0 && blended.Dye[5].Template == 1007
                 && blended.Rows[31].Diffuse == blended.Rows[30].Diffuse,
             "for an index made from the normal map, pair p holds old rows p and p + 1, the last pair its row twice");
 

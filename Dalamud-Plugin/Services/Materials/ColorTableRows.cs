@@ -223,22 +223,8 @@ public record struct LegacyColorRow
         HalfPacking.Set(row, 15, TileVV);
     }
 
-    /// <summary>The same look in the Dawntrail layout: gloss becomes roughness 2^(-gloss/15), no metal, default sheen.</summary>
-    public readonly DtColorRow ToDawntrail()
-    {
-        var row = DtColorRow.Default;
-        row.Diffuse = Diffuse;
-        row.Specular = Specular;
-        row.Emissive = Emissive;
-        row.Roughness = float.Exp2(-Gloss / 15f);
-        row.Metalness = 0f;
-        row.TileIndexValue = TileIndexValue;
-        row.TileUU = TileUU;
-        row.TileUV = TileUV;
-        row.TileVU = TileVU;
-        row.TileVV = TileVV;
-        return row;
-    }
+    /// <summary>The same look in the Dawntrail layout (see <see cref="LegacyConversion.ToCharacter(LegacyLook)"/>).</summary>
+    public readonly DtColorRow ToDawntrail() => LegacyConversion.ToCharacter(LegacyLook.From(this));
 }
 
 /// <summary>
@@ -438,8 +424,8 @@ public sealed class ColorTable
 
     /// <summary>
     /// The table in the Dawntrail layout. A legacy row p fills both rows of Dawntrail pair p, so the
-    /// index texture picks the same colours whatever its blend channel says; its dye row keeps the
-    /// template and maps diffuse, specular, emissive and gloss (as roughness).
+    /// index texture picks the same colours whatever its blend channel says; its dye row maps diffuse,
+    /// specular, emissive and gloss (as roughness) and takes the template's Dawntrail id.
     /// With <paramref name="blendNext"/>, pair p holds legacy row p on top and row p + 1 below instead,
     /// for an index made from the normal map (see <see cref="LegacyIndexTexture"/>): its blend channel
     /// then gives the in-between colours legacy shaders blend for alphas between two rows.
@@ -466,9 +452,5 @@ public sealed class ColorTable
         return new ColorTable(rows, dye, baseFlags);
     }
 
-    private static DtDyeRow DyeToDawntrail(LegacyDyeRow old)
-    {
-        var flags = (ushort)((old.Flags & 0b111) | ((old.Flags & 0b1000) != 0 ? 1 << 5 : 0));
-        return new DtDyeRow(0).WithFlags(flags).WithTemplate(old.Template);
-    }
+    private static DtDyeRow DyeToDawntrail(LegacyDyeRow old) => LegacyConversion.DyeToCharacter(old.Flags, old.Template, 0);
 }

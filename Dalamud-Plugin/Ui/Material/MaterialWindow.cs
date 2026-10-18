@@ -613,7 +613,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Removes keys and values this shader ignores. Shows the list first.");
-        if (doc.Table is { Kind: ColorTableKind.Legacy })
+        var legacyShader = LegacyConversion.IsLegacyShader(doc.ShaderPackage);
+        if (doc.Table is { Kind: ColorTableKind.Legacy } || legacyShader && doc.Table is { Kind: ColorTableKind.Dawntrail })
         {
             using (ImRaii.Disabled(Busy || !doc.Editable))
             {
@@ -621,7 +622,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                     ConvertToDawntrail(current, doc);
             }
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip("Moves the material to character.shpk with 32 Dawntrail rows. Each old row fills both rows of its pair.");
+                ImGui.SetTooltip(legacyShader ? "Moves the material to character.shpk and keeps its look."
+                    : "Moves the material to character.shpk with 32 Dawntrail rows. Each old row fills both rows of its pair.");
         }
         DrawCopyMenuItem(current);
         // A save may have written the model with the material (its second UV map), so its backups count too;
