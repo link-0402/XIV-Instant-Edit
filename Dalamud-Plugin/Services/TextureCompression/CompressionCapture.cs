@@ -47,6 +47,35 @@ internal sealed record TextureUse
 
     /// <summary> Pixels below the threshold aren't drawn at all: an opacity channel read by a material that cuts out. </summary>
     public bool CutsOut => OpacityChannel >= 0 && !Translucent && AlphaThreshold > 0;
+
+    /// <summary>
+    /// The cut-out threshold assumed when the material isn't read: an opacity channel is then
+    /// checked as a cut-out at half, which catches lost lace or fishnet a real threshold would show.
+    /// </summary>
+    public const float AssumedAlphaThreshold = 0.5f;
+
+    /// <summary>
+    /// A texture whose material isn't read: any opacity channel is checked both as a cut-out at
+    /// <see cref="AssumedAlphaThreshold"/> and as blended at it, since either may be what draws it.
+    /// </summary>
+    public static IReadOnlyList<TextureUse> Unknown(TextureRole role, string package, string material = "") => new[]
+    {
+        new TextureUse { Role = role, ShaderPackage = package, Material = material, AlphaThreshold = AssumedAlphaThreshold },
+        new TextureUse { Role = role, ShaderPackage = package, Material = material, AlphaThreshold = AssumedAlphaThreshold, Translucent = true },
+    };
+
+    /// <summary>
+    /// The shader package the kind of model at a texture's game path uses. A face's <c>_etc_</c>
+    /// textures belong to its brows and lashes, which hair.shpk draws.
+    /// </summary>
+    public static string PackageFor(string gamePath)
+    {
+        var path = PathRules.NormalizeGamePath(gamePath).ToLowerInvariant();
+        return path.Contains("/obj/hair/") || path.Contains("/obj/tail/") || path.Contains("/obj/zear/") ? "hair.shpk"
+            : path.Contains("/obj/face/") && Path.GetFileName(path).Contains("_etc_") ? "hair.shpk"
+            : path.Contains("/obj/body/") || path.Contains("/obj/face/") ? "skin.shpk"
+            : "character.shpk";
+    }
 }
 
 /// <summary> A mod texture the character renders, with every material that reads it. </summary>
@@ -168,32 +197,38 @@ internal static class CompressionCapture
     /// <summary>
     /// How a material reads a texture at <paramref name="gamePath"/>: one use per sampler naming it.
     /// When the material can't be read, or no sampler names the path, <paramref name="fallbackRole"/> gives the role.
+    /// A material that can't be read is taken as <see cref="TextureUse.Unknown"/>, its shader guessed from the path.
     /// </summary>
     internal static IEnumerable<TextureUse> UsesIn(SkinMaterial? material, string materialPath, string gamePath, Func<TextureRole> fallbackRole)
     {
-        var threshold = material is not null && material.HasConstant(TextureUse.AlphaThresholdConstant) && material.Constant(TextureUse.AlphaThresholdConstant) is { Length: > 0 } values
+        if (material is null)
+            return TextureUse.Unknown(fallbackRole(), TextureUse.PackageFor(gamePath), materialPath);
+        return SamplerUses(material, materialPath, gamePath, fallbackRole);
+    }
+
+    private static IEnumerable<TextureUse> SamplerUses(SkinMaterial material, string materialPath, string gamePath, Func<TextureRole> fallbackRole)
+    {
+        var threshold = material.HasConstant(TextureUse.AlphaThresholdConstant) && material.Constant(TextureUse.AlphaThresholdConstant) is { Length: > 0 } values
             ? values[0]
             : 0f;
-        var translucent = material is not null && (material.MaterialFlags & TextureUse.TranslucencyFlag) != 0;
+        var translucent = (material.MaterialFlags & TextureUse.TranslucencyFlag) != 0;
         var found = false;
-        if (material is not null)
-            foreach (var sampler in material.Samplers.Keys)
+        foreach (var sampler in material.Samplers.Keys)
+        {
+            if (!string.Equals(material.RequestedTextureFor(sampler), gamePath, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(material.TextureFor(sampler), gamePath, StringComparison.OrdinalIgnoreCase))
+                continue;
+            found = true;
+            yield return new TextureUse
             {
-                if (!string.Equals(material.RequestedTextureFor(sampler), gamePath, StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(material.TextureFor(sampler), gamePath, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                found = true;
-                yield return new TextureUse
-                {
-                    SamplerId = sampler, Role = RoleOf(sampler), ShaderPackage = material.ShaderPackage, Material = materialPath,
-                    AlphaThreshold = threshold, Translucent = translucent,
-                };
-            }
+                SamplerId = sampler, Role = RoleOf(sampler), ShaderPackage = material.ShaderPackage, Material = materialPath,
+                AlphaThreshold = threshold, Translucent = translucent,
+            };
+        }
         if (!found)
             yield return new TextureUse
             {
-                Role = fallbackRole(),
-                ShaderPackage = material?.ShaderPackage ?? string.Empty, Material = materialPath, AlphaThreshold = threshold, Translucent = translucent,
+                Role = fallbackRole(), ShaderPackage = material.ShaderPackage, Material = materialPath, AlphaThreshold = threshold, Translucent = translucent,
             };
     }
 

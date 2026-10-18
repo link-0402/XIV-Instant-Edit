@@ -22,7 +22,9 @@ internal static partial class ModCleanUpScenarios
         RestrictionUsesRepeatedHalving();
         HeadersSayWhatCanBeEncoded();
         ScanTicksOnlyLargeOrdinaryTextures();
+        ScanChecksTexturesWithoutAMaterialAsUnknown();
         AutoPicksBc5ForIndexMapsAndBc7Otherwise(testRoot);
+        AManualBc5PickIsComparedOnAllFourChannels(testRoot);
         AnEncodeTheCheckRejectsIsNotWritten(testRoot);
         ResizingHalvesAndChecksAgainstTheHalvedOriginal(testRoot);
         ACancelledCleanUpKeepsWhatItFinished(testRoot);
@@ -67,7 +69,8 @@ internal static partial class ModCleanUpScenarios
 
     /// <summary>
     /// Penumbra's conversion, offline: "compressed" files carry the right header and size, with their
-    /// pixels kept aside so decoding them gives back what went in (or, corrupted, something else).
+    /// pixels kept aside so decoding them gives back what went in (BC5 without blue and alpha, or,
+    /// corrupted, something else).
     /// </summary>
     private sealed class FakeConverter
     {
@@ -101,6 +104,13 @@ internal static partial class ModCleanUpScenarios
             var data = new byte[(width + 3) / 4 * ((height + 3) / 4) * blockBytes];
             File.WriteAllBytes(output, Header(format, width, height).Concat(data).ToArray());
             var stored = pixels.ToArray();
+            // BC5 keeps red and green only: it decodes with blue 0 and alpha full, as Penumbra's does.
+            if (format == TextureCost.Bc5)
+                for (var i = 0; i < stored.Length; i += 4)
+                {
+                    stored[i] = 0;
+                    stored[i + 3] = 255;
+                }
             if (Corrupt)
                 for (var i = 0; i < stored.Length; i += 4)
                     stored[i] = (byte)(255 - stored[i]);
@@ -213,6 +223,35 @@ internal static partial class ModCleanUpScenarios
             "an already-compressed texture is left unticked, an HDR one can't be picked");
     }
 
+    private static void ScanChecksTexturesWithoutAMaterialAsUnknown()
+    {
+        const string gear = "chara/equipment/e0005/texture/v01_c0201e0005_top_norm.tex";
+        const string hair = "chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_norm.tex";
+        using var mod = new TestModFolder()
+            .File("files/top_norm.tex", Pattern(256, 256))
+            .File("files/hir_norm.tex", Pattern(256, 256, 5));
+        mod.Meta(new Newtonsoft.Json.Linq.JObject
+        {
+            ["FileVersion"] = 4,
+            ["Name"] = "Loose",
+            ["DefaultData"] = new Newtonsoft.Json.Linq.JObject
+            {
+                ["Files"] = new Newtonsoft.Json.Linq.JObject { [gear] = "files/top_norm.tex", [hair] = "files/hir_norm.tex" },
+            },
+        }.ToString());
+        var meta = PenumbraModMeta.Load(mod.Path);
+        var graph = ResourceGraphBuilder.Build(new GraphInput { Folder = mod.Path, Files = meta.AllFiles().ToList(), Swaps = meta.AllSwaps().ToList() },
+            new ModFileFactsCache(), new FakeVanillaFiles(), CancellationToken.None);
+        var candidates = TextureCleanUp.Scan(graph, node => File.Exists(node.DiskPath) ? File.ReadAllBytes(node.DiskPath) : null);
+        var top = candidates.Single(c => c.RelPath == "files/top_norm.tex").Uses;
+        var hir = candidates.Single(c => c.RelPath == "files/hir_norm.tex").Uses;
+        Require(top.Count == 2 && top.All(u => u is { Role: TextureRole.Normal, ShaderPackage: "character.shpk", OpacityChannel: 2, AlphaThreshold: 0.5f }) &&
+                top.Any(u => u.CutsOut) && top.Any(u => u.Translucent),
+            "a texture no material of the mod reads is checked with its opacity both cut out and blended at half");
+        Require(hir.Count == 2 && hir.All(u => u is { ShaderPackage: "hair.shpk", OpacityChannel: 3 }),
+            "a loose hair normal map is checked as hair.shpk reads it");
+    }
+
     private static void AutoPicksBc5ForIndexMapsAndBc7Otherwise(string testRoot)
     {
         using var mod = TextureMod("t/base.tex", "t/id.tex");
@@ -224,6 +263,22 @@ internal static partial class ModCleanUpScenarios
         ], convert, testRoot);
         Require(result.Changed == 2 && FormatOf(mod, "t/base.tex") == TextureCost.Bc7 && FormatOf(mod, "t/id.tex") == TextureCost.Bc5,
             "Auto compresses an index map to BC5 and other textures to BC7");
+    }
+
+    private static void AManualBc5PickIsComparedOnAllFourChannels(string testRoot)
+    {
+        using var mod = TextureMod("t/norm.tex", "t/base.tex", "t/id.tex");
+        var normalUse = new TextureUse { Role = TextureRole.Normal, SamplerId = TextureUse.NormalSampler, ShaderPackage = "character.shpk", AlphaThreshold = 0.5f };
+        var before = File.ReadAllBytes(Path.Combine(mod.Path, "t", "norm.tex"));
+        var result = Clean(mod,
+        [
+            new TextureJob(Candidate(mod, "t/norm.tex", [normalUse]), TextureFormatChoice.Bc5, 4096),
+            new TextureJob(Candidate(mod, "t/base.tex", [BaseUse]), TextureFormatChoice.Bc5, 4096),
+            new TextureJob(Candidate(mod, "t/id.tex", [IndexUse]), TextureFormatChoice.Bc5, 4096),
+        ], new FakeConverter(), testRoot);
+        Require(result.Changed == 1 && result.Kept == 2 && FormatOf(mod, "t/id.tex") == TextureCost.Bc5 &&
+                File.ReadAllBytes(Path.Combine(mod.Path, "t", "norm.tex")).SequenceEqual(before) && FormatOf(mod, "t/base.tex") == TextureCost.Bgra8,
+            "BC5 picked by hand passes only for an index map: on a normal map it would drop the blue cut-out");
     }
 
     private static void AnEncodeTheCheckRejectsIsNotWritten(string testRoot)

@@ -374,6 +374,7 @@ internal sealed partial class CheckView
                 var format = choice.Format;
                 if (ComboWheel.Combo("##format", ref format, FormatLabels))
                     _textureChoices[candidate.RelPath] = (_textureChoices[candidate.RelPath].Ticked, format, _textureChoices[candidate.RelPath].Cap);
+                Gui.Tooltip("BC5 keeps only red and green, so it only suits index maps.");
                 ImGui.PopID();
             }
             ImGui.EndTable();

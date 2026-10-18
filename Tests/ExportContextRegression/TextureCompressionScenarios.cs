@@ -28,8 +28,11 @@ internal static class TextureCompressionScenarios
         CheckCapture();
         CheckCutouts();
         CheckOpacity();
+        CheckUnknownMaterial();
+        CheckThinCoverage();
         CheckIndexRows();
         CheckNormalsAndColors();
+        CheckNormalPatches();
         CheckSingleColor();
         CheckBackupStore(testRoot);
         CheckRestoreSelection();
@@ -219,6 +222,7 @@ internal static class TextureCompressionScenarios
                 Node("chara/equipment/e0003/material/v0001/mt_c0201e0003_glv_a.mtrl", ModFile(gear, "missing.mtrl"), gear, children:
                 [
                     Node("chara/equipment/e0003/texture/v01_c0201e0003_glv_base.tex", ModFile(gear, "tex/glv_base.tex"), gear, "g_SamplerDiffuse"),
+                    Node("chara/equipment/e0003/texture/v01_c0201e0003_glv_norm.tex", ModFile(gear, "tex/glv_norm.tex"), gear, "g_SamplerNormal"),
                 ]),
                 Node("chara/equipment/e0004/material/v0001/mt_c0201e0004_sho_a.mtrl", ModFile(preview, "Files/sho.mtrl"), preview, children:
                 [
@@ -231,7 +235,7 @@ internal static class TextureCompressionScenarios
             mod => string.Equals(mod, preview, StringComparison.OrdinalIgnoreCase));
         CompressionCandidate File(string name) => candidates.Single(c => c.FileName == name);
 
-        Require(candidates.Count == 6 && candidates.All(c => c.Source.IsModFile) && !candidates.Any(c => c.FileName == "skin_d.tex"),
+        Require(candidates.Count == 7 && candidates.All(c => c.Source.IsModFile) && !candidates.Any(c => c.FileName == "skin_d.tex"),
             "texture compression: every mod texture the character renders is considered once; game files are not");
         var norm = File("norm.tex");
         Require(norm.GamePaths.Count == 2 && norm.Uses.Count == 2 && norm.Uses.All(u => u.Role == TextureRole.Normal && u.OpacityChannel == 2) &&
@@ -242,12 +246,16 @@ internal static class TextureCompressionScenarios
             "texture compression: roles come from the material's samplers");
         Require(File("hair_norm.tex").Uses.Single() is { OpacityChannel: 3, CutsOut: true },
             "texture compression: hair normal maps carry opacity in alpha");
-        Require(File("glv_base.tex").Uses.Single() is { Role: TextureRole.Base, SamplerId: 0, ShaderPackage: "" },
+        Require(File("glv_base.tex").Uses is { Count: > 0 } unreadBase && unreadBase.All(u => u is { Role: TextureRole.Base, SamplerId: 0 }),
             "texture compression: when a material can't be read, Penumbra's sampler name still gives the role");
+        var unreadNormal = File("glv_norm.tex").Uses;
+        Require(unreadNormal.Count == 2 && unreadNormal.All(u => u is { Role: TextureRole.Normal, ShaderPackage: "character.shpk", OpacityChannel: 2, AlphaThreshold: 0.5f }) &&
+                unreadNormal.Any(u => u.CutsOut) && unreadNormal.Any(u => u.Translucent),
+            "texture compression: when a material can't be read, its opacity channel is checked both as a cut-out and as blended at half");
         Require(File("sho_base.tex").InPreview && !File("norm.tex").InPreview,
             "texture compression: files of other Quick Actions' preview mods are marked so they are left alone");
         var loaded = CompressionCapture.ModFiles(roots);
-        Require(loaded.Count == 12 && loaded.Contains(ModFile(gear, "top.mdl")) && loaded.Contains(ModFile(gear, "TOP.MTRL")) && loaded.Contains(normal) &&
+        Require(loaded.Count == 13 &&loaded.Contains(ModFile(gear, "top.mdl")) && loaded.Contains(ModFile(gear, "TOP.MTRL")) && loaded.Contains(normal) &&
                 !loaded.Contains("chara/common/texture/skin_d.tex"),
             "texture optimization: what the character has loaded from mods is every model, material and texture of the tree, game files left out");
     }
@@ -345,6 +353,70 @@ internal static class TextureCompressionScenarios
             "texture compression check: a blended material without a threshold draws everything, so its blue isn't opacity");
     }
 
+    private static void CheckUnknownMaterial()
+    {
+        const int size = 256;
+        // A lace normal map: blue 160 on every fourth column, cut away elsewhere. Each strand drops under half by 40 levels.
+        var lace = Image(size, size, 0, 128, 128, 255);
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x += 4)
+            lace[(y * size + x) * 4] = 160;
+        var lost = (byte[])lace.Clone();
+        for (var i = 0; i < lost.Length; i += 4)
+            if (lost[i] == 160)
+                lost[i] = 120;
+        var unread = CompressionCapture.UsesIn(null, string.Empty, "chara/equipment/e0003/texture/v01_c0201e0003_glv_norm.tex", () => TextureRole.Normal).ToArray();
+        Require(!CompressionCheck.Compare(lace, lost, size, size, unread, false).Passed,
+            "texture compression check: a lace normal map whose material can't be read still keeps its strands");
+        var hair = CompressionCapture.UsesIn(null, string.Empty, "chara/human/c0201/obj/hair/h0001/texture/c0201h0001_hir_norm.tex", () => TextureRole.Normal).ToArray();
+        Require(hair.Length > 0 && hair.All(u => u is { ShaderPackage: "hair.shpk", OpacityChannel: 3 }),
+            "texture compression: an unread hair material is checked as hair.shpk reads it, with opacity in alpha");
+    }
+
+    /// <summary> A fishnet normal map: blue 255 on lines every <paramref name="spacing"/> pixels, cut away between them. </summary>
+    private static byte[] Fishnet(int size, int spacing)
+    {
+        var net = Image(size, size, 0, 128, 128, 255);
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+            if (x % spacing == 0 || y % spacing == 0)
+                net[(y * size + x) * 4] = 255;
+        return net;
+    }
+
+    private static void CheckThinCoverage()
+    {
+        const int size = 1024;
+        var cut = new[] { Use(TextureRole.Normal, "character.shpk", 0.5f) };
+        var blend = new[] { Use(TextureRole.Normal, "character.shpk", 0.5f, translucent: true) };
+        // 19 % coverage: this tile holds 183 strand pixels. All of them gone is 0.091 % of the texture's.
+        var net = Fishnet(size, 10);
+        var hole = (byte[])net.Clone();
+        for (var y = 352; y < 384; y++)
+        for (var x = 352; x < 384; x++)
+            hole[(y * size + x) * 4] = 0;
+        var cutHole = CompressionCheck.Compare(net, hole, size, size, cut, false);
+        Require(!cutHole.Passed && cutHole.CutoutChange < CompressionTolerances.Default.MaxCutoutChange,
+            "texture compression check: a hole in a thin fishnet keeps the texture, though the tile holds few drawn pixels");
+        var blendHole = CompressionCheck.Compare(net, hole, size, size, blend, false);
+        Require(!blendHole.Passed && blendHole.OpacityChange < CompressionTolerances.Default.MaxOpacityChange,
+            "texture compression check: the same hole in a blended fishnet keeps the texture");
+
+        // 10 % coverage: 124 strand pixels in a tile. A few of them flipping is noise, a stretch of a strand is not.
+        var thin = Fishnet(size, 20);
+        byte[] Broken(int count)
+        {
+            var copy = (byte[])thin.Clone();
+            for (var k = 0; k < count; k++)
+                copy[((321 + k) * size + 320) * 4] = 0;
+            return copy;
+        }
+        Require(CompressionCheck.Compare(thin, Broken(14), size, size, cut, false).Passed,
+            "texture compression check: a few pixels of a thin strand flipping in a sparse tile pass");
+        Require(!CompressionCheck.Compare(thin, Broken(24), size, size, cut, false).Passed,
+            "texture compression check: a broken stretch of a thin strand keeps the texture");
+    }
+
     private static void CheckIndexRows()
     {
         Require(CompressionCheck.Pair(0) == 0 && CompressionCheck.Pair(8) == 0 && CompressionCheck.Pair(9) == 1 && CompressionCheck.Pair(17) == 1 &&
@@ -405,6 +477,39 @@ internal static class TextureCompressionScenarios
         Require(texts.Distinct().Count() == 5 && texts.All(text => text.StartsWith("compressing would", StringComparison.Ordinal) && !text.Contains('…') &&
                                                                  !text.Contains("...", StringComparison.Ordinal)),
             "texture compression check: each reason reads as its own sentence part, without ellipses");
+    }
+
+    private static void CheckNormalPatches()
+    {
+        const int size = 1024;
+        var skin = new[] { Use(TextureRole.Normal, "skin.shpk") };
+        var flat = Image(size, size, 255, 128, 128, 255);
+        // Red 255 turns a flat normal by 90 degrees.
+        byte[] Turned(int x0, int y0, int side)
+        {
+            var copy = (byte[])flat.Clone();
+            for (var y = y0; y < y0 + side; y++)
+            for (var x = x0; x < x0 + side; x++)
+                copy[(y * size + x) * 4 + 2] = 255;
+            return copy;
+        }
+        // Under 1 % of the pixels, so the 99th percentile doesn't see it.
+        var patch = CompressionCheck.Compare(flat, Turned(300, 300, 100), size, size, skin, false);
+        Require(!patch.Passed && patch.NormalAngleP99 <= CompressionTolerances.Default.MaxNormalAngleP99 &&
+                patch.NormalTurnedShare > CompressionTolerances.Default.MaxNormalTurnedShare && patch.Problem.Contains("light", StringComparison.Ordinal),
+            "texture compression check: a patch of normals turned far keeps the texture, though it is under 1 % of the pixels");
+        var tile = CompressionCheck.Compare(flat, Turned(320, 320, 32), size, size, skin, false);
+        Require(!tile.Passed && tile.NormalTurnedShare < CompressionTolerances.Default.MaxNormalTurnedShare &&
+                tile.NormalTileTurned > CompressionTolerances.Default.MaxNormalTileTurned,
+            "texture compression check: normals turned across one tile keep the texture, though the share overall is tiny");
+        var scattered = (byte[])flat.Clone();
+        for (var k = 0; k < size * size; k += 1009)
+            scattered[k * 4 + 2] = 255;
+        Require(CompressionCheck.Compare(flat, scattered, size, size, skin, false).Passed,
+            "texture compression check: a normal turned here and there across the texture passes");
+        Require(CompressionCheck.ProblemOf(new CompressionCheckResult { NormalTurnedShare = 1 }) == CompressionCheck.ProblemOf(new CompressionCheckResult { NormalAngleP99 = 90 }) &&
+                CompressionCheck.ProblemOf(new CompressionCheckResult { NormalTileTurned = 1 }) == "compressing would change how light falls on it",
+            "texture compression check: normals turned in patches give the light reason");
     }
 
     // ---- Single colors --------------------------------------------------------------------------------

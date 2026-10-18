@@ -43,8 +43,10 @@ internal static class VerifiedEncode
     {
         var info = request.Info;
         var source = request.Source;
-        var target = request.Target ?? (request.Uses.Count > 0 && request.Uses.All(use => use.Role == Ui.TextureRole.Index) ? TextureCost.Bc5 : TextureCost.Bc7);
-        var twoChannel = target == TextureCost.Bc5;
+        var indexOnly = request.Uses.Count > 0 && request.Uses.All(use => use.Role == Ui.TextureRole.Index);
+        var target = request.Target ?? (indexOnly ? TextureCost.Bc5 : TextureCost.Bc7);
+        // Only index maps leave blue and alpha unread; BC5 picked for anything else is compared on all four, where blue decodes to 0.
+        var twoChannel = target == TextureCost.Bc5 && indexOnly;
         // Mipmaps only when the original has them: a texture drawn without them keeps its look far away.
         var mipMaps = (source[14] & 0x7F) > 1;
         var (cappedWidth, cappedHeight) = request.MaxSide is { } maxSide ? Restricted(info.Width, info.Height, Math.Max(MinSide, maxSide)) : (info.Width, info.Height);

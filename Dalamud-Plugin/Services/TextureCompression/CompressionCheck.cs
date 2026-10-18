@@ -19,6 +19,10 @@ internal sealed record CompressionCheckResult
     public double RowTileChange { get; init; }
     /// <summary> The 99th percentile of how far drawn normals turn, in degrees. </summary>
     public double NormalAngleP99 { get; init; }
+    /// <summary> Of the drawn pixels, the share whose normal turns more than <see cref="CompressionTolerances.MaxNormalAngleP99"/>. </summary>
+    public double NormalTurnedShare { get; init; }
+    /// <summary> The same share in the worst tile, so a patch of turned normals can't hide in a large texture. </summary>
+    public double NormalTileTurned { get; init; }
     /// <summary> Of the drawn pixels, the share with a channel off by more than <see cref="CompressionTolerances.LargeError"/>. </summary>
     public double LargeErrorShare { get; init; }
 
@@ -44,13 +48,23 @@ internal sealed record CompressionTolerances
     public double MaxRowChange { get; init; } = 0.0005;
     public double MaxRowTileChange { get; init; } = 0.10;
     public double MaxNormalAngleP99 { get; init; } = 25;
+    /// <summary> Normals turning more than <see cref="MaxNormalAngleP99"/> may make up this share of the whole, so a patch under 1 % can't pass. </summary>
+    public double MaxNormalTurnedShare { get; init; } = 0.002;
+    public double MaxNormalTileTurned { get; init; } = 0.10;
     /// <summary> A pixel counts as a large error when a channel moves by more than this many levels. </summary>
     public int LargeError { get; init; } = 48;
     public double MaxLargeErrorShare { get; init; } = 0.002;
     /// <summary> Tiles this many pixels square are checked on their own. </summary>
     public int Tile { get; init; } = 32;
-    /// <summary> Tiles with fewer counted pixels than this are only judged as part of the whole, since a few pixels of a thin strand make large shares. </summary>
-    public int MinTilePixels { get; init; } = 256;
+    /// <summary> Tiles with fewer counted pixels than this are only judged as part of the whole. </summary>
+    public int MinTilePixels { get; init; } = 64;
+    /// <summary>
+    /// Tiles with fewer counted pixels than this are sparse, like those of a thin fishnet: a few pixels
+    /// of a strand make large shares there, so they are judged only when more than
+    /// <see cref="MaxSparseTileChanges"/> pixels change.
+    /// </summary>
+    public int SparseTilePixels { get; init; } = 256;
+    public int MaxSparseTileChanges { get; init; } = 16;
 }
 
 /// <summary>
@@ -68,8 +82,10 @@ internal static class CompressionCheck
     /// <summary>
     /// Bumped when the tolerances or what a texture is tried as change, so textures an older check kept
     /// are looked at again. 2: an uncompressed texture the one-color check keeps is tried at its own size.
+    /// 3: unread materials are checked as cut-out and blended, BC5 on anything but an index map is compared
+    /// on all four channels, patches of turned normals and sparse tiles are judged.
     /// </summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
     /// <summary> How a material reads opacity from the texture: the byte (BGRA order), the level that draws, and whether it blends. </summary>
     private readonly record struct Opacity(int Byte, float Level, bool Blended);
@@ -96,11 +112,13 @@ internal static class CompressionCheck
         int tilesX = (width + tileSize - 1) / tileSize, tilesY = (height + tileSize - 1) / tileSize, tiles = tilesX * tilesY;
         var counted = new long[opacities.Length];
         var changed = new long[opacities.Length];
-        var tileCounted = new int[opacities.Length, tiles];
-        var tileChanged = new int[opacities.Length, tiles];
+        var tileCounted = opacities.Select(_ => new int[tiles]).ToArray();
+        var tileChanged = opacities.Select(_ => new int[tiles]).ToArray();
         var tileRowFlips = index ? new int[tiles] : [];
-        long rowFlips = 0, drawn = 0, large = 0, angles = 0;
+        long rowFlips = 0, drawn = 0, large = 0, angles = 0, turned = 0;
         var angleHistogram = normal ? new long[1801] : [];
+        var tileAngles = normal ? new int[tiles] : [];
+        var tileTurned = normal ? new int[tiles] : [];
         var channels = twoChannel ? 2 : 4;
 
         for (var y = 0; y < height; y++)
@@ -121,11 +139,11 @@ internal static class CompressionCheck
                     if (before < 0.02 && after < 0.02)
                         continue;
                     counted[o]++;
-                    tileCounted[o, tile]++;
+                    tileCounted[o][tile]++;
                     if (Math.Abs(before - after) > tolerances.OpacityStep)
                     {
                         changed[o]++;
-                        tileChanged[o, tile]++;
+                        tileChanged[o][tile]++;
                     }
                 }
                 else
@@ -134,14 +152,14 @@ internal static class CompressionCheck
                     if (before)
                     {
                         counted[o]++;
-                        tileCounted[o, tile]++;
+                        tileCounted[o][tile]++;
                     }
                     else
                         shown = false;
                     if (before != after)
                     {
                         changed[o]++;
-                        tileChanged[o, tile]++;
+                        tileChanged[o][tile]++;
                     }
                 }
             }
@@ -165,8 +183,15 @@ internal static class CompressionCheck
             }
             if (normal)
             {
-                angleHistogram[Math.Min(1800, (int)(Angle(original, decoded, i) * 20))]++;
+                var angle = Angle(original, decoded, i);
+                angleHistogram[Math.Min(1800, (int)(angle * 20))]++;
                 angles++;
+                tileAngles[tile]++;
+                if (angle > tolerances.MaxNormalAngleP99)
+                {
+                    turned++;
+                    tileTurned[tile]++;
+                }
             }
         }
 
@@ -174,10 +199,7 @@ internal static class CompressionCheck
         for (var o = 0; o < opacities.Length; o++)
         {
             var share = counted[o] > 0 ? changed[o] / (double)counted[o] : 0;
-            var tileShare = 0.0;
-            for (var t = 0; t < tiles; t++)
-                if (tileCounted[o, t] >= tolerances.MinTilePixels)
-                    tileShare = Math.Max(tileShare, tileChanged[o, t] / (double)tileCounted[o, t]);
+            var tileShare = WorstTile(tileCounted[o], tileChanged[o], tolerances);
             if (opacities[o].Blended)
             {
                 opacityChange = Math.Max(opacityChange, share);
@@ -194,7 +216,8 @@ internal static class CompressionCheck
             for (var t = 0; t < tiles; t++)
             {
                 int tileWidth = Math.Min(tileSize, width - t % tilesX * tileSize), tileHeight = Math.Min(tileSize, height - t / tilesX * tileSize);
-                if (tileWidth * tileHeight >= tolerances.MinTilePixels)
+                // Every pixel of an index map counts, so only the cut-off tiles at its right and bottom edge are sparse.
+                if (tileWidth * tileHeight >= tolerances.SparseTilePixels)
                     rowTileChange = Math.Max(rowTileChange, tileRowFlips[t] / (double)(tileWidth * tileHeight));
             }
         double angleP99 = 0;
@@ -221,6 +244,8 @@ internal static class CompressionCheck
             RowChange = index ? rowFlips / (double)pixels : 0,
             RowTileChange = rowTileChange,
             NormalAngleP99 = angleP99,
+            NormalTurnedShare = angles > 0 ? turned / (double)angles : 0,
+            NormalTileTurned = normal ? WorstTile(tileAngles, tileTurned, tolerances) : 0,
             LargeErrorShare = drawn > 0 ? large / (double)drawn : 0,
         };
         return result with { Problem = ProblemOf(result, tolerances) };
@@ -236,11 +261,25 @@ internal static class CompressionCheck
             return "compressing would change how see-through it is";
         if (result.RowChange > tolerances.MaxRowChange || result.RowTileChange > tolerances.MaxRowTileChange)
             return "compressing would change which dye colors parts of it use";
-        if (result.NormalAngleP99 > tolerances.MaxNormalAngleP99)
+        if (result.NormalAngleP99 > tolerances.MaxNormalAngleP99 || result.NormalTurnedShare > tolerances.MaxNormalTurnedShare ||
+            result.NormalTileTurned > tolerances.MaxNormalTileTurned)
             return "compressing would change how light falls on it";
         if (result.LargeErrorShare > tolerances.MaxLargeErrorShare)
             return "compressing would change its colors noticeably";
         return string.Empty;
+    }
+
+    /// <summary>
+    /// The largest share of changed pixels in a tile with enough counted pixels to judge alone. A
+    /// sparse tile counts only once more than <see cref="CompressionTolerances.MaxSparseTileChanges"/> of its pixels change.
+    /// </summary>
+    private static double WorstTile(int[] counted, int[] changed, CompressionTolerances tolerances)
+    {
+        var worst = 0.0;
+        for (var t = 0; t < counted.Length; t++)
+            if (counted[t] >= tolerances.MinTilePixels && (counted[t] >= tolerances.SparseTilePixels || changed[t] > tolerances.MaxSparseTileChanges))
+                worst = Math.Max(worst, changed[t] / (double)counted[t]);
+        return worst;
     }
 
     /// <summary> The colorset row pair an index map's red channel picks: pairs are 17 levels apart, rounded. </summary>
