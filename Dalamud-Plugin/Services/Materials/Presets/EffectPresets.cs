@@ -76,8 +76,9 @@ public static class EffectPresets
             if (HasRows(context))
             {
                 (var rows, note) = Rows(context, target);
-                doc = EditRows(doc, rows, row => row with { Emissive = row.Diffuse * 2f, Exposure = 2f });
-                changes.Add($"Glow at twice the base colour and 1 stop brighter on {RowCount(rows.Length)}.");
+                // Half 11 brightens the base colour, not the glow, so it stays as it is.
+                doc = EditRows(doc, rows, row => row with { Emissive = row.Diffuse * 2f });
+                changes.Add($"Glow at twice the base colour on {RowCount(rows.Length)}.");
             }
             if (Reads(context, EmissiveColor))
             {

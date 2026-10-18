@@ -95,6 +95,7 @@ public record struct DtColorRow
     public Vector3 Specular;
     public float Scalar7;
     public Vector3 Emissive;
+    /// <summary>Half 11, Penumbra's "Exposure": the Dawntrail packages multiply the base colour by it (not the glow), so 0 is black.</summary>
     public float Exposure;
     public float SheenRate;
     public float SheenTint;

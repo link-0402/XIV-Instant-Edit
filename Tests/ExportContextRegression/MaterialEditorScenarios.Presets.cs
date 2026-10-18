@@ -157,8 +157,10 @@ internal static partial class MaterialEditorScenarios
                 failures.Add(preset.Name);
         }
         Require(failures.Count == 0, "every preset that applies to the Mask material writes a readable file" + (failures.Count > 0 ? ": " + string.Join(", ", failures) : ""));
-        Require(PresetNamed("Glow").Apply(Context(mask), RowTarget.All).Doc.Table!.Rows.All(row => row.Exposure == 2f),
-            "Glow raises every row's glow");
+        var before = Context(mask).Doc.Table!.Rows;
+        var glowed = PresetNamed("Glow").Apply(Context(mask), RowTarget.All).Doc.Table!.Rows;
+        Require(glowed.Zip(before).All(pair => pair.First.Emissive == pair.Second.Diffuse * 2f && pair.First.Exposure == pair.Second.Exposure),
+            "Glow sets every row's glow to twice its base colour and keeps half 11 (it brightens the base colour, not the glow)");
         Require(PresetNamed("Dyeable").Apply(Context(mask), RowTarget.All).Doc.Table!.Dye!.All(dye => dye.Flags == 0x37),
             "Dyeable lets the dye change base, shine, glow, metalness and roughness");
     }

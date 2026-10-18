@@ -2,7 +2,7 @@ using System.Numerics;
 using InstantEdit.Services.Materials;
 using static InstantEdit.TestSupport.Assertions;
 
-/// <summary>The colour-row editor's maths: the detail pattern's 2 x 2 transform as scale, rotation and shear; colours in square-root space; exposure in stops.</summary>
+/// <summary>The colour-row editor's maths: the detail pattern's 2 x 2 transform as scale, rotation and shear; colours in square-root space; the swatches' base colour times half 11.</summary>
 internal static partial class MaterialEditorScenarios
 {
     public static void RunRowEditing()
@@ -43,8 +43,15 @@ internal static partial class MaterialEditorScenarios
         var edit = RowMath.ToEdit(stored);
         Require(edit == new Vector3(2f, -0.5f, 0f) && RowMath.ToStored(edit) == stored,
             "colours are edited as signed square roots and stored as signed squares");
-        Require(RowMath.ExposureToStops(1f) == 0f && Near(RowMath.ExposureToStops(4f), 1f) && float.IsNegativeInfinity(RowMath.ExposureToStops(0f))
-                && Near(RowMath.StopsToExposure(1f), 4f) && Near(RowMath.StopsToExposure(RowMath.ExposureToStops(2.5f)), 2.5f),
-            "exposure 1 is 0 stops and 4 is 1 stop, and stops convert back");
+
+        // The Dawntrail packages' composite passes multiply the base colour by half 11; the glow is col2.rgb times the scene's glow scale only.
+        var row = DtColorRow.Default with { Diffuse = new Vector3(0.5f, 0.25f, 1f), Specular = new Vector3(0.1f), Emissive = new Vector3(0.75f, 0f, 0.5f), Exposure = 0f };
+        Require(RowMath.Swatches(row, legacyShader: false) == (Vector3.Zero, row.Specular, row.Emissive),
+            "on character.shpk a row with half 11 = 0 shows a black base and its glow colour as it is");
+        Require(RowMath.Swatches(row with { Exposure = 2f }, legacyShader: false).Base == new Vector3(1f, 0.5f, 2f),
+            "half 11 = 2 shows the base colour twice as bright");
+        Require(RowMath.Swatches(row, legacyShader: true) == (row.Diffuse, row.Specular, row.Emissive),
+            "legacy shaders don't read half 11, so their swatches show the colours as stored");
+        Require(ShaderLabels.RowField(11) == "Base brightness", "half 11 is labelled as the base brightness, not a glow value");
     }
 }

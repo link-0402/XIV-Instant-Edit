@@ -215,7 +215,7 @@ public static class ShaderLabels
     [
         "Base red", "Base green", "Base blue", "Value 3",
         "Shine red", "Shine green", "Shine blue", "Value 7",
-        "Glow red", "Glow green", "Glow blue", "Glow exposure",
+        "Glow red", "Glow green", "Glow blue", "Base brightness",
         "Sheen", "Sheen tint", "Sheen spread", "Value 15",
         "Roughness", "Value 17", "Metalness", "Anisotropy",
         "Value 20", "Reflection strength", "Value 22", "Scroll layer",

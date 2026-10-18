@@ -68,7 +68,7 @@ public sealed class StainTemplates
 
     /// <summary>
     /// The row with the dye's flagged fields replaced by the stain's values (bits: base, shine, glow,
-    /// exposure, metalness, roughness, sheen, sheen tint, sheen spread, anisotropy, reflection map,
+    /// base brightness (half 11), metalness, roughness, sheen, sheen tint, sheen spread, anisotropy, reflection map,
     /// reflection strength). A black shine leaves the row's own.
     /// </summary>
     public static DtColorRow ApplyDye(DtColorRow row, DtDyeRow dye, DyePack pack)

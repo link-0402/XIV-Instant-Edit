@@ -138,10 +138,10 @@ internal sealed partial class MaterialWindow
     {
         var third = size.X / 3;
         Vector4 Shown(Vector3 colour) => new(Math.Clamp(colour.X, 0, 1), Math.Clamp(colour.Y, 0, 1), Math.Clamp(colour.Z, 0, 1), 1);
-        draw.AddRectFilled(position, position + new Vector2(third, size.Y), ImGui.GetColorU32(Shown(row.Diffuse)));
-        draw.AddRectFilled(position + new Vector2(third, 0), position + new Vector2(third * 2, size.Y), ImGui.GetColorU32(Shown(row.Specular)));
-        // Legacy shaders don't read half 11.
-        draw.AddRectFilled(position + new Vector2(third * 2, 0), position + size, ImGui.GetColorU32(Shown(legacyShader ? row.Emissive : row.Emissive * row.Exposure)));
+        var (shownBase, shine, glow) = RowMath.Swatches(row, legacyShader);
+        draw.AddRectFilled(position, position + new Vector2(third, size.Y), ImGui.GetColorU32(Shown(shownBase)));
+        draw.AddRectFilled(position + new Vector2(third, 0), position + new Vector2(third * 2, size.Y), ImGui.GetColorU32(Shown(shine)));
+        draw.AddRectFilled(position + new Vector2(third * 2, 0), position + size, ImGui.GetColorU32(Shown(glow)));
     }
 
     // ---- The selected pair ----
@@ -197,11 +197,11 @@ internal sealed partial class MaterialWindow
         RowColour(current, row, "Base colour", values.Diffuse, colour => values with { Diffuse = colour }, name);
         RowColour(current, row, "Shine colour", values.Specular, colour => values with { Specular = colour }, name);
         RowColour(current, row, "Glow colour", values.Emissive, colour => values with { Emissive = colour }, name);
-        var stops = values.Exposure <= 0 ? -4f : RowMath.ExposureToStops(values.Exposure);
-        if (RowLabel("Glow strength", "How bright the glow is, in stops. Each stop is 4 times brighter."))
+        var brightness = values.Exposure;
+        if (RowLabel("Base brightness", "Multiplies the base colour. 1 keeps it, 0 makes it black."))
         {
-            var changed = ImGui.SliderFloat("##exposure", ref stops, -4f, 4f, "%.2f stops");
-            Track(current, changed, d => EditRow(d, row, r => r with { Exposure = RowMath.StopsToExposure(stops) }), $"{name} glow strength");
+            var changed = ImGui.SliderFloat("##exposure", ref brightness, 0f, 2f, "%.2fx");
+            Track(current, changed, d => EditRow(d, row, r => r with { Exposure = MathF.Max(brightness, 0f) }), $"{name} base brightness");
         }
 
         Section("Surface");
