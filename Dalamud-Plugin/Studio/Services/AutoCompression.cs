@@ -25,47 +25,26 @@ internal sealed record AutoCompressionResult(byte[] Tex, TextureCompression Form
 /// </summary>
 internal static class AutoCompression
 {
-    /// <summary>
-    /// The cut-out threshold assumed when the material is not known yet: an opacity channel is then
-    /// checked as a cut-out at half, which catches lost lace or fishnet a real threshold would show.
-    /// </summary>
-    private const float AssumedAlphaThreshold = 0.5f;
-
     /// <summary>How a material of <paramref name="shader"/> reads a slot's texture: from its template material when there is one.</summary>
     public static IReadOnlyList<TextureUse> UsesFor(TextureType type, ShaderType shader, MtrlInfo? material)
     {
         var package = material is { ShaderPackageName.Length: > 0 } ? material.ShaderPackageName : ShaderInfo.ShaderPackName(shader);
         if (material is not { ShaderDataParsed: true })
-            return Unknown(RoleOf(type), package);
+            return TextureUse.Unknown(RoleOf(type), package);
         var (threshold, translucent) = Transparency(material);
         return new[] { new TextureUse { Role = RoleOf(type), ShaderPackage = package, AlphaThreshold = threshold, Translucent = translucent } };
     }
 
     /// <summary>
     /// How an image replacing the texture at <paramref name="gamePath"/> is read, when its materials
-    /// are not looked at: the role from its path, the shader its kind of model uses. A face's
-    /// <c>_etc_</c> textures belong to its brows and lashes, which hair.shpk draws.
+    /// are not looked at: the role from its path, the shader its kind of model uses (<see cref="TextureUse.PackageFor"/>).
     /// </summary>
     public static IReadOnlyList<TextureUse> UsesFor(string gamePath, string sourcePath)
     {
         var path = PathNormalizer.GamePath(gamePath);
         var role = TextureRoleClassifier.Classify(InstantEdit.Ui.ResourceKinds.Texture, null, path, sourcePath);
-        var package = path.Contains("/obj/hair/") || path.Contains("/obj/tail/") || path.Contains("/obj/zear/") ? "hair.shpk"
-            : path.Contains("/obj/face/") && Path.GetFileName(path).Contains("_etc_") ? "hair.shpk"
-            : path.Contains("/obj/body/") || path.Contains("/obj/face/") ? "skin.shpk"
-            : "character.shpk";
-        return Unknown(role, package);
+        return TextureUse.Unknown(role, TextureUse.PackageFor(path));
     }
-
-    /// <summary>
-    /// A texture whose material isn't read: any opacity channel is checked both as a cut-out at
-    /// <see cref="AssumedAlphaThreshold"/> and as blended at it, since either may be what draws it.
-    /// </summary>
-    private static IReadOnlyList<TextureUse> Unknown(TextureRole role, string package) => new[]
-    {
-        new TextureUse { Role = role, ShaderPackage = package, AlphaThreshold = AssumedAlphaThreshold },
-        new TextureUse { Role = role, ShaderPackage = package, AlphaThreshold = AssumedAlphaThreshold, Translucent = true },
-    };
 
     /// <summary>What a set of uses is cached and planned under: a change to any of them, or to the check, encodes the texture again.</summary>
     public static string KeyOf(IReadOnlyList<TextureUse> uses)

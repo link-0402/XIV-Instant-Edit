@@ -779,7 +779,8 @@ internal sealed class TextureCompressionService : IDisposable
             {
                 _log.Information($"Kept {candidate.Label} as it is{(shrunk ? " (one color)" : string.Empty)}: {result.Problem} (cut-outs {result.CutoutChange:P3}, tile {result.CutoutTileChange:P1}; " +
                                  $"opacity {result.OpacityChange:P3}, tile {result.OpacityTileChange:P1}; rows {result.RowChange:P4}, tile {result.RowTileChange:P1}; " +
-                                 $"normals p99 {result.NormalAngleP99:0.0} degrees; large errors {result.LargeErrorShare:P3}).");
+                                 $"normals p99 {result.NormalAngleP99:0.0} degrees, turned {result.NormalTurnedShare:P3}, tile {result.NormalTileTurned:P1}; " +
+                                 $"large errors {result.LargeErrorShare:P3}).");
                 Backups.RecordKept(new KeptTexture { File = candidate.File, Sha256 = sha, Reason = result.Problem, CheckVersion = CompressionCheck.Version });
                 return new Outcome(null, result.Problem);
             }

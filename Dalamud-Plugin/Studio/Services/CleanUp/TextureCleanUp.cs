@@ -112,8 +112,11 @@ internal static class TextureCleanUp
             {
                 var parents = graph.ParentsOf(node).Where(p => p.Kind == StudioResourceKind.Material).ToArray();
                 var fallback = () => TextureRoleClassifier.Classify(InstantEdit.Ui.ResourceKinds.Texture, null, node.GamePath, node.DiskPath);
+                // No material of the mod reads it: checked as its path says, with any opacity both cut out and blended.
                 if (parents.Length == 0)
-                    uses.Add(new TextureUse { Role = fallback() });
+                    foreach (var use in AutoCompression.UsesFor(node.GamePath, node.DiskPath))
+                        if (!uses.Contains(use))
+                            uses.Add(use);
                 foreach (var parent in parents)
                     foreach (var use in CompressionCapture.UsesIn(Material(parent), parent.GamePath, node.GamePath, fallback))
                         if (!uses.Contains(use))
