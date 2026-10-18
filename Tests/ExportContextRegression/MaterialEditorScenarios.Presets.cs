@@ -18,7 +18,84 @@ internal static partial class MaterialEditorScenarios
         CheckGlass();
         CheckCleanUp();
         CheckUsedRowsTarget();
+        CheckSingleRowTargets();
+        CheckMaskPainting();
         CheckEveryPreset();
+    }
+
+    private static void CheckSingleRowTargets()
+    {
+        var mask = PresetDocument(MaskPreset);
+        Require(PresetChecks.Rows(Context(mask, pair: 7), RowTarget.SelectedTop).Rows.SequenceEqual([14])
+                && PresetChecks.Rows(Context(mask, pair: 7), RowTarget.SelectedBottom).Rows.SequenceEqual([15]),
+            "pair 8/1 is row 15 (index 14), the top; 8/2 is row 16 (index 15), the bottom");
+        var top = PresetNamed("Metal").Apply(Context(mask, pair: 7), RowTarget.SelectedTop).Doc.Table!.Rows;
+        Require(top[14].Metalness == 1f && top.Where((_, i) => i != 14).All(row => row.Metalness == 0f),
+            "Metal on pair 8/1 changes that one row only");
+        var none = PresetChecks.Rows(Context(mask), RowTarget.SelectedBottom);
+        Require(none.Rows.Length == 32 && none.Note != null, "with no pair selected, a single-row target falls back to every row and says so");
+    }
+
+    /// <summary>
+    /// An 8 x 8 index: pair 1 on the left (x 0-3), a compression ramp column of pair 5 (x 4), pair 8 on the
+    /// right (x 5-7); the top half shows the pairs' top rows (green 255), the bottom half their bottom rows.
+    /// One texel of pair 8's bottom row sits inside pair 1, at (1, 6), like a thin detail.
+    /// </summary>
+    private static DecodedTexture RampIndex()
+    {
+        const int size = 8;
+        var bgra = new byte[size * size * 4];
+        for (var y = 0; y < size; y++)
+            for (var x = 0; x < size; x++)
+            {
+                var p = (y * size + x) * 4;
+                bgra[p + 1] = (byte)(y < 4 ? 255 : 0);
+                bgra[p + 2] = (byte)(x < 4 ? 0 : x == 4 ? 68 : 119);
+                bgra[p + 3] = 255;
+            }
+        bgra[(6 * size + 1) * 4 + 2] = 119;
+        return new DecodedTexture(bgra, size, size, size, size, 0, 1);
+    }
+
+    private static void CheckMaskPainting()
+    {
+        var metal = PresetNamed("Metal");
+        Require(metal.MaskEdit == new MaskEdit(1f, 0.5f), "Metal paints full shine (red) and leaves the rows' roughness (green 0.5)");
+        var rough = metal.Apply(Context(PresetDocument(MaskPreset), mask: Solid(4, 0, 255)) with { AdjustsMask = true }, RowTarget.All);
+        Require(rough.Warnings.Count == 0, "with Adjust mask, Metal doesn't warn about a mask it paints");
+
+        // A 16 x 16 mask over the 8 x 8 index: each index texel covers 2 x 2 mask texels.
+        var mask = Solid(16, 0, 255);
+        for (var i = 0; i < 16 * 16; i++)
+            mask.Bgra[i * 4] = 77;
+        var index = RampIndex();
+        bool Painted(byte[] bgra, int x, int y) => bgra[(y * 16 + x) * 4 + 2] == 255 && bgra[(y * 16 + x) * 4 + 1] == 128 && bgra[(y * 16 + x) * 4] == 77;
+        bool Untouched(byte[] bgra, int x, int y) => bgra[(y * 16 + x) * 4 + 2] == 0 && bgra[(y * 16 + x) * 4 + 1] == 255;
+
+        var (top, topChanged) = MaskPainting.Paint(mask, index, [14], metal.MaskEdit!);
+        Require(topChanged == 64 && Painted(top, 15, 0) && Painted(top, 10, 7) && Untouched(top, 15, 8) && Untouched(top, 3, 3),
+            "pair 8/1 paints only where the index shows that top row, and keeps the mask's blue");
+        Require(Painted(top, 8, 0) && Painted(top, 9, 7) && Untouched(top, 7, 0),
+            "the ramp column next to pair 8 takes pair 8's paint, so the painted area has no gap");
+
+        var (_, rampChanged) = MaskPainting.Paint(mask, index, [8, 9], metal.MaskEdit!);
+        Require(rampChanged == 0, "the compression ramp between pairs 1 and 8 doesn't paint pair 5, which it only passes through");
+
+        var (bottom, bottomChanged) = MaskPainting.Paint(mask, index, [15], metal.MaskEdit!);
+        Require(bottomChanged == 68 && Painted(bottom, 15, 15) && Untouched(bottom, 15, 0) && Painted(bottom, 2, 12) && Painted(bottom, 3, 13)
+                && Untouched(bottom, 4, 12),
+            "pair 8/2 paints the bottom half, and the thin detail of pair 8 inside pair 1 too");
+
+        var (pair, _) = MaskPainting.Paint(mask, index, [14, 15], metal.MaskEdit!);
+        Require(Painted(pair, 15, 0) && Painted(pair, 15, 15), "the whole pair paints both its rows' areas");
+
+        var (all, allChanged) = MaskPainting.Paint(mask, null, Enumerable.Range(0, 32).ToArray(), metal.MaskEdit!);
+        Require(allChanged == 256 && Painted(all, 0, 0), "without an index texture, every row paints the whole mask");
+
+        var halfIndex = Solid(1, 0, 128);
+        var (half, _) = MaskPainting.Paint(Solid(1, 0, 255), halfIndex, [0], metal.MaskEdit!);
+        Require(half[2] is >= 127 and <= 129 && half[1] is >= 191 and <= 192,
+            "where the index blends a row half and half, the mask moves half way");
     }
 
     private static PresetContext Context(MaterialDocument doc, IndexUsage? usage = null, DecodedTexture? mask = null, int? pair = null)

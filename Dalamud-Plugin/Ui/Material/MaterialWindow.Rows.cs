@@ -672,24 +672,10 @@ internal sealed partial class MaterialWindow
         var failed = false;
         Run(async () =>
         {
-            // A mod material's textures come from its own mod: the character's collection may load other ones (or the mod is off).
-            if (!source.IsGameData && source.ModRootPath.Length > 0)
-            {
-                string? Own(string? gamePath) => gamePath == null
-                    ? null
-                    : ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, gamePath) is { } relative
-                      && Path.Combine(source.ModRootPath, relative.Replace('/', Path.DirectorySeparatorChar)) is var full && File.Exists(full)
-                        ? full
-                        : null;
-                normalFile = Own(normal) ?? normalFile;
-                indexFile = Own(existing) ?? indexFile;
-                maskFile = Own(mask) ?? maskFile;
-            }
-            // A made texture goes where nothing is yet: over a game texture of that name it would change every
-            // material that reads it, and a path the mod maps already would stop the save.
-            bool Taken(string path) => data.FileExists(path) || current.NewFiles.ContainsKey(path) ||
-                                       !source.IsGameData && source.ModRootPath.Length > 0 &&
-                                       ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, path) != null;
+            normalFile = OwnTextureFile(source, normal) ?? normalFile;
+            indexFile = OwnTextureFile(source, existing) ?? indexFile;
+            maskFile = OwnTextureFile(source, mask) ?? maskFile;
+            bool Taken(string path) => TextureTaken(current, source, path);
             if (legacyShader)
             {
                 var maskBytes = mask != null && current.NewFiles.TryGetValue(mask, out var made) ? made : await ReadTextureAsync(maskFile).ConfigureAwait(false);
@@ -775,6 +761,27 @@ internal sealed partial class MaterialWindow
         doc = slot < 0 ? doc.WithAddedSlot(IndexSampler, indexPath) : doc.WithSlot(slot, doc.Slots[slot] with { Path = indexPath });
         return (doc, notes.Where(note => !note.Contains("Make that texture", StringComparison.Ordinal)).ToList());
     }
+
+    /// <summary>
+    /// A mod material's own file for a texture it reads, as the character's collection may load another one
+    /// (or the mod is off); null for a game material or when the mod has no such file.
+    /// </summary>
+    private static string? OwnTextureFile(MaterialSource source, string? gamePath)
+        => gamePath == null || source.IsGameData || source.ModRootPath.Length == 0
+            ? null
+            : ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, gamePath) is { } relative
+              && Path.Combine(source.ModRootPath, relative.Replace('/', Path.DirectorySeparatorChar)) is var full && File.Exists(full)
+                ? full
+                : null;
+
+    /// <summary>
+    /// Whether a made texture can't go at <paramref name="path"/>: over a game texture of that name it would change
+    /// every material that reads it, and a path the mod maps already would stop the save.
+    /// </summary>
+    private bool TextureTaken(MaterialSession current, MaterialSource source, string path)
+        => data.FileExists(path) || current.NewFiles.ContainsKey(path) ||
+           !source.IsGameData && source.ModRootPath.Length > 0 &&
+           ModMetadata.MappedFileBeside(source.ModRootPath, source.GamePath, source.RelativePath, path) != null;
 
     /// <summary>A texture's bytes from a mod file or the game's files; null when there is none.</summary>
     private async Task<byte[]?> ReadTextureAsync(string? file)
