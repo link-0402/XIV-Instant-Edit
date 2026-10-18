@@ -181,7 +181,7 @@ internal sealed class OptionInspector
                 _session.RenameGroup(group.Id, _name);
         }
         Gui.Tooltip("Collections remember what is picked in a group by its name: after a rename it may need picking again.");
-        Gui.LabeledValue("Players pick", ResourceStyle.GroupTypeLabel(group.Type), ResourceStyle.GroupTypeHelp(group.Type));
+        Gui.LabeledValue("Selection Type", ResourceStyle.GroupTypeLabel(group.Type), ResourceStyle.GroupTypeHelp(group.Type));
 
         ImGui.Spacing();
         Gui.SectionHeader(group.Type == ModGroupType.Combining ? $"Combinations ({group.FileSets.Count})" : $"Options ({group.Options.Count})");

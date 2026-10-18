@@ -95,7 +95,13 @@ internal static class Tile
 
         // ── The card itself: one item for clicks, hover and drops ──────────
         ImGui.SetCursorScreenPos(min);
-        result.Clicked = ImGui.InvisibleButton("##tile", Vector2.Max(tileSize, Vector2.One));
+        // The card stops where the action buttons begin, so the two never overlap and a click on a
+        // button can't be taken by the card (or its drag source).
+        float actionsWidth = spec.Actions is { Count: > 0 } acts
+            ? acts.Count * (ImGui.GetFrameHeight() + Theme.S(2)) + Theme.S(4) + pad
+            : 0f;
+        var buttonSize = new Vector2(Math.Max(1f, tileSize.X - actionsWidth), Math.Max(1f, tileSize.Y));
+        result.Clicked = ImGui.InvisibleButton("##tile", buttonSize);
         result.Hovered = ImGui.IsItemHovered();
         result.DoubleClicked = result.Hovered && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
         result.RightClicked = ImGui.IsItemClicked(ImGuiMouseButton.Right);
@@ -105,7 +111,8 @@ internal static class Tile
         if (spec.Drop != null && FileDrop.Target(spec.Drop.Reject, out var dropped))
             result.Dropped = dropped;
 
-        var bg = spec.Selected ? Theme.TileSelected : result.Hovered ? Theme.TileHovered : Theme.Tile;
+        bool cardHot = result.Hovered || (actionsWidth > 0 && ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, max));
+        var bg = spec.Selected ? Theme.TileSelected : cardHot ? Theme.TileHovered : Theme.Tile;
         draw.AddRectFilled(min, max, ImGui.GetColorU32(bg), rounding);
         draw.AddRect(min, max, ImGui.GetColorU32(spec.Selected ? Theme.Accent with { W = 0.55f } : Theme.TileBorder), rounding, ImDrawFlags.None,
             spec.Selected ? Theme.S(1.5f) : 1f);

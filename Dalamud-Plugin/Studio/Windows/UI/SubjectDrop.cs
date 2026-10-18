@@ -15,8 +15,8 @@ internal static class SubjectDrop
     /// <summary>What the drag carries. ImGui payloads are bytes; the subject stays here.</summary>
     private static PortSubject? _dragging;
 
-    /// <summary>Makes the last drawn item draggable, carrying <paramref name="subject"/>.</summary>
-    public static void Source(PortSubject subject, bool alreadyInPack, string shelf = "modpack")
+    /// <summary>Makes the last drawn item draggable, carrying <paramref name="subject"/>. <paramref name="hint"/> replaces the line under its name.</summary>
+    public static void Source(PortSubject subject, bool alreadyInPack, string shelf = "modpack", string? hint = null)
     {
         if (!ImGui.BeginDragDropSource(ImGuiDragDropFlags.None))
             return;
@@ -24,7 +24,7 @@ internal static class SubjectDrop
         _dragging = subject;
         ImGui.SetDragDropPayload(Label, ReadOnlySpan<byte>.Empty, ImGuiCond.None);
         ImGui.TextUnformatted(subject.DisplayName);
-        ImGui.TextColored(Theme.Muted, alreadyInPack ? $"Already in the {shelf}." : $"Drop onto the {shelf}'s list to add it.");
+        ImGui.TextColored(Theme.Muted, hint ?? (alreadyInPack ? $"Already in the {shelf}." : $"Drop onto the {shelf}'s list to add it."));
         ImGui.EndDragDropSource();
     }
 

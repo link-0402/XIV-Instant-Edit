@@ -626,6 +626,7 @@ internal sealed class ResourceActions
 
     private void DrawNewGroupPopup()
     {
+        Gui.CenterNextPopup();
         if (!ImGui.BeginPopupModal(NewGroupPopupId, ImGuiWindowFlags.AlwaysAutoResize))
             return;
         if (_session.Project is not { } project)
@@ -641,7 +642,7 @@ internal sealed class ResourceActions
         ImGui.SetNextItemWidth(Theme.S(320));
         if (ImGui.IsWindowAppearing())
             ImGui.SetKeyboardFocusHere();
-        bool enter = ImGui.InputTextWithHint("##groupname", "Colour, Style, Texture Slot A", ref _newName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
+        bool enter = ImGui.InputText("##groupname", ref _newName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
         DrawGroupTypeChoice(ref _newMulti);
 
         var name = _newName.Trim();
@@ -681,18 +682,19 @@ internal sealed class ResourceActions
     /// <summary>Pick one (Single) or pick any (Multi), as two radio buttons after a label.</summary>
     private static void DrawGroupTypeChoice(ref bool multi)
     {
-        Gui.Label("Players pick", "Penumbra's group types: Single (exactly one option at a time) or Multi (any number, at most 32 options).");
-        if (ImGui.RadioButton("one option##single", !multi))
+        Gui.Label("Selection Type", "Penumbra's group types: Single (exactly one option at a time) or Multi (any number, at most 32 options).");
+        if (ImGui.RadioButton("single##single", !multi))
             multi = false;
         Gui.Tooltip(ResourceStyle.GroupTypeHelp(ModGroupType.Single));
         ImGui.SameLine();
-        if (ImGui.RadioButton("any number##multi", multi))
+        if (ImGui.RadioButton("multiple##multi", multi))
             multi = true;
         Gui.Tooltip(ResourceStyle.GroupTypeHelp(ModGroupType.Multi));
     }
 
     private void DrawNewOptionPopup()
     {
+        Gui.CenterNextPopup();
         if (!ImGui.BeginPopupModal(NewOptionPopupId, ImGuiWindowFlags.AlwaysAutoResize))
             return;
         if (_session.Project?.Meta.FindGroupView(_newOptionGroup) is not { } group)

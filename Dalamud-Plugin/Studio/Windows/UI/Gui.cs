@@ -45,6 +45,10 @@ internal static class Gui
         ImGui.Spacing();
     }
 
+    /// <summary>Opens the next popup in the middle of the screen.</summary>
+    public static void CenterNextPopup()
+        => ImGui.SetNextWindowPos(ImGui.GetMainViewport().GetCenter(), ImGuiCond.Appearing, new Vector2(0.5f, 0.5f));
+
     /// <summary>A muted explanatory line, e.g. an empty-state message.</summary>
     public static void Hint(string text) => ImGui.TextColored(Theme.Muted, text);
 

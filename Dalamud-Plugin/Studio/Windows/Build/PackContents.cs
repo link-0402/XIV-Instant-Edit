@@ -211,7 +211,8 @@ internal sealed class PackContents
         => subject.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase)
         || subject.IdDisplay.Contains(filter, StringComparison.OrdinalIgnoreCase);
 
-    private void DrawItem(PortItem item, Vector2 size, float indent)
+    /// <summary>An item's tile. Under an option (<paramref name="place"/>) it can be dragged to another option, and gear dropped on it goes into that option.</summary>
+    private void DrawItem(PortItem item, Vector2 size, float indent, string? place = null)
     {
         var subject = item.Subject;
         var target  = new Target(TargetKind.Item, item.Key);
@@ -244,12 +245,18 @@ internal sealed class PackContents
             Selected  = selected,
             Issue     = worst,
             IssueText = worst != null ? string.Join("\n", _session.Issues.Where(i => i.Target.IsWithin(target)).Select(i => i.Message)) : null,
+            AfterButton = place != null ? () => SubjectDrop.Source(subject, true, hint: "Drop onto an option to move it there.") : null,
         }, size);
 
         if (result.Clicked)
             _session.Focus(target);
         if (SubjectDrop.Target() is { } dropped)
-            _session.AddItem(dropped);
+        {
+            if (place != null)
+                _structure.DropItemInto(dropped, place);
+            else
+                _session.AddItem(dropped);
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -270,7 +277,7 @@ internal sealed class PackContents
         // ── Default files ────────────────────────────────────────────────
         DrawPlaceTile(PackPlace.Default, null, null, new Vector2(width, tileH), 0);
         foreach (var item in byPlace.GetValueOrDefault(PackPlace.Default, new List<PortItem>()).Where(ItemMatches))
-            DrawItem(item, new Vector2(width, itemH), step);
+            DrawItem(item, new Vector2(width, itemH), step, PackPlace.Default);
         if (_session.Items.Count == 0)
             Gui.HintWrapped(SubjectDrop.IsDragging ? "Drop it here to add it to the modpack." : "Nothing here yet. Add gear or a character feature from the game.");
 
@@ -298,7 +305,7 @@ internal sealed class PackContents
                 var place = PackPlace.Of(group.Id, option.Id);
                 DrawPlaceTile(place, group, option, new Vector2(width, tileH), step);
                 foreach (var item in byPlace.GetValueOrDefault(place, new List<PortItem>()).Where(ItemMatches))
-                    DrawItem(item, new Vector2(width, itemH), step * 2);
+                    DrawItem(item, new Vector2(width, itemH), step * 2, place);
             }
         }
 
@@ -376,8 +383,8 @@ internal sealed class PackContents
             DrawThumb = image != null && _host.Configuration.ShowThumbnails ? side => _thumbs.DrawFile(image, side) : null,
             Selected  = _session.Selection == target,
             Tooltip   = option == null
-                ? "The mod's default files: always in use while the mod is enabled. Drop gear from the item browser here to add it."
-                : $"{group!.Name} › {option.Name}\nDrop gear from the item browser here to put it into this option.",
+                ? "The mod's default files: always in use while the mod is enabled. Drop gear or an item of the list here to put it in them."
+                : $"{group!.Name} › {option.Name}\nDrop gear or an item of the list here to put it into this option.",
         }, size);
 
         if (result.Clicked)

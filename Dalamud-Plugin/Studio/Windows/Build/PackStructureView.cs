@@ -80,10 +80,12 @@ internal sealed class PackStructureView
         _openPopup = RemoveOptionPopupId;
     }
 
-    /// <summary>Puts gear dragged from the browser into a place: added to the modpack if it is not in it yet.</summary>
+    /// <summary>Puts gear dragged from the browser, or an item dragged from another option, into a place: added to the modpack if it is not in it yet.</summary>
     public void DropItemInto(PortSubject subject, string place)
     {
         var item = _session.AddItem(subject);
+        if (_session.PlaceOf(item) == place)
+            return;
         _session.SetPlace(item, place);
         _session.Notify($"{subject.DisplayName} goes into {_session.Label(place)}.", Severity.Info);
     }
@@ -215,7 +217,8 @@ internal sealed class PackStructureView
             },
             IconColor = Theme.Accent,
             DrawThumb = thumb,
-            Tooltip   = "Click to set it up.",
+            Tooltip   = placed.Kind == PlacedKind.Item ? "Click to set it up. Drag it onto an option on the left to move it there." : "Click to set it up.",
+            AfterButton = placed.Kind == PlacedKind.Item ? () => SubjectDrop.Source(item.Subject, true, hint: "Drop onto an option to move it there.") : null,
         }, size);
         if (result.Clicked)
             _session.Focus(placed.Target);
@@ -365,14 +368,14 @@ internal sealed class PackStructureView
             _session.MarkDirty();
         }
 
-        Gui.Label("Players pick", "Single: exactly one option at a time. Multi: any number of them (at most 32 options).");
-        if (ImGui.RadioButton("one option##packsingle", !group.Multi))
+        Gui.Label("Selection Type", "Single: exactly one option at a time. Multiple: any number of them (at most 32 options).");
+        if (ImGui.RadioButton("single##packsingle", !group.Multi))
             _session.SetMulti(group, false);
         ImGui.SameLine();
         var whyNot = PortSession.WhyNotMulti(group);
         using (Gui.Disabled(whyNot != null))
         {
-            if (ImGui.RadioButton("any number##packmulti", group.Multi))
+            if (ImGui.RadioButton("multiple##packmulti", group.Multi))
                 _session.SetMulti(group, true);
         }
         Gui.Tooltip(whyNot);
@@ -445,6 +448,7 @@ internal sealed class PackStructureView
             _openPopup = null;
         }
 
+        Gui.CenterNextPopup();
         if (ImGui.BeginPopupModal(NewGroupPopupId, ImGuiWindowFlags.AlwaysAutoResize))
         {
             Gui.HintWrapped("A group of options players pick between in Penumbra. Put items or files into its options afterwards.");
@@ -452,11 +456,11 @@ internal sealed class PackStructureView
             ImGui.SetNextItemWidth(Theme.S(320));
             if (ImGui.IsWindowAppearing())
                 ImGui.SetKeyboardFocusHere();
-            bool enter = ImGui.InputTextWithHint("##packnewgroup", "Colour, Style, Outfit", ref _newName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
-            Gui.Label("Players pick");
-            if (ImGui.RadioButton("one option##newsingle", !_newMulti)) _newMulti = false;
+            bool enter = ImGui.InputText("##packnewgroup", ref _newName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
+            Gui.Label("Selection Type");
+            if (ImGui.RadioButton("single##newsingle", !_newMulti)) _newMulti = false;
             ImGui.SameLine();
-            if (ImGui.RadioButton("any number##newmulti", _newMulti)) _newMulti = true;
+            if (ImGui.RadioButton("multiple##newmulti", _newMulti)) _newMulti = true;
 
             var trimmed = _newName.Trim();
             var problem = trimmed.Length == 0 ? "Give it a name."
@@ -479,6 +483,7 @@ internal sealed class PackStructureView
             ImGui.EndPopup();
         }
 
+        Gui.CenterNextPopup();
         if (ImGui.BeginPopupModal(NewOptionPopupId, ImGuiWindowFlags.AlwaysAutoResize))
         {
             var group = _newOptionGroup;
