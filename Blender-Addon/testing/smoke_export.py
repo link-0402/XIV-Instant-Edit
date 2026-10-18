@@ -1156,6 +1156,126 @@ def assert_backface_duplicate(addon):
     print("[PASS] Generate Duplicate with Backfaces adds a flipped copy as the next part")
 
 
+def assert_bake_mesh_copy(addon):
+    """Bake to Copy: shape keys and modifiers applied but Armature, which the copy keeps; original hidden."""
+    ui = importlib.import_module(f"{addon.__name__}.ui")
+
+    with temporary_scene_data():
+        scene = bpy.context.scene
+        rig_data = bpy.data.armatures.new("Bake Rig Data")
+        rig = bpy.data.objects.new("Bake Rig", rig_data)
+        scene.collection.objects.link(rig)
+        bpy.context.view_layer.objects.active = rig
+        bpy.ops.object.mode_set(mode="EDIT")
+        bone = rig_data.edit_bones.new("j_kosi")
+        bone.head, bone.tail = (0, 0, 0), (0, 0, 1)
+        bpy.ops.object.mode_set(mode="OBJECT")
+        # A posed rig: the copy must still be made from the unposed mesh.
+        rig.pose.bones["j_kosi"].location = (5.0, 0.0, 0.0)
+
+        def create(name):
+            mesh = bpy.data.meshes.new(f"{name} Data")
+            mesh.from_pydata([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], [], [(0, 1, 2, 3)])
+            obj = bpy.data.objects.new(name, mesh)
+            scene.collection.objects.link(obj)
+            obj.vertex_groups.new(name="j_kosi").add([0, 1, 2, 3], 1.0, "REPLACE")
+            obj["xiv_material"] = "/mt_c0201e0903_top_b.mtrl"
+            obj.shape_key_add(name="Basis")
+            raise_key = obj.shape_key_add(name="Raise")
+            for point in raise_key.data:
+                point.co.z += 1.0
+            raise_key.value = 0.5
+            obj.shape_key_add(name="shp_wa_").value = 0.0
+            return obj
+
+        modded = create("70.0 Modded")
+        modded.parent = rig
+        armature = modded.modifiers.new("Armature", "ARMATURE")
+        armature.object = rig
+        armature.use_deform_preserve_volume = True
+        displace = modded.modifiers.new("Displace", "DISPLACE")
+        displace.strength = 0.2  # No texture: every vertex moves 0.1 along its normal (+Z).
+        hidden_modifier = modded.modifiers.new("Off", "DISPLACE")
+        hidden_modifier.strength = 10.0
+        hidden_modifier.show_viewport = False
+        parented = create("70.1 Parented")
+        parented.parent = rig
+        parented.parent_type = "ARMATURE"
+        empty = bpy.data.objects.new("Bake Empty", None)
+        scene.collection.objects.link(empty)
+
+        for obj in bpy.context.view_layer.objects:
+            obj.select_set(obj in (modded, parented, empty))
+        bpy.context.view_layer.objects.active = modded
+        before = set(scene.objects)
+        if bpy.ops.xiv_ie.bake_mesh_copy() != {"FINISHED"}:
+            raise AssertionError("Bake to Copy did not finish")
+        copies = {obj.name.rsplit(".", 1)[0]: obj for obj in set(scene.objects) - before}
+        if sorted(copies) != ["70.0 Modded", "70.1 Parented"]:
+            raise AssertionError(f"Bake to Copy made unexpected objects: {sorted(copies)}")
+        modded_copy, parented_copy = copies["70.0 Modded"], copies["70.1 Parented"]
+
+        for copy in (modded_copy, parented_copy):
+            if copy.data.shape_keys is not None:
+                raise AssertionError(f"{copy.name} kept shape keys")
+            if copy.parent is not rig or copy.get("xiv_material") != "/mt_c0201e0903_top_b.mtrl":
+                raise AssertionError(f"{copy.name} lost its parent or properties")
+            group = copy.vertex_groups.get("j_kosi")
+            if group is None or any(
+                    [element.weight for element in vertex.groups] != [1.0] for vertex in copy.data.vertices):
+                raise AssertionError(f"{copy.name} lost its weights")
+        if [(modifier.type, modifier.name) for modifier in modded_copy.modifiers] != [("ARMATURE", "Armature")]:
+            raise AssertionError(f"Baked modifiers: {[modifier.name for modifier in modded_copy.modifiers]}")
+        kept = modded_copy.modifiers[0]
+        if kept.object is not rig or not kept.use_deform_preserve_volume or not kept.show_viewport:
+            raise AssertionError("The copy's Armature modifier lost its settings")
+        if parented_copy.modifiers or parented_copy.parent_type != "ARMATURE":
+            raise AssertionError("The armature-parented copy is no longer deformed by its parent")
+        for copy, height in ((modded_copy, 0.6), (parented_copy, 0.5)):
+            heights = [round(vertex.co.z, 4) for vertex in copy.data.vertices]
+            xs = sorted(round(vertex.co.x, 4) for vertex in copy.data.vertices)
+            if heights != [height] * 4 or xs != [0.0, 0.0, 1.0, 1.0]:
+                raise AssertionError(f"{copy.name} was not baked unposed with its shape mix: {heights}, {xs}")
+
+        if not modded.hide_get() or not parented.hide_get() or empty.hide_get():
+            raise AssertionError("Bake to Copy did not hide just the originals")
+        if (not armature.show_viewport or parented.parent_type != "ARMATURE"
+                or modded.data.shape_keys.key_blocks["Raise"].value != 0.5):
+            raise AssertionError("Bake to Copy changed the originals")
+        if (set(bpy.context.selected_objects) != {modded_copy, parented_copy, empty}
+                or bpy.context.view_layer.objects.active is not modded_copy):
+            raise AssertionError("The baked copies were not left selected")
+
+    # The entry joins the Material tab's slot menus, and the right-click one only on slots.
+    for menu_type, draw in ((bpy.types.UI_MT_list_item_context_menu, ui.draw_material_slot_context_menu),
+                            (bpy.types.MATERIAL_MT_context_menu, ui.draw_material_specials_menu)):
+        if draw not in getattr(menu_type.draw, "_draw_funcs", ()):
+            raise AssertionError(f"Bake to Copy was not added to {menu_type.__name__}")
+
+    class Layout:
+        def __init__(self):
+            self.items = []
+
+        def separator(self):
+            self.items.append("separator")
+
+        def operator(self, idname, **_options):
+            self.items.append(idname)
+
+    def slot_menu(context):
+        owner = SimpleNamespace(layout=Layout())
+        ui.draw_material_slot_context_menu(owner, context)
+        return owner.layout.items
+
+    if slot_menu(SimpleNamespace(ui_list=SimpleNamespace(bl_idname="MATERIAL_UL_matslots"))) != [
+            "separator", "xiv_ie.bake_mesh_copy"]:
+        raise AssertionError("Bake to Copy is missing from a material slot's right-click menu")
+    if slot_menu(SimpleNamespace(ui_list=SimpleNamespace(bl_idname="MESH_UL_shape_keys"))) or slot_menu(
+            SimpleNamespace()):
+        raise AssertionError("Bake to Copy showed in another list's right-click menu")
+    print("[PASS] Bake to Copy applies shape keys and modifiers but Armature, and hides the original")
+
+
 def assert_links_menu(addon):
     """The globe at the right end of the Instant Edit header opens Luci_xiv's links."""
     ui = importlib.import_module(f"{addon.__name__}.ui")
@@ -2647,6 +2767,7 @@ def run() -> None:
         assert_mesh_drag_plan(addon)
         assert_mesh_list_geometry(addon)
         assert_backface_duplicate(addon)
+        assert_bake_mesh_copy(addon)
         assert_links_menu(addon)
         assert_mesh_material_quick_selectors(addon)
 

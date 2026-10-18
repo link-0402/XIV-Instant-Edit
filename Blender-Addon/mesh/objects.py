@@ -182,6 +182,40 @@ def quick_copy(source_obj: Object, key_name: str=None) -> Object:
         raise
 
 
+def baked_copy(source_obj: Object) -> Object:
+    """Copy a mesh as an export writes it and an import brings it back: its shape keys at their
+    current values and every modifier but Armature applied.
+
+    The copy keeps the Armature modifiers, with their settings, and an armature parent, so the
+    pose moves it as it moves the original.
+    """
+    armatures   = [modifier for modifier in source_obj.modifiers if modifier.type == "ARMATURE"]
+    shown       = [(modifier, modifier.show_viewport) for modifier in armatures]
+    parent_type = source_obj.parent_type
+    for modifier in armatures:
+        modifier.show_viewport = False
+    # An armature parent deforms the mesh like a modifier; an object parent places it the same.
+    if parent_type == "ARMATURE":
+        source_obj.parent_type = "OBJECT"
+    try:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        depsgraph.update()
+        new_obj = copy_mesh_object(source_obj, depsgraph, export=False)
+    finally:
+        for modifier, show in shown:
+            modifier.show_viewport = show
+        source_obj.parent_type = parent_type
+
+    new_obj.parent_type = parent_type
+    for source in armatures:
+        modifier = new_obj.modifiers.new(name=source.name, type="ARMATURE")
+        for prop in source.bl_rna.properties:
+            if prop.is_readonly or prop.identifier in {"rna_type", "name", "type", "is_active"}:
+                continue
+            setattr(modifier, prop.identifier, getattr(source, prop.identifier))
+    return new_obj
+
+
 def evaluate_obj(obj: Object, depsgraph: Depsgraph) -> Object:
         eval_obj  = obj.evaluated_get(depsgraph)
         obj.data = bpy.data.meshes.new_from_object(
