@@ -40,20 +40,24 @@ public static class EffectPresets
         public override string Requirement => "Needs Dawntrail colour rows.";
         public override bool Applies(PresetContext context) => HasRows(context);
 
+        // Full shine, and green 0.5 keeps the rows' roughness.
+        public override MaskEdit MaskEdit { get; } = new(1f, 0.5f);
+
         public override PresetResult Apply(PresetContext context, RowTarget target)
         {
             var (rows, note) = Rows(context, target);
             var doc = EditRows(context.Doc, rows, row => row with { Metalness = 1f, Roughness = 0.2f, Specular = row.Diffuse, SheenRate = 0f });
             var warnings = new List<string>();
-            if (context.Mask is { } mask)
+            // A mask the window paints needs no check.
+            if (!context.AdjustsMask && context.Mask is { } mask)
             {
                 var (red, green) = MaskMeans(mask);
                 if (green > 0.6f)
-                    warnings.Add("The mask's green channel is rough; the metal will look dull. Darken it in the mask.");
+                    warnings.Add("The mask's green channel is rough; the metal will look dull. Darken it in the mask, or tick Adjust mask.");
                 if (red < 0.3f)
-                    warnings.Add("The mask's red channel is dark; the metal will barely shine. Brighten it in the mask.");
+                    warnings.Add("The mask's red channel is dark; the metal will barely shine. Brighten it in the mask, or tick Adjust mask.");
             }
-            else
+            else if (!context.AdjustsMask)
                 warnings.Add("The mask texture couldn't be read, so it wasn't checked.");
             return Result(doc, [$"Metalness 100% and roughness 20% on {RowCount(rows.Length)}; the shine takes the base colour."], warnings, note);
         }

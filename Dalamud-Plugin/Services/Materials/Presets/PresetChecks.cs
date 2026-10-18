@@ -45,7 +45,11 @@ public static class PresetChecks
                 return (all, "The index texture couldn't be read, so every row changed.");
             case RowTarget.Selected when context.SelectedPair is { } pair and >= 0 and < 16:
                 return ([pair * 2, pair * 2 + 1], null);
-            case RowTarget.Selected:
+            case RowTarget.SelectedTop when context.SelectedPair is { } pair and >= 0 and < 16:
+                return ([pair * 2], null);
+            case RowTarget.SelectedBottom when context.SelectedPair is { } pair and >= 0 and < 16:
+                return ([pair * 2 + 1], null);
+            case RowTarget.Selected or RowTarget.SelectedTop or RowTarget.SelectedBottom:
                 return (all, "No pair was selected, so every row changed.");
             default:
                 return (all, null);

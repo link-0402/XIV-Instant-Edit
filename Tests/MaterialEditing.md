@@ -135,6 +135,17 @@ The `material` Bridge tool shows the window's state, the live binding and, with
 - [ ] Dyeable adds a dye table (the rows' Dye section appears); Clean up's hover lists what it
   removes. (On a material that already has one, Dyeable sets 3 rows to channel 1; adding a table
   is covered by Dyeable on/off in Task 12.)
+- [x] Rows to change offers Pair N, Pair N/1 and Pair N/2; Metal on Pair N/1 changes only the top row
+  (row 2N - 1), and only the top half of that pair turns metallic on the character. (2026-10-18,
+  Pentagram Boots sho_b, Pair 7/1: only row 13 changed; the pentagram and rivets took the white shine.)
+- [ ] Metal with Adjust mask ticked (default): the message names a new `…_mask_ie.tex`, the mask slot
+  reads it, and only the rows' area of that mask is red 255 / green 128 (open it in the Textures
+  thumbnail or after Save). The rest of the model looks as before; Undo puts the old mask back in one
+  step, and Save writes the new mask beside the material. (2026-10-18, same boots: slot moved to
+  `…_s_1813c566_ie.tex`; 7/1 texels went from green 255 to 129 on average, 8.8k blended 7/2 texels moved
+  slightly, 6/x and 8/x unchanged; one Undo restored mask and rows. The preview's "Shown on the
+  character" replaces the preset's message, as with every redraw. Save not tried.)
+- [ ] Adjust mask is greyed out with its reason on a material without a mask or index texture.
 
 ## Dye rows and preview dyes (Task 12, pending)
 
