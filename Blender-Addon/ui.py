@@ -1280,6 +1280,7 @@ class XIVIE_PT_options_export(Panel):
         column = layout.column(align=True)
         column.prop(settings, "keep_shapekeys")
         column.prop(settings, "reset_scaling_on_export")
+        column.prop(settings, "auto_triangulate")
         column.prop(settings, "calculate_heels_offset")
         _draw_hint(layout, context, "Every export requires triangulated meshes with bone weights.")
 

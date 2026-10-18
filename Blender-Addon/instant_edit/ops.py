@@ -23,7 +23,7 @@ from ..materials     import (
 )
 from ..mesh.export   import (export_result, get_export_stats, check_triangulation, check_weights,
                              check_uv_layers, check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode,
-                             ShapeExports)
+                             ShapeExports, auto_triangulate, triangulation_refusals)
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
 from ..xivpy.model   import XIVModel
@@ -755,7 +755,7 @@ def export_target_issues(
             if len(names) > 1
             for name in names
         ]
-        not_triangulated = check_triangulation(export_objects)
+        not_triangulated = triangulation_refusals(export_objects)
         unweighted = check_weights(export_objects)
 
         if invalid_names:
@@ -2661,6 +2661,7 @@ def raise_unless_exportable(export_objects, game_path: str, *, race_model: bool 
     if refusal:
         raise ValueError(refusal)
     flush_edit_mode(export_objects)
+    auto_triangulate(export_objects)
     not_triangulated = check_triangulation(export_objects)
     if not_triangulated:
         raise ValueError("Not Triangulated: " + ", ".join(not_triangulated) + ".")

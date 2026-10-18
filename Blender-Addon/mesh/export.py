@@ -131,6 +131,36 @@ def check_triangulation(objects=None) -> list[str]:
 
     return not_triangulated
 
+def _has_triangulate_modifier(obj) -> bool:
+    return any(modifier.type == "TRIANGULATE" for modifier in obj.modifiers)
+
+def triangulation_refusals(objects=None) -> list[str]:
+    """check_triangulation, less the meshes Auto Triangulate would fix on export."""
+    names = check_triangulation(objects)
+    if not names or not get_settings().auto_triangulate:
+        return names
+    visible = list(objects) if objects is not None else visible_meshobj()
+    keep = {obj.name for obj in visible if _has_triangulate_modifier(obj)}
+    return [name for name in names if name in keep]
+
+def auto_triangulate(objects) -> list[str]:
+    """With Auto Triangulate on, give untriangulated meshes without a Triangulate modifier one
+    (Fixed quads, Beauty n-gons, Keep Normals). Returns the names of the meshes that got one."""
+    if not get_settings().auto_triangulate:
+        return []
+    names = set(check_triangulation(objects))
+    added = []
+    for obj in objects:
+        if obj.name not in names or _has_triangulate_modifier(obj):
+            continue
+        modifier = obj.modifiers.new("Triangulate", "TRIANGULATE")
+        modifier.quad_method = "FIXED"
+        modifier.ngon_method = "BEAUTY"
+        modifier.min_vertices = 4
+        modifier.keep_custom_normals = True
+        added.append(obj.name)
+    return added
+
 def check_uv_layers(objects=None) -> list[str]:
     """Problems with the UV maps meshes would export, one sentence per mesh (see get_xiv_uv_layers)."""
     from ..io.model.com.exceptions import XIVMeshError

@@ -24,7 +24,7 @@ from .materials import (
 )
 from .mesh_list import (DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts,
                         untangled_placement)
-from .mesh.export import (check_triangulation, check_uv_layers, check_weights, dropped_shape_keys_warning, export_result,
+from .mesh.export import (auto_triangulate, check_triangulation,check_uv_layers, check_weights, dropped_shape_keys_warning, export_result,
                           get_export_stats, ShapeExports)
 from .mesh.hidden import hidden_vertices, remove_vertices
 from .mesh.racial_scaling import apply_deformer
@@ -276,6 +276,7 @@ class XIVIE_OT_simple_export(Operator):
             self.report({"ERROR"}, "No visible mesh objects match Export Parts.")
             return {"CANCELLED"}
         # The game only takes weighted triangles, whichever format carries them there.
+        auto_triangulate(objects)
         not_triangulated = check_triangulation(objects)
         if not_triangulated:
             self.report({"ERROR"}, "Not Triangulated: " + ", ".join(not_triangulated))

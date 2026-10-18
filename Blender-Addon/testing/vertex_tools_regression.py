@@ -685,8 +685,21 @@ def check_export_requirements() -> None:
                 message = ""
             require("Not Triangulated: 0.0 Quad" in message and not (Path(folder) / "quad.fbx").exists(),
                     "Simple Export refuses untriangulated meshes in every format")
+            require(all(m.type != "TRIANGULATE" for m in quad.modifiers), "Auto Triangulate is off by default")
+            settings.auto_triangulate = True
+            require(export_module.triangulation_refusals([quad]) == [], "Auto Triangulate clears the readiness error")
+            bpy.ops.xiv_ie.simple_export()
+            modifier = quad.modifiers[-1]
+            require(modifier.type == "TRIANGULATE" and modifier.quad_method == "FIXED"
+                    and modifier.ngon_method == "BEAUTY" and modifier.min_vertices == 4
+                    and modifier.keep_custom_normals and (Path(folder) / "quad.fbx").exists(),
+                    "Auto Triangulate adds the modifier on export and the export goes through")
+            bpy.ops.xiv_ie.simple_export()
+            require(len([m for m in quad.modifiers if m.type == "TRIANGULATE"]) == 1,
+                    "Auto Triangulate adds no second modifier")
         finally:
             settings.model_format = "MDL"
+            settings.auto_triangulate = False
 
 
 def check_pose_tools() -> None:

@@ -106,6 +106,14 @@ class XIVIEExportSettings(PropertyGroup):
         description="Temporarily reset armature scaling, positioning and rotation to default values for export",
         default=False,
     )  # type: ignore
+    auto_triangulate: BoolProperty(
+        name="Auto Triangulate",
+        description=(
+            "On export, add a Triangulate modifier to meshes that are not triangulated "
+            "and have none yet"
+        ),
+        default=False,
+    )  # type: ignore
     calculate_heels_offset: BoolProperty(
         name="Calculate Heels Offset",
         description=(
