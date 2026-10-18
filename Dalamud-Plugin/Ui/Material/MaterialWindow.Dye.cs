@@ -13,7 +13,7 @@ namespace InstantEdit.Ui.Material;
 internal sealed partial class MaterialWindow
 {
     private static readonly string[] DyeFields =
-        ["Base", "Shine", "Glow", "Exposure", "Metalness", "Roughness", "Sheen", "Sheen tint", "Sheen spread", "Anisotropy", "Reflection map", "Reflection"];
+        ["Base", "Shine", "Glow", "Base brightness", "Metalness", "Roughness", "Sheen", "Sheen tint", "Sheen spread", "Anisotropy", "Reflection map", "Reflection"];
 
     // What the same bits dye on characterlegacy.shpk.
     private static readonly string[] LegacyDyeFields = ["Base", "Shine", "Glow", "Gloss", "Shine strength"];
@@ -205,7 +205,7 @@ internal sealed partial class MaterialWindow
         0 => Rgb(pack.Diffuse),
         1 => pack.Specular == Vector3.Zero ? "no shine, so the row keeps its own" : Rgb(pack.Specular),
         2 => Rgb(pack.Emissive),
-        3 => $"{pack.Exposure:0.##}",
+        3 => $"{pack.Exposure:0.##}x",
         4 => $"{pack.Metalness * 100:0}%",
         5 => $"{pack.Roughness * 100:0}%",
         6 => $"{pack.SheenRate * 100:0}%",

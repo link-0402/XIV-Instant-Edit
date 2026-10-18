@@ -35,10 +35,12 @@ public static class RowMath
 
     public static Vector3 ToStored(Vector3 edit) => new(edit.X * MathF.Abs(edit.X), edit.Y * MathF.Abs(edit.Y), edit.Z * MathF.Abs(edit.Z));
 
-    /// <summary>Glow exposure in stops: 1 is 0 stops, every 4 times brighter is one stop more; 0 is minus infinity.</summary>
-    public static float ExposureToStops(float exposure) => exposure <= 0 ? float.NegativeInfinity : MathF.Log2(exposure) / 2f;
-
-    public static float StopsToExposure(float stops) => float.IsNegativeInfinity(stops) ? 0f : MathF.Pow(4f, stops);
+    /// <summary>
+    /// The base, shine and glow colours a row's swatches show. Every Dawntrail package multiplies the base
+    /// colour by half 11 (<see cref="DtColorRow.Exposure"/>); the glow is the glow colour alone. Legacy shaders don't read half 11.
+    /// </summary>
+    public static (Vector3 Base, Vector3 Shine, Vector3 Glow) Swatches(DtColorRow row, bool legacyShader)
+        => (legacyShader ? row.Diffuse : row.Diffuse * row.Exposure, row.Specular, row.Emissive);
 
     private static float SignedSqrt(float value) => MathF.CopySign(MathF.Sqrt(MathF.Abs(value)), value);
 }

@@ -143,7 +143,7 @@ stainingtemplate.stm (43 templates each).
 - [x] On a dyeable gear material, pick a preview dye for Dye 1: the swatches and the character take
   it the same frame. (Critique dress, Celeste Green: the red dress turned teal at once.)
 - [x] Compare one row's dyed colour with Penumbra's dye preview for the same dye: they match. (Dye
-  field 3 is taken as glow exposure; note here if Penumbra shows it elsewhere.) (Compared with
+  field 3 dyes half 11, the base brightness; note here if Penumbra shows it elsewhere.) (Compared with
   Penumbra.GameData's ColorTableRow.ApplyDye instead of its window: Dawntrail rows take the
   Exposure flag into Exposure (half 11), as here; only its legacy path writes Scalar3.)
 - [x] A row's Dye section: change its template, channel and fields; Undo takes each back.
@@ -216,6 +216,15 @@ map), Limsa inn.
 - [ ] Through the editor after a Release build: Convert to Dawntrail on a characterlegacy material is
   one undo step, the new `_ie.tex` mask saves with the material, the rows show legacy labels before
   converting, and pasting a legacy row onto a character.shpk material keeps its base colour.
+
+## Half 11 is the base brightness (2026-10-18)
+
+The composite passes of all six packages that read the table (character, characterscroll, characterinc,
+characterstockings, characterglass, charactertransparency) multiply the base colour by half 11; the glow
+is the glow colour times the scene's glow scale only.
+- [ ] A character.shpk row's "Base brightness" at 0 turns that part black, 2 makes it brighter; the
+  glow doesn't change. The base swatch darkens and brightens with it; the glow swatch doesn't.
+- [ ] The Glow preset lights the rows without making the base colour brighter.
 
 ## Finish (Task 13, pending)
 
