@@ -215,8 +215,9 @@ internal unsafe sealed class AnimationNative
                 if (resource == null) throw new InvalidDataException("Havok could not load the animation resource.");
                 Root = (hkRootLevelContainer*)resource->GetContentsPointer("hkRootLevelContainer", registry->GetTypeInfoRegistry());
                 if (Root == null) throw new InvalidDataException("Missing Havok root container.");
-                Container = (hkaAnimationContainer*)Root->findObjectByName("hkaAnimationContainer", null);
-                if (Container == null) throw new InvalidDataException("The Havok resource has no named hkaAnimationContainer.");
+                // By type, as the game finds it: other tools name the variant freely ("Merged Animation Container").
+                Container = (hkaAnimationContainer*)Root->findObjectByType("hkaAnimationContainer", null);
+                if (Container == null) throw new InvalidDataException("The Havok resource has no hkaAnimationContainer.");
                 if (Container->Bindings.Length is < 0 or > 4096 || Container->Animations.Length is < 0 or > 4096 ||
                     Container->Skeletons.Length is < 0 or > 16)
                     throw new InvalidDataException($"Invalid Havok animation container (bindings={Container->Bindings.Length}, animations={Container->Animations.Length}, skeletons={Container->Skeletons.Length}).");
