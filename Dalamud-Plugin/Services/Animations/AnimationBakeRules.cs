@@ -78,6 +78,27 @@ internal static class AnimationBakeRules
         request.Operation == AnimationOperation.EditTimeline && request.RepairTarget != null;
 
     /// <summary>
+    /// The race a repair's output must name in its PAP header: the one whose standard skeleton it was
+    /// repaired onto, the clip's live skeleton's. The game plays a PAP naming another race through that
+    /// race's skeleton mapper, so a clip repaired onto c0801's standard that still names c0101 is converted
+    /// a second time: every bone shortened by the races' ratio, a warped body and head (measured in game
+    /// 2026-10-19). Null when the header stays: no repair, a clip naming no human race, or the same race.
+    /// The header names the race of every animation in the file, so a file holding others the repair
+    /// leaves on the old race is refused: one of the two would play warped.
+    /// </summary>
+    public static ushort? RepairedModel(AnimationBakeRequest request, AnimationClip clip, AnimationPap pap)
+    {
+        if (!Repairs(request) || pap.ModelType != 0 || AnimationSkeletonIndex.ModelFromPath(clip.SkeletonPath) is not { } race ||
+            !ushort.TryParse(race.AsSpan(1), out var model) || model == pap.ModelId)
+            return null;
+        var startup = request.IncludeStartup && request.Capture.Startup is { } start && start.GamePath == clip.GamePath ? start.BindingIndex : -1;
+        if (pap.Entries.Any(entry => entry.Binding != clip.BindingIndex && entry.Binding != startup))
+            throw new InvalidDataException($"This file also holds animations for {AnimationSkeletonIndex.ModelCode(pap.ModelId) ?? "another race"}. " +
+                $"Repairing it onto {race} would warp them.");
+        return model;
+    }
+
+    /// <summary>
     /// Whether saving <paramref name="document"/> bakes the motion: a stretch, cuts, bone layers that
     /// change it, bones left out, or a repair onto <paramref name="repair"/>.
     /// </summary>

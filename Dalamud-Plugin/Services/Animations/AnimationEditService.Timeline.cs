@@ -646,7 +646,8 @@ internal sealed partial class AnimationEditService
                 workDirectory, message => Status = message, token, () => CheckIdentityOnFramework(request.Capture, true));
         }
         var result = new AnimationPap(motion).WithTimeline(source.EntryIndex, timeline);
-        CheckTimelineOutput(pap, result, source.EntryIndex, timeline, !baked && source.BaseMotion == null);
+        CheckTimelineOutput(pap, result, source.EntryIndex, timeline, !baked && source.BaseMotion == null,
+            baked ? AnimationBakeRules.RepairedModel(request, source.MotionClip, new AnimationPap(pap)) : null);
         // Unbaked, the motion is the file's own: what the game plays once it loads the file.
         var fingerprint = baked || source.BaseMotion != null
             ? await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(result).GetValueOrDefault(clip.BindingIndex, ""))
@@ -657,13 +658,14 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// The edited file must differ from the original only in the edited timeline, and in the
     /// motion when the length changed: same entries, every other timeline byte for byte, and a
-    /// timeline that reads back cleanly.
+    /// timeline that reads back cleanly. <paramref name="model"/> is the race a repair names instead
+    /// (see <see cref="AnimationBakeRules.RepairedModel"/>); null keeps the original's.
     /// </summary>
-    internal static void CheckTimelineOutput(byte[] original, byte[] edited, int entry, byte[] timeline, bool sameMotion)
+    internal static void CheckTimelineOutput(byte[] original, byte[] edited, int entry, byte[] timeline, bool sameMotion, ushort? model = null)
     {
         var before = new AnimationPap(original);
         var after = new AnimationPap(edited);
-        if (!before.Entries.SequenceEqual(after.Entries) || before.ModelId != after.ModelId || before.ModelType != after.ModelType)
+        if (!before.Entries.SequenceEqual(after.Entries) || after.ModelId != (model ?? before.ModelId) || before.ModelType != after.ModelType)
             throw new InvalidDataException("Saving the timeline changed the animation's entries.");
         if (sameMotion && !before.Havok.AsSpan().SequenceEqual(after.Havok))
             throw new InvalidDataException("Saving the timeline changed the motion.");

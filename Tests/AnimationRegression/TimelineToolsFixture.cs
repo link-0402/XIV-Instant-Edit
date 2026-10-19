@@ -21,6 +21,7 @@ internal static class TimelineToolsFixture
         Library(check);
         Edits(check);
         Saves(check);
+        RepairedRace(check, reject);
         Problems(check);
     }
 
@@ -262,6 +263,58 @@ internal static class TimelineToolsFixture
                   Request = journal.Request with { ExcludedBones = [], RepairTarget = null }, State = "Completed",
               }) == null,
             "such an edit can't be opened again with its layers; the same edit without them can");
+    }
+
+    // A PAP envelope around no motion: one entry per binding, the header naming the model and its type.
+    private static byte[] Pap(ushort model, byte type = 0, int bindings = 1)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        var havok = 26 + 40 * bindings;
+        writer.Write("pap "u8); writer.Write(0x20001); writer.Write((short)bindings);
+        writer.Write(model); writer.Write(type); writer.Write((byte)0);
+        writer.Write(26); writer.Write(havok); writer.Write(havok + 8);
+        for (var i = 0; i < bindings; i++)
+        {
+            writer.Write(i == 0 ? "loop"u8 : "start"u8); writer.Write(new byte[i == 0 ? 28 : 27]);
+            writer.Write((short)0); writer.Write((short)i); writer.Write(0);
+        }
+        writer.Write(new byte[8]);
+        return stream.ToArray();
+    }
+
+    private static void RepairedRace(Action<bool, string> check, Action<Action, string> reject)
+    {
+        // Rough Sketch Fortitude (2026-10-19): a c0101 clip repaired onto c0801's IVCS kept naming c0101,
+        // so the game ran it through the c0101 to c0801 mapper again and every bone came out short.
+        var game = new SkeletonDescription("game", "game", [.. Rig.Bones.Take(4)], [], [], []);
+        var clip = Clip(Rig, new StandardSkeleton(SkeletonStandard.Ivcs, game, "IVCS")) with
+            { SkeletonPath = "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb" };
+        var doc = new TimelineDocument(30, 30, null, [], 1);
+        var repair = AnimationEditService.TimelineRequest(Source(clip, doc), doc, AnimationDestination.InPlace, "Mod", SkeletonStandard.Ivcs);
+        var plain = AnimationEditService.TimelineRequest(Source(clip, doc), doc, AnimationDestination.InPlace, "Mod");
+        ushort? Model(AnimationBakeRequest request, AnimationClip of, byte[] pap) => AnimationBakeRules.RepairedModel(request, of, new AnimationPap(pap));
+        check(Model(repair, clip, Pap(101)) == 801 && Model(repair, clip, Pap(0)) == 801 &&
+              Model(repair with { Operation = AnimationOperation.RepairSkeleton, Timeline = null }, clip, Pap(101)) == 801,
+            "a repair onto another race's standard names that race in the PAP header");
+        check(Model(plain, clip, Pap(101)) == null && Model(repair, clip, Pap(801)) == null && Model(repair, clip, Pap(101, 1)) == null &&
+              Model(repair, clip with { SkeletonPath = "chara/test.sklb" }, Pap(101)) == null,
+            "the header stays without a repair, on the same race, for a non-human clip, and without a race to name");
+        reject(() => Model(repair, clip, Pap(101, bindings: 2)),
+            "a repair refuses to rename the race of a file holding other animations it leaves on the old race");
+        var startup = clip with { Name = "start", BindingIndex = 1 };
+        var both = repair with { Operation = AnimationOperation.RepairSkeleton, Timeline = null, IncludeStartup = true,
+            Capture = repair.Capture with { Startup = startup } };
+        check(Model(both, clip, Pap(101, bindings: 2)) == 801,
+            "a repair of a loop and its startup in one file renames the file's race");
+        string? Refusal(ushort? model)
+        {
+            try { AnimationEditService.CheckTimelineOutput(Pap(101), Pap(801), 0, [], false, model); return null; }
+            catch (InvalidDataException e) { return e.Message; }
+        }
+        check(Refusal(null) == "Saving the timeline changed the animation's entries." && Refusal(801) is { } next && !next.Contains("entries") &&
+              Refusal(701) == "Saving the timeline changed the animation's entries.",
+            "a timeline save accepts a new race in the header only when its repair names it");
     }
 
     private static void Problems(Action<bool, string> check)

@@ -75,7 +75,11 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 completed = await framework.RunOnTick(() => { Check(token); validateRuntime(); return session.ValidateBatch(token); }, delayTicks: 1);
                 status($"Verifying {clip.Name}: {session.ValidationProgress:P0}");
             }
-            return new AnimationPap(source).ReplaceHavok(baked);
+            var original = new AnimationPap(source);
+            var result = original.ReplaceHavok(baked);
+            // A repair onto another race's standard names that race, or the game converts it again.
+            return AnimationBakeRules.RepairedModel(request, clip, original) is { } model
+                ? new AnimationPap(result).WithModel(model, original.ModelType) : result;
         }
         finally
         {
