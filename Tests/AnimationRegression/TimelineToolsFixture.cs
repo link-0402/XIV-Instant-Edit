@@ -263,6 +263,13 @@ internal static class TimelineToolsFixture
                   Request = journal.Request with { ExcludedBones = [], RepairTarget = null }, State = "Completed",
               }) == null,
             "such an edit can't be opened again with its layers; the same edit without them can");
+        // Undo outside GPose (2026-10-19): a timeline save clears no offsets, so it needs no GPose character to undo.
+        var pose = new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, "");
+        check(!AnimationEditService.RestoresOffsets(journal) &&
+              !AnimationEditService.RestoresOffsets(new AnimationEditJournal { PoseBefore = pose, PoseAfter = pose, PoseClearOutcome = "NotApplicable" }) &&
+              AnimationEditService.RestoresOffsets(new AnimationEditJournal { PoseBefore = pose, PoseAfter = pose, OffsetsCleared = true }) &&
+              AnimationEditService.RestoresOffsets(new AnimationEditJournal { PoseBefore = pose, PoseAfter = pose, PoseClearOutcome = "Pending" }),
+            "only an undo that puts cleared live offsets back needs the captured character");
     }
 
     // A PAP envelope around no motion: one entry per binding, the header naming the model and its type.

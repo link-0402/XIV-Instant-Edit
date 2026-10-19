@@ -397,15 +397,22 @@ internal sealed partial class AnimationEditService : IDisposable
         if (added.Count > 0 && recovery.Any(other => other.Id != journal.Id && other.State is not ("Undone" or "FilesUndone") &&
                 other.ReusedFiles.Any(added.Contains)))
             throw new IOException("A later timeline edit uses a file this edit added. Undo that edit first.");
-        await CheckActorAsync(journal.Request.Capture, false);
+        // Files undo by their hashes alone; only live offsets to put back need the character.
+        if (RestoresOffsets(journal)) await CheckActorAsync(journal.Request.Capture, false);
         CanCancel = false;
         await commits.UndoFilesAsync(journal);
         await RestoreOffsetsAsync(journal);
         journal.State = "Undone"; journals.Save(journal); Status = journal.Message;
     });
+    /// <summary>
+    /// Whether undoing <paramref name="journal"/> puts live offsets back: a LivePose bake that cleared
+    /// them, or may have. Timeline saves and repairs clear none, so they undo outside GPose too.
+    /// </summary>
+    internal static bool RestoresOffsets(AnimationEditJournal journal) =>
+        journal.PoseBefore != null && journal.PoseAfter != null && (journal.OffsetsCleared || journal.PoseClearOutcome is "Pending");
     private async Task RestoreOffsetsAsync(AnimationEditJournal journal)
     {
-        if (journal.PoseBefore == null || journal.PoseAfter == null || !journal.OffsetsCleared && journal.PoseClearOutcome is not "Pending")
+        if (!RestoresOffsets(journal))
         { journal.Message = "Files recovered; live offsets were not cleared."; journals.Save(journal); return; }
         var restored = await framework.RunOnFrameworkThread(() =>
         {
