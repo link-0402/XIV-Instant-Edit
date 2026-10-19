@@ -45,6 +45,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineClipBand clipBand;
     private readonly CutPanel cutPanel;
     private readonly TimelineCanvas canvas;
+    private readonly ShortcutKeys keys;
     private readonly PropertiesPanel properties;
     private readonly SoundSaveCheck soundSave;
     private readonly SaveFooter saveFooter;
@@ -79,7 +80,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
     internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
         AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, AnimationRecorder recorder, IDataManager data,
-        IFramework framework, ITextureProvider textures, IPluginLog log, GameSoundPlayer? soundPlayer = null)
+        IFramework framework, ITextureProvider textures, IKeyState keyState, IPluginLog log, GameSoundPlayer? soundPlayer = null)
         : base("Timeline (Beta)###XIVInstantEditTimeline")
     {
         session = new TimelineSession(animations, catalog, preview, playback, motionDisplay, data, framework, log);
@@ -101,7 +102,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         boneEditor = new BoneEditor(session, decode, posing, this);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
-        canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts);
+        keys = new ShortcutKeys(keyState);
+        canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
         properties = new PropertiesPanel(session, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
         soundSave = new SoundSaveCheck(session, soundFiles);
         saveFooter = new SaveFooter(session, timelinePreview, effectLooks, soundFiles, soundSave, texts, () => reader.Busy,
@@ -118,7 +120,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         blenderMotion = new BlenderMotionPanel(session, decode);
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion);
-        bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures);
+        bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures, keys);
         session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy || blenderMotion.Working);
 
         Size = new Vector2(1000, 560);
@@ -447,6 +449,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     public override void Draw()
     {
         RespectCloseHotkey = true;
+        keys.Refresh();
         if (animations == null)
         {
             Widgets.Banner("##timeline-unavailable", FeedbackSeverity.Warning, animationError ?? "Animation editing is unavailable.");

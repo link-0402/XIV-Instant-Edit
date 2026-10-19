@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Keys;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
@@ -19,7 +20,7 @@ namespace InstantEdit.Ui.Timeline;
 /// shared with the properties panel's bone picker and the bones on the character.
 /// </summary>
 internal sealed class BonesPanel(TimelineSession session, string? animationError, BonePosing posing, BoneEditor boneEditor,
-    PoseSourcePanel poseSources, TimelinePreview timelinePreview, IBonesOverlay overlay, ITextureProvider textures)
+    PoseSourcePanel poseSources, TimelinePreview timelinePreview, IBonesOverlay overlay, ITextureProvider textures, ShortcutKeys keys)
 {
     private enum BonesPage : byte { Map, List }
 
@@ -509,19 +510,19 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
         var readOnly = session.ReadOnly;
-        if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.Z))
+        if (keys.Ctrl && keys.Pressed(ImGuiKey.Z, VirtualKey.Z))
         {
             if (!readOnly)
-                current.Key(io.KeyShift ? TimelineKey.Redo : TimelineKey.Undo);
+                current.Key(keys.Shift ? TimelineKey.Redo : TimelineKey.Undo);
         }
-        else if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.Y))
+        else if (keys.Ctrl && keys.Pressed(ImGuiKey.Y, VirtualKey.Y))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Redo);
         }
-        else if (!io.KeyAlt && ImGui.IsKeyPressed(ImGuiKey.LeftArrow, true))
-            current.Key(TimelineKey.Left, io.KeyShift);
-        else if (!io.KeyAlt && ImGui.IsKeyPressed(ImGuiKey.RightArrow, true))
-            current.Key(TimelineKey.Right, io.KeyShift);
+        else if (!keys.Alt && keys.Pressed(ImGuiKey.LeftArrow, VirtualKey.LEFT, true))
+            current.Key(TimelineKey.Left, keys.Shift);
+        else if (!keys.Alt && keys.Pressed(ImGuiKey.RightArrow, VirtualKey.RIGHT, true))
+            current.Key(TimelineKey.Right, keys.Shift);
     }
 }

@@ -71,7 +71,8 @@ public sealed class Plugin : IDalamudPlugin
         INotificationManager notifications,
         ITargetManager targets,
         ICondition condition,
-        IDragDropManager dragDrop)
+        IDragDropManager dragDrop,
+        IKeyState keyState)
     {
         _pi       = pi;
         _commands = commands;
@@ -188,7 +189,7 @@ public sealed class Plugin : IDalamudPlugin
         _motionDisplay = _animations == null ? null
             : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
         _timelineWindow = new TimelineWindow(_animations, animationError, _timelineCatalog, _animationPreview, _animationPlayback,
-            _motionDisplay, _recorder, data, framework, textureProvider, log, _soundPlayer);
+            _motionDisplay, _recorder, data, framework, textureProvider, keyState, log, _soundPlayer);
         _exportServer = new ExportServer(_config, _penumbra.ModelExports, _penumbra.RaceExports, _penumbra.SizesExports,
             _penumbra.ModelBackups, _penumbra.Mashups, _penumbra.Scanner, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
