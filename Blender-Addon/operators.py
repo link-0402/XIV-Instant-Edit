@@ -939,33 +939,36 @@ class XIVIE_OT_duplicate_backfaces(Operator):
         return {"FINISHED"}
 
 
-def _bake_targets(context: Context) -> list:
-    """The meshes Bake to Copy works on: the Material tab's object first, then the other selected meshes."""
-    targets = [obj for obj in (context.object, *context.selected_objects) if obj is not None and obj.type == "MESH"]
-    return list(dict.fromkeys(targets))
-
-
 class XIVIE_OT_bake_mesh_copy(Operator):
     bl_idname = "xiv_ie.bake_mesh_copy"
-    bl_label = "Bake to Copy"
+    bl_label = "Duplicate with Modifiers Applied"
     bl_description = (
-        "Copy the selected meshes with their shape keys and modifiers applied, as an export and "
-        "import would, keep the Armature modifier, and hide the originals"
+        "Copy this part with its shape keys and modifiers applied, as an export and "
+        "import would, keep the Armature modifier, and hide the original"
     )
     bl_options = {"REGISTER", "UNDO"}
+
+    mesh_group: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    mesh_part: IntProperty(default=0, min=0, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    mesh_part_instance: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
 
     @classmethod
     def poll(cls, context: Context):
         if context.mode != "OBJECT":
             cls.poll_message_set("Switch to Object Mode to bake a copy")
             return False
-        if not _bake_targets(context):
-            cls.poll_message_set("Select a mesh")
-            return False
         return True
 
     def execute(self, context: Context):
-        originals = _bake_targets(context)
+        originals = mesh_part_instance_objects(
+            tuple(visible_meshobj()),
+            self.mesh_group,
+            self.mesh_part,
+            self.mesh_part_instance or None,
+        )
+        if not originals:
+            self.report({"ERROR"}, f"Mesh part {self.mesh_group}.{self.mesh_part} is no longer visible.")
+            return {"CANCELLED"}
         copies = []
         for obj in originals:
             try:
@@ -977,13 +980,14 @@ class XIVIE_OT_bake_mesh_copy(Operator):
         _share_local_views(context, list(zip(originals, copies)))
         for obj in originals:
             obj.hide_set(True)
-        for copy in copies:
-            copy.select_set(True)
+        for obj in context.view_layer.objects:
+            obj.select_set(obj in copies)
         context.view_layer.objects.active = copies[0]
         if len(copies) == 1:
             self.report({"INFO"}, f"Baked {copies[0].name} and hid {originals[0].name}")
         else:
             self.report({"INFO"}, f"Baked {len(copies)} copies and hid the originals")
+        _redraw(context)
         return {"FINISHED"}
 
 

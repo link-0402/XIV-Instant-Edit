@@ -1144,9 +1144,10 @@ def assert_backface_duplicate(addon):
     items = menu(ui._PART_NAME_OPERATOR)
     part = {"mesh_group": 70, "mesh_part": 0, "mesh_part_instance": "front"}
     if (
-        len(items) != 3 or items[0] != "separator" or items[1][0] != "xiv_ie.duplicate_backfaces"
+        len(items) != 4 or items[0] != "separator" or items[1][0] != "xiv_ie.duplicate_backfaces"
         or vars(items[1][1]) != part or items[2][0] != "xiv_ie.remove_hidden_vertices"
         or vars(items[2][1]) != {"part_only": True, **part}
+        or items[3][0] != "xiv_ie.bake_mesh_copy" or vars(items[3][1]) != part
     ):
         raise AssertionError(f"Unexpected part name context menu: {items}")
     owner = SimpleNamespace(layout=Layout())
@@ -1156,10 +1157,8 @@ def assert_backface_duplicate(addon):
     print("[PASS] Generate Duplicate with Backfaces adds a flipped copy as the next part")
 
 
-def assert_bake_mesh_copy(addon):
+def assert_bake_mesh_copy(_addon):
     """Bake to Copy: shape keys and modifiers applied but Armature, which the copy keeps; original hidden."""
-    ui = importlib.import_module(f"{addon.__name__}.ui")
-
     with temporary_scene_data():
         scene = bpy.context.scene
         rig_data = bpy.data.armatures.new("Bake Rig Data")
@@ -1204,16 +1203,29 @@ def assert_bake_mesh_copy(addon):
         empty = bpy.data.objects.new("Bake Empty", None)
         scene.collection.objects.link(empty)
 
-        for obj in bpy.context.view_layer.objects:
-            obj.select_set(obj in (modded, parented, empty))
-        bpy.context.view_layer.objects.active = modded
-        before = set(scene.objects)
-        if bpy.ops.xiv_ie.bake_mesh_copy() != {"FINISHED"}:
-            raise AssertionError("Bake to Copy did not finish")
-        copies = {obj.name.rsplit(".", 1)[0]: obj for obj in set(scene.objects) - before}
+        empty.select_set(True)
+        copies = {}
+        for part in (0, 1):
+            before = set(scene.objects)
+            if bpy.ops.xiv_ie.bake_mesh_copy(mesh_group=70, mesh_part=part) != {"FINISHED"}:
+                raise AssertionError(f"Bake to Copy did not finish on part 70.{part}")
+            made = set(scene.objects) - before
+            if len(made) != 1:
+                raise AssertionError(f"Bake to Copy of part 70.{part} made {sorted(o.name for o in made)}")
+            copy = made.pop()
+            if set(bpy.context.selected_objects) != {copy} or bpy.context.view_layer.objects.active is not copy:
+                raise AssertionError("The baked copy was not left selected on its own")
+            copies[copy.name.rsplit(".", 1)[0]] = copy
         if sorted(copies) != ["70.0 Modded", "70.1 Parented"]:
             raise AssertionError(f"Bake to Copy made unexpected objects: {sorted(copies)}")
         modded_copy, parented_copy = copies["70.0 Modded"], copies["70.1 Parented"]
+        try:
+            bpy.ops.xiv_ie.bake_mesh_copy(mesh_group=70, mesh_part=5)
+        except RuntimeError as error:
+            if "70.5 is no longer visible" not in str(error):
+                raise
+        else:
+            raise AssertionError("Bake to Copy did not cancel on a missing part")
 
         for copy in (modded_copy, parented_copy):
             if copy.data.shape_keys is not None:
@@ -1242,37 +1254,6 @@ def assert_bake_mesh_copy(addon):
         if (not armature.show_viewport or parented.parent_type != "ARMATURE"
                 or modded.data.shape_keys.key_blocks["Raise"].value != 0.5):
             raise AssertionError("Bake to Copy changed the originals")
-        if (set(bpy.context.selected_objects) != {modded_copy, parented_copy, empty}
-                or bpy.context.view_layer.objects.active is not modded_copy):
-            raise AssertionError("The baked copies were not left selected")
-
-    # The entry joins the Material tab's slot menus, and the right-click one only on slots.
-    for menu_type, draw in ((bpy.types.UI_MT_list_item_context_menu, ui.draw_material_slot_context_menu),
-                            (bpy.types.MATERIAL_MT_context_menu, ui.draw_material_specials_menu)):
-        if draw not in getattr(menu_type.draw, "_draw_funcs", ()):
-            raise AssertionError(f"Bake to Copy was not added to {menu_type.__name__}")
-
-    class Layout:
-        def __init__(self):
-            self.items = []
-
-        def separator(self):
-            self.items.append("separator")
-
-        def operator(self, idname, **_options):
-            self.items.append(idname)
-
-    def slot_menu(context):
-        owner = SimpleNamespace(layout=Layout())
-        ui.draw_material_slot_context_menu(owner, context)
-        return owner.layout.items
-
-    if slot_menu(SimpleNamespace(ui_list=SimpleNamespace(bl_idname="MATERIAL_UL_matslots"))) != [
-            "separator", "xiv_ie.bake_mesh_copy"]:
-        raise AssertionError("Bake to Copy is missing from a material slot's right-click menu")
-    if slot_menu(SimpleNamespace(ui_list=SimpleNamespace(bl_idname="MESH_UL_shape_keys"))) or slot_menu(
-            SimpleNamespace()):
-        raise AssertionError("Bake to Copy showed in another list's right-click menu")
     print("[PASS] Bake to Copy applies shape keys and modifiers but Armature, and hides the original")
 
 

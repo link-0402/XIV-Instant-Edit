@@ -54,8 +54,6 @@ from .ui import (
     XIVIE_PT_session,
     XIVIE_PT_tools,
     XIVIE_PT_vertex_data_popover,
-    draw_material_slot_context_menu,
-    draw_material_specials_menu,
     draw_mesh_part_context_menu,
 )
 
@@ -139,8 +137,6 @@ def register() -> None:
         set_addon_properties()
         instant_edit.register()
         bpy.types.UI_MT_button_context_menu.append(draw_mesh_part_context_menu)
-        bpy.types.UI_MT_list_item_context_menu.append(draw_material_slot_context_menu)
-        bpy.types.MATERIAL_MT_context_menu.append(draw_material_specials_menu)
         register_keymaps()
     except Exception:
         unregister()
@@ -150,8 +146,6 @@ def register() -> None:
 def unregister() -> None:
     unregister_keymaps()
     bpy.types.UI_MT_button_context_menu.remove(draw_mesh_part_context_menu)
-    bpy.types.UI_MT_list_item_context_menu.remove(draw_material_slot_context_menu)
-    bpy.types.MATERIAL_MT_context_menu.remove(draw_material_specials_menu)
     instant_edit.unregister()
     try:
         remove_addon_properties()
