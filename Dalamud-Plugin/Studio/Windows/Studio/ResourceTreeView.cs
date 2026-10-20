@@ -26,6 +26,7 @@ namespace InstantEdit.Studio.Windows.Studio;
 internal sealed class ResourceTreeView
 {
     private const string NodeMenuId = "##resourcenodemenu";
+    private const string NewMaterialModelMenuId = "##newmaterialmodel";
 
     private readonly StudioHost _host;
     private readonly ModEditor _editor;
@@ -49,6 +50,9 @@ internal sealed class ResourceTreeView
     // Popups are opened and drawn outside the virtualised child, in one ID scope.
     private string? _openPopup;
     private ResourceNode? _menuNode;
+
+    /// <summary>The models of an entry a new material could be for, while the menu to pick one is open.</summary>
+    private List<ResourceNode> _newMaterialModels = new();
 
     // The flattened rows, rebuilt only when something they depend on changed: a mod can list tens
     // of thousands of files under one entry.
@@ -497,13 +501,35 @@ internal sealed class ResourceTreeView
                 var hint = row.Root?.Option is { } into
                     ? $"Drop files here to add them to {(into.IsDefault ? "the default files" : _session.Project?.Meta.OptionName(into))}, or click to pick them"
                     : "Drop files here to add them to this entry, or click to pick them";
+                // Beside it, a new material for one of the entry's models — as the + on a model row does.
+                var models = row.Root?.Nodes.Where(n => n.Kind == ResourceKind.Model && n.MaterialSlots.Count > 0).ToList() ?? new List<ResourceNode>();
+                float spacing = ImGui.GetStyle().ItemSpacing.X;
+                float buttonW = models.Count > 0 ? Theme.S(150) : 0;
                 var zone = DropZone.Draw(row.Key, hint, FontAwesomeIcon.Plus,
-                    new Vector2(width, height), new FileDropRule(FileDrop.RejectForAdding, _ => { }), indent: indent);
+                    new Vector2(width - (buttonW > 0 ? buttonW + spacing : 0), height), new FileDropRule(FileDrop.RejectForAdding, _ => { }), indent: indent);
                 var option = scope.Option;
                 if (zone.Dropped is { } dropped)
                     _actions.BeginAdd(dropped.Files, row.Root, option);
                 else if (zone.Clicked)
                     _actions.BrowseAdd(row.Root, option);
+                if (buttonW > 0)
+                {
+                    ImGui.SameLine(0, spacing);
+                    var make = DropZone.Draw(row.Key + "#mtrl", "New material", FontAwesomeIcon.Palette, new Vector2(buttonW, height), null);
+                    Gui.Tooltip(models.Count == 1
+                        ? $"Make a material of the mod's own for {models[0].FileName}, and pick the meshes that load it."
+                        : "Make a material of the mod's own for one of this entry's models, and pick the meshes that load it.");
+                    if (make.Clicked)
+                    {
+                        if (models.Count == 1)
+                            _actions.BeginNewMaterial(models[0], -1);
+                        else
+                        {
+                            _newMaterialModels = models;
+                            _openPopup = NewMaterialModelMenuId;
+                        }
+                    }
+                }
                 break;
             }
 
@@ -608,7 +634,7 @@ internal sealed class ResourceTreeView
                 $"Made from {replacement!.SourcePath}."));
         if (replacement is { ReassignsMaterials: true })
             badges.Add(new Badge("materials reassigned", Theme.Good,
-                string.Join("\n", replacement.MaterialNames.Select((n, i) => (n, i)).Where(s => !string.IsNullOrWhiteSpace(s.n)).Select(s => $"Slot {s.i + 1} → {s.n}"))));
+                string.Join("\n", replacement.MaterialNames.Select((n, i) => (n, i)).Where(s => !string.IsNullOrWhiteSpace(s.n)).Select(s => replacement.MaterialNamesPerMesh ? $"Mesh {s.i} → {s.n}" : $"Slot {s.i + 1} → {s.n}"))));
         if (node.Pinned)
             badges.Add(new Badge("from the game", Theme.Accent, "Listed because its item was added to the mod from the game. Drop a file on it to put one of your own here."));
 
@@ -631,6 +657,11 @@ internal sealed class ResourceTreeView
         if (_handoffs.For(node) is { } handoff)
             actions.Add(new TileAction(handoff.Icon, handoff.Block is { } why ? $"{handoff.Label}. {why}" : handoff.Label, handoff.Run,
                 Enabled: handoff.Block == null));
+        // A new material of the mod's own: for a model's meshes, or as a copy of this material.
+        if (node.Kind == ResourceKind.Model && node.MaterialSlots.Count > 0)
+            actions.Add(new TileAction(FontAwesomeIcon.Plus, "New material for this model", () => _actions.BeginNewMaterial(node, -1)));
+        else if (node.Kind == ResourceKind.Material && node.Origin != OriginKind.Missing)
+            actions.Add(new TileAction(FontAwesomeIcon.Plus, "New material from this one", () => _actions.BeginNewMaterialFrom(node)));
         FileDropRule? drop = null;
         if (node.AuthoredSlot is { } slot)
         {
@@ -642,7 +673,7 @@ internal sealed class ResourceTreeView
         {
             drop = _actions.DropRuleFor(node);
             if (replacement is { OnlyReassigns: true })
-                actions.Add(new TileAction(FontAwesomeIcon.Undo, "Give every slot the material its file has", () => _session.ResetMaterials(node), Theme.Warn));
+                actions.Add(new TileAction(FontAwesomeIcon.Undo, "Give every mesh the material its file has", () => _session.ResetMaterials(node), Theme.Warn));
             else if (replacement != null)
                 actions.Add(new TileAction(FontAwesomeIcon.Undo, node.Origin == OriginKind.Added ? "Don't add this file" : "Keep the mod's own file",
                     () => _actions.ClearReplacement(node), Theme.Warn));
@@ -813,6 +844,25 @@ internal sealed class ResourceTreeView
     // Popups
     // ─────────────────────────────────────────────────────────────────────────
 
+    /// <summary>Which of the entry's models a new material is for, when it has more than one.</summary>
+    private void DrawNewMaterialModelMenu()
+    {
+        if (!ImGui.BeginPopup(NewMaterialModelMenuId))
+            return;
+        ImGui.TextColored(Theme.Muted, "A new material for");
+        ImGui.Separator();
+        foreach (var model in _newMaterialModels)
+        {
+            if (ImGui.Selectable($"{model.FileName}##{model.Id}"))
+            {
+                _actions.BeginNewMaterial(model, -1);
+                ImGui.CloseCurrentPopup();
+            }
+            Gui.Tooltip(model.GamePath);
+        }
+        ImGui.EndPopup();
+    }
+
     private void DrawPopups()
     {
         if (_openPopup != null)
@@ -820,6 +870,8 @@ internal sealed class ResourceTreeView
             ImGui.OpenPopup(_openPopup);
             _openPopup = null;
         }
+
+        DrawNewMaterialModelMenu();
 
         if (!ImGui.BeginPopup(NodeMenuId))
             return;
@@ -873,8 +925,8 @@ internal sealed class ResourceTreeView
             ImGui.Separator();
             if (ImGui.MenuItem("New material for it"))
                 _actions.BeginNewMaterial(node, -1);
-            Gui.Tooltip("Make a material of the mod's own for this model, from a preset or as a copy of one it uses. Its slots are pointed at materials in the inspector.");
-            if (own is { ReassignsMaterials: true } && ImGui.MenuItem("Every slot as the file has it"))
+            Gui.Tooltip("Make a material of the mod's own for this model, from a preset or as a copy of one it uses, and pick the meshes that load it.");
+            if (own is { ReassignsMaterials: true } && ImGui.MenuItem("Every mesh as the file has it"))
                 _session.ResetMaterials(node);
         }
         if (node.Kind == ResourceKind.Material && node.Origin is OriginKind.ModFile or OriginKind.Vanilla && own == null)

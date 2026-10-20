@@ -41,9 +41,6 @@ internal sealed class ResourceInspector
     private TextureSlot? _pathSlot;
     private string _pathText = string.Empty;
 
-    /// <summary>What is being typed into a model's material slot, by node and slot, until it is taken.</summary>
-    private readonly Dictionary<string, string> _slotText = new(StringComparer.Ordinal);
-
     public ResourceInspector(ModEditor editor, ModSession session, TextureThumbnailCache thumbs, ResourceActions actions, TextureSlotEditor textures, HandoffActions handoffs)
     {
         _host   = editor.Host;
@@ -139,8 +136,21 @@ internal sealed class ResourceInspector
             ImGui.Spacing();
             ImGui.Spacing();
             Gui.SectionHeader("Made from", "This texture belongs to a material made here; its image is converted into the mod.");
-            if (_textures.DrawCompact(slot, 0))
+            // The builder's texture card; the game path stays editable here.
+            var owner = _session.Graph.ParentsOf(node)
+                .FirstOrDefault(n => n.Replacement?.Authored?.Textures.Contains(slot) == true);
+            if (owner?.Replacement?.Authored is { } ownerMaterial)
+            {
+                bool thumbAbove = node.Origin is OriginKind.ModFile or OriginKind.Vanilla;
+                if (_textures.DrawFull(ownerMaterial, slot, _host.Configuration.ShowThumbnails && !thumbAbove, gamePath: null, variants: false))
+                    _session.TouchReplacements();
+                Gui.Label("Game path", "Where this texture is written in the mod. Leave it empty for the usual path.");
+                DrawTexturePath(owner.GamePath, slot);
+            }
+            else if (_textures.DrawCompact(slot, 0))
+            {
                 _session.TouchReplacements();
+            }
         }
         else if (ResourceActions.CanReplace(node) && authored == null)
         {
@@ -347,100 +357,86 @@ internal sealed class ResourceInspector
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Each material slot of a model, and the material it loads: the file's own, or another material
-    /// of the mod or the game, or a new one made here. The model is written into the mod with only
-    /// those names changed.
+    /// Each mesh of a model and the material it loads, laid out as the builder lays out a model's
+    /// wiring: the file's own, another material of the mod or the game, or a new one made here.
+    /// The model is written into the mod with only those names changed — a material slot that
+    /// meshes share is split when they are given different materials.
     /// </summary>
     private void DrawModelMaterials(ResourceNode node)
     {
         ImGui.Spacing();
         ImGui.Spacing();
-        Gui.SectionHeader("Materials",
-            "Which material each of the model's material slots loads. Point a slot at another material of the mod or the game, or at a new one — " +
+        Gui.SectionHeader("Meshes in this file",
+            "One row per mesh of the file, numbered as Penumbra and Blender number them. Meshes that share a material can be given different ones — " +
             "the model is written into the mod with only those names changed, and the mod's own file is kept.");
 
         var replacement = _session.FindReplacement(node.GamePath, _session.OptionFor(node));
         var choices = MaterialChoices(node);
-        float buttonW = ImGui.GetFrameHeight();
-        float spacing = ImGui.GetStyle().ItemInnerSpacing.X;
+        int meshes = node.MeshSlots.Count;
+        int changes = 0;
 
-        for (int slot = 0; slot < node.MaterialSlots.Count; slot++)
+        ImGui.PushID("meshes");
+        if (ImGui.BeginTable("##wiring", 2, ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.PadOuterX))
         {
-            ImGui.PushID(slot);
-            var own = node.MaterialSlots[slot];
-            var current = node.EffectiveMaterial(slot);
-            bool changed = !string.Equals(current, own, StringComparison.Ordinal);
+            ImGui.TableSetupColumn("In the file", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Uses",        ImGuiTableColumnFlags.WidthStretch, 1.4f);
+            ImGui.TableHeadersRow();
 
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(changed ? Theme.Good : Theme.Muted, $"Slot {slot + 1}");
-            Gui.Tooltip(changed ? $"Reassigned here. The file has {own}." : "As the file has it.");
-            ImGui.SameLine(Theme.S(56));
-
-            // The name, typed: taken once the field is left.
-            var key = $"{node.Id}#{slot}";
-            var text = _slotText.TryGetValue(key, out var typing) ? typing : current;
-            int buttons = changed ? 3 : 2;
-            ImGui.SetNextItemWidth(-(buttonW * buttons + spacing * buttons));
-            ImGui.InputTextWithHint("##name", own.Length > 0 ? own : "/mt_name.mtrl", ref text, 256);
-            if (ImGui.IsItemActive())
-                _slotText[key] = text;
-            if (ImGui.IsItemDeactivatedAfterEdit())
+            for (int mesh = 0; mesh < meshes; mesh++)
             {
-                _slotText.Remove(key);
-                _session.ReassignMaterial(node, slot, text);
-            }
-            else if (!ImGui.IsItemActive())
-            {
-                _slotText.Remove(key);
-            }
+                var own = node.OwnMaterial(mesh);
+                var current = node.EffectiveMaterial(mesh);
+                bool changed = !string.Equals(current, own, StringComparison.Ordinal);
+                if (changed)
+                    changes++;
 
-            // Picked from the materials the model's set has.
-            ImGui.SameLine(0, spacing);
-            if (ImGui.BeginCombo("##pick", string.Empty, ImGuiComboFlags.NoPreview | ImGuiComboFlags.HeightLarge))
-            {
-                if (own.Length > 0 && ImGui.Selectable($"The file's own: {Path.GetFileName(own)}", !changed))
-                    _session.ReassignMaterial(node, slot, string.Empty);
-                ImGui.Separator();
-                foreach (var (name, label, origin) in choices)
-                {
-                    var reference = own.TrimStart('/').Contains('/') ? name : $"/{Path.GetFileName(name)}";
-                    if (ImGui.Selectable($"{label}##{name}", string.Equals(reference, current, StringComparison.OrdinalIgnoreCase)))
-                        _session.ReassignMaterial(node, slot, reference);
-                    Gui.Tooltip($"{name}\n{origin}");
-                }
-                if (choices.Count == 0)
-                    Gui.Hint("No other material in this model's set.");
-                ImGui.EndCombo();
-            }
-            Gui.Tooltip("Pick a material of the model's set");
+                ImGui.TableNextRow();
+                ImGui.PushID(mesh);
 
-            ImGui.SameLine(0, spacing);
-            if (Gui.IconButton(FontAwesomeIcon.Plus, "newmtrl", "Make a new material for this slot"))
-                _actions.BeginNewMaterial(node, slot);
-
-            if (changed)
-            {
-                ImGui.SameLine(0, spacing);
-                if (Gui.IconButton(FontAwesomeIcon.Undo, "own", $"Back to the file's own: {own}"))
-                    _session.ReassignMaterial(node, slot, string.Empty);
-            }
-
-            // Where the name leads.
-            var resolved = ResourceActions.ResolvedMaterial(node, current);
-            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Theme.S(56));
-            if (resolved != null)
-            {
-                Gui.Icon(ResourceStyle.Icon(resolved.Kind), ResourceStyle.OriginColor(resolved.Origin));
+                ImGui.TableNextColumn();
+                ImGui.AlignTextToFramePadding();
+                ImGui.TextColored(Theme.Faint, $"{mesh}");
                 ImGui.SameLine();
-                if (ImGui.Selectable($"{ResourceStyle.OriginLabel(resolved.Origin)} · {resolved.GamePath}##go", false))
-                    _session.Focus(resolved.Target);
+                ImGui.TextColored(Theme.Muted, Short(own));
+                Gui.Tooltip($"Mesh {mesh} references {own}.");
+
+                ImGui.TableNextColumn();
+                ImGui.SetNextItemWidth(-1);
+                var resolved = ResourceActions.ResolvedMaterial(node, current);
+                var preview = changed ? Short(current) : $"Keep the file's own";
+                if (resolved is { Origin: OriginKind.Missing })
+                    preview += " (missing)";
+                if (ImGui.BeginCombo("##uses", preview, ImGuiComboFlags.HeightLarge))
+                {
+                    if (ImGui.Selectable("Keep the file's own", !changed))
+                        _session.ReassignMaterial(node, mesh, string.Empty);
+                    if (choices.Count > 0)
+                        ImGui.Separator();
+                    foreach (var (name, label, origin) in choices)
+                    {
+                        var reference = own.TrimStart('/').Contains('/') ? name : $"/{Path.GetFileName(name)}";
+                        bool isCurrent = changed && string.Equals(reference, current, StringComparison.OrdinalIgnoreCase);
+                        if (ImGui.Selectable($"{label}##{name}", isCurrent))
+                            _session.ReassignMaterial(node, mesh, reference);
+                        Gui.Tooltip($"{name}\n{origin}");
+                    }
+                    ImGui.Separator();
+                    if (ImGui.Selectable("New material"))
+                        _actions.BeginNewMaterial(node, mesh);
+                    ImGui.EndCombo();
+                }
+                Gui.Tooltip(resolved != null
+                    ? $"{ResourceStyle.OriginLabel(resolved.Origin)} · {resolved.GamePath}"
+                    : current.Length > 0 ? $"{current} — not found" : "No material.");
+
+                ImGui.PopID();
             }
-            else if (current.Length > 0)
-            {
-                ImGui.TextColored(Theme.Faint, changed && replacement != null ? "read again in a moment" : "not found");
-            }
-            ImGui.PopID();
+            ImGui.EndTable();
         }
+        ImGui.PopID();
+
+        ImGui.TextColored(changes > 0 ? Theme.Muted : Theme.Faint,
+            changes > 0 ? $"{changes} of {meshes} mesh(es) repointed" : "the file is kept with its own material names");
 
         ImGui.Spacing();
         if (Gui.IconTextButton(FontAwesomeIcon.Plus, "New material", "Make a material of the mod's own for this model, from a preset or as a copy of one it uses."))
@@ -448,11 +444,17 @@ internal sealed class ResourceInspector
         if (replacement is { ReassignsMaterials: true })
         {
             ImGui.SameLine();
-            if (Gui.IconTextButton(FontAwesomeIcon.Undo, "Every slot as the file has it"))
+            if (Gui.IconTextButton(FontAwesomeIcon.Undo, "Every mesh as the file has it"))
                 _session.ResetMaterials(node);
         }
     }
 
+    /// <summary>A material name without its leading slash and .mtrl, as the builder lists them.</summary>
+    private static string Short(string name)
+    {
+        var file = Path.GetFileName(name.Replace('\\', '/'));
+        return file.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase) ? file[..^5] : file;
+    }
     /// <summary>
     /// The materials a slot of this model could load: what the mod and the game have in the model's
     /// set (any variant folder), and what the model already uses — by game path, with a label.
@@ -527,15 +529,14 @@ internal sealed class ResourceInspector
             return;
         }
 
+        // Laid out as the builder lays out a material: what it starts from, its shader, a preset —
+        // and its texture slots, each set up on its own row of the tree.
         bool clones = replacement.CloneModMaterial || replacement.CloneGameMaterial;
         Gui.SectionHeader("Made here", "Written into the mod as you set it up: this material, and each slot's image as its texture. Slots that keep a texture point at it again.");
-        Gui.LabeledValue("Starts from", StartsFrom(replacement));
+        Gui.LabeledValue("Template", StartsFrom(replacement), "What the material is made from before its texture slots are filled.");
 
-        // The shader: another one starts the material from a bundled preset.
-        Gui.Label("Shader", "Which shader the game draws it with.");
         int shader = Math.Max(0, ShaderInfo.All.ToList().FindIndex(d => d.Type == material.ShaderType));
-        ImGui.SetNextItemWidth(-1);
-        if (ComboWheel.Combo("##shader", ref shader, ShaderInfo.Labels))
+        if (Gui.LabeledCombo("Shader", "##shader", ref shader, ShaderInfo.Labels, $"Shader pack: {ShaderInfo.ShaderPackName(material.ShaderType)}"))
         {
             _session.ChangeShader(replacement, ShaderInfo.All[shader].Type);
             if (clones)
@@ -544,19 +545,22 @@ internal sealed class ResourceInspector
         if (clones)
             Gui.HintWrapped("Another shader starts it from a bundled preset instead: the colour table and settings of the original are not kept.");
 
-        // A preset: its shader and any slots it has that this material lacks; the textures stay.
-        Gui.Label("Preset", "Load a preset's shader and texture slots. Its textures and their paths are kept.");
-        float loadW = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.FileImport, "Load");
-        ImGui.SetNextItemWidth(-(loadW + ImGui.GetStyle().ItemSpacing.X));
+        ImGui.Spacing();
+        Gui.Label("Preset");
+        float applyW = Dalamud.Interface.Components.ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.Redo, "Apply");
+        ImGui.SetNextItemWidth(-(applyW + ImGui.GetStyle().ItemSpacing.X));
         ComboWheel.Combo("##loadpreset", ref _preset, MaterialPresets.Names);
         ImGui.SameLine();
-        if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Load", "Switch to this preset. Texture slots and their paths are kept; missing slots are added."))
+        if (Gui.IconTextButton(FontAwesomeIcon.Redo, "Apply", "Switch to this preset. Texture slots and their images are kept; missing slots are added."))
         {
             _session.LoadPreset(replacement, MaterialPresets.All[Math.Clamp(_preset, 0, MaterialPresets.All.Count - 1)]);
             if (clones)
                 _session.Notify("The colour table and settings of the original are not kept.", Severity.Warning);
         }
 
+        ImGui.Spacing();
+        ImGui.Spacing();
+        Gui.SectionHeader("Texture slots", "Select a slot's texture in the tree to pick its image. A slot that keeps a texture reads the one the material had.");
         bool edited = false;
         float removeW = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X;
         int remove = -1;
@@ -564,32 +568,30 @@ internal sealed class ResourceInspector
         {
             var tex = material.Textures[i];
             ImGui.PushID(i);
-            ImGui.Spacing();
             if (tex.IsShared)
             {
                 DrawKeptThumb(tex.SharedGamePath, option);
                 ImGui.SameLine();
                 ImGui.AlignTextToFramePadding();
                 ImGui.TextUnformatted(TextureTypeInfo.DisplayName(tex.Type));
+                Gui.Tooltip($"Keeps {tex.SharedGamePath}");
                 ImGui.SameLine();
-                ImGui.TextColored(Theme.Faint, $"keeps {Path.GetFileName(tex.SharedGamePath)}");
-                Gui.Tooltip(tex.SharedGamePath);
                 DrawKeptSlot(node.GamePath, material, tex, removeW);
             }
             else
             {
                 _textures.DrawThumb(tex, _host.Configuration.ShowThumbnails);
                 ImGui.SameLine();
-                ImGui.AlignTextToFramePadding();
-                ImGui.TextUnformatted(TextureTypeInfo.DisplayName(tex.Type));
-                ImGui.SameLine();
-                ImGui.TextColored(Theme.Faint, Path.GetFileName(ResourceNaming.SlotTexturePath(node.GamePath, tex)));
-                edited |= _textures.DrawCompact(tex, removeW);
+                var texPath = ResourceNaming.SlotTexturePath(node.GamePath, tex);
+                var state = tex.UseWhiteDummy ? "placeholder" : string.IsNullOrWhiteSpace(tex.SourcePath) ? "no image set yet" : Path.GetFileName(tex.SourcePath);
+                if (ImGui.Selectable($"{TextureTypeInfo.DisplayName(tex.Type)}  ·  {state}##slot", false, ImGuiSelectableFlags.None,
+                        new System.Numerics.Vector2(ImGui.GetContentRegionAvail().X - removeW, ImGui.GetFrameHeight())))
+                    _session.Focus(Target.ForResource(string.Empty, texPath, option.Serialize()));
+                Gui.Tooltip($"{texPath}\n\nClick to set it up.");
             }
             ImGui.SameLine();
             if (Gui.IconButton(FontAwesomeIcon.Trash, "removeslot", "Take this texture slot out of the material", danger: true))
                 remove = i;
-            DrawTexturePath(node.GamePath, tex);
             ImGui.PopID();
         }
         if (remove >= 0)
@@ -603,6 +605,7 @@ internal sealed class ResourceInspector
         ImGui.Spacing();
         DrawAddSlot(node.GamePath, material);
 
+        ImGui.Spacing();
         ImGui.Spacing();
         if (Gui.IconTextButton(FontAwesomeIcon.Undo, node.Origin == OriginKind.ModFile ? "Keep the mod's own material" : "Don't make it here"))
             _actions.ClearReplacement(node);

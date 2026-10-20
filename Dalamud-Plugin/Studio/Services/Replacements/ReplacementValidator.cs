@@ -121,21 +121,26 @@ internal static class ReplacementValidator
         }
 
         var model = session.Graph.Find(path, option);
+        bool perMesh = replacement.MaterialNamesPerMesh;
         for (int slot = 0; slot < replacement.MaterialNames.Count; slot++)
         {
             var name = replacement.MaterialNames[slot];
+            var label = perMesh ? $"mesh {slot}" : $"slot {slot + 1}";
             if (string.IsNullOrWhiteSpace(name))
                 continue;
             if (!name.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase))
             {
-                issues.Add(new(Severity.Error, target, $"{who}: slot {slot + 1} names {name}, which is not a material (.mtrl)."));
+                issues.Add(new(Severity.Error, target, $"{who}: {label} names {name}, which is not a material (.mtrl)."));
                 continue;
             }
             if (model == null || model.MaterialSlots.Count == 0)
                 continue;
-            if (slot >= model.MaterialSlots.Count)
+            int count = perMesh ? model.MeshSlots.Count : model.MaterialSlots.Count;
+            if (slot >= count)
             {
-                issues.Add(new(Severity.Warning, target, $"{who}: has {model.MaterialSlots.Count} material slot(s), so slot {slot + 1} ({name}) is ignored."));
+                issues.Add(new(Severity.Warning, target, perMesh
+                    ? $"{who}: has {count} mesh(es), so mesh {slot} ({name}) is ignored."
+                    : $"{who}: has {count} material slot(s), so slot {slot + 1} ({name}) is ignored."));
                 continue;
             }
 
@@ -143,7 +148,7 @@ internal static class ReplacementValidator
             var loads = model.Children.Select(c => c.Node)
                 .FirstOrDefault(n => n.Kind == ResourceKind.Material && string.Equals(n.FileName, file, StringComparison.OrdinalIgnoreCase));
             if (loads is { Origin: OriginKind.Missing })
-                issues.Add(new(Severity.Warning, target, $"{who}: slot {slot + 1} loads {file}, which neither the mod nor the game has — make it, or pick another."));
+                issues.Add(new(Severity.Warning, target, $"{who}: {label} loads {file}, which neither the mod nor the game has — make it, or pick another."));
         }
     }
 

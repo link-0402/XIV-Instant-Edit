@@ -714,7 +714,7 @@ internal sealed class ModelInspector
         var tex = mat.Textures[index];
         Gui.SectionHeader($"{TextureTypeInfo.DisplayName(tex.Type)} · {mat.Name}");
 
-        if (_textures.DrawFull(item.Subject, mat, tex, _host.Configuration.ShowThumbnails))
+        if (_textures.DrawFull(mat, tex, _host.Configuration.ShowThumbnails, item.Subject.TextureGamePath(MaterialNaming.ComposeTextureName(mat.Name, tex.Postfix))))
             _session.MarkDirty();
 
         // A shared slot writes no file of its own, so it goes nowhere.

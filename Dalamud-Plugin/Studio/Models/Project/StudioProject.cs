@@ -161,12 +161,43 @@ public class ResourceReplacement
     public string TemplatePath { get; set; } = string.Empty;
 
     /// <summary>
-    /// For a model: the material each of its material slots is pointed at instead (as a model names
-    /// one, "/mt_c0201e6114_top_a.mtrl"), by slot; an empty entry keeps the slot's own. Applied to
+    /// For a model: the material each of its meshes is pointed at instead (as a model names one,
+    /// "/mt_c0201e6114_top_a.mtrl"), by mesh — or by material slot, for set-ups saved before
+    /// <see cref="MaterialNamesPerMesh"/>; an empty entry keeps the mesh's own. Applied to
     /// <see cref="SourcePath"/> when one is set, else to the mod's own model at this path (or the
     /// game's) — which is how a model of the mod gets its materials reassigned.
     /// </summary>
     public List<string> MaterialNames { get; set; } = new();
+
+    /// <summary>
+    /// True when <see cref="MaterialNames"/> are by mesh of the model's first LOD rather than by
+    /// material slot: meshes that share a slot can then load different materials, and the model is
+    /// written with that slot split for them. Set-ups saved before this was possible are by slot.
+    /// </summary>
+    public bool MaterialNamesPerMesh { get; set; }
+
+    /// <summary>
+    /// The name each mesh is pointed at (empty keeps its own), given the slot each mesh uses
+    /// (<paramref name="meshSlots"/>): <see cref="MaterialNames"/> as they are, or read through the
+    /// slots for a set-up saved by slot.
+    /// </summary>
+    public List<string> MeshMaterialNames(IReadOnlyList<int> meshSlots)
+    {
+        if (MaterialNamesPerMesh)
+            return MaterialNames.ToList();
+        return meshSlots.Select(s => s >= 0 && s < MaterialNames.Count ? MaterialNames[s] : string.Empty).ToList();
+    }
+
+    /// <summary>Converts a set-up saved by slot to one by mesh (see <see cref="MaterialNamesPerMesh"/>).</summary>
+    public void UseMeshMaterialNames(IReadOnlyList<int> meshSlots)
+    {
+        if (MaterialNamesPerMesh)
+            return;
+        MaterialNames = MeshMaterialNames(meshSlots);
+        while (MaterialNames.Count > 0 && string.IsNullOrWhiteSpace(MaterialNames[^1]))
+            MaterialNames.RemoveAt(MaterialNames.Count - 1);
+        MaterialNamesPerMesh = true;
+    }
 
     public bool IsAuthored => Authored != null;
 

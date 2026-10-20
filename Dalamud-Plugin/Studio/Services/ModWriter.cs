@@ -525,7 +525,8 @@ internal sealed class ModWriter
     {
         var label = Path.GetFileName(gamePath);
         var names = replacement.MaterialNames.Select(n => string.IsNullOrWhiteSpace(n) ? null : n.Trim()).ToList();
-        var namesKey = string.Join(",", names.Select(n => n ?? string.Empty));
+        bool perMesh = replacement.MaterialNamesPerMesh;
+        var namesKey = (perMesh ? "mesh:" : string.Empty) + string.Join(",", names.Select(n => n ?? string.Empty));
 
         string? file = null;
         string from;
@@ -574,13 +575,15 @@ internal sealed class ModWriter
         byte[] rewritten;
         try
         {
-            rewritten = ModelMaterialRewriter.Rewrite(bytes, names);
-            var loads = ModelMaterialRewriter.ReadMaterialsStrict(rewritten);
+            // By mesh: meshes sharing a slot that now load different materials get that slot split.
+            rewritten = perMesh ? ModelMaterialRewriter.RewriteMeshes(bytes, names) : ModelMaterialRewriter.Rewrite(bytes, names);
+            var loads = perMesh ? ModelMaterialRewriter.ReadMeshMaterialsStrict(rewritten) : ModelMaterialRewriter.ReadMaterialsStrict(rewritten);
             for (int i = 0; i < names.Count && i < loads.Count; i++)
             {
                 if (names[i] != null && !string.Equals(loads[i], names[i], StringComparison.Ordinal))
                 {
-                    Fail(plan, $"material slot {i + 1} would not load {names[i]} in the rewritten model");
+                    Fail(plan, perMesh ? $"mesh {i} would not load {names[i]} in the rewritten model"
+                                       : $"material slot {i + 1} would not load {names[i]} in the rewritten model");
                     return;
                 }
             }
@@ -594,7 +597,7 @@ internal sealed class ModWriter
         int changed = names.Count(n => n != null);
         var how   = replacement.IsNew ? "added" : "replaced";
         var where = option.IsDefault ? string.Empty : $" · {meta.OptionLabel(option)}";
-        Provide(plan, Content.Of(rewritten), $"{how} from {from}, {changed} material slot(s) reassigned → {plan.RelPath}{where}");
+        Provide(plan, Content.Of(rewritten), $"{how} from {from}, {changed} {(perMesh ? "mesh(es)" : "material slot(s)")} reassigned → {plan.RelPath}{where}");
     }
 
     /// <summary>

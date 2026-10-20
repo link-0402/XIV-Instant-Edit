@@ -34,6 +34,7 @@ internal static class ModWriterScenarios
             await ABuildNamesTheModAsTyped(root);                       // writers-7
             await ASwitchedOffVanillaModelLosesItsEqdpBits(root);
             await ABuiltModelsPartTagsBecomeAToggleGroup(root);
+            await MeshesOfOneMaterialCanBePointedApart(root);
             AStoppedWatcherIsNoticed(root);                             // glue-6
         }
         finally
@@ -296,6 +297,43 @@ internal static class ModWriterScenarios
             ["DefaultData"] = new JsonObject { ["Files"] = new JsonObject() },
             ["Groups"]      = groups,
         }.ToJsonString());
+
+    /// <summary>
+    /// The mod editor points meshes, not material slots: two meshes on one slot given different
+    /// materials come out with that slot split. A set-up saved by slot still writes as it did.
+    /// </summary>
+    private static async Task MeshesOfOneMaterialCanBePointedApart(string root)
+    {
+        var mod = Path.Combine(root, "Mods", "Meshes Apart");
+        Directory.CreateDirectory(mod);
+        WriteMeta(mod, new JsonArray());
+        var source = Path.Combine(root, "two-mesh.mdl");
+        File.WriteAllBytes(source, InstantEdit.TestSupport.TestModels.TwoMeshModel());
+
+        var perMesh = new ResourceReplacement
+        {
+            GamePath = Model, SourcePath = source, IsNew = true,
+            MaterialNames = new List<string> { string.Empty, "/mt_c0101e0001_top_b.mtrl" }, MaterialNamesPerMesh = true,
+        };
+        var report = await Update(mod, "Meshes Apart", perMesh);
+        Require(report.FatalError == null && !report.Entries.Any(e => e.Outcome == WriteOutcome.Failed),
+            $"a model with its meshes pointed apart writes ({string.Join("; ", report.Entries.Select(e => $"{e.Outcome} {e.Detail}"))})");
+        var written = File.ReadAllBytes(Path.Combine(mod, "chara", "equipment", "e0001", "model", "c0101e0001_top.mdl"));
+        Require(ModelMaterialRewriter.ReadMeshMaterialsStrict(written).SequenceEqual(new[] { "/old.mtrl", "/mt_c0101e0001_top_b.mtrl" })
+                && ModelMaterialRewriter.ReadMaterialsStrict(written).Count == 2,
+            "mesh 0 keeps its material and mesh 1 loads the new one, from a slot of its own");
+
+        var bySlot = new ResourceReplacement
+        {
+            GamePath = Model, SourcePath = source, IsNew = true,
+            MaterialNames = new List<string> { "/mt_c0101e0001_top_c.mtrl" },
+        };
+        await Update(mod, "Meshes Apart", bySlot);
+        written = File.ReadAllBytes(Path.Combine(mod, "chara", "equipment", "e0001", "model", "c0101e0001_top.mdl"));
+        Require(ModelMaterialRewriter.ReadMeshMaterialsStrict(written).SequenceEqual(new[] { "/mt_c0101e0001_top_c.mtrl", "/mt_c0101e0001_top_c.mtrl" })
+                && ModelMaterialRewriter.ReadMaterialsStrict(written).Count == 1,
+            "a set-up saved by slot still renames that slot for every mesh on it");
+    }
 
     private static string Source(string root, string name, byte marker)
     {

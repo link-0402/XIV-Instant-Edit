@@ -25,6 +25,9 @@ internal sealed class FileFacts
     /// <summary>For a model: the material each of its material slots names, in slot order (empty where none loads).</summary>
     public IReadOnlyList<string> MaterialSlots { get; init; } = Array.Empty<string>();
 
+    /// <summary>For a model: the material slot each mesh of its first LOD uses, in mesh order.</summary>
+    public IReadOnlyList<int> MeshSlots { get; init; } = Array.Empty<int>();
+
     public string? ShaderPackage { get; init; }
 
     public TexHeaderInfo? Texture { get; init; }
@@ -195,7 +198,11 @@ internal sealed class ModFileFactsCache
                     .Where(n => !string.IsNullOrWhiteSpace(n))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
-                return new FileFacts { Size = bytes.Length, StampTicks = stamp, References = names, MaterialSlots = slots };
+                return new FileFacts
+                {
+                    Size = bytes.Length, StampTicks = stamp, References = names, MaterialSlots = slots,
+                    MeshSlots = ModelMaterialRewriter.ReadMeshMaterialSlots(bytes),
+                };
             }
 
             case ResourceKind.Material:

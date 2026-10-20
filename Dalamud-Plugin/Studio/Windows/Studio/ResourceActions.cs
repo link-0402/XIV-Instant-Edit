@@ -89,7 +89,7 @@ internal sealed class ResourceActions
     /// <summary>Set when a dialog's change of meta.json could not be written; the dialog stays open and says so.</summary>
     private bool _writeFailed;
 
-    /// <summary>A material being made, and the model slot it is for (if any).</summary>
+    /// <summary>A material being made, and the model meshes it is for (if any).</summary>
     private sealed class PendingMaterial
     {
         public string Folder = string.Empty;
@@ -99,8 +99,10 @@ internal sealed class ResourceActions
         public int Start;          // the copy first (when there is one), then each preset
         public string ModelPath = string.Empty;
         public OptionRef ModelOption;
-        public int Slot = -1;
-        public bool Assign = true;
+
+        /// <summary>Which meshes of the model load it once made, with the material each has now.</summary>
+        public bool[] Meshes = Array.Empty<bool>();
+        public string[] MeshMaterials = Array.Empty<string>();
     }
 
     private PendingMaterial? _material;
@@ -211,32 +213,65 @@ internal sealed class ResourceActions
     // ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Starts making a new material for a model: in the folder its slot's material lives in (or the
+    /// Starts making a new material for a model: in the folder its mesh's material lives in (or the
     /// model set's), named like that material with the next free letter, from a preset or as a copy
-    /// of it — and, for a slot, loaded by that slot once made.
+    /// of it — and, for a mesh (or a model with only one), loaded by that mesh once made.
     /// </summary>
-    public void BeginNewMaterial(ResourceNode model, int slot)
+    public void BeginNewMaterial(ResourceNode model, int mesh)
     {
         if (_session.Project == null)
             return;
 
-        var current = slot >= 0 ? model.EffectiveMaterial(slot) : model.MaterialSlots.FirstOrDefault(n => n.Length > 0) ?? string.Empty;
+        var current = mesh >= 0 ? model.EffectiveMaterial(mesh) : model.MaterialSlots.FirstOrDefault(n => n.Length > 0) ?? string.Empty;
         var resolved = ResolvedMaterial(model, current);
-        var folder = resolved != null
-            ? Path.GetDirectoryName(resolved.GamePath)?.Replace('\\', '/') ?? string.Empty
-            : ResourceNaming.MaterialFolder(Path.GetFileName(current)) ?? ResourceNaming.FallbackMaterialFolder(model.GamePath);
+        int meshes = model.MeshSlots.Count;
+        Start(model, resolved, current, m => m == mesh || meshes == 1);
+    }
+
+    /// <summary>
+    /// Starts making a new material as a copy of <paramref name="material"/>, beside it — for the
+    /// model that uses it, whose meshes on it now are ticked to load the new one.
+    /// </summary>
+    public void BeginNewMaterialFrom(ResourceNode material)
+    {
+        if (_session.Project == null || material.Kind != ResourceKind.Material)
+            return;
+        var model = _session.Graph.ParentsOf(material).FirstOrDefault(n => n.Kind == ResourceKind.Model);
+        if (model == null)
+        {
+            var folder = Path.GetDirectoryName(material.GamePath)?.Replace('\\', '/') ?? string.Empty;
+            _material = new PendingMaterial
+            {
+                Folder = folder,
+                Name   = NextName(folder, Path.GetFileNameWithoutExtension(material.GamePath), material),
+                Option = _session.OptionFor(material),
+                CopyOf = material.GamePath,
+            };
+            _openMaterial = true;
+            return;
+        }
+        Start(model, material, material.FileName, m =>
+            string.Equals(Path.GetFileName(model.EffectiveMaterial(m)), material.FileName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void Start(ResourceNode model, ResourceNode? copyOf, string like, Func<int, bool> ticked)
+    {
+        var folder = copyOf != null
+            ? Path.GetDirectoryName(copyOf.GamePath)?.Replace('\\', '/') ?? string.Empty
+            : ResourceNaming.MaterialFolder(Path.GetFileName(like)) ?? ResourceNaming.FallbackMaterialFolder(model.GamePath);
 
         var option = _session.OptionFor(model);
+        int meshes = model.MeshSlots.Count;
         _material = new PendingMaterial
         {
-            Folder      = folder,
-            Name        = NextName(folder, Path.GetFileNameWithoutExtension(current), model),
-            Option      = option,
-            CopyOf      = resolved?.GamePath,
-            ModelPath   = model.GamePath,
-            ModelOption = option,
-            Slot        = slot,
-            Assign      = slot >= 0,
+            Folder        = folder,
+            Name          = NextName(folder, Path.GetFileNameWithoutExtension(like), model),
+            Option        = option,
+            CopyOf        = copyOf?.GamePath,
+            ModelPath     = model.GamePath,
+            ModelOption   = option,
+            Meshes        = Enumerable.Range(0, meshes).Select(ticked).ToArray(),
+            MeshMaterials = Enumerable.Range(0, meshes).Select(model.EffectiveMaterial).ToArray(),
         };
         _openMaterial = true;
     }
@@ -926,10 +961,18 @@ internal sealed class ResourceActions
         Gui.Label("Into", "Which part of the mod carries it: its default files, or one option of a group.");
         DrawOptionCombo("##mtrloption", project.Meta, ref m.Option);
 
-        if (m.Slot >= 0)
+        if (m.Meshes.Length > 0)
         {
-            Gui.Label(string.Empty);
-            ImGui.Checkbox($"Use it for slot {m.Slot + 1} of {Path.GetFileName(m.ModelPath)}", ref m.Assign);
+            Gui.Label("Use it for", $"The meshes of {Path.GetFileName(m.ModelPath)} that load it once made. Meshes that share a material can be split.");
+            ImGui.BeginGroup();
+            for (int i = 0; i < m.Meshes.Length; i++)
+            {
+                var now = Path.GetFileNameWithoutExtension(m.MeshMaterials[i]);
+                ImGui.Checkbox($"Mesh {i}##usefor{i}", ref m.Meshes[i]);
+                ImGui.SameLine();
+                ImGui.TextColored(Theme.Faint, now.Length > 0 ? $"now {now}" : "no material now");
+            }
+            ImGui.EndGroup();
         }
 
         ImGui.Spacing();
@@ -941,15 +984,23 @@ internal sealed class ResourceActions
                 var preset = copy ? null : MaterialPresets.All[Math.Clamp(m.Start - (m.CopyOf != null ? 1 : 0), 0, MaterialPresets.All.Count - 1)];
                 if (_session.NewMaterial(path, m.Option, preset, copy ? m.CopyOf : null) != null)
                 {
-                    bool assigned = false;
-                    if (m.Assign && m.Slot >= 0 && _session.Graph.Find(m.ModelPath, m.ModelOption) is { } model)
+                    var assigned = new List<int>();
+                    if (m.Meshes.Any(t => t) && _session.Graph.Find(m.ModelPath, m.ModelOption) is { } model)
                     {
-                        // Named the way the slot names its material now: by file name, or by full path.
-                        var reference = model.EffectiveMaterial(m.Slot).TrimStart('/').Contains('/') ? path : $"/{name}.mtrl";
-                        _session.ReassignMaterial(model, m.Slot, reference);
-                        assigned = true;
+                        for (int i = 0; i < m.Meshes.Length; i++)
+                        {
+                            if (!m.Meshes[i])
+                                continue;
+                            // Named the way the mesh names its material now: by file name, or by full path.
+                            var reference = m.MeshMaterials[i].TrimStart('/').Contains('/') ? path : $"/{name}.mtrl";
+                            _session.ReassignMaterial(model, i, reference);
+                            assigned.Add(i);
+                        }
                     }
-                    _session.Notify($"{name}.mtrl is in the mod now{(assigned ? $", loaded by slot {m.Slot + 1}" : string.Empty)} — set up its textures.", Severity.Info);
+                    var loadedBy = assigned.Count == 0 ? string.Empty
+                                 : assigned.Count == 1 ? $", loaded by mesh {assigned[0]}"
+                                 : $", loaded by meshes {string.Join(", ", assigned)}";
+                    _session.Notify($"{name}.mtrl is in the mod now{loadedBy} — set up its textures.", Severity.Info);
                     _session.Focus(Target.ForResource(string.Empty, path, m.Option.Serialize()));
                 }
                 _material = null;

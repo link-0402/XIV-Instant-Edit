@@ -556,18 +556,19 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     }
 
     /// <summary>
-    /// Points material slot <paramref name="slot"/> of a model at <paramref name="material"/> (named
-    /// the way a model names one: "/mt_c0201e6114_top_a.mtrl"); an empty name gives the slot back
-    /// what its file has. The model is written into the mod with only those names changed.
+    /// Points mesh <paramref name="mesh"/> of a model at <paramref name="material"/> (named the way
+    /// a model names one: "/mt_c0201e6114_top_a.mtrl"); an empty name gives the mesh back what its
+    /// file has. The model is written into the mod with only those names changed — and a material
+    /// slot split where meshes that share it now load different materials.
     /// </summary>
-    public void ReassignMaterial(ResourceNode model, int slot, string material)
+    public void ReassignMaterial(ResourceNode model, int mesh, string material)
     {
-        if (Project == null || model.Kind != ResourceKind.Model || slot < 0)
+        if (Project == null || model.Kind != ResourceKind.Model || mesh < 0)
             return;
 
         var option = OptionFor(model);
         var name = MaterialReference(material);
-        if (slot < model.MaterialSlots.Count && string.Equals(model.MaterialSlots[slot], name, StringComparison.Ordinal))
+        if (string.Equals(model.OwnMaterial(mesh), name, StringComparison.Ordinal))
             name = string.Empty;   // what the file has anyway
 
         var replacement = FindReplacement(model.GamePath, option);
@@ -581,14 +582,16 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
                 Option      = option.Serialize(),
                 Compression = TextureCompression.Auto,
                 IsNew       = model.Origin is OriginKind.Vanilla or OriginKind.Missing or OriginKind.Shared,
+                MaterialNamesPerMesh = true,
             };
             Project.Sidecar.Replacements.Add(replacement);
         }
 
+        replacement.UseMeshMaterialNames(model.MeshSlots);
         var names = replacement.MaterialNames;
-        while (names.Count <= slot)
+        while (names.Count <= mesh)
             names.Add(string.Empty);
-        names[slot] = name;
+        names[mesh] = name;
         while (names.Count > 0 && string.IsNullOrWhiteSpace(names[^1]))
             names.RemoveAt(names.Count - 1);
 

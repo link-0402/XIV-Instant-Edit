@@ -107,13 +107,35 @@ internal sealed class ResourceNode
 
     public bool IsModContent => Origin is OriginKind.ModFile or OriginKind.Swap or OriginKind.Added;
 
-    /// <summary>The material slot <paramref name="slot"/> loads: reassigned here, else the file's own.</summary>
-    public string EffectiveMaterial(int slot)
+    /// <summary>
+    /// For a model: the material slot each mesh of its first LOD uses, in the same file as
+    /// <see cref="MaterialSlots"/>. Unknown reads as one mesh per slot.
+    /// </summary>
+    public IReadOnlyList<int> MeshSlots
     {
-        var names = Replacement?.MaterialNames;
-        if (names != null && slot < names.Count && !string.IsNullOrWhiteSpace(names[slot]))
-            return names[slot];
-        return slot < MaterialSlots.Count ? MaterialSlots[slot] : string.Empty;
+        get => _meshSlots.Count > 0 || MaterialSlots.Count == 0 ? _meshSlots : Enumerable.Range(0, MaterialSlots.Count).ToArray();
+        set => _meshSlots = value;
+    }
+    private IReadOnlyList<int> _meshSlots = Array.Empty<int>();
+
+    /// <summary>The material mesh <paramref name="mesh"/> names in the file, before any reassignment here.</summary>
+    public string OwnMaterial(int mesh)
+    {
+        var slots = MeshSlots;
+        int slot = mesh >= 0 && mesh < slots.Count ? slots[mesh] : -1;
+        return slot >= 0 && slot < MaterialSlots.Count ? MaterialSlots[slot] : string.Empty;
+    }
+
+    /// <summary>The material mesh <paramref name="mesh"/> loads: reassigned here, else the file's own.</summary>
+    public string EffectiveMaterial(int mesh)
+    {
+        if (Replacement is { ReassignsMaterials: true } replacement)
+        {
+            var names = replacement.MeshMaterialNames(MeshSlots);
+            if (mesh >= 0 && mesh < names.Count && !string.IsNullOrWhiteSpace(names[mesh]))
+                return names[mesh];
+        }
+        return OwnMaterial(mesh);
     }
 
     /// <summary>The selection target: this file, in the entry it is listed under.</summary>

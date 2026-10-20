@@ -214,8 +214,12 @@ internal sealed class TextureSlotEditor
     // Full (inspector)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The inspector card for a texture. Returns true when something was edited.</summary>
-    public bool DrawFull(PortSubject subject, MaterialSetup mat, TextureSlot tex, bool showThumbnail)
+    /// <summary>
+    /// The inspector card for a texture. <paramref name="gamePath"/> is shown as where it is written
+    /// (null leaves that to the caller); without <paramref name="variants"/> a slot takes one image or
+    /// a placeholder only. Returns true when something was edited.
+    /// </summary>
+    public bool DrawFull(MaterialSetup mat, TextureSlot tex, bool showThumbnail, string? gamePath, bool variants = true)
     {
         bool edited = false;
 
@@ -265,6 +269,8 @@ internal sealed class TextureSlotEditor
         var mode = ModeOf(tex);
         for (int m = 0; m < SourceModeLabels.Length; m++)
         {
+            if (!variants && (SourceMode)m == SourceMode.Variants && mode != SourceMode.Variants)
+                continue;
             if (m > 0) ImGui.SameLine();
             if (ImGui.RadioButton($"{SourceModeLabels[m]}##fullmode", (int)mode == m))
             {
@@ -301,9 +307,11 @@ internal sealed class TextureSlotEditor
         ImGui.SetNextItemWidth(Theme.S(140));
         edited |= DrawCompression(tex);
 
-        ImGui.Spacing();
-        var gamePath = subject.TextureGamePath(MaterialNaming.ComposeTextureName(mat.Name, tex.Postfix));
-        Gui.LabeledValue("Game path", gamePath, "Where this texture is written in the mod.");
+        if (gamePath != null)
+        {
+            ImGui.Spacing();
+            Gui.LabeledValue("Game path", gamePath, "Where this texture is written in the mod.");
+        }
 
         return edited;
     }

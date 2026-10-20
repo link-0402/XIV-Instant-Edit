@@ -1,7 +1,11 @@
 using System.Text;
 using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Models.Project;
+using InstantEdit.Studio.Models.Resources;
 using InstantEdit.Studio.Services;
+using InstantEdit.Studio.Services.Resources;
 using static InstantEdit.TestSupport.Assertions;
+using static InstantEdit.TestSupport.TestModels;
 
 /// <summary>
 /// The Mod Browser's Build mode assigns materials per mesh: meshes that share one material in the
@@ -17,6 +21,46 @@ internal static class MeshMaterialScenarios
         KeptMeshStaysOnItsSlot();
         AutomaticMatchFollowsDistinctNames();
         SavedSlotLinksBecomeMeshLinks();
+        EditModeReadsMaterialsPerMesh();
+        EditModeSlotNamesBecomeMeshNames();
+    }
+
+    private static void EditModeReadsMaterialsPerMesh()
+    {
+        var facts = ModFileFactsCache.FromBytes(TwoMeshModel(), ResourceKind.Model);
+        Require(facts.MeshSlots.SequenceEqual(new[] { 0, 0 }) && facts.MaterialSlots.SequenceEqual(new[] { "/old.mtrl" }),
+            "the mod editor reads which slot each mesh uses, next to the slots themselves");
+
+        var node = new ResourceNode
+        {
+            Id = "m", GamePath = "chara/accessory/a0044/model/c0201a0044_nek.mdl", Kind = ResourceKind.Model, Origin = OriginKind.ModFile,
+            MaterialSlots = facts.MaterialSlots, MeshSlots = facts.MeshSlots,
+            Replacement = new ResourceReplacement { MaterialNames = new List<string> { string.Empty, "/b.mtrl" }, MaterialNamesPerMesh = true },
+        };
+        Require(node.OwnMaterial(1) == "/old.mtrl" && node.EffectiveMaterial(0) == "/old.mtrl" && node.EffectiveMaterial(1) == "/b.mtrl",
+            "each mesh shows its own material, or the one it was pointed at");
+
+        var unknown = new ResourceNode
+        {
+            Id = "u", GamePath = "x.mdl", Kind = ResourceKind.Model, Origin = OriginKind.ModFile,
+            MaterialSlots = new[] { "/a.mtrl", "/b.mtrl" },
+        };
+        Require(unknown.MeshSlots.SequenceEqual(new[] { 0, 1 }) && unknown.EffectiveMaterial(1) == "/b.mtrl",
+            "a model whose meshes are not known reads as one mesh per slot");
+    }
+
+    private static void EditModeSlotNamesBecomeMeshNames()
+    {
+        var saved = new ResourceReplacement { MaterialNames = new List<string> { "/a.mtrl" } };
+        Require(saved.MeshMaterialNames(new[] { 0, 0, 1 }).SequenceEqual(new[] { "/a.mtrl", "/a.mtrl", string.Empty }),
+            "a mod-editor set-up saved by slot is read through each mesh's slot");
+
+        saved.UseMeshMaterialNames(new[] { 0, 0, 1 });
+        Require(saved.MaterialNamesPerMesh && saved.MaterialNames.SequenceEqual(new[] { "/a.mtrl", "/a.mtrl" }),
+            "and converted to one name per mesh the first time it is changed");
+
+        saved.UseMeshMaterialNames(new[] { 1, 1 });
+        Require(saved.MaterialNames.SequenceEqual(new[] { "/a.mtrl", "/a.mtrl" }), "a set-up already by mesh is left as it is");
     }
 
     private static void SharedMaterialIsReadPerMesh()
@@ -135,90 +179,5 @@ internal static class MeshMaterialScenarios
         long strings = 68 + stack;
         uint size = BitConverter.ToUInt32(model, (int)strings + 4);
         return strings + 8 + size + 56;
-    }
-
-    /// <summary>A V6 model with two meshes in the first LOD, both on the one material "/old.mtrl".</summary>
-    private static byte[] TwoMeshModel()
-    {
-        var strings = new MemoryStream();
-        int Name(string value)
-        {
-            int offset = (int)strings.Length;
-            strings.Write(Encoding.UTF8.GetBytes(value + "\0"));
-            return offset;
-        }
-        int bone = Name("j_kosi");
-        int material = Name("/old.mtrl");
-        while (strings.Length % 4 != 0)
-            strings.WriteByte(0);
-
-        var vertices = Enumerable.Range(0, 96).Select(i => (byte)(i * 7)).ToArray();
-        var indices = Enumerable.Range(0, 24).Select(i => (byte)(200 - i)).ToArray();
-
-        var data = new MemoryStream();
-        var w = new BinaryWriter(data);
-        w.Write((ushort)2); w.Write((ushort)0); w.Write((uint)strings.Length);
-        w.Write(strings.ToArray());
-        // Model header.
-        w.Write(0.5f);
-        w.Write((ushort)2); w.Write((ushort)0); w.Write((ushort)2); w.Write((ushort)1); w.Write((ushort)1); w.Write((ushort)1);
-        w.Write((ushort)0); w.Write((ushort)0); w.Write((ushort)0);
-        w.Write((byte)1); w.Write((byte)0); w.Write((ushort)0); w.Write((byte)0); w.Write((byte)0);
-        w.Write(0f); w.Write(0f);
-        w.Write((ushort)0); w.Write((ushort)0);
-        w.Write(0u);
-        w.Write((ushort)2); w.Write(0u); w.Write(new byte[6]);
-        long lods = data.Position;
-        w.Write(new byte[3 * 60]);
-        // Meshes: both on material 0.
-        for (int m = 0; m < 2; m++)
-        {
-            w.Write((ushort)4); w.Write((ushort)0); w.Write(6u);
-            w.Write((ushort)0); w.Write((ushort)m); w.Write((ushort)1); w.Write((ushort)0);
-            w.Write((uint)(m * 6)); w.Write((uint)(m * 48)); w.Write(0u); w.Write(0u);
-            w.Write((byte)12); w.Write((byte)0); w.Write((byte)0); w.Write((byte)1);
-        }
-        for (int s = 0; s < 2; s++)
-        {
-            w.Write((uint)(s * 6)); w.Write(6u); w.Write(0u); w.Write((ushort)0); w.Write((ushort)1);
-        }
-        w.Write((uint)material);
-        w.Write((uint)bone);
-        w.Write((ushort)0); w.Write((ushort)1);   // bone table header
-        w.Write((ushort)0); w.Write((ushort)0);   // its two-entry array
-        // What the rewriter copies through: bone-map size, padding, bounding boxes.
-        w.Write(0u);
-        w.Write((byte)3); w.Write(new byte[3]);
-        w.Write(Enumerable.Range(0, 128).Select(i => (byte)(i + 1)).ToArray());
-
-        long runtime = data.Length;
-        const int stack = 2 * 136;
-        long vertexAt = 68 + stack + runtime;
-        long indexAt = vertexAt + vertices.Length;
-
-        var lod = new byte[60];
-        BitConverter.TryWriteBytes(lod.AsSpan(0, 2), (ushort)0);
-        BitConverter.TryWriteBytes(lod.AsSpan(2, 2), (ushort)2);
-        BitConverter.TryWriteBytes(lod.AsSpan(52, 4), (uint)vertexAt);
-        BitConverter.TryWriteBytes(lod.AsSpan(56, 4), (uint)indexAt);
-        var body = data.ToArray();
-        lod.CopyTo(body, lods);
-
-        var file = new MemoryStream();
-        var h = new BinaryWriter(file);
-        h.Write(0x01000006u); h.Write((uint)stack); h.Write((uint)runtime);
-        h.Write((ushort)2); h.Write((ushort)1);
-        h.Write((uint)vertexAt); h.Write(0u); h.Write(0u);
-        h.Write((uint)indexAt); h.Write(0u); h.Write(0u);
-        h.Write((uint)vertices.Length); h.Write(0u); h.Write(0u);
-        h.Write((uint)indices.Length); h.Write(0u); h.Write(0u);
-        h.Write((byte)1); h.Write((byte)0); h.Write((byte)0); h.Write((byte)0);
-        var declarations = new byte[stack];
-        declarations[0] = declarations[136] = 0xFF;
-        h.Write(declarations);
-        h.Write(body);
-        h.Write(vertices);
-        h.Write(indices);
-        return file.ToArray();
     }
 }

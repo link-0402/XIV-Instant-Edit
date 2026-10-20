@@ -294,8 +294,9 @@ internal static class ResourceGraphBuilder
             if (node.Kind == ResourceKind.Model)
             {
                 node.MaterialSlots = facts.MaterialSlots;
+                node.MeshSlots = facts.MeshSlots;
                 if (node.Replacement is { ReassignsMaterials: true })
-                    references = Enumerable.Range(0, facts.MaterialSlots.Count)
+                    references = Enumerable.Range(0, node.MeshSlots.Count)
                         .Select(node.EffectiveMaterial)
                         .Where(n => !string.IsNullOrWhiteSpace(n))
                         .Distinct(StringComparer.OrdinalIgnoreCase)
