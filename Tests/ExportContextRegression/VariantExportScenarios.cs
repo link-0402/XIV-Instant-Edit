@@ -504,6 +504,14 @@ internal static class VariantExportScenarios
                 swapGroup["Options"]!.AsArray().Select(option => option!["AttributeMask"]!.GetValue<int>()).SequenceEqual([1, 2, 4, 8]),
             "accessory attribute groups: a swap that gives every variant material 1 keeps it, instead of the game's materials 2 to 4");
 
+        // Sera Yura's top: the swap kept the game's leftover VfxId on one variant.
+        var leftoverVfx = Folder("NecklaceSwapLeftoverVfx");
+        Require(AttributeGroupService.WriteAttributeGroupsForRegression(leftoverVfx, necklace, tags, masks,
+                    Imc((2, Entry(1)), (3, Entry(1)), (4, Entry(1, vfx: 4))), game) is null &&
+                ImcGroup(leftoverVfx)["DefaultEntry"]!["MaterialId"]!.GetValue<int>() == 1 &&
+                ImcGroup(leftoverVfx)["DefaultEntry"]!["VfxId"]!.GetValue<int>() == 0,
+            "accessory attribute groups: variants that differ only in their effect still get a group, with the most common effect");
+
         var plain = Folder("NecklacePlain");
         Require(AttributeGroupService.WriteAttributeGroupsForRegression(plain, necklace, tags, masks, Imc((1, Entry(1))), game) is null &&
                 ImcGroup(plain)["OnlyAttributes"]!.GetValue<bool>() &&

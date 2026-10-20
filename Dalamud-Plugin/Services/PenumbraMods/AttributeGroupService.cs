@@ -173,17 +173,29 @@ internal sealed class AttributeGroupService
             .ToList();
         if (effective.All(entry => SameImcEntry(entry, effective[0])))
             return Usable(new ImcGroupEntry(effective[0], false));
+        // Variants that differ only in their effect still get a group, with the most common one: gear often
+        // keeps a leftover VfxId from the item it was made from, and losing it is no reason to refuse the toggles.
+        if (effective.All(entry => SameImcEntry(entry, effective[0], ignoreVfx: true)))
+        {
+            var entry = effective[0].DeepClone().AsObject();
+            entry["VfxId"] = effective
+                .GroupBy(item => JsonIntFlexible(item["VfxId"]))
+                .OrderByDescending(group => group.Count())
+                .ThenBy(group => group.Key)
+                .First().Key;
+            return Usable(new ImcGroupEntry(entry, false));
+        }
         return new ImcGroupEntry(null, false,
-            "attribute_group_imc_mixed: This mod changes the materials or effects of some of this model's variants, and a part toggle group would undo that. " +
+            "attribute_group_imc_mixed: This mod changes the materials, decals or sounds of some of this model's variants, and a part toggle group would undo that. " +
             "Set up the part toggles in Penumbra instead.");
 
         static ImcGroupEntry Usable(ImcGroupEntry plan)
             => plan.Entry is not null && JsonIntFlexible(plan.Entry["MaterialId"]) is >= 1 and <= byte.MaxValue ? plan : plan with { Entry = null };
     }
 
-    private static bool SameImcEntry(JsonObject first, JsonObject second)
+    private static bool SameImcEntry(JsonObject first, JsonObject second, bool ignoreVfx = false)
         => new[] { "MaterialId", "DecalId", "VfxId", "MaterialAnimationId", "SoundId" }
-            .All(key => JsonIntFlexible(first[key]) == JsonIntFlexible(second[key]));
+            .All(key => (ignoreVfx && key == "VfxId") || JsonIntFlexible(first[key]) == JsonIntFlexible(second[key]));
 
     /// <summary> The game's IMC entries of the model's part, by variant from 0 to the file's count; null when there's no file. </summary>
     private IReadOnlyList<JsonObject>? GameImcEntries(string resolvedGamePath, AttributeModelIdentity identity)
