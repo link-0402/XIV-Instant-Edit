@@ -113,6 +113,16 @@ internal sealed record ResourceView(
 /// <summary> Pure helpers that build and classify resource views. No ImGui or Dalamud dependencies. </summary>
 internal static class ResourceViews
 {
+    /// <summary> The material row the texture row sits under in the actor's tree, or null. </summary>
+    public static ResourceView? ParentMaterial(ActorView actor, ResourceView texture)
+    {
+        foreach (var root in actor.Roots)
+            foreach (var row in root.Flattened)
+                if ((row.Kinds & ResourceKinds.Material) != 0 && row.Children.Any(child => ReferenceEquals(child, texture)))
+                    return row;
+        return null;
+    }
+
     /// <summary> Converts a snapshot node (and its children) into browser rows. </summary>
     public static ResourceView FromNode(ResourceNode node)
     {

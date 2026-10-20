@@ -179,6 +179,18 @@ These checks need the game and Explorer:
   lights up.
 - [ ] Dragging a texture row over a Mod Browser tile: the tile refuses it in red.
 
+## Editing a texture as a separate copy in On Screen (2026-10-20, pending)
+
+`Tests/ExportContextRegression` covers the plan, the write and session reuse (TextureCopyScenarios). These need the game:
+- [ ] Pick a mod texture that two materials share. ⋯ > Edit as a separate copy opens the TGA; the session
+  says "Watching; the first save makes the copy". Save: the actor redraws, only that material shows the
+  edit, and the row now shows `ie_<id>_<name>.tex` from the material's mod. The other material is unchanged.
+- [ ] In Penumbra the material's mod maps `<folder>/ie_<id>/<name>.tex` in every option that maps the material.
+- [ ] Save again: the copy changes, the original file stays as it was. Restore puts back the copied original.
+- [ ] Copy white.tex (or another Game Data texture) under a mod material: it works, and no new mod is made.
+- [ ] Under a Game Data material the item is greyed out with "Its material comes from the game".
+- [ ] Choosing the item again before the first save reopens the same session.
+
 ## Implementation validation environment
 
 The local environment uses Blender 5.2.1 LTS. The model export smoke suite fails

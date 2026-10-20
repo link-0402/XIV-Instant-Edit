@@ -8,9 +8,37 @@ namespace InstantEdit.Models;
 /// For a vanilla texture edited without an actor (from Game Files): the object whose collection
 /// gets the new mod. The session keeps no actor, so the texture needn't be one the object renders.
 /// </param>
+/// <param name="Copy">
+/// Set to edit a copy of the texture that only this material uses: the session's first save writes the
+/// copy into the material's mod under a new game path and points the material at it.
+/// </param>
 public sealed record TextureEditRequest(string GamePath, string ActualPath, string ModDirectory,
     string ModRoot, string RelativePath, int? ObjectIndex, long ActorAddress, string NewModName = "", Guid? JobId = null,
-    int? CollectionObjectIndex = null);
+    int? CollectionObjectIndex = null, TextureCopyMaterial? Copy = null);
+
+/// <summary>The material a texture copy is made for, as the mod file the actor draws it from.</summary>
+public sealed record TextureCopyMaterial(string GamePath, string ModDirectory, string ModRoot, string RelativePath);
+
+/// <summary>
+/// A texture copy that the session's first save makes. Until then the session already carries the copy's
+/// game path and mod file; this keeps the texture it was copied from and the material that will use it.
+/// </summary>
+public sealed record TextureCopyPlan
+{
+    /// <summary>The texture's game path as the actor requested it before the copy.</summary>
+    public string SourceGamePath { get; init; } = "";
+    /// <summary>The copied texture's file: a mod file on disk, or a game path for a game texture.</summary>
+    public string SourceFile { get; init; } = "";
+    public string MaterialGamePath { get; init; } = "";
+    public string MaterialRelativePath { get; init; } = "";
+    /// <summary>The material file's hash when the session opened; the first save stops if something else changed it.</summary>
+    public string MaterialHash { get; init; } = "";
+    /// <summary>The texture path the material names, and the one it names after the copy.</summary>
+    public string MaterialTexture { get; init; } = "";
+    public string CopyTexture { get; init; } = "";
+    /// <summary>The game paths the copy is mapped to: the material's new path, and its DirectX 11 form when the material asks for it.</summary>
+    public List<string> CopyGamePaths { get; init; } = [];
+}
 
 public sealed record TextureEditSession
 {
@@ -66,6 +94,8 @@ public sealed record TextureEditSession
     public List<TextureVariant> Variants { get; set; } = [];
     /// <summary>The image last dropped over this texture, kept until it is undone.</summary>
     public TextureReplacement? Replacement { get; set; }
+    /// <summary>The copy the first save makes, while that save is pending; null for every other session.</summary>
+    public TextureCopyPlan? PendingCopy { get; set; }
     public string Directory => Path.Combine(CacheRoot, "texture-edits", Id.ToString("N"));
     public string WorkingFile => Path.Combine(Directory, Path.ChangeExtension(Path.GetFileName(GamePath), ".tga"));
     public string TargetFile => Path.Combine(ModRoot, RelativePath.Replace('/', Path.DirectorySeparatorChar));

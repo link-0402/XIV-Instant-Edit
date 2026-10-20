@@ -108,6 +108,34 @@ internal sealed class TextureSessionsTab
         else TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
     }
 
+    /// <summary> Why the texture can't be edited as a copy for <paramref name="material"/>; null when it can. </summary>
+    public static string? TextureCopyBlock(ResourceView texture, ResourceView? material)
+    {
+        if (texture.SourceState is not (ResourceSourceState.GameData or ResourceSourceState.LoadedMod))
+            return "This texture has no verified source.";
+        if (material is null)
+            return "No material is listed above this texture.";
+        if (material.SourceState != ResourceSourceState.LoadedMod || material.SourceModDirectory.Length == 0 ||
+            !material.SourceRelativePath.EndsWith(".mtrl", StringComparison.OrdinalIgnoreCase))
+            return "Its material comes from the game. Save the material into a mod first.";
+        return null;
+    }
+
+    /// <summary>
+    /// Opens (or resumes) a session for a copy of the texture that only <paramref name="material"/> uses; its first
+    /// save writes the copy into the material's mod and points the material at it.
+    /// </summary>
+    public void StartTextureCopyEdit(ResourceView texture, ResourceView material, ActorView actor)
+    {
+        if (!IsTextureRow(texture) || TextureCopyBlock(texture, material) is not null || Busy.IsBusy)
+            return;
+        var request = TextureRequest(texture, actor) with
+        {
+            Copy = new TextureCopyMaterial(material.GamePath, material.SourceModDirectory, material.SourceModRootPath, material.SourceRelativePath),
+        };
+        TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
+    }
+
     private static Vector4 SessionColour(SessionState state)
         => state switch
         {

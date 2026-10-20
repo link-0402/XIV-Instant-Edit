@@ -138,7 +138,8 @@ public sealed class TextureEditService : IDisposable
                         throw new IOException("Invalid texture variant.");
                     if (s.Id == Guid.Empty || !ModPaths.IsSafeGameResourcePath(s.GamePath, ".tex") ||
                         !ModPaths.IsSafeGameResourcePath(s.RelativePath, ".tex") ||
-                        (s.NeedsMod && !ModPaths.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")))
+                        (s.NeedsMod && !ModPaths.IsSafeGameResourcePath(s.ResolvedGamePath, ".tex")) ||
+                        (s.PendingCopy is { } copy && !TextureCopies.IsSafe(copy)))
                         throw new IOException("Invalid texture session identity.");
                     TextureFiles.EnsureLocalPath(s.Directory);
                     MigrateLegacyWorkingFile(s);
@@ -256,7 +257,8 @@ public sealed class TextureEditService : IDisposable
         try
         {
             EnsureReady();
-            var blocked = SharedTextures.EditBlock(request.GamePath, string.IsNullOrEmpty(request.ModDirectory));
+            // A copy only changes the one material, so even a shared texture such as white.tex can be copied.
+            var blocked = request.Copy is null ? SharedTextures.EditBlock(request.GamePath, string.IsNullOrEmpty(request.ModDirectory)) : "";
             if (blocked.Length > 0) throw new IOException(blocked);
             if (launchEditor) ValidateEditor();
             var existing = _sessions.Values.FirstOrDefault(r => IsReusableFor(r.Session, request));
@@ -294,7 +296,7 @@ public sealed class TextureEditService : IDisposable
                 session.PixelHash = TextureFiles.PixelHash(TextureFiles.Read(pixels));
                 session.WorkingHash = TextureFiles.Hash(tga);
                 session.Paused = false;
-                session.Status = "Watching for saves";
+                session.Status = session.PendingCopy is null ? "Watching for saves" : "Watching; the first save makes the copy";
                 runtime.Enabled = true;
                 ArmWatcher(runtime);
                 Persist();
@@ -319,7 +321,21 @@ public sealed class TextureEditService : IDisposable
     /// </summary>
     internal static bool IsReusableFor(TextureEditSession session, TextureEditRequest request)
         => !session.Conflict && session.PixelHash.Length > 0 &&
-           (string.IsNullOrEmpty(request.ModDirectory)
+           (request.Copy is { } copy
+               // A copy not saved yet continues when the same texture is copied for the same material again.
+               ? session.PendingCopy is { } pending && SameCopy(session, pending, request, copy)
+               : session.PendingCopy is null && IsReusableEdit(session, request));
+
+    private static bool SameCopy(TextureEditSession session, TextureCopyPlan pending, TextureEditRequest request, TextureCopyMaterial copy)
+        => string.Equals(pending.SourceGamePath, request.GamePath, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(pending.SourceFile, string.IsNullOrEmpty(request.ModDirectory) ? PathRules.NormalizeGamePath(request.ActualPath) : request.ActualPath,
+               StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(session.ModDirectory, copy.ModDirectory, StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(pending.MaterialRelativePath, copy.RelativePath, StringComparison.OrdinalIgnoreCase) &&
+           session.ObjectIndex == request.ObjectIndex && session.ActorAddress == request.ActorAddress;
+
+    private static bool IsReusableEdit(TextureEditSession session, TextureEditRequest request)
+        => (string.IsNullOrEmpty(request.ModDirectory)
                ? session.NewModName.Length > 0 && session.JobId == request.JobId && session.GamePath == request.GamePath && session.CollectionId.HasValue &&
                  session.ObjectIndex == request.ObjectIndex && session.ActorAddress == request.ActorAddress
                : string.Equals(session.TargetFile, request.ActualPath, StringComparison.OrdinalIgnoreCase) ||
@@ -497,6 +513,7 @@ public sealed class TextureEditService : IDisposable
         {
             var s = Get(id).Session;
             if (s.NeedsMod || s.Conflict) throw new IOException("There is no safe destination to restore.");
+            if (s.PendingCopy is not null) throw new IOException("Nothing was saved yet, so the original is still in place.");
             var target = _backups.Describe(s.ModDirectory, s.RelativePath);
             var source = string.IsNullOrEmpty(s.LastBackup) ? Path.Combine(s.Directory, "original.tex")
                 : _backups.Resolve(target.Id, Path.GetFileName(s.LastBackup));

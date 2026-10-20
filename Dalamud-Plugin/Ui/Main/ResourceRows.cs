@@ -226,6 +226,17 @@ internal sealed class ResourceRows
             if (ImGui.MenuItem("Edit texture"))
                 _textureTab.StartTextureEdit(node, actor);
         }
+        // On Screen only: the copy goes into the mod of the material the actor draws.
+        if (texture && actor.Entity is not null)
+        {
+            var parent = ResourceViews.ParentMaterial(actor, node);
+            var blocked = TextureSessionsTab.TextureCopyBlock(node, parent);
+            using (ImRaii.Disabled(blocked is not null || _textureTab.Busy.IsBusy))
+                if (ImGui.MenuItem("Edit as a separate copy") && parent is not null)
+                    _textureTab.StartTextureCopyEdit(node, parent, actor);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(blocked ?? "Edit a copy only this material uses.\nSaving gives it its own path; other materials keep the original.");
+        }
         // Shown while the texture still holds an image dropped on it.
         if (texture && _textureTab.UndoableReplace(node, actor) is { Replacement: { } drop } replaced)
         {

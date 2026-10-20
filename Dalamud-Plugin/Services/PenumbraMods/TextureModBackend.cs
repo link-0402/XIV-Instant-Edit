@@ -67,6 +67,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     async Task<TextureSource> ITextureEditBackend.CaptureAsync(TextureEditRequest request, CancellationToken token)
     {
         if (!IsSafeGameResourcePath(request.GamePath, ".tex")) throw new IOException("Select a valid TEX game resource.");
+        if (request.Copy is { } copy) return await CaptureCopyAsync(request, copy, token).ConfigureAwait(false);
         var vanilla = string.IsNullOrEmpty(request.ModDirectory);
         var resolvedGamePath = vanilla ? NormalizeGamePath(request.ActualPath) : "";
         var collection = (request.ObjectIndex ?? (vanilla ? request.CollectionObjectIndex : null)) is { } index
@@ -120,6 +121,67 @@ internal sealed class TextureModBackend : ITextureEditBackend
         return new TextureSource(bytes, session);
     }
 
+    /// <summary>
+    /// Opens a texture as a copy for one material (<see cref="TextureCopies"/>). The session already has the copy's
+    /// game path and file in the material's mod; its first save writes them.
+    /// </summary>
+    private async Task<TextureSource> CaptureCopyAsync(TextureEditRequest request, TextureCopyMaterial copy, CancellationToken token)
+    {
+        var vanilla = string.IsNullOrEmpty(request.ModDirectory);
+        var materialFile = Path.Combine(copy.ModRoot, copy.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        await ValidateTextureDestinationAsync(copy.ModDirectory, copy.ModRoot, copy.RelativePath, materialFile, token, ".mtrl").ConfigureAwait(false);
+        var collection = request.ObjectIndex is { } index ? await _ipc.GetCollectionTargetAsync(index).ConfigureAwait(false) : null;
+        var actor = await _framework.RunOnFrameworkThread(() =>
+        {
+            var obj = request.ObjectIndex is { } i ? _objects[i] : null;
+            if (obj is null || obj.Address.ToInt64() != request.ActorAddress)
+                throw new IOException("The selected actor changed. Refresh the character list.");
+            return (Id: obj.GameObjectId, Name: obj.Name.ToString());
+        }).ConfigureAwait(false);
+        byte[] bytes;
+        string source;
+        if (vanilla)
+        {
+            source = NormalizeGamePath(request.ActualPath);
+            if (Path.IsPathRooted(request.ActualPath) || !IsSafeGameResourcePath(source, ".tex"))
+                throw new IOException("The texture has no verified source.");
+            bytes = await _framework.RunOnFrameworkThread(() => _data.GetFile(source)?.Data.ToArray()
+                ?? throw new IOException("The game texture could not be read.")).ConfigureAwait(false);
+        }
+        else
+        {
+            await ValidateTextureDestinationAsync(request.ModDirectory, request.ModRoot, request.RelativePath, request.ActualPath, token).ConfigureAwait(false);
+            source = request.ActualPath;
+            bytes = TextureFiles.Read(request.ActualPath);
+        }
+        var header = TextureFiles.ReadOriginal(bytes).Header;
+        var id = Guid.NewGuid();
+        var (plan, gamePath, relative) = TextureCopies.Plan(TextureFiles.Read(materialFile), copy.GamePath, copy.RelativePath,
+            request.GamePath, source, id);
+        var session = new TextureEditSession
+        {
+            Id = id, GamePath = request.GamePath, ModDirectory = copy.ModDirectory, ModRoot = copy.ModRoot, RelativePath = relative,
+            ObjectIndex = request.ObjectIndex, ActorAddress = request.ActorAddress, ActorId = actor.Id, ActorName = actor.Name,
+            CollectionId = collection?.Id, CollectionName = collection?.Name ?? "",
+            Format = header.Format, Width = header.Width, Height = header.Height, MipMaps = header.Mips > 1,
+            PendingCopy = plan,
+        };
+        // The actor must show the texture being copied, under the path the material names.
+        await ValidateLiveTextureMappingAsync(session, source, true).ConfigureAwait(false);
+        return new TextureSource(bytes, session with { GamePath = gamePath });
+    }
+
+    /// <summary>
+    /// Checks a copy's first save can go through: the material is still in its registered mod, unchanged.
+    /// Nothing is checked against the actor, which shows the original texture until the copy exists.
+    /// </summary>
+    private async Task CheckCopyAsync(TextureEditSession session, TextureCopyPlan plan, CancellationToken token)
+    {
+        var materialFile = Path.Combine(session.ModRoot, plan.MaterialRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        await ValidateTextureDestinationAsync(session.ModDirectory, session.ModRoot, plan.MaterialRelativePath, materialFile, token, ".mtrl").ConfigureAwait(false);
+        _ = TextureCopies.ReadMaterial(session.ModRoot, plan);
+    }
+
     private async Task EnsureNewTextureModNameAsync(string name, string path)
     {
         var exists = await _framework.RunOnFrameworkThread(() => _ipc.GetMods().Any(m =>
@@ -127,9 +189,11 @@ internal sealed class TextureModBackend : ITextureEditBackend
         if (exists || Directory.Exists(path) || File.Exists(path)) throw new TextureConflictException("That mod name is already in use. Start a session with a different name.");
     }
 
-    private async Task ValidateTextureDestinationAsync(string mod, string root, string relative, string file, CancellationToken token)
+    /// <param name="extension">The file's kind: a texture, or the material a texture copy is made for.</param>
+    private async Task ValidateTextureDestinationAsync(string mod, string root, string relative, string file, CancellationToken token,
+        string extension = ".tex")
     {
-        if (!IsSafeModName(mod) || !IsSafeGameResourcePath(relative, ".tex")) throw new IOException("Invalid texture destination.");
+        if (!IsSafeModName(mod) || !IsSafeGameResourcePath(relative, extension)) throw new IOException("Invalid texture destination.");
         TextureFiles.EnsureLocalPath(root);
         TextureFiles.EnsureLocalPath(file);
         if (!PathRules.IsPathWithin(file, root) || !string.Equals(Path.GetFullPath(Path.Combine(root, relative)), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
@@ -270,6 +334,16 @@ internal sealed class TextureModBackend : ITextureEditBackend
         {
             token.ThrowIfCancellationRequested();
             string backup = "";
+            if (session.PendingCopy is { } copy)
+            {
+                await CheckCopyAsync(session, copy, token).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                // The material's backup stays in the backup store; the copy has none, so Restore puts back the captured original.
+                _ = TextureCopies.Write(session.ModRoot, session.ModDirectory, session.RelativePath, copy, tex, _backups, stillCurrent);
+                session.PendingCopy = null;
+                session.MappingFingerprint = TextureMappingFingerprint(session.ModRoot, session.RelativePath);
+                return new TextureCommit(TextureFiles.Hash(tex), "", "Texture copy saved");
+            }
             if (session.NeedsMod && session.JobId is { } job && Directory.Exists(session.ModRoot))
             {
                 // Another texture of the same Painter project created the mod; this one joins it.
@@ -328,6 +402,11 @@ internal sealed class TextureModBackend : ITextureEditBackend
     async Task ITextureEditBackend.CheckAsync(TextureEditSession session, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        if (session.PendingCopy is { } copy)
+        {
+            await CheckCopyAsync(session, copy, token).ConfigureAwait(false);
+            return;
+        }
         // The first save of a vanilla texture checks its new mod's name while creating it.
         if (session.NeedsMod)
         {
@@ -343,6 +422,8 @@ internal sealed class TextureModBackend : ITextureEditBackend
     {
         if (session.NeedsMod)
             throw new IOException("This texture's mod hasn't been created. Discard the session and open the texture again.");
+        if (session.PendingCopy is not null)
+            throw new IOException("This texture's copy hasn't been made. Discard the session and make the copy again.");
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -489,6 +570,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     {
         TextureFiles.ValidateCommit(tex, session);
         if (session.NeedsMod) throw new IOException("The texture mod has not been created yet.");
+        if (session.PendingCopy is not null) throw new IOException("Save the texture itself once first, so its copy exists.");
         await _exportGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
