@@ -72,6 +72,7 @@ internal static class ChangelogCatalog
             Highlight("Quick Actions: 'Body physics' builds customizable body physics, optimized for your character."),
             Entry("Start from scratch or any other physics preset you're already using, matched for your character's skeleton.", 1),
             Entry("Tune each area with plain sliders, both sides at once, and preview it on your character before you save.", 1),
+            Entry("Add areas back after removing them: the chest, butt, thighs and other jiggle your skeleton has bones for, and the game's own skirt, tail, earrings and hair.", 1),
             Entry("Save under a name of your choice, above your other mods. Each name is its own mod, so you can keep several and switch in Penumbra. 'Loaded now' opens whichever is on.", 1),
             Entry("A spring that doesn't pull a part back to where it rests is named for what it does, like Lift or Pull down, instead of Firmness.", 1),
             Entry("'Fit to my body' measures your body standing still, with your body mod, Customize+ and bust size, and sizes the arms, legs and collision tips that bump into each other to match your character's shape. It also places breast tips: on the nipple, or in the middle of the breast so your arms bump into all of it.", 1),

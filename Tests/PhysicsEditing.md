@@ -171,3 +171,10 @@ The "My physics mod" starting point is gone; "Loaded now" opens whichever saved 
 - [x] Turn mine off: every mod you saved is off and the message names the ones that were on.
   (XIV Bridge tests/instant-edit/physics/20, 2026-10-15: both saved mods off; "XIVBridgeTest IE
   Physics is off. Your other physics mods apply again." names only the one that was on.)
+
+## Adding areas back
+
+- [ ] Untick the skirt (or delete it), save, and reopen with Loaded now: "+ Skirt" is listed under
+  Add an area. Click it: the skirt comes back with its thigh shapes, and the preview swings it again.
+- [ ] Same for the tail on a Miqo'te or Au Ra, and for the chest or butt: the chest and other jiggle
+  areas are built on your skeleton, the skirt, tail, earrings and hair are the game's own.

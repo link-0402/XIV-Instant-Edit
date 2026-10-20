@@ -84,7 +84,8 @@ internal sealed partial class PhysicsWindow
 
         ImGui.Spacing();
         Widgets.SectionHeader("Add an area");
-        Tip("Areas your skeleton has bones for that this file doesn't move yet, or one copied from another file.");
+        Tip("Areas your skeleton has bones for that this file doesn't move yet, the game's own ones such as the skirt or tail, " +
+            "or one copied from another file.");
         if (target is { } found)
         {
             foreach (var kind in PhysicsTemplates.Addable(current.File, found.Character.Skeleton))
@@ -99,6 +100,23 @@ internal sealed partial class PhysicsWindow
                     });
                 Tip($"New physics for {string.Join(", ", PhysicsTemplates.Bones(kind, found.Character.Skeleton).Select(bone => bone.Name))}, " +
                     "measured on your skeleton. Tune it, then preview.");
+            }
+            // The game's own skirt, tail, earrings and hair, which have no template: copied from the race's file.
+            if (service.GameFile(current.Race) is { } game)
+            {
+                var gameLabels = PhysicsAreas.Labels(game);
+                foreach (var index in PhysicsTemplates.AddableFromGame(current.File, game))
+                {
+                    using var id = ImRaii.PushId($"game-{index}");
+                    var label = gameLabels[index];
+                    if (ImGui.Selectable($"+ {label}##add-game"))
+                    {
+                        Change(current, () => selected = current.ImportArea(game, index), $"Add {label}");
+                        Say(FeedbackSeverity.Info, $"Added the game's {label.ToLowerInvariant()}.");
+                    }
+                    Tip($"The game's own physics for {string.Join(", ", PhysicsAreas.RootBones(game.Simulators[index]).Distinct())}, " +
+                        "with the shapes it collides with.");
+                }
             }
         }
         using (ImRaii.Disabled(Busy))

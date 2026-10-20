@@ -467,6 +467,29 @@ internal static class PhysicsScenarios
             "physics: the search ends at the first empty GPose slot, as Penumbra's does");
     }
 
+    /// <summary> Areas without a template that a file lost come back from the game's own file, shapes included. </summary>
+    private static void CheckGameAreas(PhybFile game)
+    {
+        var labels = PhysicsAreas.Labels(game);
+        Require(PhysicsTemplates.AddableFromGame(game, game).Count == 0,
+            "physics: the game's own file offers none of its areas again");
+        var document = new PhysicsDocument(PhybFile.Parse(game.ToBytes()), new PhysicsSource(PhysicsSourceKind.Vanilla, "vanilla", "test"), 801);
+        var skirt = labels.ToList().IndexOf("Skirt");
+        document.RemoveArea(skirt);
+        document.File.Simulators[labels.ToList().IndexOf("Tail") - 1].Excluded = true;
+        // The skirt's shapes stay in the file, so the copy uses them rather than adding renamed twins.
+        var shapes = document.File.Collision.Names.Count();
+        var offered = PhysicsTemplates.AddableFromGame(document.File, game).Select(index => labels[index]).ToList();
+        Require(offered.SequenceEqual(["Skirt", "Tail"]),
+            $"physics: a file without its skirt and with the tail turned off is offered the game's skirt and tail, not the chest (got {string.Join(", ", offered)})");
+        var added = document.ImportArea(game, skirt);
+        Require(PhysicsAreas.Classify(document.File.Simulators[added]).Label == "Skirt" &&
+                document.File.Collision.Names.Count() == shapes &&
+                PhysicsValidation.Check(document.Output(), null).All(issue => issue.Level != PhysicsIssueLevel.Error) &&
+                PhysicsTemplates.AddableFromGame(document.File, game).Select(index => labels[index]).SequenceEqual(["Tail"]),
+            "physics: adding the game's skirt reuses the file's matching shapes, passes the checks and leaves only the tail offered");
+    }
+
     /// <summary> The walk and run the builder plays in GPose are the game's own loops. </summary>
     private static void CheckMotions(Lumina.GameData game)
     {
@@ -509,6 +532,7 @@ internal static class PhysicsScenarios
         Require(chest.Attracts.Any(a => a.Chain == left && a.Node == 1 && a.Bone.Text == "j_sebo_b" && Vector3.Distance(a.Offset, GameChestSpring) < 1e-4f) &&
                 MathF.Abs(chest.Chains[left].LastBoneOffset.Length() - 0.145f) < 1e-3f,
             "physics: the game's Miqo'te breasts pull a 14.5 cm tip toward the spring point new chests are checked against");
+        CheckGameAreas(c0801);
         _ = skeleton;
         PhysicsFitScenarios.CheckGameBody(game);
         PhysicsTuneScenarios.CheckGame(game);

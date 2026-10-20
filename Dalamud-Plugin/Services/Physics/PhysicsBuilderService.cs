@@ -211,6 +211,32 @@ internal sealed class PhysicsBuilderService : IDisposable
         }
     }
 
+    private readonly Dictionary<ushort, PhybFile?> gameFiles = [];
+
+    /// <summary>
+    /// The game's own body physics for a race, which areas such as the skirt or tail are copied from;
+    /// null when the game has none or it can't be read. Read once per race.
+    /// </summary>
+    public PhybFile? GameFile(ushort race)
+    {
+        lock (gameFiles)
+        {
+            if (gameFiles.TryGetValue(race, out var cached))
+                return cached;
+            PhybFile? file = null;
+            try
+            {
+                if (data.GetFile(PhysicsPaths.BodyPhysics(race))?.Data is { } bytes)
+                    file = PhybFile.Parse(bytes);
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or ArgumentException)
+            {
+                log.Warning(e, $"The game's body physics for c{race:D4} can't be read.");
+            }
+            return gameFiles[race] = file;
+        }
+    }
+
     /// <summary> Reads and parses a physics file from disk. </summary>
     public static async Task<PhybFile> ReadFileAsync(string path)
     {

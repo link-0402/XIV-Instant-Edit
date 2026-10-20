@@ -28,6 +28,23 @@ internal static class PhysicsTemplates
                                                  bones.All(bone => !moved.Contains(bone.Name))).ToList();
     }
 
+    /// <summary>
+    /// The game's own areas that have no template, such as the skirt, tail or earrings, that no simulator
+    /// of the file moves yet: indices of <paramref name="game"/>'s simulators, copied as they are.
+    /// </summary>
+    public static IReadOnlyList<int> AddableFromGame(PhybFile file, PhybFile game)
+    {
+        var moved = file.Simulators.Where(s => !s.Excluded).SelectMany(PhysicsAreas.RootBones).ToHashSet(StringComparer.Ordinal);
+        var result = new List<int>();
+        for (var i = 0; i < game.Simulators.Count; i++)
+        {
+            var info = PhysicsAreas.Classify(game.Simulators[i]);
+            if (info.Bones.Count > 0 && info.Kinds.Any(kind => kind.Template is null) && info.Bones.All(bone => !moved.Contains(bone)))
+                result.Add(i);
+        }
+        return result;
+    }
+
     /// <summary> A new simulator for an area, or null when the skeleton lacks its bones. </summary>
     public static PhybSimulator? Build(PhysicsAreaKind kind, PhysicsSkeleton skeleton)
     {
