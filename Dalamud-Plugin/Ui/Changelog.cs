@@ -98,6 +98,7 @@ internal static class ChangelogCatalog
             Entry("Timeline: tick Keep on a face to keep it on after the expression ends, until another one replaces it, like the Permanent Facial Expressions mod does. A moving face, like Panting Face's, keeps looping for about 18 minutes, then returns to neutral.", 1),
             Entry("Animations: the listener now finds emotes your race plays from another race's files, like a Miqo'te dancing with a Midlander male's Popotostep mod."),
             Entry("Animations: running, sprinting, jumping, side steps and turning now show up on their own, not just the walk, so you can open each in the timeline."),
+            Entry("Animations: animations saved by other tools, like PSO2 ports, now open too."),
             Entry("Animations: saving no longer pins the bones an animation leaves alone to the skeleton it was read on, so they follow each player's own skeleton like the original."),
             Entry("Animations: Posing skeletons, like YAS Posing, are no longer offered as an animation's skeleton or as a repair target."),
             Entry("Timeline: the Bones window has the IVCS groin bones, and more bones have plain names."),
