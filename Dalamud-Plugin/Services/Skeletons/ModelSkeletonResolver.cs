@@ -124,8 +124,9 @@ internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModSe
     /// <summary>
     /// The deformer that reshapes a model of <paramref name="modelRace"/> for <paramref name="race"/>
     /// (the local player's race when null), from the <c>human.pbd</c> the local player's collection
-    /// loads, so skeleton mods' deformers apply. The game's file without a local player. A problem
-    /// instead when the race is unknown or the file can't reshape the model's race for it.
+    /// loads, so skeleton mods' deformers apply. The game's file without a local player. Races on
+    /// other branches of the race tree go through the race both descend from, as TexTools converts
+    /// them. A problem instead when the race is unknown or the file can't reshape the model's race for it.
     /// </summary>
     public async Task<(RacialDeformer? Deformer, ushort Race, string? Problem)> RacialDeformerForPlayerAsync(ushort modelRace, ushort? race,
         CancellationToken token)
@@ -141,7 +142,7 @@ internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModSe
         {
             var collection = objectIndex >= 0 ? await penumbra.GetCollectionTargetAsync(objectIndex) : null;
             var pbd = await ReadAsync(collection?.Id, RacialDeformer.GamePath, token);
-            return (RacialDeformer.Create(pbd, race.Value, modelRace), race.Value, null);
+            return (RacialDeformer.Create(pbd, race.Value, modelRace, throughCommonAncestor: true), race.Value, null);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)

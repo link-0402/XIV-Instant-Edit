@@ -133,7 +133,8 @@ def request_deformer(model_race: int, race: int, port: int | None = None) -> tup
     if status == 404 and response.get("code") == "endpoint_not_found":
         raise ValueError("the plugin is too old for this tool; update XIV Instant Edit")
     if status == 422 and "not an ancestor" in str(response.get("error")):
-        # Each race's deformer builds on its parent race's: c0201 reaches c0801, never the other way.
+        # The plugin goes through the race both descend from (c1801 to c0801 through c0201); older
+        # plugins and broken race trees still refuse races off the model race's own branch.
         target = RACE_LABELS.get(race, "that race") if race else "your character's race"
         raise ValueError(f"the game can't reshape c{model_race:04d} models for {target}")
     if not 200 <= status < 300:

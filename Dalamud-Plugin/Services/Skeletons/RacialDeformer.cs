@@ -28,6 +28,15 @@ internal sealed class RacialDeformer
         public Affine Then(Affine after)
             => new(Row(after.X, this), Row(after.Y, this), Row(after.Z, this));
 
+        /// <summary> The transform that undoes this one; identity when it can't be undone (a flattened bone). </summary>
+        public Affine Inverse()
+        {
+            var m = new Matrix4x4(X.X, X.Y, X.Z, X.W, Y.X, Y.Y, Y.Z, Y.W, Z.X, Z.Y, Z.Z, Z.W, 0, 0, 0, 1);
+            if (!Matrix4x4.Invert(m, out var i))
+                return Identity;
+            return new(new Vector4(i.M11, i.M12, i.M13, i.M14), new Vector4(i.M21, i.M22, i.M23, i.M24), new Vector4(i.M31, i.M32, i.M33, i.M34));
+        }
+
         private static Vector4 Row(Vector4 row, Affine m) => new(
             row.X * m.X.X + row.Y * m.Y.X + row.Z * m.Z.X,
             row.X * m.X.Y + row.Y * m.Y.Y + row.Z * m.Z.Y,
@@ -48,8 +57,13 @@ internal sealed class RacialDeformer
 
     public Affine For(string bone) => _matrices.TryGetValue(bone, out var matrix) ? matrix : Affine.Identity;
 
-    /// <summary> The deformer for a model of race <paramref name="modelRace"/> worn by <paramref name="skeletonRace"/> (codes like 801). </summary>
-    public static RacialDeformer Create(byte[] pbd, int skeletonRace, int modelRace)
+    /// <summary>
+    /// The deformer for a model of race <paramref name="modelRace"/> worn by <paramref name="skeletonRace"/> (codes like 801).
+    /// The game only reshapes a model for races below its own in the tree; with <paramref name="throughCommonAncestor"/>
+    /// any other race works too, as in TexTools' race conversion: the model's chain is undone back to the
+    /// nearest race both descend from, then the skeleton race's chain applies (c1801 to c0801 through c0201).
+    /// </summary>
+    public static RacialDeformer Create(byte[] pbd, int skeletonRace, int modelRace, bool throughCommonAncestor = false)
     {
         if (skeletonRace == modelRace)
             return None;
@@ -89,21 +103,56 @@ internal sealed class RacialDeformer
             return deformer >= 0 && deformer < entries.Length ? deformer : null;
         }
 
-        var current = Index(skeletonRace);
-        var result = Read(pbd, entries[current].Offset);
-        for (var guard = 0; guard < count; guard++)
+        // An entry and each race above it, nearest first.
+        List<int> Line(int entry)
         {
-            if (Parent(current) is not { } parent)
-                throw new InvalidDataException($"Race {modelRace:D4} is not an ancestor of {skeletonRace:D4} in the racial deformer file.");
-            if (entries[parent].Race == modelRace)
-                return new RacialDeformer(result);
-            // The parent's matrices bring the model to the parent race first; the matrices so far follow.
-            foreach (var (bone, matrix) in Read(pbd, entries[parent].Offset))
-                if (result.TryGetValue(bone, out var existing))
-                    result[bone] = matrix.Then(existing);
-            current = parent;
+            var line = new List<int> { entry };
+            while (Parent(line[^1]) is { } parent)
+            {
+                if (line.Count > count)
+                    throw new InvalidDataException("The racial deformer tree has a cycle.");
+                line.Add(parent);
+            }
+            return line;
         }
-        throw new InvalidDataException("The racial deformer tree has a cycle.");
+
+        // The matrices that move a model of the ancestor's race onto the entry's race.
+        Dictionary<string, Affine> Chain(int entry, int ancestor)
+        {
+            if (entry == ancestor)
+                return new Dictionary<string, Affine>(StringComparer.Ordinal);
+            var result = Read(pbd, entries[entry].Offset);
+            for (var current = Parent(entry); current is { } parent && parent != ancestor; current = Parent(parent))
+            {
+                // The parent's matrices bring the model to the parent race first; the matrices so far follow.
+                foreach (var (bone, matrix) in Read(pbd, entries[parent].Offset))
+                    if (result.TryGetValue(bone, out var existing))
+                        result[bone] = matrix.Then(existing);
+            }
+            return result;
+        }
+
+        var skeleton = Index(skeletonRace);
+        var skeletonLine = Line(skeleton);
+        if (skeletonLine.FindIndex(entry => entries[entry].Race == modelRace) is var ancestor and > 0)
+            return new RacialDeformer(Chain(skeleton, skeletonLine[ancestor]));
+        var notAncestor = new InvalidDataException($"Race {modelRace:D4} is not an ancestor of {skeletonRace:D4} in the racial deformer file.");
+        if (!throughCommonAncestor)
+            throw notAncestor;
+
+        var model = Index(modelRace);
+        var common = Line(model).FirstOrDefault(skeletonLine.Contains, -1);
+        if (common < 0)
+            throw notAncestor;
+        var down = Chain(skeleton, common);
+        var up = Chain(model, common);
+        var combined = new Dictionary<string, Affine>(StringComparer.Ordinal);
+        foreach (var bone in up.Keys.Union(down.Keys))
+        {
+            var back = up.TryGetValue(bone, out var undo) ? undo.Inverse() : Affine.Identity;
+            combined[bone] = back.Then(down.TryGetValue(bone, out var matrix) ? matrix : Affine.Identity);
+        }
+        return new RacialDeformer(combined);
     }
 
     private static Dictionary<string, Affine> Read(byte[] pbd, int offset)

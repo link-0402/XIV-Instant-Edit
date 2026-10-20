@@ -107,6 +107,18 @@ internal static class RacialScalingScenarios
         Require(chained.For("j_kubi").Point(Vector3.One) == new Vector3(2, 3, 2) &&
                 chained.For("j_sebo_c").Point(Vector3.One) == new Vector3(1.5f, 2.25f, 1.5f),
             "racial scaling: a chain applies the oldest ancestor's matrices first");
+        Reject(() => RacialDeformer.Create(pbd, 201, 801),
+            "racial scaling: the game's way, a race never reshapes its descendants' models");
+        static bool Near(Vector3 a, Vector3 b) => Vector3.Distance(a, b) < 1e-5f;
+        // c0801's chain (c0201's, then c0801's) undone back to c0101, then c1101's (×0.5) applies.
+        var across = RacialDeformer.Create(pbd, 1101, 801, throughCommonAncestor: true);
+        Require(Near(across.For("j_kubi").Point(new Vector3(2, 3, 2)), new Vector3(0.5f)) &&
+                Near(across.For("j_sebo_c").Point(new Vector3(1.5f, 2.25f, 1.5f)), Vector3.One) &&
+                across.BoneCount == 2,
+            "racial scaling: another branch's model goes back to the race both descend from, then down");
+        var up = RacialDeformer.Create(pbd, 201, 801, throughCommonAncestor: true);
+        Require(Near(up.For("j_kubi").Point(new Vector3(1, 2, 1)), Vector3.One),
+            "racial scaling: a descendant's model is undone back to its ancestor's shape");
         var source = new RacialScalingSource(801, pbd);
         Require(source.For("chara/equipment/e6001/model/c0801e6001_top.mdl") is null &&
                 source.For("chara/weapon/w0101/obj/body/b0001/model/w0101b0001.mdl") is null &&
