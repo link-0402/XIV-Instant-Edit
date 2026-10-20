@@ -803,6 +803,15 @@ internal sealed class TimelineEditor
         return RemoveRange(frame, TimelineSnap.Round(cuts.PartEnd(part, Document.Length)));
     }
 
+    /// <summary>Keeps only output frames <paramref name="from"/> up to <paramref name="to"/>, as one undo step (see <see cref="CutEdits.KeepRange"/>).</summary>
+    public bool KeepOnly(int from, int to)
+    {
+        if (!Cutting(CutEdits.KeepRange(Document, from, to, out var removed), removed))
+            return false;
+        Playhead = 0;
+        return true;
+    }
+
     /// <summary>Removes the selected part, as one undo step.</summary>
     public bool RemoveSelectedPart()
     {

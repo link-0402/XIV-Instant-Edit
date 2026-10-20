@@ -44,6 +44,7 @@ Scenarios.Run(() => EditAgainFixture.Run(Check));
 Scenarios.Run(() => TimelineToolsFixture.Run(Check, Reject));
 Scenarios.Run(() => MotionCutFixture.Run(Check, Reject));
 Scenarios.Run(() => CutEditsFixture.Run(Check, Reject));
+Scenarios.Run(() => PoseMatchFixture.Run(Check));
 Scenarios.Run(() => SoundCutFixture.Run(Check, Reject));
 Scenarios.Run(() => BlenderMotionFixture.Run(Check, Reject));
 Scenarios.Run(() => MotionReplacementFixture.Run(Check, Reject));

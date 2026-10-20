@@ -292,6 +292,11 @@ internal static class TimelineWindowViewsFixture
         check(TimelineWindowViews.LiveHint(false) == "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too." &&
               TimelineWindowViews.LiveHint(true) == "Live shows the motion. Sounds and effects keep their old timing until Preview.", "live hints");
         texts.AddRange([TimelineWindowViews.LiveHint(false), TimelineWindowViews.LiveHint(true)]);
+        check(TimelineWindowViews.MatchText(new PoseMatch(120, .43f, 2.06f), 20) == "Same pose and motion as frame 20: 0.4 deg apart, worst bone 2.1 deg." &&
+              TimelineWindowViews.KeepLoopTip(20, 120) == "Keeps frames 20 to 120, then the loop starts again. Removes the rest.",
+            "pose match texts");
+        texts.AddRange([TimelineWindowViews.MatchText(new PoseMatch(1, 1, 1), 0), TimelineWindowViews.MatchHint, TimelineWindowViews.KeepLoop,
+            TimelineWindowViews.KeepLoopTip(1, 2)]);
         // A loop that arrives slow and leaves fast (the TikTok dance) gets its start eased in.
         check(TimelineWindowViews.JumpText(.19f, 1.61f) == "The loop starts again faster than it ends." &&
               TimelineWindowViews.JumpText(2, 1) == "The loop starts again slower than it ends." &&

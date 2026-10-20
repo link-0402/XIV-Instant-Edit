@@ -1443,6 +1443,22 @@ Spec: docs/superpowers/specs/2026-10-14-timeline-cuts-and-loop-seams-design.md. 
   you can open again" line; the second save keeps the cut and the song stays in step. Edit again then
   shows the song's whole file chosen as "Cut with the motion", and saving cuts it once.
 
+## Pose matches on the clip band (pending)
+
+Paused, the clip band marks the frames that play the playhead's pose the same way (every bone within a
+mean 1 deg and worst 5 deg, over the frame and two either side), for finding a clean loop inside a
+clip. Code: Services/Animations/Motion/PoseMatches.cs, Ui/Timeline/TimelineClipBand.cs.
+
+- [ ] 1 Open a dance that repeats a move (the TikTok dance): paused, green marks show on the clip band
+  where the playhead's moment comes back; none while it plays or while you scrub, and they move when you
+  step the playhead. No hitch when stepping with the arrow keys.
+- [ ] 2 Hover a mark: "Same pose and motion as frame N: x deg apart, worst bone y deg." Click it: the
+  playhead jumps there and the marks follow.
+- [ ] 3 Right-click a mark, Keep only this loop: the clip keeps the frames between the playhead and the
+  mark (one undo step), and the seam badge says Loops cleanly or close. Preview: the move loops with no pop.
+- [ ] 4 Tolerance: on a few real dances, are marks missing where you see a repeat, or shown where the
+  pose visibly differs? (PoseMatches.MeanDegrees / WorstDegrees.)
+
 ## Motion from Blender (pending)
 
 Sending a clip's motion from the Timeline to Blender and bringing the edited action back as the

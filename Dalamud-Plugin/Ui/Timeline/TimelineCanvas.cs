@@ -18,6 +18,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     SoundFiles soundFiles, TimelineTexts texts, ShortcutKeys keys)
 {
     private const string CanvasMenu = "##timeline-canvas-menu";
+    private const string MatchMenu = "##timeline-match-menu";
 
     private static readonly string[] LaneGlyphs = [.. TimelineUi.LaneIcons.Select(icon => icon.ToIconString())];
     // Offset, amplitude and pose layers.
@@ -34,6 +35,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     private bool rightPressed;
     private TimelineHit menuHit;
     private int menuFrame;
+    // The pose match a right-click opened its menu on, and the playhead it matched then.
+    private (PoseMatch Match, int Playhead)? menuMatch;
     private TimelineLayout? groupLayout;
     private readonly List<GroupSpan> groupSpans = [];
     private readonly Dictionary<long, string> tickLabels = [];
@@ -89,6 +92,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         DrawTimeline(current, origin, area, geometry, hit, hovered);
         DrawTooltip(current, hit, hovered && !active, readOnly);
         DrawCanvasMenu(current, readOnly);
+        DrawMatchMenu(current, readOnly);
     }
 
     private void ClampScroll(TimelineEditor current, float row, float ruler, float height) =>
@@ -143,7 +147,13 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         {
             rightPressed = false;
             // A click, not a drag: the delta stays zero below the drag threshold.
-            if (hovered && current.Gesture == TimelineGesture.None && hit.Part != TimelinePart.None &&
+            if (hovered && current.Gesture == TimelineGesture.None && ImGui.GetMouseDragDelta(ImGuiMouseButton.Right) == Vector2.Zero &&
+                clipBand.MarkAt(io.MousePos) is { } match)
+            {
+                menuMatch = (match, current.Playhead);
+                ImGui.OpenPopup(MatchMenu);
+            }
+            else if (hovered && current.Gesture == TimelineGesture.None && hit.Part != TimelinePart.None &&
                 ImGui.GetMouseDragDelta(ImGuiMouseButton.Right) == Vector2.Zero)
             {
                 menuHit = hit;
@@ -177,6 +187,12 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         if (clipBand.OnSeamBadge(io.MousePos))
         {
             current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+            return;
+        }
+        // A pose match's mark moves the playhead to it, which then marks the frames matching that one.
+        if (clipBand.MarkAt(io.MousePos) is { } match)
+        {
+            current.Playhead = match.Frame;
             return;
         }
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly &&
@@ -532,6 +548,16 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                 ImGui.TextColored(Theme.Hint, "Click to pick this bone. Ctrl+click adds it.");
             return;
         }
+        if (clipBand.MarkAt(ImGui.GetIO().MousePos) is { } match)
+        {
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            if (!Widgets.HoverDelay($"pose-match:{current.Playhead}:{match.Frame}"))
+                return;
+            using var tooltip = ImRaii.Tooltip();
+            ImGui.TextUnformatted(TimelineWindowViews.MatchText(match, current.Playhead));
+            ImGui.TextColored(Theme.Hint, readOnly ? "Click to go here." : TimelineWindowViews.MatchHint);
+            return;
+        }
         if (TimelineClipBand.DrawTooltip(hit, readOnly))
             return;
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
@@ -611,6 +637,21 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             TimelinePart.LayerFadeOut => "Drag to change how long it fades out.",
             _ => "Drag to move it with its keys.",
         });
+    }
+
+    /// <summary> A pose match's right-click menu: keep only the frames from the playhead to it, or go to it. </summary>
+    private void DrawMatchMenu(TimelineEditor current, bool readOnly)
+    {
+        using var popup = ImRaii.Popup(MatchMenu);
+        if (!popup.Success || menuMatch is not { } chosen)
+            return;
+        int from = Math.Min(chosen.Playhead, chosen.Match.Frame), to = Math.Max(chosen.Playhead, chosen.Match.Frame);
+        if (ImGui.MenuItem(TimelineWindowViews.KeepLoop, "", false, !readOnly))
+            current.KeepOnly(from, to);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(TimelineWindowViews.KeepLoopTip(from, to));
+        if (ImGui.MenuItem($"Go to frame {chosen.Match.Frame}"))
+            current.Playhead = chosen.Match.Frame;
     }
 
     /// <summary> The right-click menu: actions on the event under the pointer, or adds and the length at that frame. </summary>

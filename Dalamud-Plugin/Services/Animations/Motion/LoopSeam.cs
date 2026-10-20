@@ -105,13 +105,14 @@ internal static class LoopSeam
     }
 
     /// <summary>The clip's length in whole timeline frames.</summary>
-    private static int Frames(MotionClip clip) => Math.Max(1, (int)Math.Round(clip.Duration * TimelineDocument.Fps));
+    internal static int Frames(MotionClip clip) => Math.Max(1, (int)Math.Round(clip.Duration * TimelineDocument.Fps));
 
-    private static int[] Tracked(MotionClip clip) =>
+    /// <summary>The bones measured: the clip's own tracks, or every bone when it has none recorded.</summary>
+    internal static int[] Tracked(MotionClip clip) =>
         clip.SourceTracks.IsDefaultOrEmpty ? [.. Enumerable.Range(0, clip.Bones)] : [.. clip.SourceTracks.Select(t => (int)t).Where(t => t < clip.Bones)];
 
     /// <summary>The <paramref name="bones"/>' rotations at a whole timeline frame, between the samples around it.</summary>
-    private static Quaternion[] Rotations(MotionClip clip, int frame, int[] bones)
+    internal static Quaternion[] Rotations(MotionClip clip, int frame, int[] bones)
     {
         var at = clip.Duration <= 0 ? 0 : Math.Clamp(frame / (double)TimelineDocument.Fps / clip.Duration, 0, 1) * (clip.Samples - 1);
         if (Math.Abs(at - Math.Round(at)) < 1e-4)

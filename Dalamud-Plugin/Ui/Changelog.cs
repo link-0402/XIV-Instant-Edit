@@ -40,6 +40,7 @@ internal static class ChangelogCatalog
             Entry("Change the animation's length. Its sounds and effects can move with it.", 1),
             Entry("Cut the animation like a video: end it at any frame or remove a part. The parts blend into each other so nothing pops.", 1),
             Entry("Fix loop smooths a loop that stalls or jumps when it starts over, like many dances.", 1),
+            Entry("Paused, the clip band marks every frame that repeats the playhead's pose and motion. Right-click a mark to keep only that loop.", 1),
             Entry("Sounds that play across a cut can be cut with it, so music stays in step.", 1),
             Entry("See and change the file a sound or effect plays, such as a music library's sound/lolo.scd.", 1),
             Entry("Saved cuts and lengths stay editable: Edit again brings them back.", 1),

@@ -613,6 +613,18 @@ internal static partial class TimelineWindowViews
         _ => "Loops cleanly",
     };
 
+    /// <summary>A pose match's tooltip on the clip band: the frame it repeats and how closely.</summary>
+    public static string MatchText(PoseMatch match, int playhead) => string.Create(CultureInfo.InvariantCulture,
+        $"Same pose and motion as frame {playhead}: {match.MeanAngle:0.0} deg apart, worst bone {match.WorstAngle:0.0} deg.");
+
+    /// <summary>Under a pose match's tooltip.</summary>
+    public const string MatchHint = "Click to go here. Right-click to keep only this loop.";
+
+    /// <summary>A pose match's right-click menu item, and its tooltip: the frames it keeps, the later one playing the first again.</summary>
+    public const string KeepLoop = "Keep only this loop";
+
+    public static string KeepLoopTip(int from, int to) => $"Keeps frames {from} to {to}, then the loop starts again. Removes the rest.";
+
     /// <summary>The jump a join or the seam blends away: the pose gap and the speeds on both sides.</summary>
     public static string GapText(JoinGap gap) => string.Create(CultureInfo.InvariantCulture,
         $"Pose gap {gap.MeanAngle:0.0} deg{(gap.WorstBone.Length > 0 ? string.Create(CultureInfo.InvariantCulture, $", worst {gap.WorstBone} {gap.WorstAngle:0.0} deg") : "")}. " +

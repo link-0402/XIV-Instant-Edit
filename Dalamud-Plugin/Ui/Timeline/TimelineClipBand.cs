@@ -11,6 +11,7 @@ namespace InstantEdit.Ui.Timeline;
 /// it keeps and a line of how fast the motion moves, the blends where parts join, the loop seam's,
 /// and on the ruler how many frames each cut took out. Its right-click menu cuts at the pointer, and
 /// the seam's badge at its end selects the seam. The loop seam is measured here for the cut panel too.
+/// While the clip is paused it marks the frames that play the playhead's pose the same way, for finding a loop.
 /// </summary>
 internal sealed class TimelineClipBand(TimelineSession session, MotionDecode decode)
 {
@@ -27,6 +28,13 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     private SeamReport? outputSeam;
     // Where the seam's badge was drawn last, in screen pixels: a click there selects the seam.
     private (Vector2 Min, Vector2 Max)? seamBadge;
+    // The motion as the cuts play it, sampled for pose matches once per output motion; the frames playing
+    // the playhead's pose the same way, for the samples and playhead they were found for; and where their
+    // marks were drawn last, in screen pixels.
+    private (MotionClip Motion, Quaternion[][] Poses)? matchPoses;
+    private (Quaternion[][] Poses, int Playhead, IReadOnlyList<PoseMatch> Found)? matches;
+    private readonly List<(float X, PoseMatch Match)> marks = [];
+    private (float Top, float Bottom) markBand;
 
     /// <summary>The clip band's height for <paramref name="doc"/>: none on an expression's timeline, which is never cut.</summary>
     public static float Height(TimelineDocument doc, float row) => doc.Expression ? 0 : row * 1.5f;
@@ -34,6 +42,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     public void Draw(ImDrawListPtr drawList, TimelineEditor current, TimelineGeometry geometry, Vector2 min, Vector2 max,
         float trackLeft, TimelineHit hit)
     {
+        marks.Clear();
         if (geometry.Clip <= 0)
             return;
         var doc = current.Document;
@@ -115,6 +124,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
                 TimelineUi.U32(Theme.WithAlpha(Theme.Accent, chosen ? .6f : .35f)));
             drawList.AddLine(new Vector2(TimelineUi.Crisp(full), barTop), new Vector2(TimelineUi.Crisp(full), barBottom), TimelineUi.U32(Theme.Accent), line);
         }
+        DrawMatches(drawList, current, max, trackLeft, barTop, barBottom, line);
         DrawDecodeState(drawList, max, top, bottom);
         DrawSeamBadge(drawList, current, max, trackLeft, top, bottom);
         drawList.PopClipRect();
@@ -151,6 +161,65 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
                 drawList.AddLine(from, point, colour, line);
             previous = point;
         }
+    }
+
+    /// <summary>
+    /// The frames playing the playhead's pose the same way (see <see cref="PoseMatches"/>), in the motion as
+    /// the cuts play it; null while the clip plays, during a drag, or before its motion is read. The motion
+    /// is sampled once per cut and length (<see cref="MotionDecode.OutputMotion"/> keeps it), and searched once per playhead.
+    /// </summary>
+    public IReadOnlyList<PoseMatch>? Matches(TimelineEditor current)
+    {
+        if (current.Playing || current.Gesture != TimelineGesture.None || current.Document.Expression ||
+            session.Source is not { Standalone: false } loaded || decode.DecodedPose(loaded) is not { } decoded)
+            return null;
+        var motion = decode.OutputMotion(current, decoded);
+        if (matchPoses is not { } sampled || !ReferenceEquals(sampled.Motion, motion))
+            matchPoses = sampled = (motion, PoseMatches.Sample(motion));
+        if (matches is { } cached && ReferenceEquals(cached.Poses, sampled.Poses) && cached.Playhead == current.Playhead)
+            return cached.Found;
+        var found = PoseMatches.Find(sampled.Poses, current.Playhead);
+        matches = (sampled.Poses, current.Playhead, found);
+        return found;
+    }
+
+    /// <summary>On a paused clip, a mark at each frame playing the playhead's pose the same way; the one under the pointer brighter.</summary>
+    private void DrawMatches(ImDrawListPtr drawList, TimelineEditor current, Vector2 max, float trackLeft, float top, float bottom, float line)
+    {
+        markBand = (top, bottom);
+        if (Matches(current) is not { Count: > 0 } found)
+            return;
+        var size = Theme.Scaled(4);
+        foreach (var match in found)
+        {
+            var x = TimelineUi.Crisp(trackLeft + current.View.X(match.Frame));
+            if (x >= trackLeft - size && x <= max.X + size)
+                marks.Add((x, match));
+        }
+        var hot = MarkAt(ImGui.GetIO().MousePos);
+        foreach (var (x, match) in marks)
+        {
+            var lit = hot == match;
+            var colour = TimelineUi.U32(Theme.WithAlpha(Theme.Success, lit ? 1f : .75f));
+            drawList.AddLine(new Vector2(x, top), new Vector2(x, bottom), colour, lit ? line * 2 : line);
+            var middle = top + size;
+            drawList.AddTriangleFilled(new Vector2(x - size, middle), new Vector2(x, middle - size), new Vector2(x + size, middle), colour);
+            drawList.AddTriangleFilled(new Vector2(x - size, middle), new Vector2(x + size, middle), new Vector2(x, middle + size), colour);
+        }
+    }
+
+    /// <summary>The pose match whose mark is under <paramref name="mouse"/> (screen pixels), as last drawn.</summary>
+    public PoseMatch? MarkAt(Vector2 mouse)
+    {
+        if (marks.Count == 0 || mouse.Y < markBand.Top || mouse.Y > markBand.Bottom)
+            return null;
+        var reach = Theme.Scaled(5);
+        PoseMatch? best = null;
+        var closest = float.MaxValue;
+        foreach (var (x, match) in marks)
+            if (Math.Abs(mouse.X - x) is var distance && distance <= reach && distance < closest)
+                (best, closest) = (match, distance);
+        return best;
     }
 
     /// <summary>While the motion is read, how far along on the band's right; why it failed when it did.</summary>

@@ -59,6 +59,40 @@ internal static class CutEdits
         return Remove(doc, cuts, CutFrame(doc, cuts, from), CutFrame(doc, cuts, to), out removed);
     }
 
+    /// <summary>
+    /// Keeps only output frames <paramref name="from"/> up to <paramref name="to"/> (either way round): what
+    /// plays after them and before them goes, and ripples. Nothing changes when that would keep everything
+    /// or leave under <see cref="TimelineDocument.MinLength"/> frames.
+    /// </summary>
+    public static TimelineDocument KeepRange(TimelineDocument doc, int from, int to, out CutRemoval removed)
+    {
+        removed = default;
+        if (from > to)
+            (from, to) = (to, from);
+        from = Math.Clamp(from, 0, doc.Length);
+        to = Math.Clamp(to, 0, doc.Length);
+        if (doc.Expression || to - from < TimelineDocument.MinLength || from == 0 && to == doc.Length)
+            return doc;
+        // The end goes first, so the start's frames are still where the caller counted them.
+        var next = doc;
+        CutRemoval after = default, before = default;
+        if (to < doc.Length)
+        {
+            next = RemoveRange(doc, to, doc.Length, out after);
+            if (ReferenceEquals(next, doc))
+                return doc;
+        }
+        if (from > 0)
+        {
+            var trimmed = RemoveRange(next, 0, from, out before);
+            if (ReferenceEquals(trimmed, next))
+                return doc;
+            next = trimmed;
+        }
+        removed = new CutRemoval(after.Events + before.Events, after.Keys + before.Keys);
+        return next;
+    }
+
     /// <summary>Removes part <paramref name="part"/> and ripples.</summary>
     public static TimelineDocument RemovePart(TimelineDocument doc, int part, out CutRemoval removed)
     {
