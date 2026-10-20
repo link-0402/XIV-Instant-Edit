@@ -27,13 +27,17 @@ internal sealed partial class MaterialWindow
     private Task<IDalamudTextureWrap>? whereTask;
     private IDalamudTextureWrap? whereWrap;
 
-    /// <summary>Starts reading the index texture when the one the material points at changed.</summary>
+    /// <summary>
+    /// Starts reading the index texture when the one the material points at changed, or its file
+    /// did (size and write time, like the thumbnails: a placeholder replaced by the real texture).
+    /// </summary>
     private void RefreshUsage(MaterialDocument doc)
     {
         var path = doc.Slots.FirstOrDefault(slot => slot.SamplerId == IndexSampler && slot.Path.Length > 0)?.Path;
         var file = path != null && resolvedTextures.TryGetValue(path, out var resolved) ? resolved : null;
         var kind = doc.Table?.Kind ?? ColorTableKind.None;
-        var key = file == null || kind is not (ColorTableKind.Dawntrail or ColorTableKind.Legacy) ? null : $"{kind}|{file}";
+        var stamp = file == null ? default : previews.KeyFor(file, !Path.IsPathRooted(file));
+        var key = file == null || kind is not (ColorTableKind.Dawntrail or ColorTableKind.Legacy) ? null : $"{kind}|{file}|{stamp.Size}|{stamp.MtimeTicks}";
         if (key == usageFor || usageTask != null)
             return;
         usageFor = key;
@@ -57,7 +61,12 @@ internal sealed partial class MaterialWindow
     private void PollUsage()
     {
         if (usageTask is not { IsCompleted: true } done)
+        {
+            // Notices the index file changing on disk; KeyFor looks at the file at most once a second.
+            if (usageTask == null && session != null && resolving == null)
+                RefreshUsage(session.Current);
             return;
+        }
         usageTask = null;
         if (done.IsCompletedSuccessfully && done.Result is { } read)
         {
