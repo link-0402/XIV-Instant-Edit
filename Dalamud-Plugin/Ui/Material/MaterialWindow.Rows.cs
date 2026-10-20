@@ -20,8 +20,9 @@ internal sealed partial class MaterialWindow
     private const string PastePopup = "##row-paste";
 
     private int selectedPair;
-    // Shared, so a row copied in one Material window pastes in another. Legacy: copied on characterlegacy.shpk, whose rows mean other things.
-    private static (DtColorRow Row, bool Legacy)? rowClipboard;
+    // Shared, so a row copied in one Material window pastes in another. Dye: null when the table had no dye rows.
+    // Legacy: copied on characterlegacy.shpk, whose rows mean other things.
+    private static (DtColorRow Row, DtDyeRow? Dye, bool Legacy)? rowClipboard;
 
     private enum PasteKind
     {
@@ -329,7 +330,7 @@ internal sealed partial class MaterialWindow
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - buttons));
         if (Widgets.GhostIconButton("##copy", FontAwesomeIcon.Copy, "Copy this row", square))
         {
-            rowClipboard = (values, legacyShader);
+            rowClipboard = (values, table.Dye?[row], legacyShader);
             Say(FeedbackSeverity.Info, $"Copied {name}.");
         }
         var hovered = ImGui.IsItemHovered();
@@ -358,10 +359,24 @@ internal sealed partial class MaterialWindow
         if (!popup.Success || rowClipboard is not { } clip)
             return hovered;
         var copied = LegacyConversion.RowForShader(clip.Row, clip.Legacy, legacyShader);
+        // A row from a table without dye rows pastes as undyed.
+        var copiedDye = LegacyConversion.DyeForShader(clip.Dye ?? default, clip.Legacy, legacyShader);
         foreach (var (kind, label) in new[] { (PasteKind.All, "Everything"), (PasteKind.Colours, "Colours only"), (PasteKind.Surface, "Surface only") })
             if (ImGui.MenuItem(label))
-                _ = current.Apply(d => EditRow(d, row, r => Paste(r, copied, kind, legacyShader)), $"Paste onto {name}");
+                _ = current.Apply(d => PasteRow(d, row, copied, copiedDye, kind, legacyShader), $"Paste onto {name}");
         return true;
+    }
+
+    /// <summary>The document with a copied row pasted onto one row; Everything also takes its dye, when the table has dye rows.</summary>
+    private static MaterialDocument PasteRow(MaterialDocument doc, int row, DtColorRow copied, DtDyeRow copiedDye, PasteKind kind, bool legacyShader)
+    {
+        if (doc.Table is not { Kind: ColorTableKind.Dawntrail } source)
+            return doc;
+        var table = source.Clone();
+        table.Rows[row] = Paste(table.Rows[row], copied, kind, legacyShader);
+        if (kind == PasteKind.All && table.Dye != null)
+            table.Dye[row] = copiedDye;
+        return doc.WithTable(table);
     }
 
     private static DtColorRow Paste(DtColorRow target, DtColorRow copied, PasteKind kind, bool legacyShader) => (kind, legacyShader) switch

@@ -156,6 +156,23 @@ public static class LegacyConversion
         return dye.WithTemplate(template is > 0 and < 1000 ? template + 1000 : template);
     }
 
+    /// <summary>
+    /// A character.shpk dye row for characterlegacy.shpk, the reverse of <see cref="DyeToCharacter"/>: base, shine and
+    /// glow stay, roughness (bit 5) becomes gloss (bit 3), fields legacy has no bit for are dropped, template t + 1000 is t.
+    /// </summary>
+    public static DtDyeRow DyeToLegacyShader(DtDyeRow dye)
+    {
+        var converted = (ushort)((dye.Flags & 0b111) | ((dye.Flags & (1 << 5)) != 0 ? 1 << 3 : 0));
+        var template = dye.Template is > 1000 and < 2000 ? dye.Template - 1000 : dye.Template;
+        return new DtDyeRow(0).WithFlags(converted).WithChannel(dye.Channel).WithTemplate(template);
+    }
+
+    /// <summary>A copied row's dye as the target's shader reads it, like <see cref="RowForShader"/>.</summary>
+    public static DtDyeRow DyeForShader(DtDyeRow copied, bool fromLegacy, bool toLegacy)
+        => fromLegacy == toLegacy || copied is { Flags: 0, Template: 0 } ? copied
+            : fromLegacy ? DyeToCharacter(copied.Flags, copied.Template, copied.Channel)
+            : DyeToLegacyShader(copied);
+
     /// <summary>A 32-row table as characterlegacy.shpk reads it, in character.shpk's layout.</summary>
     public static ColorTable TableToCharacter(ColorTable table)
     {

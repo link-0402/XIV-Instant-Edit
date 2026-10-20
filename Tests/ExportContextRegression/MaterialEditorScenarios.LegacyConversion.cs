@@ -91,6 +91,11 @@ internal static partial class MaterialEditorScenarios
             "a legacy dye row keeps base, shine and glow, dyes roughness for gloss, drops shine strength, and takes template t + 1000");
         Require(LegacyConversion.DyeToCharacter(0b1, 1500, 0).Template == 1500 && LegacyConversion.DyeToCharacter(0, 0, 0).Template == 0,
             "a Dawntrail template id or none stays as it is");
+        var back = LegacyConversion.DyeForShader(dye, fromLegacy: false, toLegacy: true);
+        Require(back.Flags == 0b1111 && back.Template == 205 && back.Channel == 1,
+            "a dye pasted from character.shpk onto characterlegacy.shpk takes gloss for roughness and template t - 1000");
+        Require(LegacyConversion.DyeForShader(dye, true, true) == dye && LegacyConversion.DyeForShader(default, true, false) == default,
+            "dyes paste unchanged between materials of the same kind, and an undyed row stays undyed");
 
         var table = ColorTable.NewDawntrail(dyeable: true);
         table.Rows[4] = LegacyShaderRow(20f, 0.5f, Vector3.One);
