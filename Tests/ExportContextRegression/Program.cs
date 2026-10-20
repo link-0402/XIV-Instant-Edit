@@ -933,6 +933,93 @@ static async Task CheckExportContextsAsync(string testRoot)
             "expanded colorsets followed by a 64-byte dye table are previewed");
     }
 
+    // ---- Material preview manifest size budget ----
+    // The add-on rejects manifests over 1 MiB. A full manifest keeps its leading
+    // materials and names the rest instead of dropping every preview.
+    static (string ModelMaterial, object Entry) PreviewEntry(int index, Func<int, float> value)
+    {
+        var name = $"/mt_c0201e{index:D4}_top_a.mtrl";
+        return (name, new
+        {
+            modelMaterial = name,
+            gamePath = $"chara/equipment/e{index:D4}/material/v0001{name}",
+            shaderPackage = "characterlegacy.shpk",
+            materialFlags = 0u,
+            additionalData = string.Empty,
+            shaderKeys = Enumerable.Range(0, 6).Select(key => new { category = (uint)key, value = 0u }).ToArray(),
+            shaderConstants = Enumerable.Range(0, 16).Select(id => new { id = (uint)id, values = new[] { 0.5f, 1f, 0.25f } }).ToArray(),
+            colorSet = new { width = 8, height = 32, values = Enumerable.Range(0, 1024).Select(value).ToArray() },
+            textures = Enumerable.Range(0, 4).Select(texture => new
+            {
+                usage = "normal",
+                samplerId = 0x0C5EC1F1u,
+                samplerFlags = 0u,
+                gamePath = $"chara/equipment/e{index:D4}/texture/v01_c0201e{index:D4}_top_{texture}.tex",
+                file = $"textures/{new string('a', 64)}.rgba",
+                width = 1024,
+                height = 1024,
+                uvSet = 0,
+                colorSpace = "Non-Color",
+            }).ToArray(),
+        });
+    }
+
+    var random = new Random(7);
+    var randomEntries = Enumerable.Range(0, 256)
+        .Select(index => PreviewEntry(index, _ => (float)BitConverter.UInt16BitsToHalf((ushort)random.Next(0, 0x7C00))))
+        .ToArray();
+    var (fullJson, fullWarnings) = MaterialPreviewBundleBuilder.SerializeManifest(
+        "chara/equipment/e0001/model/c0201e0001_top.mdl", randomEntries, [], ["earlier warning"]);
+    using (var fullManifest = JsonDocument.Parse(fullJson))
+    {
+        var keptMaterials = fullManifest.RootElement.GetProperty("materials");
+        var kept = keptMaterials.GetArrayLength();
+        Require(fullJson.Length <= 1024 * 1024 && kept > 0 && kept < randomEntries.Length,
+            "an over-budget preview manifest keeps the materials that fit within 1 MiB");
+        Require(Enumerable.Range(0, kept).All(index =>
+                keptMaterials[index].GetProperty("modelMaterial").GetString() == randomEntries[index].ModelMaterial),
+            "an over-budget preview manifest keeps its materials in model order");
+        var skippedWarning = fullManifest.RootElement.GetProperty("warnings")[0].GetString() ?? string.Empty;
+        Require(fullWarnings.Count == 2 && fullWarnings[0] == skippedWarning && fullWarnings[1] == "earlier warning" &&
+                skippedWarning.Contains($"{randomEntries.Length - kept} material(s)") &&
+                skippedWarning.Contains(randomEntries[kept].ModelMaterial.TrimStart('/')) &&
+                skippedWarning.Contains($"(+{randomEntries.Length - kept - 8} more)") &&
+                skippedWarning.Length <= 512,
+            "an over-budget preview manifest names the skipped materials in a bounded warning");
+    }
+
+    // Indented, 100 all-zero Dawntrail colorsets came to about 1.9 MB.
+    var zeroEntries = Enumerable.Range(0, 100).Select(index => PreviewEntry(index, _ => 0f)).ToArray();
+    var (zeroJson, zeroWarnings) = MaterialPreviewBundleBuilder.SerializeManifest(
+        "chara/equipment/e0001/model/c0201e0001_top.mdl", zeroEntries, [], []);
+    using (var zeroManifest = JsonDocument.Parse(zeroJson))
+        Require(zeroManifest.RootElement.GetProperty("materials").GetArrayLength() == 100 && zeroWarnings.Count == 0 &&
+                !zeroJson.AsSpan().Contains((byte)'\n'),
+            "the preview manifest is compact JSON, so typical material counts fit");
+
+    var smallEntries = zeroEntries.Take(3).ToArray();
+    var (exactJson, _) = MaterialPreviewBundleBuilder.SerializeManifest("a.mdl", smallEntries, [], []);
+    var (atLimitJson, atLimitWarnings) = MaterialPreviewBundleBuilder.SerializeManifest(
+        "a.mdl", smallEntries, [], [], exactJson.Length);
+    var (underLimitJson, underLimitWarnings) = MaterialPreviewBundleBuilder.SerializeManifest(
+        "a.mdl", smallEntries, [], [], exactJson.Length - 1);
+    using (var underLimitManifest = JsonDocument.Parse(underLimitJson))
+        Require(atLimitJson.AsSpan().SequenceEqual(exactJson) && atLimitWarnings.Count == 0 &&
+                underLimitJson.Length < exactJson.Length &&
+                underLimitManifest.RootElement.GetProperty("materials").GetArrayLength() is > 0 and < 3 &&
+                underLimitWarnings.Count == 1,
+            "the preview manifest budget is exact to the byte");
+    var oversizedEnvelope = false;
+    try
+    {
+        MaterialPreviewBundleBuilder.SerializeManifest("a.mdl", smallEntries, [], [new string('w', 512)], 256);
+    }
+    catch (InvalidDataException)
+    {
+        oversizedEnvelope = true;
+    }
+    Require(oversizedEnvelope, "a preview manifest whose warnings alone exceed the budget is rejected");
+
     // Mod tools can write mip offsets that do not match the stored data; the
     // preview rebuilds them so Lumina decodes the first surface correctly.
     var misplacedMips = new byte[80 + 2 * 2 * 4 + 4];

@@ -285,7 +285,7 @@ public sealed partial class MaterialPreviewBundleBuilder
                 : [];
             var excludedMaterialKeys = excludedMaterials.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var manifestMaterials = new List<object>();
+            var manifestMaterials = new List<(string ModelMaterial, object Entry)>();
             var textureCount = 0;
             long decodedBytes = 0;
             var writtenTextures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -394,7 +394,7 @@ public sealed partial class MaterialPreviewBundleBuilder
                     }
                 }
 
-                manifestMaterials.Add(new
+                manifestMaterials.Add((modelMaterial, new
                 {
                     modelMaterial,
                     gamePath = materialPath,
@@ -405,21 +405,13 @@ public sealed partial class MaterialPreviewBundleBuilder
                     shaderConstants = metadata.ShaderConstants,
                     colorSet = ReadColorSet(materialBytes, mtrl),
                     textures,
-                });
+                }));
             }
 
-            var safeWarnings = BoundWarnings(warnings);
-            var manifest = new
-            {
-                schema = Schema,
-                version = Version,
-                modelGamePath = NormaliseGamePath(modelGamePath),
-                materials = manifestMaterials,
-                excludedMaterials,
-                warnings = safeWarnings,
-            };
+            var (json, safeWarnings) = SerializeManifest(
+                modelGamePath, manifestMaterials, excludedMaterials, warnings);
             var manifestPath = Path.Combine(bundleDirectory, "materials.json");
-            await WriteManifestAsync(manifestPath, manifest, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllBytesAsync(manifestPath, json, cancellationToken).ConfigureAwait(false);
             return new MaterialPreviewBundleResult(manifestPath, safeWarnings);
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -433,19 +425,8 @@ public sealed partial class MaterialPreviewBundleBuilder
             {
                 Directory.CreateDirectory(bundleDirectory);
                 var manifestPath = Path.Combine(bundleDirectory, "materials.json");
-                var safeWarnings = BoundWarnings(warnings);
-                await WriteManifestAsync(
-                    manifestPath,
-                    new
-                    {
-                        schema = Schema,
-                        version = Version,
-                        modelGamePath = NormaliseGamePath(modelGamePath),
-                        materials = Array.Empty<object>(),
-                        excludedMaterials = Array.Empty<string>(),
-                        warnings = safeWarnings,
-                    },
-                    cancellationToken).ConfigureAwait(false);
+                var (json, safeWarnings) = SerializeManifest(modelGamePath, [], [], warnings);
+                await File.WriteAllBytesAsync(manifestPath, json, cancellationToken).ConfigureAwait(false);
                 return new MaterialPreviewBundleResult(manifestPath, safeWarnings);
             }
             catch (Exception manifestError) when (manifestError is not OperationCanceledException)
@@ -463,12 +444,71 @@ public sealed partial class MaterialPreviewBundleBuilder
             .Take(256)
             .ToArray();
 
-    private static async Task WriteManifestAsync(string path, object manifest, CancellationToken cancellationToken)
+    /// <summary>
+    /// Serializes the manifest as compact UTF-8 JSON (no BOM) of at most <paramref name="maxBytes"/>,
+    /// the Blender add-on's cap. Materials are kept in order until the next one would not fit; the
+    /// rest are named in a warning, so one oversized import still previews its first materials.
+    /// </summary>
+    internal static (byte[] Json, IReadOnlyList<string> Warnings) SerializeManifest(
+        string modelGamePath,
+        IReadOnlyList<(string ModelMaterial, object Entry)> materials,
+        IReadOnlyList<string> excludedMaterials,
+        IReadOnlyList<string> warnings,
+        int maxBytes = MaxManifestBytes)
     {
-        var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true });
-        if (Encoding.UTF8.GetByteCount(json) > MaxManifestBytes)
-            throw new InvalidDataException("The material preview manifest exceeds 1 MiB.");
-        await File.WriteAllTextAsync(path, json, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+        // Compact JSON writes an array element exactly as it writes the value on its own, so the
+        // manifest's size is the envelope's plus each kept material's plus the commas between them.
+        var sizes = materials
+            .Select(material => (long)JsonSerializer.SerializeToUtf8Bytes(material.Entry).Length)
+            .ToArray();
+        var kept = materials.Count;
+        while (true)
+        {
+            var safeWarnings = BoundWarnings(kept < materials.Count
+                ? warnings.Prepend(SkippedMaterialsWarning(materials.Skip(kept).Select(m => m.ModelMaterial).ToArray()))
+                : warnings);
+            long total = SerializeManifestJson(modelGamePath, [], excludedMaterials, safeWarnings).Length;
+            if (total > maxBytes)
+                throw new InvalidDataException("The material preview manifest exceeds 1 MiB.");
+            var fit = 0;
+            for (; fit < kept && total + sizes[fit] + (fit > 0 ? 1 : 0) <= maxBytes; fit++)
+                total += sizes[fit] + (fit > 0 ? 1 : 0);
+            if (fit < kept)
+            {
+                // The skipped-materials warning grows the envelope, so measure again.
+                kept = fit;
+                continue;
+            }
+
+            var json = SerializeManifestJson(
+                modelGamePath, materials.Take(kept).Select(m => m.Entry).ToArray(), excludedMaterials, safeWarnings);
+            if (json.Length > maxBytes)
+                throw new InvalidDataException("The material preview manifest exceeds 1 MiB.");
+            return (json, safeWarnings);
+        }
+    }
+
+    private static byte[] SerializeManifestJson(
+        string modelGamePath,
+        object[] materials,
+        IReadOnlyList<string> excludedMaterials,
+        IReadOnlyList<string> warnings)
+        => JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schema = Schema,
+            version = Version,
+            modelGamePath = NormaliseGamePath(modelGamePath),
+            materials,
+            excludedMaterials,
+            warnings,
+        });
+
+    private static string SkippedMaterialsWarning(IReadOnlyList<string> skipped)
+    {
+        const int maxNames = 8;
+        var names = string.Join(", ", skipped.Take(maxNames).Select(FileName));
+        var more = skipped.Count > maxNames ? $" (+{skipped.Count - maxNames} more)" : string.Empty;
+        return $"Preview manifest is full; no preview for {skipped.Count} material(s): {names}{more}";
     }
 
     private static Dictionary<string, List<string>> BuildResourceMap(
