@@ -6,6 +6,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui;
 
@@ -34,6 +35,7 @@ public sealed class SettingsWindow : Window
     private AnimationEditService? _animations;
     private string? _animationError;
     private DateTime? _savedSkeletonLibrary;
+    private DateTime? _savedFaceLibraries;
     private int? _pendingListenPort;
     private SettingsTab _tab;
 
@@ -77,6 +79,7 @@ public sealed class SettingsWindow : Window
     public override void OnOpen()
     {
         _savedSkeletonLibrary = _animations?.SavedSkeletonLibraryUtc();
+        _savedFaceLibraries = _animations?.FaceLibraries.SavedUtc();
         _tools.Refresh();
     }
 
@@ -209,6 +212,56 @@ public sealed class SettingsWindow : Window
         Divider();
         Widgets.SectionHeader("Skeleton library", "animations");
         DrawSkeletonLibrary();
+
+        Divider();
+        Widgets.SectionHeader("Expression sets", "animations");
+        DrawFaceLibraries();
+    }
+
+    /// <summary>The expression sets the installed mods add, which the Timeline's face pickers offer when the mod is on.</summary>
+    private void DrawFaceLibraries()
+    {
+        Widgets.MutedWrapped("The Timeline's face pickers also list the expression sets your mods add, from mods that are on in your " +
+                             "collection. The list is built once, saved in the cache folder, and only built again with this button.");
+        ImGui.Spacing();
+        if (_animations is not { } service)
+        {
+            Widgets.Hint(_animationError ?? "Animation integration is unavailable.");
+            return;
+        }
+        var status = service.FaceLibraries.Status;
+        using (ImRaii.Disabled(status.State is FaceLibraryState.Loading or FaceLibraryState.Building))
+        {
+            if (ImGui.Button("Rebuild expression sets"))
+                service.RebuildFaceLibraries();
+        }
+        ImGui.SameLine();
+        Widgets.Hint("After installing, updating or removing expression mods.");
+        switch (status.State)
+        {
+            case FaceLibraryState.NotLoaded:
+                Widgets.HintWrapped(_savedFaceLibraries is { } saved
+                    ? $"Saved {saved.ToLocalTime():g}. It loads the first time a face picker opens."
+                    : "Not built yet. It is built the first time a face picker opens, or now with the button.");
+                break;
+            case FaceLibraryState.Loading or FaceLibraryState.Building:
+                Widgets.HintWrapped(TimelineWindowViews.FaceLibraryNote(status) ?? "");
+                break;
+            case FaceLibraryState.Ready:
+                Widgets.HintWrapped(TimelineWindowViews.FaceLibrarySummary(status));
+                if (status.Missing > 0 || status.Changed > 0)
+                    Widgets.Banner("##face-libraries-stale", FeedbackSeverity.Warning,
+                        $"Since then, {Sets(status.Missing)} were removed and {Sets(status.Changed)} changed. Rebuild to pick those changes up.");
+                if (status.Error is { } saveError)
+                    Widgets.Banner("##face-libraries-save", FeedbackSeverity.Warning, saveError);
+                break;
+            case FaceLibraryState.Failed:
+                Widgets.Banner("##face-libraries-failed", FeedbackSeverity.Error, $"The last build failed: {status.Error}" +
+                    (status.Libraries > 0 ? " The previous list stays in use." : ""));
+                break;
+        }
+
+        static string Sets(int count) => count == 1 ? "1 set" : $"{count} sets";
     }
 
     /// <summary>The library of the installed mods' full skeletons, each once, that animations are matched against.</summary>

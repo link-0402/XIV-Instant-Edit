@@ -50,6 +50,42 @@ internal static class TimelineEditorFixture
         editor.Select(faces[1].Key);
         check(editor.DeleteSelection() && editor.Document.FacePack == null && editor.Undo() && editor.Document.FacePack == "emot/laugh",
             "deleting the last face in the editor drops the library in the same undo step");
+
+        // Smile is in smile and smile_st, Grin only in smile_st, Wink only in smile.
+        var sets = new Dictionary<string, ImmutableArray<string>>(StringComparer.Ordinal)
+        {
+            ["cfxf_smile"] = ["smile", "smile_st"], ["cfxf_smile_st"] = ["smile_st"], ["cfxf_wink"] = ["smile"],
+        };
+        var smiling = Doc(100, Ev("t1", TimelineLane.Expression, 0, 30, true, magic: "C010", path: "cfxf_smile")) with { FacePack = "smile" };
+        var grin = Ev("", TimelineLane.Expression, 50, 30, true, magic: "C010", path: "cfxf_smile_st");
+        var switching = new TimelineEditor(smiling) { ResidentMotions = resident, MotionPacks = sets };
+        var choice = switching.ChoosePack(["smile_st"]);
+        check(!switching.Add([grin], "smile_st") && switching.LastError == TimelineEdits.PackInUse("smile") && switching.LastNotice == null &&
+              ReferenceEquals(switching.Document, smiling),
+            "an add from another set without the switch is still refused");
+        check(choice.Switches && switching.Add([grin], choice.Pack, choice.Switches) && switching.Document.FacePack == "smile_st" &&
+              switching.Document.Events.Length == 2 && switching.LastError == null && switching.LastNotice == TimelineEdits.PackSwitched("smile_st") &&
+              switching.Undo() && ReferenceEquals(switching.Document, smiling) && switching.Redo() && switching.Document.FacePack == "smile_st",
+            "Grin switches a Smile timeline to smile_st and comes in, as one undo step, saying so");
+        switching.Press(TimelineHit.None());
+        switching.Release();
+        check(switching.LastNotice == null, "the note goes with the next click");
+
+        var winking = Doc(100, Ev("t1", TimelineLane.Expression, 0, 30, true, magic: "C010", path: "cfxf_smile"),
+            Ev("t2", TimelineLane.Expression, 40, 30, true, magic: "C010", path: "cfxf_wink")) with { FacePack = "smile" };
+        var replacing = new TimelineEditor(winking) { ResidentMotions = resident, MotionPacks = sets };
+        var wink = winking.Events[1];
+        check(replacing.ChoosePack(["smile_st"]).Refused && !replacing.ReplaceFace(wink with { Path = "cfxf_smile_st" }, replacing.ChoosePack(["smile_st"])) &&
+              ReferenceEquals(replacing.Document, winking),
+            "a face no set can hold beside the others is refused");
+        var swap = replacing.ChoosePack(["smile_st"], except: "t2");
+        check(swap.Switches && replacing.ReplaceFace(wink with { Path = "cfxf_smile_st" }, swap) && replacing.Document.FacePack == "smile_st" &&
+              replacing.Document.Events[1].Path == "cfxf_smile_st" && replacing.LastNotice == TimelineEdits.PackSwitched("smile_st") &&
+              replacing.Undo() && ReferenceEquals(replacing.Document, winking),
+            "replacing Wink with Grin switches to smile_st, which still has Smile, as one undo step");
+        check(replacing.ReplaceFace(wink with { Path = "cfxf_smile" }, replacing.ChoosePack(["smile", "smile_st"], except: "t2")) &&
+              replacing.Document.FacePack == "smile" && replacing.LastNotice == null,
+            "a face the timeline's set has keeps the set");
     }
 
     /// <summary>

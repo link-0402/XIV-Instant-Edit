@@ -24,6 +24,7 @@ internal static class TimelineCatalogFixture
         {
             Catalog(check, temp);
             Imports(check, reject, temp);
+            FaceLibraries(check, temp);
         }
         finally { Directory.Delete(temp, true); }
     }
@@ -171,6 +172,10 @@ internal static class TimelineCatalogFixture
               !resident.Contains("cfxf_smile") && TimelineCatalogData.Empty.ResidentMotions == null,
             "a face many libraries hold is listed once, preferring its expression's library and knowing the others; " +
             "the always loaded faces are known by name");
+        check(data.MotionPacks.GetValueOrDefault("cfxf_smile").SequenceEqual(["smile", "emot/laugh"]) &&
+              data.MotionPacks.GetValueOrDefault("cfxl_lip_laugh").SequenceEqual(["emot/laugh"]) &&
+              !data.MotionPacks.ContainsKey("cfxf_angry") && TimelineCatalogData.Empty.MotionPacks.IsEmpty,
+            "every library a face or lip shape is in is known by motion name; always loaded ones have none");
         check(Expression("cfxf_laugh", "emot/laugh")!.Request(TimelineAddKind.Expression, 12, 30) ==
               new TimelineAddRequest(TimelineAddKind.Expression, 12, "cfxf_laugh", 30, "emot/laugh"),
             "a catalog item becomes the add request that places it");
@@ -354,6 +359,87 @@ internal static class TimelineCatalogFixture
         var bytes = items.Concat(strings).ToArray();
         Int(bytes, 4, bytes.Length);
         return bytes;
+    }
+
+    /// <summary>
+    /// The expression sets installed mods add (FaceLibraryIndex): found in every option of a mod's
+    /// settings, the game's own and broken files left out, saved and read back like the skeleton
+    /// library, and offered only from mods the collection plays, each face from its own set.
+    /// </summary>
+    private static void FaceLibraries(Action<bool, string> check, string temp)
+    {
+        var empty = Tmb();
+        var mod = Path.Combine(temp, "faces-mod");
+        Directory.CreateDirectory(Path.Combine(mod, "pap"));
+        var mine = Path.Combine(mod, "pap", "mine.pap");
+        var other = Path.Combine(mod, "pap", "other.pap");
+        File.WriteAllBytes(mine, Pap(("cfxf_mine_grin", 17, empty), ("cfxf_angry", 17, empty), ("cfxl_mine_lip", 19, empty), ("cbem_body", 7, empty)));
+        File.WriteAllBytes(Path.Combine(mod, "pap", "smile.pap"), Pap(("cfxf_smile", 17, empty)));
+        File.WriteAllBytes(other, Pap(("cfxf_other", 17, empty)));
+        File.WriteAllBytes(Path.Combine(mod, "pap", "broken.pap"), [1, 2, 3]);
+        const string minePath = "chara/human/c0801/animation/f0002/nonresident/mine/faces.pap";
+        const string otherPath = "chara/human/c0101/animation/f0001/nonresident/other.pap";
+        File.WriteAllText(Path.Combine(mod, "meta.json"), new JsonObject
+        {
+            ["DefaultData"] = new JsonObject { ["Files"] = new JsonObject
+            {
+                [minePath] = "pap\\mine.pap",
+                ["chara/human/c0801/animation/f0002/nonresident/smile.pap"] = "pap/smile.pap",
+                ["chara/human/c0801/animation/f0002/nonresident/broken.pap"] = "pap/broken.pap",
+                ["chara/human/c0801/animation/f0002/nonresident/out.pap"] = "..\\outside.pap",
+                ["chara/human/c0801/animation/a0001/bt_common/emote/x.pap"] = "pap/other.pap",
+            } },
+            ["Groups"] = new JsonArray(new JsonObject
+            {
+                ["Options"] = new JsonArray(new JsonObject { ["Files"] = new JsonObject { [minePath] = "pap\\mine.pap", [otherPath] = "pap/other.pap" } }),
+            }),
+        }.ToJsonString());
+        var found = FaceLibraryIndex.Scan([("faces-mod", "My Faces", mod)],
+            path => path == "chara/human/c0801/animation/f0002/nonresident/smile.pap", File.ReadAllBytes, CancellationToken.None);
+        static string Shape(FaceLibrary l) => $"{l.Pack}|{l.Race}|{l.Face}|{l.GamePath}|{Path.GetFileName(l.File)}|{l.ModDirectory}|{l.ModName}|" +
+            string.Join(",", l.Motions.Select(m => m.Name + (m.Lip ? "+lip" : "")));
+        check(found.Select(Shape).SequenceEqual([
+                $"mine/faces|c0801|f0002|{minePath}|mine.pap|faces-mod|My Faces|cfxf_mine_grin,cfxf_angry,cfxl_mine_lip+lip",
+                $"other|c0101|f0001|{otherPath}|other.pap|faces-mod|My Faces|cfxf_other"]),
+            "a mod's expression sets are found in every option once, with their faces and lip shapes; the game's own, broken files, files " +
+            "outside the mod and other animations are left out");
+        check(FaceLibraryIndex.TryParse("Chara/Human/c0801/animation/f0002/nonresident/emot/laugh.pap", out var race, out var face, out var pack) &&
+              (race, face, pack) == ("c0801", "f0002", "emot/laugh") &&
+              !FaceLibraryIndex.TryParse("chara/human/c0801/animation/f0002/resident/face.pap", out _, out _, out _) &&
+              !FaceLibraryIndex.TryParse("chara/human/c08x1/animation/f0002/nonresident/a.pap", out _, out _, out _) &&
+              !FaceLibraryIndex.TryParse("chara/human/c0801/animation/f0002/nonresident/a/../b.pap", out _, out _, out _),
+            "only a race face's nonresident PAPs are expression sets, named as a TMPP can name them");
+
+        var built = new DateTime(2026, 10, 19, 12, 0, 0, DateTimeKind.Utc);
+        var states = found.ToDictionary(l => l.File, l => (true, 100L, built));
+        var json = FaceLibraryIndex.Serialize(found, built, file => states[file]);
+        check(FaceLibraryIndex.TryLoad(json, file => states[file], out var loaded, out var missing, out var changed, out var builtUtc) &&
+              loaded.Select(Shape).SequenceEqual(found.Select(Shape)) && missing == 0 && changed == 0 && builtUtc == built,
+            "a saved list reads back as it was built");
+        states[other] = (false, 0, DateTime.MinValue);
+        states[mine] = (true, 200L, built);
+        check(FaceLibraryIndex.TryLoad(json, file => states[file], out loaded, out missing, out changed, out _) &&
+              loaded.Length == 1 && loaded[0].Pack == "mine/faces" && missing == 1 && changed == 1,
+            "a saved list stays in use: removed files are left out and counted, changed ones kept and counted");
+        check(!FaceLibraryIndex.TryLoad("{", _ => default, out _, out _, out _, out _) &&
+              !FaceLibraryIndex.TryLoad(json.Replace("\"Version\":1", "\"Version\":9", StringComparison.Ordinal), _ => default, out _, out _, out _, out _) &&
+              !FaceLibraryIndex.TryLoad(json.Replace("mine/faces.pap", "mine/../faces.pap", StringComparison.Ordinal), file => states[file], out _, out _, out _, out _),
+            "an unreadable, unknown or tampered list is built again");
+
+        var twin = found[0] with { File = Path.Combine(mod, "pap", "twin.pap"), ModDirectory = "twin-mod" };
+        var candidates = new[] { twin, found[0], found[1] };
+        check(FaceLibraryIndex.Active(candidates, "c0801", "f0002", path => path == minePath ? mine.ToUpperInvariant() : null)
+                  .Select(l => l.ModDirectory).SequenceEqual(["faces-mod"]) &&
+              FaceLibraryIndex.Active(candidates, "c0801", "f0002", path => path).IsEmpty &&
+              FaceLibraryIndex.Active(candidates, "c0101", "f0001", path => path == otherPath ? other : null).Single().Pack == "other",
+            "only sets the collection resolves to their own file count, for the clip's race and face");
+        var resident = new HashSet<string>(StringComparer.Ordinal) { "cfxf_angry" };
+        var faces = FaceLibraryIndex.Items([found[0]], false, resident);
+        var lips = FaceLibraryIndex.Items([found[0]], true, resident);
+        check(faces.Length == 1 && faces[0] is { Path: "cfxf_mine_grin", Pack: "mine/faces", Origin: TimelineCatalogOrigin.Installed, Detail: "My Faces" } &&
+              faces[0].Label == TimelineCatalogBuilder.Readable("cfxf_mine_grin") && faces[0].Packs.SequenceEqual(["mine/faces"]) &&
+              lips.Single().Path == "cfxl_mine_lip",
+            "a set's faces and lip shapes are offered from it, named after its mod, without the always loaded ones");
     }
 
     /// <summary>A PAP holding one clip per entry, each with its own timeline, aligned as the game aligns them.</summary>

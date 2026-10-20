@@ -127,7 +127,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         livePose.DrawItems(session.Source);
     }
 
-    /// <summary> One line each for an import running or done, an edit the editor refused and a header length the motion disagrees with. </summary>
+    /// <summary> One line each for an import running or done, an edit the editor refused or noted and a header length the motion disagrees with. </summary>
     public void DrawMessages(TimelineEditor current)
     {
         if (texts.HeaderNote != null)
@@ -135,6 +135,8 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         pickers.DrawImportStatus();
         if (current.LastError is { } error)
             TimelineUi.Note(null, Theme.Warning, error);
+        if (current.LastNotice is { } notice)
+            TimelineUi.Note(null, Theme.Muted, notice);
         if (current.LastRemoval is { } removal && TimelineWindowViews.RemovalStatus(removal) is { } removed)
             TimelineUi.Note(null, Theme.Muted, removed);
         loader.DrawStatus();

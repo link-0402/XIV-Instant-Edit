@@ -383,6 +383,46 @@ internal static class TimelineEdits
         $"This timeline uses the {pack} expressions, and can only use one set. Remove those first.";
 
     /// <summary>
+    /// The expression library to place a face from, of the ones that hold it (<paramref name="packs"/>,
+    /// its own first; empty when the face always has it loaded). A timeline loads only one, so while
+    /// faces play from its library (<see cref="FromPack"/>, other than <paramref name="except"/>, the
+    /// event being given the face) it keeps it when that holds the face too, else switches to one that
+    /// holds the face and all of them (<paramref name="motionPacks"/>: every library each motion is in;
+    /// one it doesn't list, or doesn't list in the timeline's, is only in the timeline's), the face's own first. When none does, the choice
+    /// is refused with the faces the face's own library lacks: without them it fits.
+    /// </summary>
+    public static TimelinePackChoice ChoosePack(TimelineDocument doc, ImmutableArray<string> packs, IReadOnlySet<string>? resident,
+        IReadOnlyDictionary<string, ImmutableArray<string>>? motionPacks, string? except = null)
+    {
+        var current = doc.FacePack;
+        if (packs.IsDefaultOrEmpty)
+            return new(null, false, []);
+        if (!string.IsNullOrEmpty(current) && packs.Contains(current, StringComparer.OrdinalIgnoreCase))
+            return new(current, false, []);
+        var faces = Events(doc).Where(ev => ev.Key != except && FromPack(doc, ev, resident)).Select(ev => ev.Path).Distinct(StringComparer.Ordinal).ToList();
+        if (faces.Count == 0)
+            return new(packs[0], false, []);
+        // The catalog knows the game's own libraries only. A face it doesn't list in the timeline's
+        // library plays from one it doesn't know, such as a mod's own with a vanilla face's name, so
+        // that face stays where it is.
+        bool Holds(string face, string pack) => motionPacks != null && motionPacks.TryGetValue(face, out var sets) && !sets.IsDefault &&
+            sets.Contains(current!, StringComparer.OrdinalIgnoreCase)
+            ? sets.Contains(pack, StringComparer.OrdinalIgnoreCase)
+            : string.Equals(pack, current, StringComparison.OrdinalIgnoreCase);
+        foreach (var pack in packs)
+            if (faces.All(face => Holds(face, pack)))
+                return new(pack, true, []);
+        return new(null, false, [.. faces.Where(face => !Holds(face, packs[0]))]);
+    }
+
+    /// <summary>The note after a face brought the timeline over to <paramref name="pack"/> (<see cref="TimelinePackChoice.Switches"/>).</summary>
+    public static string PackSwitched(string pack) => $"Switched to the {pack} expressions, which have all these faces.";
+
+    /// <summary>Why a face can't come in (<see cref="TimelinePackChoice.Blockers"/>, by their names in <paramref name="faces"/>).</summary>
+    public static string PackBlocked(IReadOnlyList<string> faces) =>
+        $"No expression set has all these faces. Remove {(faces.Count < 2 ? string.Concat(faces) : string.Join(", ", faces.Take(faces.Count - 1)) + " and " + faces[^1])} first.";
+
+    /// <summary>
     /// Whether two documents are the same: their events by <see cref="Same(TimelineEvent, TimelineEvent)"/>,
     /// their sound edits by content (<see cref="TimelineSoundEdits.Same"/>), the rest as records.
     /// </summary>
@@ -454,4 +494,14 @@ internal static class TimelineEdits
 
     private static IReadOnlySet<string> Set(IEnumerable<string> keys) =>
         keys as IReadOnlySet<string> ?? keys.ToHashSet(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// Where a face comes from (<see cref="TimelineEdits.ChoosePack"/>): its expression library, null for
+/// one always loaded or when refused; whether that replaces the library the timeline's faces play
+/// from; and the motions that keep it from coming in, empty when it can.
+/// </summary>
+internal sealed record TimelinePackChoice(string? Pack, bool Switches, ImmutableArray<string> Blockers)
+{
+    public bool Refused => !Blockers.IsDefaultOrEmpty;
 }

@@ -21,6 +21,8 @@ internal enum TimelineCatalogOrigin : byte
     Item,
     /// <summary>Mapped by the mod the clip comes from.</summary>
     Mod,
+    /// <summary>An expression library a mod on in the collection adds (<see cref="FaceLibraryIndex"/>).</summary>
+    Installed,
 }
 
 /// <summary>Something the timeline editor can place.</summary>
@@ -147,6 +149,13 @@ internal sealed record TimelineCatalogData(
     public ImmutableHashSet<string>? ResidentMotions { get; } = Expressions.IsDefault || LipShapes.IsDefault || Expressions.IsEmpty
         ? null
         : Expressions.Concat(LipShapes).Where(item => item.Pack == null).Select(item => item.Path).ToImmutableHashSet(StringComparer.Ordinal);
+
+    /// <summary>Every expression library each expression and lip shape is in, by motion name; the always loaded ones have none.</summary>
+    public ImmutableDictionary<string, ImmutableArray<string>> MotionPacks { get; } = Expressions.IsDefault || LipShapes.IsDefault
+        ? ImmutableDictionary<string, ImmutableArray<string>>.Empty
+        : Expressions.Concat(LipShapes).Where(item => !item.Packs.IsEmpty).GroupBy(item => item.Path, StringComparer.Ordinal)
+            .ToImmutableDictionary(group => group.Key, group => group.SelectMany(item => item.Packs).Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray(),
+                StringComparer.Ordinal);
 
     /// <summary>
     /// <paramref name="items"/> with every motion listed once: a face many emotes' libraries hold keeps

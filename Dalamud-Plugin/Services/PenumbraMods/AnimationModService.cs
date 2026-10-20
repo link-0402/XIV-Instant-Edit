@@ -46,6 +46,12 @@ internal sealed class AnimationModService
         using var mods = _ipc.GetModListAdapter();
         return mods.Select(m => (m.Identifier, m.ModPath.FullName)).ToArray();
     });
+    /// <summary>Every installed mod's folder name, display name and folder, for the expression set list.</summary>
+    internal Task<(string Directory, string Name, string Root)[]> FaceLibraryRootsAsync() => _framework.RunOnFrameworkThread(() =>
+    {
+        using var mods = _ipc.GetModListAdapter();
+        return mods.Select(m => (m.Identifier, m.Name, m.ModPath.FullName)).ToArray();
+    });
     internal void CheckAnimationCollectionOnFramework(ushort objectIndex, Guid collection)
     {
         var current = _getCollectionForObject.Invoke(objectIndex);

@@ -45,6 +45,8 @@ internal static class ChangelogCatalog
             Entry("Saved cuts and lengths stay editable: Edit again brings them back.", 1),
             Entry("Send an animation's motion to Blender from the Timeline, edit it there, and bring it back. Saving puts it into the animation.", 1),
             Entry("Add sounds, facial expressions, lip sync, effects and props, and drag them where you want them.", 1),
+            Entry("Faces from different expression sets, like Smile and Grin, can share a timeline when one set has them all. The timeline switches to it.", 1),
+            Entry("The face pickers also list the expression sets your mods add, from mods that are on in your collection. Settings > Cache rebuilds the list.", 1),
             Entry("Import your own sounds (wav, ogg or scd) and effects (avfx). They are saved into the mod with the animation.", 1),
             Entry("Save as a new mod or replace the original. Undo works like the other animation edits.", 1),
             Entry("A new mod takes the loop's startup along, or the startup's loop, when both come from the same mod.", 1),

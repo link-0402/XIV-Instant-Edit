@@ -700,31 +700,33 @@ internal static partial class TimelineWindowViews
         return string.Equals(path, ev.Path, StringComparison.Ordinal) ? ev : ev with { Path = path };
     }
 
-    /// <summary>
-    /// The expression library the timeline uses after choosing an item that needs
-    /// <paramref name="itemPack"/>; a timeline loads only one, so a different one is refused while
-    /// a face still plays from it (<paramref name="documentPackInUse"/>).
-    /// </summary>
-    public static string? PackAfter(string? documentPack, string? itemPack, out string? error, bool documentPackInUse = true)
+    /// <summary>A face picker's line about the list of the mods' expression sets: while it is read or built, or why it failed; null otherwise.</summary>
+    public static string? FaceLibraryNote(FaceLibraryStatus status) => status.State switch
     {
-        error = null;
-        if (string.IsNullOrEmpty(itemPack) || string.Equals(documentPack, itemPack, StringComparison.OrdinalIgnoreCase))
-            return documentPack;
-        if (string.IsNullOrEmpty(documentPack) || !documentPackInUse)
-            return itemPack;
-        error = TimelineEdits.PackInUse(documentPack);
-        return documentPack;
-    }
+        FaceLibraryState.Loading => "Loading the expression sets from your mods",
+        FaceLibraryState.Building => status.Total > 0
+            ? $"Finding expression sets in your mods: {status.Progress} of {status.Total} mods read"
+            : "Finding expression sets in your mods",
+        FaceLibraryState.Failed => "The expression sets in your mods could not be listed. " + (status.Error ?? ""),
+        _ => null,
+    };
+
+    /// <summary>Settings' line about a ready list of the mods' expression sets.</summary>
+    public static string FaceLibrarySummary(FaceLibraryStatus status) =>
+        $"{(status.Libraries == 1 ? "1 expression set" : $"{status.Libraries} expression sets")} from " +
+        $"{(status.Mods == 1 ? "1 mod" : $"{status.Mods} mods")}" + (status.BuiltUtc is { } built ? $", built {built.ToLocalTime():g}." : ".");
 
     /// <summary>
-    /// The library to place a face from, of the ones that hold it (<paramref name="packs"/>, the
-    /// preferred first): none for a face always loaded, the timeline's own when it holds the face,
-    /// else the preferred one.
+    /// A picker row's tooltip: the motion <paramref name="path"/> and which of the expression libraries
+    /// that hold it (<paramref name="packs"/>, none for a face always loaded) it comes from here
+    /// (<paramref name="choice"/>, see <see cref="TimelineEdits.ChoosePack"/>).
     /// </summary>
-    public static string? PackFor(ImmutableArray<string> packs, string? documentPack) =>
-        packs.IsDefaultOrEmpty ? null
-        : !string.IsNullOrEmpty(documentPack) && packs.Contains(documentPack, StringComparer.OrdinalIgnoreCase) ? documentPack
-        : packs[0];
+    public static string PackTip(string path, ImmutableArray<string> packs, string? documentPack, TimelinePackChoice choice) =>
+        packs.IsDefaultOrEmpty ? path
+        : choice.Refused || choice.Pack == null ? $"{path}\nNeeds the {packs[0]} expressions."
+        : string.Equals(choice.Pack, documentPack, StringComparison.OrdinalIgnoreCase) ? $"{path}\nFrom this timeline's {choice.Pack} expressions."
+        : choice.Switches ? $"{path}\nSwitches this timeline to the {choice.Pack} expressions."
+        : $"{path}\nNeeds the {choice.Pack} expressions.";
 
     /// <summary>Seconds as whole frames, rounded half away from zero.</summary>
     public static int Frames(float seconds) => TimelineSnap.Round(seconds * (double)TimelineDocument.Fps);

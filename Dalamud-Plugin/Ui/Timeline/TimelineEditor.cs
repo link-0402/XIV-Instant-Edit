@@ -139,6 +139,9 @@ internal sealed class TimelineEditor
     /// <summary>Why the last command did nothing, for a short message; null when it worked.</summary>
     public string? LastError { get; private set; }
 
+    /// <summary>What the last add or face change did besides, such as switching expression sets; cleared by the next click or shortcut.</summary>
+    public string? LastNotice { get; private set; }
+
     public bool Playing { get; set; }
 
     public TimelineGesture Gesture => gesture;
@@ -180,6 +183,12 @@ internal sealed class TimelineEditor
     /// library (see <see cref="TimelineEdits.FromPack"/>). Null while unknown, when every face counts.
     /// </summary>
     public IReadOnlySet<string>? ResidentMotions { get; set; }
+
+    /// <summary>
+    /// Every expression library each face and lip motion is in, by motion name, so a face from another
+    /// one can switch the timeline over (see <see cref="ChoosePack"/>). Null while unknown.
+    /// </summary>
+    public IReadOnlyDictionary<string, ImmutableArray<string>>? MotionPacks { get; set; }
 
     /// <summary>
     /// The skeleton's bone indices by name, so bone rows list parents first; null while unknown, when
@@ -304,6 +313,7 @@ internal sealed class TimelineEditor
         // open: close it as its own step before this press starts another.
         History.End();
         LastError = null;
+        LastNotice = null;
         LastRemoval = null;
         SnapGuide = null;
         dragged = false;
@@ -657,6 +667,7 @@ internal sealed class TimelineEditor
             return true;
         }
         LastError = null;
+        LastNotice = null;
         LastRemoval = null;
         switch (key)
         {
@@ -723,11 +734,16 @@ internal sealed class TimelineEditor
     /// <summary>
     /// Adds events built for an Add and selects them; false with <see cref="LastError"/> when refused.
     /// Events that would start past the end move back together, so an add at the end still plays.
+    /// With <paramref name="switchPack"/> (a <see cref="ChoosePack"/> that switches) the timeline takes
+    /// <paramref name="pack"/> in place of its expression library in the same undo step, and says so in
+    /// <see cref="LastNotice"/>.
     /// </summary>
-    public bool Add(IEnumerable<TimelineEvent> events, string? pack)
+    public bool Add(IEnumerable<TimelineEvent> events, string? pack, bool switchPack = false)
     {
         LastError = null;
-        var doc = Document;
+        LastNotice = null;
+        var switched = switchPack && !string.IsNullOrEmpty(pack) && !string.Equals(pack, Document.FacePack, StringComparison.OrdinalIgnoreCase);
+        var doc = switched ? Document with { FacePack = pack } : Document;
         var added = events.ToList();
         if (added.Count > 0)
         {
@@ -738,9 +754,12 @@ internal sealed class TimelineEditor
         }
         var next = TimelineEdits.Add(doc, added, pack, out var created, out var error, ResidentMotions);
         LastError = error;
-        if (!Commit(next))
+        // A switched library alone is no add.
+        if (created.IsDefaultOrEmpty || !Commit(next))
             return false;
         SelectKeys(created);
+        if (switched)
+            LastNotice = TimelineEdits.PackSwitched(pack!);
         return true;
     }
 
@@ -950,6 +969,32 @@ internal sealed class TimelineEditor
             History.Preview(next);
         else
             History.Commit(next);
+        return true;
+    }
+
+    /// <summary>
+    /// The expression library a face from <paramref name="packs"/> comes from here (see
+    /// <see cref="TimelineEdits.ChoosePack"/>); <paramref name="except"/> is the event it would replace.
+    /// </summary>
+    public TimelinePackChoice ChoosePack(ImmutableArray<string> packs, string? except = null) =>
+        TimelineEdits.ChoosePack(Document, packs, ResidentMotions, MotionPacks, except);
+
+    /// <summary>
+    /// Gives a face event another motion, from <paramref name="choice"/>'s library: a library the
+    /// timeline doesn't load yet comes with it in the same undo step, and a switch says so in
+    /// <see cref="LastNotice"/>. False when refused, nothing changed or a drag is running.
+    /// </summary>
+    public bool ReplaceFace(TimelineEvent ev, TimelinePackChoice choice)
+    {
+        LastNotice = null;
+        if (choice.Refused)
+            return false;
+        if (choice.Pack is not { } pack || string.Equals(pack, Document.FacePack, StringComparison.OrdinalIgnoreCase))
+            return Replace(ev);
+        if (!Commit(TimelineEdits.Replace(Document with { FacePack = pack }, ev, motionFrames)))
+            return false;
+        if (choice.Switches)
+            LastNotice = TimelineEdits.PackSwitched(pack);
         return true;
     }
 

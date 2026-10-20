@@ -6,6 +6,7 @@ using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui;
+using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Timeline window's pure texts and choices: lane names and colours, event labels, why a save
@@ -302,22 +303,99 @@ internal static class TimelineWindowViewsFixture
             .. TimelineWindowViews.EaseSides, TimelineWindowViews.LoopCleanTip]);
     }
 
+    /// <summary>
+    /// Which expression set a face comes from. A timeline loads one, so a face from another set
+    /// switches it when that set holds every face already there (Smile is in smile and smile_st, Grin
+    /// only in smile_st), and is refused, naming the faces in the way, when none does.
+    /// </summary>
     private static void Packs(Action<bool, string> check, List<string> texts)
     {
-        check(TimelineWindowViews.PackAfter(null, "smile", out var error) == "smile" && error == null,
-            "The first library expression brings its library");
-        check(TimelineWindowViews.PackAfter("smile", "SMILE", out error) == "smile" && error == null, "The same library is kept");
-        check(TimelineWindowViews.PackAfter("smile", null, out error) == "smile" && error == null, "A resident expression keeps the library");
-        check(TimelineWindowViews.PackAfter(null, null, out error) == null && error == null, "No library stays none");
-        var kept = TimelineWindowViews.PackAfter("smile", "emot/laugh", out error);
-        texts.Add(error ?? "");
-        check(kept == "smile" && error != null && error.Contains("smile", StringComparison.Ordinal),
-            "A second library is refused with a short reason");
-        check(TimelineWindowViews.PackAfter("illusio_vitae", "smile", out error, documentPackInUse: false) == "smile" && error == null,
-            "A library no face plays from gives way");
-        check(TimelineWindowViews.PackFor([], "smile") == null && TimelineWindowViews.PackFor(["smile", "emot/laugh"], "EMOT/LAUGH") == "EMOT/LAUGH" &&
-              TimelineWindowViews.PackFor(["smile", "emot/laugh"], "illusio_vitae") == "smile" && TimelineWindowViews.PackFor(["smile"], null) == "smile",
-            "A face is placed from no library when always loaded, from the timeline's own when it has the face, else from its first");
+        var resident = ImmutableHashSet.Create(StringComparer.Ordinal, "cfxf_angry");
+        var sets = new Dictionary<string, ImmutableArray<string>>(StringComparer.Ordinal)
+        {
+            ["cfxf_smile"] = ["smile", "smile_st", "emot/laugh"],
+            ["cfxf_smile_st"] = ["smile_st"],
+            ["cfxf_wink"] = ["smile"],
+            ["cfxf_laugh"] = ["emot/laugh", "emot/x"],
+        };
+        var smiling = Doc(100, 100, Ev("t1", "C010", TimelineLane.Expression, 0, "cfxf_smile", 30),
+            Ev("t2", "C010", TimelineLane.Expression, 40, "cfxf_angry", 30)) with { FacePack = "smile" };
+        TimelinePackChoice Choose(TimelineDocument doc, ImmutableArray<string> packs, string? except = null,
+            IReadOnlyDictionary<string, ImmutableArray<string>>? motionPacks = null) =>
+            TimelineEdits.ChoosePack(doc, packs, resident, motionPacks ?? sets, except);
+
+        check(Choose(smiling, []) is { Pack: null, Switches: false, Refused: false } &&
+              Choose(smiling, ["emot/laugh", "SMILE"]) is { Pack: "smile", Switches: false, Refused: false } &&
+              Choose(smiling with { FacePack = null }, ["emot/laugh", "smile"]) is { Pack: "emot/laugh", Switches: false } &&
+              Choose(smiling with { FacePack = "illusio_vitae", Events = [] }, ["smile_st"]) is { Pack: "smile_st", Switches: false },
+            "A face always loaded needs no set; one the timeline's set holds comes from it, else from its own set while no face uses the timeline's");
+        check(Choose(smiling, ["smile_st"]) is { Pack: "smile_st", Switches: true, Refused: false },
+            "Grin switches a Smile timeline to smile_st, which has Smile too");
+        check(Choose(smiling, ["emot/x", "emot/laugh", "smile_st"]) is { Pack: "emot/laugh", Switches: true } &&
+              Choose(smiling, ["smile_st", "emot/laugh"]) is { Pack: "smile_st", Switches: true },
+            "The face's own set comes first, then any other that has all the faces");
+        check(Choose(smiling with { Events = [smiling.Events[1]] }, ["smile_st"]) is { Pack: "smile_st", Switches: false },
+            "Always loaded faces never hold a set");
+        var winking = smiling with { Events = smiling.Events.Add(Ev("t3", "C010", TimelineLane.Expression, 70, "cfxf_wink", 20)) };
+        var blocked = Choose(winking, ["smile_st"]);
+        check(blocked is { Pack: null, Switches: false, Refused: true } && blocked.Blockers.SequenceEqual(["cfxf_wink"]) &&
+              Choose(winking, ["smile_st"], except: "t3") is { Pack: "smile_st", Switches: true },
+            "With no set for all the faces the face is refused, naming those its own set lacks; the face being replaced doesn't count");
+        check(Choose(smiling, ["smile_st"], motionPacks: new Dictionary<string, ImmutableArray<string>>()) is { Refused: true } refused &&
+              refused.Blockers.SequenceEqual(["cfxf_smile"]),
+            "A face whose sets aren't known is only in the timeline's");
+        // A mod's own library with its own Smile: switching would play the game's Smile instead.
+        var custom = smiling with { FacePack = "mymod_faces" };
+        check(Choose(custom, ["smile_st"]) is { Pack: null, Refused: true } fromMod && fromMod.Blockers.SequenceEqual(["cfxf_smile"]) &&
+              Choose(custom, ["smile_st"], except: "t1") is { Pack: "smile_st", Switches: false, Refused: false },
+            "A face playing from a library the game doesn't have never switches to one it does, even with a vanilla face's name");
+        check(Choose(smiling, ["mine/faces"]) is { Refused: true } toMod && toMod.Blockers.SequenceEqual(["cfxf_smile"]) &&
+              Choose(smiling with { Events = [smiling.Events[1]] }, ["mine/faces"]) is { Pack: "mine/faces", Switches: false },
+            "The game's faces never switch to a mod's set, which only has its own faces");
+
+        var notes = new[]
+        {
+            TimelineWindowViews.FaceLibraryNote(new FaceLibraryStatus(FaceLibraryState.Building)),
+            TimelineWindowViews.FaceLibraryNote(new FaceLibraryStatus(FaceLibraryState.Building, Progress: 3, Total: 40)),
+            TimelineWindowViews.FaceLibraryNote(new FaceLibraryStatus(FaceLibraryState.Loading)),
+            TimelineWindowViews.FaceLibraryNote(new FaceLibraryStatus(FaceLibraryState.Failed, Error: "Penumbra is not running.")),
+        };
+        var summaries = new[]
+        {
+            TimelineWindowViews.FaceLibrarySummary(new FaceLibraryStatus(FaceLibraryState.Ready, 1, 1)),
+            TimelineWindowViews.FaceLibrarySummary(new FaceLibraryStatus(FaceLibraryState.Ready, 12, 3)),
+        };
+        check(notes.SequenceEqual(["Finding expression sets in your mods", "Finding expression sets in your mods: 3 of 40 mods read",
+                  "Loading the expression sets from your mods", "The expression sets in your mods could not be listed. Penumbra is not running."]) &&
+              TimelineWindowViews.FaceLibraryNote(new FaceLibraryStatus(FaceLibraryState.Ready)) == null &&
+              TimelineWindowViews.FaceLibraryNote(new FaceLibraryStatus(FaceLibraryState.NotLoaded)) == null &&
+              summaries.SequenceEqual(["1 expression set from 1 mod.", "12 expression sets from 3 mods."]),
+            "Short plain lines about the mods' expression sets");
+        texts.AddRange([.. notes.OfType<string>(), .. summaries]);
+
+        var oneBlocks = TimelineEdits.PackBlocked(["Wink"]);
+        var threeBlock = TimelineEdits.PackBlocked(["Wink", "Pout", "Shock"]);
+        var switched = TimelineEdits.PackSwitched("smile_st");
+        check(oneBlocks == "No expression set has all these faces. Remove Wink first." &&
+              threeBlock == "No expression set has all these faces. Remove Wink, Pout and Shock first." &&
+              TimelineEdits.PackBlocked(["Wink", "Pout"]).EndsWith("Remove Wink and Pout first.", StringComparison.Ordinal) &&
+              switched == "Switched to the smile_st expressions, which have all these faces.",
+            "Short plain texts for a set switch and a refusal");
+        texts.AddRange([oneBlocks, threeBlock, switched, TimelineEdits.PackInUse("smile")]);
+
+        var tips = new[]
+        {
+            TimelineWindowViews.PackTip("cfxf_angry", [], "smile", Choose(smiling, [])),
+            TimelineWindowViews.PackTip("cfxf_smile", ["smile"], "smile", Choose(smiling, ["smile"])),
+            TimelineWindowViews.PackTip("cfxf_smile_st", ["smile_st"], "smile", Choose(smiling, ["smile_st"])),
+            TimelineWindowViews.PackTip("cfxf_smile_st", ["smile_st"], "smile", blocked),
+            TimelineWindowViews.PackTip("cfxf_smile", ["smile"], null, Choose(smiling with { FacePack = null }, ["smile"])),
+        };
+        check(tips.SequenceEqual(["cfxf_angry", "cfxf_smile\nFrom this timeline's smile expressions.",
+                  "cfxf_smile_st\nSwitches this timeline to the smile_st expressions.", "cfxf_smile_st\nNeeds the smile_st expressions.",
+                  "cfxf_smile\nNeeds the smile expressions."]),
+            "A picker row says which set its face comes from");
+        texts.AddRange(tips);
     }
 
     /// <summary>

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Services.Animations;
@@ -66,6 +67,12 @@ internal sealed partial class AnimationEditService : IDisposable
         commits = new AnimationCommitService(animationMods, resources, new ModelBackupStore(recoveryRoot, () => configuration.CacheRetention), journals, backups);
         baker = new AnimationBakeService(native, framework);
         skeletons = new AnimationSkeletonIndex(animationMods, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
+        FaceLibraries = new FaceLibraryIndex(animationMods.FaceLibraryRootsAsync, path =>
+            {
+                try { return data.FileExists(path); }
+                catch (Exception e) when (e is not OutOfMemoryException) { return false; }
+            },
+            () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory), log);
         Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log);
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         Observer.CharacterChanged += Cancel;
@@ -88,6 +95,39 @@ internal sealed partial class AnimationEditService : IDisposable
         }
         catch (OperationCanceledException) { }
         catch (Exception e) { log.Warning(e, "Could not rebuild the skeleton library."); }
+    }
+
+    /// <summary>The expression libraries the installed mods add, saved in the cache folder like the skeleton library.</summary>
+    public FaceLibraryIndex FaceLibraries { get; }
+
+    /// <summary>Builds the expression set list again; the Timeline's pickers use the new one once it is done.</summary>
+    public void RebuildFaceLibraries() => _ = RebuildFaceLibrariesAsync();
+
+    private async Task RebuildFaceLibrariesAsync()
+    {
+        try { await FaceLibraries.RebuildAsync(lifetime.Token); }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { log.Warning(e, "Could not rebuild the expression set list."); }
+    }
+
+    /// <summary>Loads the saved expression set list, or builds it the first time.</summary>
+    public void StartFaceLibraries() => FaceLibraries.Start(lifetime.Token);
+
+    /// <summary>
+    /// The installed expression libraries for <paramref name="race"/>'s <paramref name="face"/> that
+    /// <paramref name="collection"/> plays: each game path is resolved through Penumbra. Nothing in game changes.
+    /// </summary>
+    public async Task<ImmutableArray<FaceLibrary>> ActiveFaceLibrariesAsync(Guid collection, string race, string face, CancellationToken token)
+    {
+        var candidates = FaceLibraries.Libraries.Where(l => l.Race == race && l.Face == face).ToList();
+        var resolved = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var gamePath in candidates.Select(l => l.GamePath).Distinct(StringComparer.Ordinal))
+        {
+            token.ThrowIfCancellationRequested();
+            try { resolved[gamePath] = await animationMods.ResolveAnimationPathAsync(collection, gamePath); }
+            catch (Exception e) when (e is IOException or InvalidDataException) { resolved[gamePath] = null; }
+        }
+        return FaceLibraryIndex.Active(candidates, race, face, path => resolved.GetValueOrDefault(path));
     }
 
     public void Refresh(AnimationCapture capture, Action<AnimationCapture> accept) => Launch(async token =>

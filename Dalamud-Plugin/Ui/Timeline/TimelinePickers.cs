@@ -47,6 +47,15 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     private TimelineAddKind pickerRowsKind;
     private string pickerRowsFilter = string.Empty;
     private int pickerRowsImports = -1;
+    private int pickerRowsInstalled = -1;
+
+    // Faces from the expression libraries that mods on in the collection add, asked each time a face
+    // picker opens and again when the list of them is rebuilt.
+    private Task<ImmutableArray<FaceLibrary>>? installedTask;
+    private (Guid Collection, string Race, string Face, int Revision)? installedKey;
+    private ImmutableArray<TimelineCatalogItem> installedFaces = [];
+    private ImmutableArray<TimelineCatalogItem> installedLips = [];
+    private int installedVersion;
 
     private readonly List<ImportedItem> importedItems = [];
     private int importsVersion;
@@ -104,6 +113,36 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         pickerError = null;
         pickerWeapon = WeaponAsListed;
         pickerOpenRequested = true;
+        // The collection may have changed since the last look.
+        if (kind is TimelineAddKind.Expression or TimelineAddKind.LipSync)
+            installedKey = null;
+    }
+
+    /// <summary>
+    /// Keeps the installed expression libraries' faces for the open clip's race up to date: asks again
+    /// when the clip, the collection or the list of libraries changed, and takes the answer once it is in.
+    /// </summary>
+    private void PollInstalled()
+    {
+        if (installedTask is { IsCompleted: true } done)
+        {
+            var active = done.IsCompletedSuccessfully ? done.Result : [];
+            if (done.Exception is { } error)
+                session.Log.Debug(error, "Could not tell which expression sets the collection plays.");
+            var resident = session.Catalog.Data.ResidentMotions;
+            installedFaces = FaceLibraryIndex.Items(active, false, resident);
+            installedLips = FaceLibraryIndex.Items(active, true, resident);
+            installedVersion++;
+            installedTask = null;
+        }
+        if (installedTask != null || session.Animations is not { } service || session.Source is not { } source || session.CatalogKey is not { } key)
+            return;
+        service.StartFaceLibraries();
+        var wanted = (source.Capture.CollectionId, key.RaceCode, key.Face, service.FaceLibraries.Revision);
+        if (installedKey == wanted || service.FaceLibraries.Status.State is not FaceLibraryState.Ready)
+            return;
+        installedKey = wanted;
+        installedTask = Task.Run(() => service.ActiveFaceLibrariesAsync(wanted.CollectionId, wanted.RaceCode, wanted.Face, CancellationToken.None));
     }
 
     public void Draw(TimelineEditor current)
@@ -122,6 +161,11 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         ImGui.TextColored(Theme.Label, pickerTarget != null ? $"Choose another {name}" : $"Add {name} at {TimelineText.Seconds(pickerFrame)}");
         ImGui.Separator();
         DrawCatalogState();
+        if (pickerKind is TimelineAddKind.Expression or TimelineAddKind.LipSync)
+        {
+            PollInstalled();
+            DrawInstalledState();
+        }
         switch (pickerKind)
         {
             case TimelineAddKind.Sound or TimelineAddKind.Effect:
@@ -178,6 +222,24 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             ImGui.TextColored(Theme.Hint, note);
     }
 
+    /// <summary> While the list of the mods' expression sets is built, or why it failed. </summary>
+    private void DrawInstalledState()
+    {
+        if (session.Animations is not { } service || session.CatalogKey == null)
+            return;
+        var status = service.FaceLibraries.Status;
+        if (TimelineWindowViews.FaceLibraryNote(status) is { } note)
+        {
+            if (status.State is FaceLibraryState.Loading or FaceLibraryState.Building)
+            {
+                Widgets.Spinner();
+                ImGui.SameLine(0, Theme.Gap);
+                ImGui.AlignTextToFramePadding();
+            }
+            ImGui.TextColored(status.State == FaceLibraryState.Failed ? Theme.Warning : Theme.Muted, note);
+        }
+    }
+
     /// <summary> Import a file from disk (a sound with its volume), or type a game path the game or a mod has. </summary>
     private void DrawImportRow(TimelineEditor current)
     {
@@ -216,7 +278,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
                 var path = TimelineWindowViews.GamePath(gamePathText, pickerKind, out var error);
                 if (path == null)
                     pickerError = error;
-                else if (Place(current, pickerKind, pickerFrame, pickerTarget, path, null, null))
+                else if (Place(current, pickerKind, pickerFrame, pickerTarget, path, [], null))
                     pickerClose = true;
             }
         }
@@ -284,7 +346,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         var id => (ushort)id,
     };
 
-    /// <summary> The picker's rows: this kind's imports first, then the catalog's list, filtered. </summary>
+    /// <summary> The picker's rows: this kind's imports first, then the catalog's list, then the faces of the mods' expression sets, filtered. </summary>
     private List<TimelineCatalogItem> PickerRows()
     {
         var data = session.Catalog.Data;
@@ -299,7 +361,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         if (list.IsDefault)
             list = [];
         if (list == pickerRowsSource && pickerKind == pickerRowsKind && importsVersion == pickerRowsImports &&
-            string.Equals(pickerFilter, pickerRowsFilter, StringComparison.Ordinal))
+            installedVersion == pickerRowsInstalled && string.Equals(pickerFilter, pickerRowsFilter, StringComparison.Ordinal))
             return pickerRows;
         pickerRows.Clear();
         var filter = pickerFilter.Trim();
@@ -309,9 +371,19 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         foreach (var item in list)
             if (Matches(item, filter))
                 pickerRows.Add(item);
+        ImmutableArray<TimelineCatalogItem> installed = pickerKind switch
+        {
+            TimelineAddKind.Expression => installedFaces,
+            TimelineAddKind.LipSync => installedLips,
+            _ => [],
+        };
+        foreach (var item in installed)
+            if (Matches(item, filter))
+                pickerRows.Add(item);
         pickerRowsSource = list;
         pickerRowsKind = pickerKind;
         pickerRowsImports = importsVersion;
+        pickerRowsInstalled = installedVersion;
         pickerRowsFilter = pickerFilter;
         return pickerRows;
     }
@@ -341,19 +413,15 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
                     var item = rows[index];
                     using var id = ImRaii.PushId(index);
                     var clicked = ImGui.Selectable(item.Label);
-                    // Of the libraries that hold a face, the timeline's own when it is one of them.
-                    var pack = TimelineWindowViews.PackFor(item.Packs, current.Document.FacePack);
                     if (ImGui.IsItemHovered() && item.Path.Length > 0)
-                        ImGui.SetTooltip(pack == null ? item.Path
-                            : string.Equals(pack, current.Document.FacePack, StringComparison.OrdinalIgnoreCase) ? $"{item.Path}\nFrom this timeline's {pack} expressions."
-                            : $"{item.Path}\nNeeds the {pack} expressions.");
+                        ImGui.SetTooltip(TimelineWindowViews.PackTip(item.Path, item.Packs, current.Document.FacePack, current.ChoosePack(item.Packs, pickerTarget)));
                     if (item.Detail.Length > 0)
                     {
                         ImGui.SameLine(0, Theme.Gap);
                         ImGui.TextColored(Theme.Muted, item.Detail);
                     }
                     if (clicked && !picked)
-                        picked = Place(current, pickerKind, pickerFrame, pickerTarget, item.Path, pack, item.Prop, item.Frames ?? 0);
+                        picked = Place(current, pickerKind, pickerFrame, pickerTarget, item.Path, item.Packs, item.Prop, item.Frames ?? 0);
                 }
             clipper.End();
         }
@@ -367,9 +435,11 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     /// <summary>
     /// Adds an event of <paramref name="kind"/> at <paramref name="frame"/>, or gives the event
     /// <paramref name="target"/> a new path or prop model. Sets <see cref="pickerError"/> when refused.
+    /// A face comes from one of the expression libraries that hold it (<paramref name="packs"/>), switching
+    /// the timeline's when another holds all its faces (<see cref="TimelineEditor.ChoosePack"/>).
     /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known.
     /// </summary>
-    private bool Place(TimelineEditor current, TimelineAddKind kind, int frame, string? target, string path, string? pack,
+    private bool Place(TimelineEditor current, TimelineAddKind kind, int frame, string? target, string path, ImmutableArray<string> packs,
         TimelinePropModel? prop, int frames = 0)
     {
         pickerError = null;
@@ -378,8 +448,15 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             pickerError = "Wait for the save to finish.";
             return false;
         }
+        var choice = current.ChoosePack(packs, target);
+        if (choice.Refused)
+        {
+            pickerError = TimelineEdits.PackBlocked([.. choice.Blockers.Select(FaceLabel)]);
+            return false;
+        }
+        var pack = choice.Pack;
         if (target != null)
-            return Replace(current, kind, target, path, pack, prop);
+            return Replace(current, kind, target, path, choice, prop);
         if (kind == TimelineAddKind.Prop && prop != null)
             prop = prop with { WeaponTimeline = WeaponChoice(prop) };
         ImmutableArray<TimelineEvent> events;
@@ -389,7 +466,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             pickerError = e.Message;
             return false;
         }
-        if (current.Add(events, pack))
+        if (current.Add(events, pack, choice.Switches))
         {
             current.Reveal(frame);
             return true;
@@ -398,7 +475,15 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         return false;
     }
 
-    private bool Replace(TimelineEditor current, TimelineAddKind kind, string key, string path, string? pack, TimelinePropModel? prop)
+    /// <summary> The name the picker lists a face or lip motion by, else the motion's own. </summary>
+    private string FaceLabel(string motion)
+    {
+        var data = session.Catalog.Data;
+        return data.Expressions.Concat(data.LipShapes).Concat(installedFaces).Concat(installedLips)
+            .FirstOrDefault(item => string.Equals(item.Path, motion, StringComparison.Ordinal))?.Label ?? motion;
+    }
+
+    private bool Replace(TimelineEditor current, TimelineAddKind kind, string key, string path, TimelinePackChoice choice, TimelinePropModel? prop)
     {
         var doc = current.Document;
         if (TimelineEdits.Find(doc, key) is not { } ev)
@@ -417,19 +502,8 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
                 .SetItem("Model", prop.Model).SetItem("Body", prop.Body).SetItem("Variant", prop.Variant);
             return Applied(current, current.Replace(ev with { Values = values }));
         }
-        // The face being swapped out no longer holds the library.
-        var facePack = TimelineWindowViews.PackAfter(doc.FacePack, pack, out var error,
-            TimelineEdits.UsesPack(doc, current.ResidentMotions, except: key));
-        if (error != null)
-        {
-            pickerError = error;
-            return false;
-        }
-        var updated = ev with { Path = path };
         // A face from a library the timeline does not load yet brings the library with it, as one step.
-        return Applied(current, !string.Equals(facePack, doc.FacePack, StringComparison.Ordinal)
-            ? current.Commit(TimelineEdits.Replace(doc with { FacePack = facePack }, updated))
-            : current.Replace(updated));
+        return Applied(current, current.ReplaceFace(ev with { Path = path }, choice));
     }
 
     /// <summary>
@@ -522,7 +596,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             importMessage = $"{name} was imported. Pick it from the list to place it.";
             return;
         }
-        if (Place(session.Editor, job.Kind, job.Frame, job.Target, import.GamePath, null, null))
+        if (Place(session.Editor, job.Kind, job.Frame, job.Target, import.GamePath, [], null))
             importMessage = $"{name} was imported.";
         else
             importError = $"{name} was imported but could not be placed. {pickerError}";
