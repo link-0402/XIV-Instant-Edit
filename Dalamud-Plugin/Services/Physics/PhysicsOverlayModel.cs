@@ -177,7 +177,8 @@ internal static class PhysicsOverlayModel
         PhysicsOverlayShapes shapes)
     {
         var bone = chain.Nodes[0];
-        if (bone.Bone.IsEmpty || skeleton.Get(bone.Bone.Text) is not { Parent.Length: > 0 } known || frame(known.Parent) is not { } parent)
+        // Face, hair and gear bones too: a body physics file may swing those (earring bones on the face skeleton).
+        if (bone.Bone.IsEmpty || skeleton.ParentOf(bone.Bone.Text) is not { Length: > 0 } parentName || frame(parentName) is not { } parent)
             return;
         var axis = parent.Turn(bone.ConeAxisOffset);
         var length = Vector3.Distance(apex, next);

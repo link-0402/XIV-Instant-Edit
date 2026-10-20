@@ -14,6 +14,40 @@ internal static class PhysicsOverlayScenarios
         CheckChain();
         CheckShapes();
         CheckMissing();
+        CheckFaceBones();
+    }
+
+    /// <summary> A body physics chain on face bones (earrings on j_kao): drawn from the face skeleton's frames and parents. </summary>
+    private static void CheckFaceBones()
+    {
+        var parents = new Dictionary<string, string> { ["j_kao"] = "", ["j_ex_earring_a_r"] = "j_kao", ["j_ex_earring_b_r"] = "j_ex_earring_a_r" };
+        var skeleton = new PhysicsSkeleton([new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity), new PhysicsBone("j_kao", "n_root", new Vector3(0, 1.5f, 0), Quaternion.Identity)],
+            otherParents: parents);
+        var frames = new Dictionary<string, PhysicsFrame>
+        {
+            ["j_kao"] = new(new Vector3(0, 1.5f, 0), Quaternion.Identity, Vector3.One),
+            ["j_ex_earring_a_r"] = new(new Vector3(0, 1.49f, -0.06f), Quaternion.Identity, Vector3.One),
+            ["j_ex_earring_b_r"] = new(new Vector3(0, 1.48f, -0.06f), Quaternion.Identity, Vector3.One),
+        };
+        PhysicsFrame? Frame(string bone) => frames.TryGetValue(bone, out var frame) ? frame : null;
+        var chain = new PhybChain
+        {
+            LastBoneOffset = new Vector3(0.01f, 0, 0),
+            Nodes =
+            [
+                new PhybNode { Bone = PhybName.From("j_ex_earring_a_r"), ConeMaxAngle = PhysicsTemplates.Radians(50), ConeAxisOffset = new Vector3(0, -1, 0) },
+                new PhybNode { Bone = PhybName.From("j_ex_earring_b_r"), Radius = 0.005f, ConeMaxAngle = PhysicsTemplates.Radians(30), ConeAxisOffset = Vector3.UnitX },
+                new PhybNode { Radius = 0.005f, ConeMaxAngle = MathF.PI, ConeAxisOffset = Vector3.UnitX },
+            ],
+        };
+        var file = new PhybFile { Simulators = [new PhybSimulator { Chains = [chain] }] };
+        var shapes = PhysicsOverlayModel.Build(file, [(0, 0)], false, PhysicsOverlayHover.None, skeleton, Frame);
+        Require(skeleton.Has("j_ex_earring_b_r") && skeleton.ParentOf("j_ex_earring_a_r") == "j_kao" && skeleton.ParentOf("j_kao") == "n_root" &&
+                skeleton.Get("j_ex_earring_a_r") is null && skeleton.ParentOf("j_missing") == "",
+            "physics skeleton: other skeletons' bones have parents, the body's win, and they stay out of the body");
+        Require(shapes.Segments.Count(segment => segment.Part == PhysicsOverlayPart.Chain) == 2 &&
+                shapes.Circles.SingleOrDefault(circle => circle.Part == PhysicsOverlayPart.Cone) is { Normal: { } axis } && Vector3.Distance(axis, -Vector3.UnitY) < 1e-5f,
+            "physics overlay: a chain on face bones draws its bones, tip and swing cone, the cone turned by the face bone's parent");
     }
 
     /// <summary> A chest bone 10 cm up a spine bone, pointing along +X, with a 14 cm tip and a spring on the spine. </summary>

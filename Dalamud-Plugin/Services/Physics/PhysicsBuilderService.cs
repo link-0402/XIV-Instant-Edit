@@ -126,14 +126,15 @@ internal sealed class PhysicsBuilderService : IDisposable
 
     /// <summary>
     /// Reads the pose of the character the builder shows (your posed copy in GPose, else your
-    /// character) into <paramref name="pose"/>; false when it can't be read. Framework thread only.
+    /// character) into <paramref name="pose"/>, face, hair and gear bones included, since a physics
+    /// file may name those; false when it can't be read. Framework thread only.
     /// </summary>
     public bool ReadShownPose(Animations.Preview.ActorPose pose)
     {
         if (objects.LocalPlayer is not ICharacter player || player.Address == 0)
             return false;
         var shown = PhysicsLiveReader.Shown(objects, player, clientState.IsGPosing);
-        return shown.Address != 0 && pose.Read(shown.Address);
+        return shown.Address != 0 && pose.Read(shown.Address, allPartials: true);
     }
 
     /// <summary> Reads your character, its skeleton and what its collection loads for its body. </summary>

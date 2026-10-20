@@ -150,6 +150,8 @@ internal static unsafe class PhysicsLiveReader
 
         SkeletonDescriptionResult body = default;
         var others = new List<string>();
+        // The other skeletons' parents, so the builder can draw their bones' swing cones; the first skeleton naming a bone wins.
+        var otherParents = new Dictionary<string, string>(StringComparer.Ordinal);
         for (var p = 0; p < skeleton->PartialSkeletonCount; p++)
         {
             var partial = &skeleton->PartialSkeletons[p];
@@ -170,7 +172,11 @@ internal static unsafe class PhysicsLiveReader
                     body = new SkeletonDescriptionResult(description,
                         partial->SkeletonResourceHandle != null ? partial->SkeletonResourceHandle->FileName.Utf8() : string.Empty);
                 else
-                    others.AddRange(description.Bones.Select(bone => bone.Name));
+                    foreach (var bone in description.Bones)
+                    {
+                        others.Add(bone.Name);
+                        otherParents.TryAdd(bone.Name, PhysicsSkeleton.ParentName(description, bone.Parent));
+                    }
             }
             catch (InvalidDataException e)
             {
@@ -188,7 +194,7 @@ internal static unsafe class PhysicsLiveReader
             if (handle != null)
                 physics = handle->FileName.Utf8();
         }
-        return (new PhysicsCharacter(local.ObjectIndex, local.Name.TextValue, race, PhysicsSkeleton.From(body.Description!, others),
+        return (new PhysicsCharacter(local.ObjectIndex, local.Name.TextValue, race, PhysicsSkeleton.From(body.Description!, others, otherParents),
             body.File, physics), null);
     }
 

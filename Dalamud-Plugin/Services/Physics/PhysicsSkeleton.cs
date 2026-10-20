@@ -17,8 +17,10 @@ internal sealed class PhysicsSkeleton
 {
     private readonly Dictionary<string, PhysicsBone> byName;
     private readonly HashSet<string> allNames;
+    private readonly Dictionary<string, string> otherParents;
 
-    public PhysicsSkeleton(IReadOnlyList<PhysicsBone> body, IEnumerable<string>? otherBones = null)
+    /// <param name="otherParents"> Parents of the other skeletons' bones, by bone name; their names count as bones too. </param>
+    public PhysicsSkeleton(IReadOnlyList<PhysicsBone> body, IEnumerable<string>? otherBones = null, IReadOnlyDictionary<string, string>? otherParents = null)
     {
         Body = body.ToImmutableArray();
         byName = new Dictionary<string, PhysicsBone>(StringComparer.Ordinal);
@@ -27,6 +29,8 @@ internal sealed class PhysicsSkeleton
         allNames = new HashSet<string>(byName.Keys, StringComparer.Ordinal);
         if (otherBones != null)
             allNames.UnionWith(otherBones);
+        this.otherParents = otherParents != null ? new Dictionary<string, string>(otherParents, StringComparer.Ordinal) : new(StringComparer.Ordinal);
+        allNames.UnionWith(this.otherParents.Keys);
         Family = FamilyOf(byName.Keys);
     }
 
@@ -45,15 +49,22 @@ internal sealed class PhysicsSkeleton
 
     public PhysicsBone? Get(string bone) => byName.GetValueOrDefault(bone);
 
+    /// <summary> The parent's name of a bone of any of the character's skeletons, the body's first; empty for a root or a bone it lacks. </summary>
+    public string ParentOf(string bone)
+        => byName.TryGetValue(bone, out var known) ? known.Parent : otherParents.GetValueOrDefault(bone) ?? string.Empty;
+
     /// <summary> A body skeleton read from a skeleton file or a live character. </summary>
-    public static PhysicsSkeleton From(SkeletonDescription body, IEnumerable<string>? otherBones = null)
+    public static PhysicsSkeleton From(SkeletonDescription body, IEnumerable<string>? otherBones = null, IReadOnlyDictionary<string, string>? otherParents = null)
     {
         var bones = new List<PhysicsBone>(body.Bones.Length);
         foreach (var bone in body.Bones)
-            bones.Add(new PhysicsBone(bone.Name, bone.Parent >= 0 && bone.Parent < body.Bones.Length ? body.Bones[bone.Parent].Name : string.Empty,
-                bone.Reference.Position, bone.Reference.Rotation));
-        return new PhysicsSkeleton(bones, otherBones);
+            bones.Add(new PhysicsBone(bone.Name, ParentName(body, bone.Parent), bone.Reference.Position, bone.Reference.Rotation));
+        return new PhysicsSkeleton(bones, otherBones, otherParents);
     }
+
+    /// <summary> The name of the bone at <paramref name="parent"/>, or empty for a root. </summary>
+    internal static string ParentName(SkeletonDescription skeleton, int parent)
+        => parent >= 0 && parent < skeleton.Bones.Length ? skeleton.Bones[parent].Name : string.Empty;
 
     /// <summary> Names a skeleton by the bones skeleton mods add: iv_ (IVCS), ya_ (YAS) and nf_ (NFLB). </summary>
     internal static string FamilyOf(IEnumerable<string> bones)
