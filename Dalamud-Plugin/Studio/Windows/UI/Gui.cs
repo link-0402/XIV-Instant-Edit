@@ -112,11 +112,14 @@ internal static class Gui
 
     // ── Buttons ──────────────────────────────────────────────────────────────
 
-    /// <summary>A square FontAwesome button. Danger buttons draw their glyph in the error colour.</summary>
+    /// <summary>
+    /// A square FontAwesome button, one frame height on each side: rows that keep room for it beside a
+    /// stretched item count on that. Danger buttons draw their glyph in the error colour.
+    /// </summary>
     public static bool IconButton(FontAwesomeIcon icon, string id, string tooltip, bool danger = false)
     {
         if (danger) ImGui.PushStyleColor(ImGuiCol.Text, Theme.Bad);
-        bool clicked = ImGuiComponents.IconButton(id, icon);
+        bool clicked = ImGuiComponents.IconButton(id, icon, new Vector2(ImGui.GetFrameHeight()));
         if (danger) ImGui.PopStyleColor();
         Tooltip(tooltip);
         return clicked;

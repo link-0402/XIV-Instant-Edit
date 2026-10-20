@@ -322,10 +322,12 @@ internal sealed partial class MaterialWindow
     /// <summary>Copy, paste and discard for one row; true while one of them is hovered or the paste menu is open.</summary>
     private bool DrawRowActions(MaterialSession current, ColorTable table, int row, DtColorRow values, string name, bool legacyShader)
     {
-        var buttons = ImGui.GetFrameHeight() * 3 + ImGui.GetStyle().ItemSpacing.X * 2;
+        // Each button is drawn at the square size kept for it, so the three end at the row's edge.
+        var square = new Vector2(ImGui.GetFrameHeight());
+        var buttons = square.X * 3 + ImGui.GetStyle().ItemSpacing.X * 2;
         ImGui.SameLine();
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - buttons));
-        if (Widgets.GhostIconButton("##copy", FontAwesomeIcon.Copy, "Copy this row"))
+        if (Widgets.GhostIconButton("##copy", FontAwesomeIcon.Copy, "Copy this row", square))
         {
             rowClipboard = (values, legacyShader);
             Say(FeedbackSeverity.Info, $"Copied {name}.");
@@ -334,7 +336,7 @@ internal sealed partial class MaterialWindow
         ImGui.SameLine();
         using (ImRaii.Disabled(rowClipboard == null))
         {
-            if (Widgets.GhostIconButton("##paste", FontAwesomeIcon.Paste, "Paste onto this row"))
+            if (Widgets.GhostIconButton("##paste", FontAwesomeIcon.Paste, "Paste onto this row", square))
                 ImGui.OpenPopup(PastePopup);
         }
         hovered |= ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
@@ -345,7 +347,7 @@ internal sealed partial class MaterialWindow
         var edited = saved != null && (saved.Rows[row] != values || (savedDye is { } dye && table.Dye?[row] is { } now && now != dye));
         using (ImRaii.Disabled(!edited))
         {
-            if (Widgets.GhostIconButton("##reset-row", FontAwesomeIcon.UndoAlt, "Discard the changes to this row (hold Ctrl)") && ImGui.GetIO().KeyCtrl && saved != null)
+            if (Widgets.GhostIconButton("##reset-row", FontAwesomeIcon.UndoAlt, "Discard the changes to this row (hold Ctrl)", square) && ImGui.GetIO().KeyCtrl && saved != null)
             {
                 var savedRow = saved.Rows[row];
                 _ = current.Apply(d => DiscardRow(d, row, savedRow, savedDye), $"Discard changes to {name}");

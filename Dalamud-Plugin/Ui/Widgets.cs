@@ -12,12 +12,15 @@ namespace InstantEdit.Ui;
 /// </summary>
 internal static partial class Widgets
 {
-    /// <summary> A square icon button. The id must be unique within the current id scope. </summary>
+    /// <summary>
+    /// A square icon button, one frame height on each side: rows that keep room for it beside a stretched
+    /// item count on that. The id must be unique within the current id scope.
+    /// </summary>
     public static bool IconButton(string id, FontAwesomeIcon icon, string? tooltip = null, bool enabled = true)
     {
         bool clicked;
         using (ImRaii.Disabled(!enabled))
-            clicked = PlainIconButton(id, icon);
+            clicked = PlainIconButton(id, icon, new Vector2(ImGui.GetFrameHeight()));
         if (tooltip is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(tooltip);
         return clicked && enabled;
@@ -129,13 +132,16 @@ internal static partial class Widgets
     {
         if (ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.F) && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
             ImGui.SetKeyboardFocusHere();
-        var clearWidth = text.Length > 0 ? ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X : 0;
+        // The clear button is drawn at exactly the size kept for it: one wider than that overflows the row,
+        // and a window that sizes itself to its content (a popup) then grows by the overflow every frame.
+        var clear = new Vector2(ImGui.GetFrameHeight());
+        var clearWidth = text.Length > 0 ? clear.X + ImGui.GetStyle().ItemSpacing.X : 0;
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(80), ImGui.GetContentRegionAvail().X - clearWidth));
         var changed = ImGui.InputTextWithHint(id, hint, ref text, 256);
         if (text.Length == 0)
             return changed;
         ImGui.SameLine();
-        if (GhostIconButton(id + "-clear", FontAwesomeIcon.Times, "Clear the search"))
+        if (GhostIconButton(id + "-clear", FontAwesomeIcon.Times, "Clear the search", clear))
         {
             text = string.Empty;
             changed = true;
