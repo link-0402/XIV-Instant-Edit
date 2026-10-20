@@ -356,13 +356,17 @@ internal sealed class OnScreenTab
         ImGui.SameLine(0, Theme.Gap);
         if (ImGui.Selectable(node.LabelId, false, ImGuiSelectableFlags.None, new Vector2(0, ImGui.GetFrameHeight())) && hasChildren)
             _expansion.Toggle(key, expanded, false);
-        var hovered = ImGui.IsItemHovered();
-        ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
-        _textureTab.DrawTextureSource(node);
-        if (hovered)
-            _hoverCards.DrawRowHover(node, presentation, key);
-        DrawRowCells(actor, node, rowLeft);
-        _rows.DrawRowMenu(actor, node);
+        // A group row has no file of its own: no hover card, menu, source, path or actions.
+        if (!ResourceViews.IsGroup(node))
+        {
+            var hovered = ImGui.IsItemHovered();
+            ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
+            _textureTab.DrawTextureSource(node);
+            if (hovered)
+                _hoverCards.DrawRowHover(node, presentation, key);
+            DrawRowCells(actor, node, rowLeft);
+            _rows.DrawRowMenu(actor, node);
+        }
 
         if (!expanded || !hasChildren)
             return;
@@ -410,10 +414,11 @@ internal sealed class OnScreenTab
         var result = new List<ActorView>(items.Count);
         foreach (var entity in items)
         {
-            var roots = OnScreenService.ProjectVisibleResourceNodes(entity.ResourceRoots, includeVanilla)
+            var byModel = OnScreenService.ProjectVisibleResourceNodes(entity.ResourceRoots, includeVanilla)
                 .Select(ResourceViews.FromNode)
                 .ToList();
-            result.Add(new ActorView(entity, entity.PresentationCategory.ToString(), UiText.Safe(entity.Name), roots, entity.ObjectIndex));
+            result.Add(new ActorView(entity, entity.PresentationCategory.ToString(), UiText.Safe(entity.Name),
+                ResourceViews.GroupBodyFeatures(byModel), entity.ObjectIndex, byModel));
         }
 
         _actorSnapshot = items;

@@ -225,4 +225,50 @@ internal static class UiViewModelScenarios
                 && sectioned.RootsInSection(ResourceSection.Other).Count == 0,
             "section roots are grouped and ordered once per view");
     }
+
+    /// <summary> On Screen lists the body materials gear shares once, under Body Features, not under each model. </summary>
+    public static void RunBodyFeatures()
+    {
+        const string bibo = "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_bibo.mtrl";
+        const string pube = "chara/human/c0201/obj/body/b0001/material/v0001/mt_c0201b0001_bibopube.mtrl";
+        ResourceNode Skin(string gamePath, string file)
+            => Node("Mtrl", "Skin", gamePath, file, children: [Node("Tex", "skin_base.tex", "chara/x/skin_base.tex", @"C:\mods\Skin\skin_base.tex")]);
+        var top = Node("Mdl", "Robe", "chara/equipment/e0039/model/c0201e0039_top.mdl", @"C:\mods\Mod\top.mdl", order: 1, children:
+        [
+            Skin(bibo, @"C:\mods\Skin\bibo.mtrl"),
+            Node("Mtrl", "Material #2", "chara/equipment/e0039/material/v0001/mt_c0201e0039_top_shirt.mtrl", @"C:\mods\Mod\shirt.mtrl"),
+        ]);
+        var legs = Node("Mdl", "Culottes", "chara/equipment/e0039/model/c0201e0039_dwn.mdl", @"C:\mods\Mod\dwn.mdl", order: 3, children:
+        [
+            Skin(bibo, @"C:\mods\Skin\bibo.mtrl"),
+            Skin(pube, @"C:\mods\Skin\pube.mtrl"),
+            Node("Mtrl", "Material #3", "chara/equipment/e0039/material/v0001/mt_c0201e0039_dwn_skirt.mtrl", @"C:\mods\Mod\skirt.mtrl"),
+        ]);
+        // A vanilla body model with hidden game files leaves its modded skin material as a root of its own.
+        var loose = Skin(bibo, @"C:\mods\Skin\bibo.mtrl") with { ResourceSection = ResourceSection.Other };
+        var face = Node("Mdl", "Face", "chara/human/c0201/obj/face/f0001/model/c0201f0001_fac.mdl", @"C:\mods\Face\fac.mdl",
+            section: ResourceSection.CharacterFeatures, children:
+            [Node("Mtrl", "Face", "chara/human/c0201/obj/face/f0001/material/mt_c0201f0001_fac_a.mtrl", @"C:\mods\Face\fac_a.mtrl")]);
+
+        var byModel = new[] { top, legs, loose, face }.Select(ResourceViews.FromNode).ToList();
+        var grouped = ResourceViews.GroupBodyFeatures(byModel);
+        var group = grouped.SingleOrDefault(ResourceViews.IsGroup);
+        Require(group is { SectionValue: ResourceSection.CharacterFeatures, DisplayName: ResourceViews.BodyFeaturesLabel },
+            "body materials gather under one Body Features row in Character features");
+        Require(group!.Children.Select(c => c.GamePath).SequenceEqual([bibo, pube]) && group.Children.All(c => c.Children.Count == 1),
+            "each body material is listed once, with its textures");
+        Require(grouped.Where(r => !ResourceViews.IsGroup(r)).SelectMany(r => r.Flattened).All(r => !ResourceViews.IsBodyMaterial(r)),
+            "no model or section keeps a body material");
+        var groupedTop = grouped.Single(r => r.GamePath == top.GamePath);
+        Require(groupedTop.Children.Count == 1 && (groupedTop.DescendantKinds & ResourceKinds.Texture) == 0,
+            "a model keeps its own materials, and its kinds follow its remaining rows");
+        Require(grouped.Single(r => r.GamePath == face.GamePath).Children.Count == 1,
+            "face materials stay with the face");
+        Require(byModel[0].Children.Count == 2,
+            "the by-model roots, which find a material's models, are left as they were");
+        var gearOnly = new[] { Node("Mdl", "Ring", "chara/accessory/a0001/model/c0201a0001_rir.mdl", @"C:\mods\Mod\rir.mdl") }
+            .Select(ResourceViews.FromNode).ToList();
+        Require(ReferenceEquals(ResourceViews.GroupBodyFeatures(gearOnly), gearOnly),
+            "without body materials there is no Body Features row");
+    }
 }

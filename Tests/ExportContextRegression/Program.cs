@@ -206,6 +206,7 @@ try
     Scenarios.Run(() => ModResourceScenarios.Run(testRoot));
     Scenarios.Run(CollectionActivationScenarios.Run);
     Scenarios.Run(UiViewModelScenarios.Run);
+    Scenarios.Run(UiViewModelScenarios.RunBodyFeatures);
     Scenarios.Run(ResourceUiNamesScenarios.Run);
     Scenarios.Run(AnimationRowScenarios.Run);
     Scenarios.Run(() => PainterScenarios.Run(testRoot));

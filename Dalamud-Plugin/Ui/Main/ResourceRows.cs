@@ -88,6 +88,7 @@ internal sealed class ResourceRows
         if ((node.Kinds & ResourceKinds.Texture) != 0) return TextureRoleClassifier.Label(node.TextureRole) + " texture";
         if ((node.Kinds & ResourceKinds.Material) != 0) return "Material";
         if ((node.Kinds & ResourceKinds.Animation) != 0) return "Animation";
+        if (ResourceViews.IsGroup(node)) return "Skin and body materials, listed once";
         return ResourceViews.KindLabel(node.Type);
     }
 
@@ -101,7 +102,7 @@ internal sealed class ResourceRows
     /// <summary> The row's kind glyph in its colour, with a tooltip naming the kind or texture role. </summary>
     public static void DrawRowGlyph(ResourceView node)
     {
-        Widgets.Icon(KindGlyph(node.Kinds), RowColour(node) ?? Theme.Muted);
+        Widgets.Icon(ResourceViews.IsGroup(node) ? FontAwesomeIcon.Child : KindGlyph(node.Kinds), RowColour(node) ?? Theme.Muted);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(RowColourLabel(node));
     }

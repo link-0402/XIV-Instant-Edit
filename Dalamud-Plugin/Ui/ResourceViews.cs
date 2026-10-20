@@ -5,13 +5,18 @@ using InstantEdit.Services.PenumbraMods;
 namespace InstantEdit.Ui;
 
 /// <summary> An actor (or a browsed mod) and the resource roots the browser shows for it. </summary>
+/// <param name="ModelRoots">The roots with each material still under the models that use it, when <paramref name="Roots"/> regroups them (<see cref="ResourceViews.GroupBodyFeatures"/>).</param>
 internal sealed record ActorView(
     OnScreenObject? Entity,
     string Category,
     string Name,
     List<ResourceView> Roots,
-    int ImportObjectIndex)
+    int ImportObjectIndex,
+    List<ResourceView>? ModelRoots = null)
 {
+    /// <summary> The roots with every material under the models that use it. </summary>
+    public List<ResourceView> RootsByModel => ModelRoots ?? Roots;
+
     private Dictionary<ResourceSection, ResourceView[]>? _sectionRoots;
     private string? _header;
     private string? _summary;
@@ -113,16 +118,6 @@ internal sealed record ResourceView(
 /// <summary> Pure helpers that build and classify resource views. No ImGui or Dalamud dependencies. </summary>
 internal static class ResourceViews
 {
-    /// <summary> The material row the texture row sits under in the actor's tree, or null. </summary>
-    public static ResourceView? ParentMaterial(ActorView actor, ResourceView texture)
-    {
-        foreach (var root in actor.Roots)
-            foreach (var row in root.Flattened)
-                if ((row.Kinds & ResourceKinds.Material) != 0 && row.Children.Any(child => ReferenceEquals(child, texture)))
-                    return row;
-        return null;
-    }
-
     /// <summary> Converts a snapshot node (and its children) into browser rows. </summary>
     public static ResourceView FromNode(ResourceNode node)
     {
@@ -213,6 +208,98 @@ internal static class ResourceViews
             string.Empty,
             Array.Empty<string>(),
             new List<ResourceView>());
+    }
+
+    /// <summary> The type of a row that only groups other rows, such as <see cref="GroupBodyFeatures"/>'s. </summary>
+    public const string GroupType = "Group";
+
+    public const string BodyFeaturesLabel = "Body Features";
+
+    // After Face, Hair, Ears and Tail (OnScreenService's ResourcePresentation).
+    private const int BodyFeaturesOrder = 4;
+
+    public static bool IsGroup(ResourceView node) => node.Type == GroupType;
+
+    /// <summary> The material row the texture row sits under in the actor's tree, or null. </summary>
+    public static ResourceView? ParentMaterial(ActorView actor, ResourceView texture)
+    {
+        foreach (var roots in new[] { actor.Roots, actor.RootsByModel })
+            foreach (var root in roots)
+                foreach (var row in root.Flattened)
+                    if ((row.Kinds & ResourceKinds.Material) != 0 && row.Children.Any(child => ReferenceEquals(child, texture)))
+                        return row;
+        return null;
+    }
+
+    /// <summary>
+    /// Whether the row is a material of the body (<c>chara/human/cNNNN/obj/body/bNNNN/material/…</c>): the
+    /// skin, and body-mod materials such as pubes or piercings that gear names with a leading slash.
+    /// </summary>
+    public static bool IsBodyMaterial(ResourceView node)
+        => (node.Kinds & ResourceKinds.Material) != 0 && BodyMaterialPath.IsMatch(node.GamePath.Replace('\\', '/'));
+
+    private static readonly System.Text.RegularExpressions.Regex BodyMaterialPath = new(
+        @"^chara/human/c\d{4}/obj/body/b\d{4}/material/",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Takes the body materials (<see cref="IsBodyMaterial"/>) out of every model and section and lists each
+    /// once (by game path and file) under a "Body Features" row in Character features. Returns the roots
+    /// unchanged when there are none.
+    /// </summary>
+    public static List<ResourceView> GroupBodyFeatures(List<ResourceView> roots)
+    {
+        var body = new List<ResourceView>();
+        var seen = new HashSet<(string, string)>();
+        var kept = new List<ResourceView>(roots.Count);
+        foreach (var root in roots)
+            if (WithoutBodyMaterials(root, body, seen) is { } rest)
+                kept.Add(rest);
+        if (body.Count == 0)
+            return roots;
+
+        kept.Add(new ResourceView(
+            GroupType,
+            string.Empty,
+            BodyFeaturesLabel,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            null,
+            ResourceSourceState.LoadedMod,
+            ResourceSection.CharacterFeatures.ToString(),
+            BodyFeaturesLabel,
+            BodyFeaturesOrder,
+            string.Empty,
+            Array.Empty<string>(),
+            body));
+        return kept;
+    }
+
+    /// <summary> The row without its body materials, which go to <paramref name="body"/> once each; null when it is one. </summary>
+    private static ResourceView? WithoutBodyMaterials(ResourceView node, List<ResourceView> body, HashSet<(string, string)> seen)
+    {
+        if (IsBodyMaterial(node))
+        {
+            if (seen.Add((node.GamePath.ToLowerInvariant(), node.ActualPath.ToLowerInvariant())))
+                body.Add(node);
+            return null;
+        }
+        if (!node.Children.Any(child => child.Flattened.Any(IsBodyMaterial)))
+            return node;
+
+        var children = new List<ResourceView>(node.Children.Count);
+        foreach (var child in node.Children)
+            if (WithoutBodyMaterials(child, body, seen) is { } rest)
+                children.Add(rest);
+        // Built anew rather than with `with`, which would keep the old children's kinds.
+        return new ResourceView(node.Type, node.Icon, node.Name, node.GamePath, node.ActualPath, node.SourceLabel,
+            node.SourceModName, node.SourceModDirectory, node.SourceModRootPath, node.SourceRelativePath, node.SourceModStableId,
+            node.SourceState, node.Section, node.Slot, node.Order, node.OptionMapping, node.OptionMemberships, children);
     }
 
     /// <summary> The root followed by its descendants, depth first. </summary>

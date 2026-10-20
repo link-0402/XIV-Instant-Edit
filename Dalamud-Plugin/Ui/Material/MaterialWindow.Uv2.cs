@@ -25,7 +25,7 @@ internal sealed partial class MaterialWindow
     private static IReadOnlyList<PreviewSource> ModelsFor(ResourceView row, ActorView actor)
     {
         var gamePath = PathRules.NormalizeGamePath(row.GamePath);
-        return actor.Roots.SelectMany(root => root.Flattened)
+        return actor.RootsByModel.SelectMany(root => root.Flattened)
             .Where(node => node.IsModel && node.Children.Any(child => string.Equals(PathRules.NormalizeGamePath(child.GamePath), gamePath, StringComparison.OrdinalIgnoreCase)))
             .Select(node => new PreviewSource
             {
