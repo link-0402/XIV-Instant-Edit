@@ -20,7 +20,7 @@ internal sealed record AnimationLibraryItem(AnimationLibraryGroup Group, ushort 
 /// <summary>
 /// Everything the loader offers, from the Emote and ActionTimeline sheets: emotes with their sitting
 /// and upper-body versions, the standing idles and the ground, chair and bed poses numbered as
-/// /changepose cycles them, every movement track, the expressions, and every other timeline by its
+/// /changepose cycles them (each with the start that plays before it), every movement track, the expressions, and every other timeline by its
 /// key. The poses come from the hidden emotes /changepose plays, so a new pose appears by itself.
 /// </summary>
 internal static class AnimationLibrary
@@ -142,21 +142,31 @@ internal static class AnimationLibrary
                     Add(AnimationLibraryGroup.Emotes, id, $"{emote.Name} ({version})", emote.Command);
         }
 
-        // The idles and the sitting and lying poses, as /changepose numbers them.
+        // A pose and the start its emote plays before it, each a row of its own.
+        void AddPose(AnimationLibraryGroup group, ushort id, string name, EmoteRow? emote)
+        {
+            Add(group, id, name, timelines[id].Key);
+            if (emote is { Timelines: [_, var start, ..] } && start > 0 && start != id && empty?.Contains(start) != true &&
+                timelines.TryGetValue(start, out var startRow))
+                Add(group, start, $"{name} start", startRow.Key);
+        }
+
+        // The idles and the sitting and lying poses, as /changepose numbers them, each with its start.
         foreach (var (group, name, poseName, baseKey, pose) in Families)
         {
+            var baseEmote = emotes.FirstOrDefault(e => e.Timelines.Length > 0 && timelines.TryGetValue(e.Timelines[0], out var row) && row.Key == baseKey);
             var first = group == AnimationLibraryGroup.Idles
                 ? timelines.Values.Where(row => row.Key == baseKey).Select(row => row.Id).DefaultIfEmpty().Min()
-                : emotes.Select(e => e.Timelines.FirstOrDefault()).FirstOrDefault(id => timelines.TryGetValue(id, out var row) && row.Key == baseKey);
+                : baseEmote?.Timelines[0] ?? 0;
             if (first > 0)
-                Add(group, first, name, timelines[first].Key);
-            var poses = new SortedDictionary<int, ushort>();
+                AddPose(group, first, name, baseEmote);
+            var poses = new SortedDictionary<int, EmoteRow>();
             foreach (var emote in emotes)
                 if (emote.Timelines.FirstOrDefault() is var id and > 0 && timelines.TryGetValue(id, out var row) &&
                     pose.Match(row.Key) is { Success: true } match && int.TryParse(match.Groups[1].Value, CultureInfo.InvariantCulture, out var number))
-                    poses.TryAdd(number, id);
-            foreach (var (number, id) in poses)
-                Add(group, id, $"{poseName} {number}", timelines[id].Key);
+                    poses.TryAdd(number, emote);
+            foreach (var (number, emote) in poses)
+                AddPose(group, emote.Timelines[0], $"{poseName} {number}", emote);
         }
 
         // Walking, running, sprinting, jumping and turning, each its own track.

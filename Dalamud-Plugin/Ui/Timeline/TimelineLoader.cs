@@ -127,10 +127,10 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
 
     private static string GroupTip(AnimationLibraryGroup group) => group switch
     {
-        AnimationLibraryGroup.Idles => "The standing idle and every /changepose idle.",
-        AnimationLibraryGroup.GroundSits => "Sitting on the ground and every /changepose version.",
-        AnimationLibraryGroup.ChairSits => "Sitting in a chair and every /changepose version.",
-        AnimationLibraryGroup.Lying => "Lying in bed and every /changepose version.",
+        AnimationLibraryGroup.Idles => "The standing idle and every /changepose idle, with their starts.",
+        AnimationLibraryGroup.GroundSits => "Sitting on the ground and every /changepose version, with their starts.",
+        AnimationLibraryGroup.ChairSits => "Sitting in a chair and every /changepose version, with their starts.",
+        AnimationLibraryGroup.Lying => "Lying in bed and every /changepose version, with their starts.",
         AnimationLibraryGroup.Movement => "Walking, running, sprinting, jumping and turning.",
         AnimationLibraryGroup.Expressions => "Faces such as /smile.",
         AnimationLibraryGroup.Other => "Every other animation the game has, by its name in the game files.",

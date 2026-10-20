@@ -132,8 +132,9 @@ internal static class TimelineToolsFixture
             new(3, "normal/idle", 2), new(783, "normal/idle", 2),
             new(3124, "emote/pose01_loop", 2), new(3123, "emote/pose01_start", 2), new(3126, "emote/pose02_loop", 2),
             new(643, "emote/sit", 2), new(642, "event_base/event_base_chair_start", 2), new(3132, "emote/s_pose01_loop", 2),
-            new(654, "emote/jmn", 2), new(3136, "emote/j_pose01_loop", 2), new(3771, "emote/j_pose03_loop", 2),
-            new(585, "emote/bed_liedown_loop", 2), new(3142, "emote/l_pose01_loop", 2),
+            new(654, "emote/jmn", 2), new(653, "event_base/event_base_ground_start", 2), new(3136, "emote/j_pose01_loop", 2),
+            new(3771, "emote/j_pose03_loop", 2), new(3770, "emote/j_pose03_start", 2),
+            new(585, "emote/bed_liedown_loop", 2), new(584, "emote/bed_liedown_start", 2), new(3142, "emote/l_pose01_loop", 2),
             new(13, "normal/walk", 2), new(22, "normal/run", 2),
             new(703, "emote/doze", 2), new(657, "emote/j_doze", 2), new(646, "emote/s_doze", 2), new(679, "emote/u_doze", 2),
             new(605, "facial/pose/smile", 0), new(919, "event_base/event_base_idle_celeb", 2), new(5, "", 2),
@@ -144,23 +145,27 @@ internal static class TimelineToolsFixture
         [
             Emote(13, "Doze", "/doze", "General", 703, 0, 657, 646, 679),
             Emote(50, "Sit", "/lounge", "Special", 643, 642, 0, 643),
-            Emote(52, "Sit on Ground", "/groundsit", "Special", 654),
-            Emote(88, "Sleep", "", "Special", 585),
+            Emote(52, "Sit on Ground", "/groundsit", "Special", 654, 653, 654),
+            Emote(88, "Sleep", "", "Special", 585, 584, 0, 0, 0, 585),
             Emote(69, "Smile", "/smile", "Expressions", 605),
-            Emote(91, "", "", "", 3124, 3123), Emote(92, "", "", "", 3126), Emote(95, "", "", "", 3132),
-            Emote(97, "", "", "", 3136), Emote(117, "", "", "", 3771), Emote(100, "", "", "", 3142),
+            Emote(91, "", "", "", 3124, 3123), Emote(92, "", "", "", 3126, 3125), Emote(95, "", "", "", 3132, 3132, 0, 3132),
+            Emote(97, "", "", "", 3136), Emote(117, "", "", "", 3771, 3770, 3771), Emote(100, "", "", "", 3142),
         ];
         var items = AnimationLibrary.Build(timelines, emotes);
         string[] Names(AnimationLibraryGroup group) => [.. items.Where(i => i.Group == group).Select(i => i.Name)];
-        check(Names(AnimationLibraryGroup.Idles).SequenceEqual(["Idle", "Idle pose 1", "Idle pose 2"]) &&
+        check(Names(AnimationLibraryGroup.Idles).SequenceEqual(["Idle", "Idle pose 1", "Idle pose 1 start", "Idle pose 2"]) &&
               items.First(i => i.Group == AnimationLibraryGroup.Idles).Timeline == 3,
-            "idles: the standing idle (the first of its rows), then every /changepose idle numbered as its file is");
-        check(Names(AnimationLibraryGroup.ChairSits).SequenceEqual(["Chair sit", "Chair sit pose 1"]) &&
-              Names(AnimationLibraryGroup.GroundSits).SequenceEqual(["Ground sit", "Ground sit pose 1", "Ground sit pose 3"]) &&
-              Names(AnimationLibraryGroup.Lying).SequenceEqual(["Lying in bed", "Lying pose 1"]),
-            "chair, ground and bed poses: the emote's own pose, then the numbered ones, gaps kept");
+            "idles: the standing idle (the first of its rows), then every /changepose idle numbered as its file is, each start after its loop; a start without a row is left out");
+        check(Names(AnimationLibraryGroup.ChairSits).SequenceEqual(["Chair sit", "Chair sit start", "Chair sit pose 1"]) &&
+              Names(AnimationLibraryGroup.GroundSits).SequenceEqual(["Ground sit", "Ground sit start", "Ground sit pose 1", "Ground sit pose 3",
+                  "Ground sit pose 3 start"]) &&
+              Names(AnimationLibraryGroup.Lying).SequenceEqual(["Lying in bed", "Lying in bed start", "Lying pose 1"]),
+            "chair, ground and bed poses: the emote's own pose and its start, then the numbered ones with theirs, gaps kept; a start that is the loop itself is not repeated");
+        check(items.Single(i => i.Name == "Idle pose 1 start") is { Timeline: 3123, Detail: "emote/pose01_start", Face: false } &&
+              items.Single(i => i.Name == "Chair sit start") is { Timeline: 642, Detail: "event_base/event_base_chair_start" },
+            "a start row plays its own timeline and shows its key");
         check(Names(AnimationLibraryGroup.Emotes).SequenceEqual(["Doze", "Doze (on the ground)", "Doze (in a chair)", "Doze (upper body)",
-                  "Sit", "Sit (start)", "Sit on Ground"]),
+                  "Sit", "Sit (start)", "Sit on Ground", "Sit on Ground (start)"]),
             "emotes by name, with their start, sitting and upper body versions; a version that is the emote itself is not repeated");
         check(items.Single(i => i.Group == AnimationLibraryGroup.Expressions) is { Name: "Smile", Face: true, Detail: "/smile" },
             "an expression plays on the face");
@@ -168,12 +173,14 @@ internal static class TimelineToolsFixture
             "movement lists every track by its name");
         var other = items.Where(i => i.Group == AnimationLibraryGroup.Other).ToArray();
         check(other.Any(i => i.Timeline == 783) && other.Any(i => i.Timeline == 919 && i.Name == "Idle celeb") &&
-              other.All(i => i.Timeline is not (3 or 703 or 605 or 5)),
+              other.All(i => i.Timeline is not (3 or 703 or 605 or 5 or 3123 or 642 or 3770)),
             "every other timeline is listed once by a name from its key, rows without a key are not");
         var withEmpty = AnimationLibrary.Build([.. timelines, new(3188, "emote/dance01_loop", 2), new(3187, "emote/dance01_start", 2)],
-            [.. emotes, Emote(102, "Bomb Dance", "/bombdance", "General", 3188, 3187)], new HashSet<ushort> { 3187 });
-        check(withEmpty.Any(i => i.Name == "Bomb Dance") && withEmpty.All(i => i.Timeline != 3187) && withEmpty.Any(i => i.Name == "Sit (start)"),
-            "a version whose timeline holds nothing (Bomb Dance's start) is left out, also from Other; other starts stay");
+            [.. emotes, Emote(102, "Bomb Dance", "/bombdance", "General", 3188, 3187)], new HashSet<ushort> { 3187, 3123, 584 });
+        check(withEmpty.Any(i => i.Name == "Bomb Dance") && withEmpty.All(i => i.Timeline is not (3187 or 3123 or 584)) &&
+              withEmpty.Any(i => i.Name == "Sit (start)") && withEmpty.Any(i => i.Name == "Chair sit start") &&
+              !withEmpty.Any(i => i.Name is "Idle pose 1 start" or "Lying in bed start"),
+            "a version whose timeline holds nothing (Bomb Dance's start, an empty pose start) is left out, also from Other; other starts stay");
         check(AnimationLibrary.KeyName("event_base/event_base_chair_talk") == "Chair talk" && AnimationLibrary.KeyName("emote/dance") == "Dance" &&
               AnimationLibrary.KeyName("x") == "X",
             "a key's name drops its folder and the folder's prefix");

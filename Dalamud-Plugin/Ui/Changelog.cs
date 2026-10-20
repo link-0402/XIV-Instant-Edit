@@ -65,6 +65,7 @@ internal static class ChangelogCatalog
             Entry("Unfold a layer to see a row per bone, and drag one bone's key on its own.", 1),
             Highlight("Animations: the tab is now the listener and the timeline. Every other animation tool is in the Timeline window."),
             Entry("Load any animation onto your GPose character from the timeline: emotes, idles, ground and chair sits and bed poses by number, every movement track, expressions, or anything else the game has.", 1),
+            Entry("Idles, sits and bed poses also list the start that plays before each one.", 1),
             Entry("Turn your LivePose adjustments, or a .livepose file, into an offset layer you can keep editing.", 1),
             Entry("Untick the bones an animation moves and see it live in GPose. Saving leaves them out.", 1),
             Entry("Repair onto the game's, IVCS or IVCS + YAS skeleton when you save.", 1),
