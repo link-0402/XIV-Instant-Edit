@@ -23,9 +23,11 @@ internal sealed class SizesExportService
     private readonly ModelFileWriter _writer;
     private readonly AttributeGroupService _attributes;
     private readonly EstEntryService _est;
+    private readonly RaceExportService _race;
 
     public SizesExportService(IFramework framework, IPluginLog log, SemaphoreSlim exportGate, SourceMods sources,
-        ModActivation activation, ModelFileWriter writer, AttributeGroupService attributes, EstEntryService est)
+        ModActivation activation, ModelFileWriter writer, AttributeGroupService attributes, EstEntryService est,
+        RaceExportService race)
     {
         _framework = framework;
         _log = log;
@@ -35,6 +37,7 @@ internal sealed class SizesExportService
         _writer = writer;
         _attributes = attributes;
         _est = est;
+        _race = race;
     }
 
     /// <summary>
@@ -142,6 +145,8 @@ internal sealed class SizesExportService
     /// <summary>
     /// Write an export at several sizes into a Single group of the original Penumbra mod, one option per
     /// size (see PlanSizeGroup): one meta.json write, one reload and one redraw for all of them.
+    /// Sizes scaled for the race of the model's own path (<paramref name="racialScalingRace"/>) turn on
+    /// that race's EQDP model flag when it's off.
     /// </summary>
     public async Task<ExportResult> ApplySizesExportAsync(
         string sourceModDirectory,
@@ -163,7 +168,8 @@ internal sealed class SizesExportService
         IReadOnlyDictionary<string, int>? attributeMasks = null,
         string? resolvedGamePath = null,
         JsonArray? sourceManipulations = null,
-        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        IReadOnlyList<EstEntryRequest>? estEntries = null,
+        int? racialScalingRace = null)
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeLocalModelPath(sourceFilePath))
@@ -277,6 +283,11 @@ internal sealed class SizesExportService
             foreach (var (relative, _) in targets)
                 foreach (var warning in _est.TryUpdateEstEntries(
                              resolved.Target.Folder, resolved.Target.Directory, relative, estEntries))
+                    if (!warnings.Contains(warning))
+                        warnings.Add(warning);
+            foreach (var (relative, _) in targets)
+                foreach (var warning in _race.TryEnsureRaceModelEqdp(
+                             resolved.Target.Folder, sourceGamePath, relative, racialScalingRace))
                     if (!warnings.Contains(warning))
                         warnings.Add(warning);
 

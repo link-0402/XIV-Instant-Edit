@@ -51,7 +51,8 @@ internal sealed class ModelExportService
     /// Write an export back to the resolved file in its original Penumbra mod.
     /// The destination is authoritative while the server-owned import context
     /// is alive; only the source mod registration and destination folder are
-    /// checked again before writing.
+    /// checked again before writing. Meshes scaled for the race of the model's own path
+    /// (<paramref name="racialScalingRace"/>) turn on that race's EQDP model flag when it's off.
     /// </summary>
     public async Task<ExportResult> ApplySourceExportAsync(
         string sourceModDirectory,
@@ -74,7 +75,8 @@ internal sealed class ModelExportService
         IReadOnlyDictionary<string, int>? attributeMasks = null,
         string? resolvedGamePath = null,
         JsonArray? sourceManipulations = null,
-        IReadOnlyList<EstEntryRequest>? estEntries = null)
+        IReadOnlyList<EstEntryRequest>? estEntries = null,
+        int? racialScalingRace = null)
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeLocalModelPath(sourceFilePath))
@@ -206,6 +208,8 @@ internal sealed class ModelExportService
 
             warnings.AddRange(_est.TryUpdateEstEntries(
                 resolved.Target.Folder, resolved.Target.Directory, targetRelative, estEntries));
+            warnings.AddRange(_race.TryEnsureRaceModelEqdp(
+                resolved.Target.Folder, sourceGamePath, targetRelative, racialScalingRace));
 
             var reloadError = await _framework.RunOnFrameworkThread(
                 () => _activation.ReloadModOnFramework(resolved.Target.Directory)).ConfigureAwait(false);

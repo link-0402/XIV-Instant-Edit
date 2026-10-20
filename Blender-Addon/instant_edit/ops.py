@@ -2132,12 +2132,14 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
                          new_mod_name: str | None = None,
                          attribute_tags: tuple[str, ...] = (),
                          attribute_masks: dict[str, int] | None = None,
-                         est_entries: list[dict] | None = None) -> dict:
+                         est_entries: list[dict] | None = None,
+                         racial_scaling_race: int | None = None) -> dict:
     """Build the versioned Dalamud export envelope.
 
     ``est_entries`` is the hair EST entry from the meshes' Magic Fit tags: omitted
     (None) the plugin leaves the mod's EST entries alone, empty it takes back the
-    entry it set before.
+    entry it set before. ``racial_scaling_race`` is the model's race when the meshes
+    are reshaped for it (see racial_scaling.own_race).
     """
     payload = {
         "schema": "instant-edit.export",
@@ -2163,6 +2165,8 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
         payload["attributeMasks"] = dict(attribute_masks or {})
     if est_entries is not None:
         payload["estEntries"] = [dict(entry) for entry in est_entries]
+    if racial_scaling_race is not None:
+        payload["racialScalingRace"] = racial_scaling_race
     if setup_in_penumbra:
         if variant_name is not None:
             payload["variantName"] = variant_name
@@ -2988,6 +2992,7 @@ def instant_export_steps(
             + ", ".join(unrecognized)
         )
     raise_unless_exportable(export_objects, ref.source_game_path)
+    scaled_race = racial_scaling.own_race(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
         if getattr(props, "create_attribute_groups", False)
@@ -3029,6 +3034,7 @@ def instant_export_steps(
                 attribute_tags=attribute_tags,
                 attribute_masks=attribute_masks,
                 est_entries=est_entries,
+                racial_scaling_race=scaled_race,
             )
 
         result, ref = yield from _send_with_reattach(ref, payload, "/export", steps.Step("Sending to Penumbra.", 1, 2))
@@ -3264,7 +3270,8 @@ def _sizes_target(props, ref) -> tuple[str, str | None]:
 def build_sizes_payload(ref, export_id: str, files: list[dict], default_size: str, props, group_name: str,
                         group_id: str | None, *, attribute_tags: tuple[str, ...] = (),
                         attribute_masks: dict[str, int] | None = None,
-                        est_entries: list[dict] | None = None) -> dict:
+                        est_entries: list[dict] | None = None,
+                        racial_scaling_race: int | None = None) -> dict:
     """Build the plugin's request for a Quick Export at Magic Fit's sizes: each size's model (``files``:
     name, filePath, size, sha256) for an option of one group, as build_export_payload does for one model."""
     payload = {
@@ -3289,6 +3296,8 @@ def build_sizes_payload(ref, export_id: str, files: list[dict], default_size: st
         payload["attributeMasks"] = dict(attribute_masks or {})
     if est_entries is not None:
         payload["estEntries"] = [dict(entry) for entry in est_entries]
+    if racial_scaling_race is not None:
+        payload["racialScalingRace"] = racial_scaling_race
     return payload
 
 
@@ -3312,6 +3321,7 @@ def sizes_export_steps(context: Context, ref):
             + ", ".join(unrecognized)
         )
     raise_unless_exportable(export_objects, ref.source_game_path)
+    scaled_race = racial_scaling.own_race(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
         if getattr(props, "create_attribute_groups", False)
@@ -3350,7 +3360,8 @@ def sizes_export_steps(context: Context, ref):
         def payload(current_ref):
             return build_sizes_payload(
                 current_ref, export_id, files, default_size, props, group_name, group_id,
-                attribute_tags=attribute_tags, attribute_masks=attribute_masks, est_entries=est_entries)
+                attribute_tags=attribute_tags, attribute_masks=attribute_masks, est_entries=est_entries,
+                racial_scaling_race=scaled_race)
 
         result, ref = yield from _send_with_reattach(
             ref, payload, "/export/sizes",

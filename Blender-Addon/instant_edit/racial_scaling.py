@@ -274,6 +274,14 @@ def mismatch_refusal(objects, game_path: str) -> str:
     return f"{listed} {'are' if several else 'is'} shaped for {shaped}, so {'they' if several else 'it'} can't go into {model}. {advice}"
 
 
+def own_race(objects, game_path: str) -> int | None:
+    """The race of the model at ``game_path`` when some of the objects are shaped for it (c0201 gear
+    reshaped for c0801 going into c0801e6000_top.mdl), else None. The plugin then makes sure that race's
+    EQDP entry says it has its own model, so the race loads the file."""
+    target = path_race(game_path)
+    return target if target is not None and target in shaped_races(objects) else None
+
+
 def race_model(objects, game_path: str) -> tuple[int | None, str]:
     """(the race whose own model these objects are written as, why they can't be or "") for Save as
     Race Model: every object must be shaped for one race, and the model must be gear or an accessory.

@@ -547,6 +547,73 @@ internal sealed class RaceExportService
         return warnings;
     }
 
+    /// <summary>The slot's two EQDP bits a container's own entry for the race's set and slot gives, or null without one.</summary>
+    private static int? ContainerEqdpBits(JsonObject container, AttributeModelIdentity identity, int genderRace)
+    {
+        int? bits = null;
+        foreach (var item in (container["Manipulations"] as JsonArray ?? []).OfType<JsonObject>())
+            if (MatchesEqdp(item, identity, genderRace) && item["Manipulation"]!["Entry"] is JsonValue &&
+                JsonIntFlexible(item["Manipulation"]!["Entry"]) is >= 0 and <= ushort.MaxValue and var entry)
+                bits = entry >> (2 * EqdpSlotIndex(identity)) & 3;
+        return bits;
+    }
+
+    /// <summary>
+    /// After racially scaled meshes went into <paramref name="modelRelativePath"/> at a race's own gear or
+    /// accessory path (<c>c0801e6000_top.mdl</c> for 801), make sure the race loads that file: every
+    /// container mapping it there whose EQDP entry (its own, else the default data's, else the game's,
+    /// <paramref name="gameEqdpBits"/>) has the model flag off gets an entry with it on. Returns whether the
+    /// metadata changed; other models, races and mods that already have the flag are left alone.
+    /// </summary>
+    internal static bool EnsureRaceModelEqdpMeta(JsonObject meta, string gamePath, string modelRelativePath, int race,
+        int? gameEqdpBits)
+    {
+        if (PlayerRaceCode($"c{race:D4}") is null ||
+            ParseAttributeModelIdentity(NormalizeGamePath(gamePath)) is not { ObjectType: "Equipment" or "Accessory" } identity ||
+            identity.RaceCode != race || EqdpSlotIndex(identity) < 0 ||
+            !TryNormalizeRelativeModPath(modelRelativePath.TrimStart('/', '\\'), out var model))
+            return false;
+        var defaultBits = meta["DefaultData"] is JsonObject defaultData ? ContainerEqdpBits(defaultData, identity, race) : null;
+        var changed = false;
+        foreach (var container in EstContainers(meta))
+        {
+            if (container.Data["Files"] is not JsonObject files || !files.Any(pair => SameGamePath(pair.Key, gamePath) &&
+                    TryNormalizeRelativeModPath(JsonString(pair.Value)?.TrimStart('/', '\\'), out var file) &&
+                    string.Equals(file, model, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            var bits = ContainerEqdpBits(container.Data, identity, race) ?? defaultBits ?? gameEqdpBits;
+            if (bits is { } known && (known & 2) != 0)
+                continue;
+            SetEqdpModel(container.Data, identity, race, defaultBits ?? gameEqdpBits);
+            changed = true;
+        }
+        if (changed)
+            TouchV4ModMetadata(meta);
+        return changed;
+    }
+
+    /// <summary>
+    /// <see cref="EnsureRaceModelEqdpMeta"/> on a mod's meta.json, for exports of meshes scaled for
+    /// <paramref name="race"/>. Returns the warnings.
+    /// </summary>
+    internal List<string> TryEnsureRaceModelEqdp(string modFolder, string gamePath, string modelRelativePath, int? race)
+    {
+        if (race is not { } code)
+            return [];
+        try
+        {
+            var meta = LoadV4ModMetadata(modFolder);
+            if (EnsureRaceModelEqdpMeta(meta, gamePath, modelRelativePath, code, GameEqdpBits(NormalizeGamePath(gamePath), code)))
+                WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+            return [];
+        }
+        catch (Exception e)
+        {
+            _log.Warning(e, "Could not add the race's EQDP entry.");
+            return [$"The c{code:D4} EQDP entry wasn't added, so c{code:D4} characters may not load this model: {e.Message}"];
+        }
+    }
+
     /// <summary>A game model's first race export: the race's model in a new mod's default data, with the EQDP entry.</summary>
     internal void AddRaceModelEqdp(string staging, string racePath, int race)
     {

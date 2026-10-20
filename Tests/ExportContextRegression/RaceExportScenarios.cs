@@ -23,7 +23,69 @@ internal static class RaceExportScenarios
         RestoreUndoesTheOptions(Path.Combine(testRoot, "RaceRestore"));
         AccessoriesAndNewMods(Path.Combine(testRoot, "RaceAccessory"));
         UnusableModsAreRefused(Path.Combine(testRoot, "RaceRefused"));
+        ScaledExportsTurnOnTheModelFlag();
         RequestsAreValidated();
+    }
+
+    private static int[] EqdpEntries(JsonNode? container)
+        => Eqdp(container).Select(item => item["Manipulation"]!["Entry"]!.GetValue<int>()).ToArray();
+
+    private static JsonObject ModelFlag(int entry) => new()
+    {
+        ["Type"] = "Eqdp",
+        ["Manipulation"] = new JsonObject
+        {
+            ["Entry"] = entry, ["Gender"] = "Female", ["Race"] = "Miqote", ["SetId"] = 6001, ["Slot"] = "Body",
+        },
+    };
+
+    private static void ScaledExportsTurnOnTheModelFlag()
+    {
+        // Scaled meshes exported in place into the mod's own c0801 file, which the race doesn't load yet.
+        var meta = Metadata(Files((RacePath, "Files/miqo.mdl")));
+        Require(RaceExportService.EnsureRaceModelEqdpMeta(meta, RacePath, "Files/miqo.mdl", 801, 1) &&
+                EqdpEntries(meta["DefaultData"]).SequenceEqual([0b1100]),
+            "scaled export: the race's EQDP model flag is turned on, keeping the game's material flag");
+        Require(!RaceExportService.EnsureRaceModelEqdpMeta(meta, RacePath, "Files/miqo.mdl", 801, 1) &&
+                EqdpEntries(meta["DefaultData"]).SequenceEqual([0b1100]),
+            "scaled export: exporting again leaves the entry as it is");
+
+        var vanilla = Metadata(Files((RacePath, "Files/miqo.mdl")));
+        Require(!RaceExportService.EnsureRaceModelEqdpMeta(vanilla, RacePath, "Files/miqo.mdl", 801, 0b11) &&
+                Eqdp(vanilla["DefaultData"]).Length == 0,
+            "scaled export: no entry when the game already gives the race its own model");
+
+        var off = Files((RacePath, "Files/miqo.mdl"));
+        off["Manipulations"] = new JsonArray(ModelFlag(0b0100));
+        var withOff = Metadata(off);
+        Require(RaceExportService.EnsureRaceModelEqdpMeta(withOff, RacePath, "Files/miqo.mdl", 801, 0b11) &&
+                EqdpEntries(withOff["DefaultData"]).SequenceEqual([0b1100]),
+            "scaled export: the mod's own entry with the model flag off is turned on");
+
+        // An option holding the file: the default data's entry counts, and an added one keeps its material flag.
+        var defaultOn = Files();
+        defaultOn["Manipulations"] = new JsonArray(ModelFlag(0b1100));
+        var optionMeta = Metadata(defaultOn, Group("Fit", ("Scaled", Files((RacePath, "Files/opt.mdl")))));
+        Require(!RaceExportService.EnsureRaceModelEqdpMeta(optionMeta, RacePath, "Files/opt.mdl", 801, 1) &&
+                Eqdp(Option(optionMeta, "Fit", "Scaled")).Length == 0,
+            "scaled export: an option needs no entry when the default data turns the model flag on");
+        var defaultOff = Files();
+        defaultOff["Manipulations"] = new JsonArray(ModelFlag(0b0000));
+        optionMeta = Metadata(defaultOff, Group("Fit", ("Scaled", Files((RacePath, "Files/opt.mdl"))), ("Other", Files())));
+        Require(RaceExportService.EnsureRaceModelEqdpMeta(optionMeta, RacePath, "Files/opt.mdl", 801, 1) &&
+                EqdpEntries(Option(optionMeta, "Fit", "Scaled")).SequenceEqual([0b1000]) &&
+                EqdpEntries(optionMeta["DefaultData"]).SequenceEqual([0b0000]) && Eqdp(Option(optionMeta, "Fit", "Other")).Length == 0,
+            "scaled export: only the option holding the file gets the entry, with the default data's material flag");
+
+        var untouched = Metadata(Files((RacePath, "Files/miqo.mdl"), (TopPath, "Files/top.mdl")));
+        var before = untouched.ToJsonString();
+        Require(!RaceExportService.EnsureRaceModelEqdpMeta(untouched, RacePath, "Files/other.mdl", 801, 1) &&
+                !RaceExportService.EnsureRaceModelEqdpMeta(untouched, RacePath, "Files/miqo.mdl", 201, 1) &&
+                !RaceExportService.EnsureRaceModelEqdpMeta(untouched, TopPath, "Files/top.mdl", 801, 1) &&
+                !RaceExportService.EnsureRaceModelEqdpMeta(untouched, "chara/human/c0801/obj/hair/h0101/model/c0801h0101_hir.mdl",
+                    "Files/miqo.mdl", 801, 1) &&
+                untouched.ToJsonString() == before,
+            "scaled export: other files, races and models than gear or accessories are left alone");
     }
 
     private static JsonObject Metadata(JsonObject? defaultData = null, params JsonObject[] groups) => new()

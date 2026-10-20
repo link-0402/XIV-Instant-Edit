@@ -482,6 +482,15 @@ internal static class RacialScalingScenarios
             "racial scaling: a mashup with a scaled import is refused unless it goes into a model of the scaled race");
         Require(ExportServer.RacialScalingRefusal([hair], 801) is null && ExportServer.RacialScalingRefusal([hair, hair], null) is null,
             "racial scaling: unscaled imports export as before");
+        var raceModel = context with { GamePath = "chara/equipment/e6001/model/c0801e6001_top.mdl" };
+        Require(ExportServer.ScaledModelRace(raceModel, null) == 801 &&
+                ExportServer.ScaledModelRace(raceModel with { RacialScaling = null }, 801) == 801 &&
+                ExportServer.ScaledModelRace(context with { RacialScaling = null }, 201) == 201,
+            "racial scaling: meshes scaled for the race of the written model's path (the plugin's import or the add-on's) get its EQDP entry");
+        Require(ExportServer.ScaledModelRace(raceModel with { RacialScaling = null }, null) is null &&
+                ExportServer.ScaledModelRace(raceModel with { RacialScaling = null }, 201) is null &&
+                ExportServer.ScaledModelRace(context, null) is null && ExportServer.ScaledModelRace(hair, null) is null,
+            "racial scaling: unscaled meshes, and meshes scaled for another race, leave the EQDP entries alone");
         Require(ExportServer.RaceExportRefusal(context, 801) is null && ExportServer.RaceExportRefusal(game, 801) is null &&
                 ExportServer.RaceExportRefusal(context with { RacialScaling = null }, 1401) is null,
             "race export: a scaled or unscaled gear import can be written as another race's model");

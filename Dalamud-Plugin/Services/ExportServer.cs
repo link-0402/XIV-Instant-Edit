@@ -80,6 +80,10 @@ public sealed partial class ExportServer : IDisposable
         /// <summary>EST entries the meshes need; null leaves the mod's alone, empty takes back the plugin's own.</summary>
         [JsonPropertyName("estEntries")]
         public List<EstEntryRequest>? EstEntries { get; set; }
+
+        /// <summary>The race the meshes are reshaped for (801 for c0801), when racially scaled; see <see cref="ScaledModelRace"/>.</summary>
+        [JsonPropertyName("racialScalingRace")]
+        public int? RacialScalingRace { get; set; }
     }
 
     private sealed class ReattachRequest
@@ -1151,7 +1155,8 @@ public sealed partial class ExportServer : IDisposable
                         export.CreateAttributeGroups,
                         export.AttributeTags,
                         export.AttributeMasks,
-                        export.EstEntries).ConfigureAwait(false);
+                        export.EstEntries,
+                        ScaledModelRace(target, export.RacialScalingRace)).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
@@ -1181,7 +1186,8 @@ public sealed partial class ExportServer : IDisposable
             bool createAttributeGroups,
             IReadOnlyList<string>? attributeTags,
             IReadOnlyDictionary<string, int>? attributeMasks,
-            IReadOnlyList<EstEntryRequest>? estEntries)
+            IReadOnlyList<EstEntryRequest>? estEntries,
+            int? racialScalingRace)
         {
             if (target.DestinationState == InstantEditImportContext.NewModRequiredDestination)
             {
@@ -1220,7 +1226,8 @@ public sealed partial class ExportServer : IDisposable
                 attributeMasks,
                 target.ResolvedGamePath,
                 AttributeGroupService.KnownManipulations(target),
-                estEntries).ConfigureAwait(false);
+                estEntries,
+                racialScalingRace).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,
                 result.Code,
@@ -1291,6 +1298,7 @@ public sealed partial class ExportServer : IDisposable
             request.AttributeTags,
             request.AttributeMasks,
             request.EstEntries,
+            request.RacialScalingRace,
         })));
 
     private T? DeserializeRequest<T>(
@@ -1699,6 +1707,16 @@ public sealed partial class ExportServer : IDisposable
     /// <summary>The race of a context's model game path (201 for c0201e6000_top.mdl), or null.</summary>
     internal static ushort? GamePathRace(InstantEditImportContext context)
         => ModelSkeletonPaths.Parse(context.GamePath) is { Human: true } key ? key.GenderRace : null;
+
+    /// <summary>
+    /// The race whose own model an export of racially scaled meshes writes, so its EQDP model flag gets
+    /// turned on: the race of the context's game path, when the meshes are shaped for it (the add-on's
+    /// <paramref name="requestRace"/>, or the plugin's own scaled import). Null otherwise.
+    /// </summary>
+    internal static int? ScaledModelRace(InstantEditImportContext context, int? requestRace)
+        => GamePathRace(context) is { } race && (requestRace == race || context.RacialScaling?.CharacterRace == race)
+            ? race
+            : null;
 
     internal static void CleanupStagedExport(StagedExport? staged)
     {

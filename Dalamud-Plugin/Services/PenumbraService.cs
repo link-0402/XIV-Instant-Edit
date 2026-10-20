@@ -141,7 +141,8 @@ public sealed class PenumbraService : IDisposable
         var attributes = new AttributeGroupService(data, log);
         var est = new EstEntryService(estEntries, log);
         RaceExports = new RaceExportService(framework, log, _exportGate, data, backups, Sources, activation, writer, attributes, est);
-        SizesExports = new SizesExportService(framework, log, _exportGate, Sources, activation, writer, attributes, est);
+        SizesExports = new SizesExportService(framework, log, _exportGate, Sources, activation, writer, attributes, est,
+            RaceExports);
         ModelExports = new ModelExportService(Ipc, framework, log, _exportGate, backups, Sources, activation, writer, attributes,
             est, RaceExports);
         ModelBackups = new ModelBackupService(framework, log, _exportGate, backups, Sources, activation, writer, est, RaceExports);

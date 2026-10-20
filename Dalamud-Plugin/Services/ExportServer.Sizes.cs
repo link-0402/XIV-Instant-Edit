@@ -84,6 +84,10 @@ public sealed partial class ExportServer
 
         [JsonPropertyName("estEntries")]
         public List<EstEntryRequest>? EstEntries { get; set; }
+
+        /// <summary>The race the sizes are reshaped for, when racially scaled; see <see cref="ScaledModelRace"/>.</summary>
+        [JsonPropertyName("racialScalingRace")]
+        public int? RacialScalingRace { get; set; }
     }
 
     private async Task<(int Status, string Body)> HandleSizesExportAsync(HttpRequest request)
@@ -165,7 +169,8 @@ public sealed partial class ExportServer
                     export.AttributeMasks,
                     target.ResolvedGamePath,
                     AttributeGroupService.KnownManipulations(target),
-                    export.EstEntries).ConfigureAwait(false);
+                    export.EstEntries,
+                    ScaledModelRace(target, export.RacialScalingRace)).ConfigureAwait(false);
                 receipt = new ExportReceipt(
                     result.Success, result.Code, result.Message, result.WarningList, result.TargetFilePath,
                     result.DestinationName);
@@ -238,6 +243,7 @@ public sealed partial class ExportServer
             request.AttributeTags,
             request.AttributeMasks,
             request.EstEntries,
+            request.RacialScalingRace,
         })));
 
     /// <summary>One hash over every size's file, for the export reservation, which records one file.</summary>

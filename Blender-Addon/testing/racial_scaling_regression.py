@@ -6,6 +6,7 @@ import math
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import bpy
@@ -222,6 +223,21 @@ def check_reshape() -> None:
                 racial.mismatch_refusal([body], "chara/equipment/e6000/model/c0801e6000_top.mdl") == "" and
                 racial.race_model([body], top) == (801, ""),
                 "Quick Export writes a reshaped mesh as the race's own model only, not back into the c0201 model")
+        race_top = "chara/equipment/e6000/model/c0801e6000_top.mdl"
+        require(racial.own_race([body], race_top) == 801 and racial.own_race([body], top) is None and
+                racial.own_race([body], "chara/equipment/e6000/model/c1401e6000_top.mdl") is None,
+                "exports of a reshaped mesh into its race's own model name that race, for its EQDP entry")
+        ops = module("instant_edit.ops")
+        ref = SimpleNamespace(plugin_instance_id="plugin", context_id="context", capability="capability")
+        props = SimpleNamespace(create_attribute_groups=False)
+        scaled = ops.build_export_payload(ref, "export", Path("model.mdl"), 1, "0" * 64, props, None,
+                                          setup_in_penumbra=False, racial_scaling_race=801)
+        plain = ops.build_export_payload(ref, "export", Path("model.mdl"), 1, "0" * 64, props, None,
+                                         setup_in_penumbra=False)
+        sizes = ops.build_sizes_payload(ref, "export", [], "M", props, "Sizes", None, racial_scaling_race=801)
+        require(scaled["racialScalingRace"] == 801 and "racialScalingRace" not in plain and
+                sizes["racialScalingRace"] == 801,
+                "Quick Export and sizes exports send the race the meshes are shaped for")
 
         def error_from(points):
             return max((Vector(vertex.co) - point).length for vertex, point in zip(body.data.vertices, points))
