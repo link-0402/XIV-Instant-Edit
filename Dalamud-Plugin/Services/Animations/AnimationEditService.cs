@@ -452,14 +452,14 @@ internal sealed partial class AnimationEditService : IDisposable
         journal.PoseBefore != null && journal.PoseAfter != null && (journal.OffsetsCleared || journal.PoseClearOutcome is "Pending");
     private async Task RestoreOffsetsAsync(AnimationEditJournal journal)
     {
-        if (!RestoresOffsets(journal))
+        if (!RestoresOffsets(journal) || journal.PoseBefore is not { } before || journal.PoseAfter is not { } after)
         { journal.Message = "Files recovered; live offsets were not cleared."; journals.Save(journal); return; }
         var restored = await framework.RunOnFrameworkThread(() =>
         {
             CheckIdentityOnFramework(journal.Request.Capture, false);
-            var current = poses.ReadMatching(journal.PoseBefore);
-            if (AnimationPoseRules.Same(current, journal.PoseBefore)) return true;
-            return poses.CompareAndSet(journal.PoseAfter, journal.PoseBefore);
+            var current = poses.ReadMatching(before);
+            if (AnimationPoseRules.Same(current, before)) return true;
+            return poses.CompareAndSet(after, before);
         });
         if (!restored) throw new IOException("Live offsets changed after this edit. They were retained; automatic restoration was skipped.");
         journal.OffsetsCleared = false; journal.PoseClearOutcome = "Restored"; journal.Message = "Captured live offsets restored."; journals.Save(journal);
