@@ -319,6 +319,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         DrawNewModPopup(current);
         DrawCleanUpPopup(current);
         DrawCopyPopup(current);
+        DrawVariantPopup(current);
         HandleShortcuts(current);
         // A control that went away while held never reports letting go.
         if (current.History.InGesture && !ImGui.IsAnyItemActive())
@@ -626,6 +627,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
                     : "Moves the material to character.shpk with 32 Dawntrail rows. Each old row fills both rows of its pair.");
         }
         DrawCopyMenuItem(current);
+        DrawVariantMenuItem(current);
         // A save may have written the model with the material (its second UV map), so its backups count too;
         // only groups with the material's own backup do, not another tool's backups of the model alone.
         var own = current.Source.IsGameData ? null : current.Source.ToPreviewSource();

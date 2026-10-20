@@ -1154,6 +1154,35 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     }
 
     /// <summary>
+    /// Saves files as a new variant of the first one, in its variant group (made when the mod has
+    /// none), in one write of meta.json. How the Material window saves a material as a variant. Null,
+    /// with <paramref name="error"/> saying why, when it could not be written: no file is left behind then.
+    /// </summary>
+    public global::InstantEdit.Services.Materials.MaterialVariants.Written? AddVariant(string name, IReadOnlyList<(string GamePath, byte[] Bytes)> files,
+        out string error)
+    {
+        error = string.Empty;
+        if (Project is not { } project)
+        {
+            error = "The mod is closed.";
+            return null;
+        }
+
+        global::InstantEdit.Services.Materials.MaterialVariants.Written? written = null;
+        if (!TryEditStructure(project, meta => written = global::InstantEdit.Services.Materials.MaterialVariants.Write(project.FolderPath, meta, name, files,
+                project.RelKeysInUse(readDisk: true))))
+        {
+            if (written != null)
+                ModHandoffCopies.Delete(written.Files);
+            error = Status?.Text ?? "The variant could not be written.";
+            return null;
+        }
+        Revision++;
+        Notify($"Saved {Path.GetFileName(files[0].GamePath)} as the variant {written!.OptionName} in {written.GroupName}.", Severity.Info);
+        return written;
+    }
+
+    /// <summary>
     /// Takes the entry <paramref name="option"/> / <paramref name="gamePath"/> out of <paramref name="meta"/>
     /// when it still points at <paramref name="expectedRel"/>; returns the file it pointed at, or null.
     /// <paramref name="changed"/> says it points at another file now (left as it is).

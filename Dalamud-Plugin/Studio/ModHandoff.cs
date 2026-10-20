@@ -69,6 +69,13 @@ internal interface IModFileCopies
     /// <paramref name="optionKey"/> at them. The files it used before stay in the mod.
     /// </summary>
     ModHandoffCopy SaveCopy(string optionKey, IReadOnlyList<(string GamePath, byte[] Bytes)> files);
+
+    /// <summary>
+    /// Writes <paramref name="files"/> into the mod as a new variant named <paramref name="name"/> of
+    /// the first file (see <see cref="global::InstantEdit.Services.Materials.MaterialVariants"/>), in one write of meta.json.
+    /// Null, with <paramref name="error"/> saying why, when nothing was written.
+    /// </summary>
+    global::InstantEdit.Services.Materials.MaterialVariants.Written? SaveVariant(string name, IReadOnlyList<(string GamePath, byte[] Bytes)> files, out string error);
 }
 
 /// <summary>

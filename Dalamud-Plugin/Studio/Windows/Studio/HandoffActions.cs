@@ -158,4 +158,15 @@ internal sealed class ModEditorCopies : IModFileCopies
         var written = _editor.Session.AddFileCopies(option, files, out var error);
         return written == null ? ModHandoffCopy.Failed(error) : new ModHandoffCopy(null, chosen.Label, written);
     }
+
+    public global::InstantEdit.Services.Materials.MaterialVariants.Written? SaveVariant(string name, IReadOnlyList<(string GamePath, byte[] Bytes)> files,
+        out string error)
+    {
+        if (Block is { } blocked)
+        {
+            error = blocked;
+            return null;
+        }
+        return _editor.Session.AddVariant(name, files, out error);
+    }
 }
