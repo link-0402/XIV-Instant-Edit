@@ -438,6 +438,48 @@ def check_skips_and_errors() -> None:
         require(result == {"CANCELLED"}, "a model already of the target race is left alone")
 
 
+def check_custom_bones() -> None:
+    """Earrings weighted to custom bones the deformer doesn't list move with the listed bone they hang from."""
+    racial = module("instant_edit.racial_scaling")
+    plugin_http = module("instant_edit.plugin_http")
+    with temporary_scene_data():
+        armature = rig()
+        bpy.context.view_layer.objects.active = armature
+        bpy.ops.object.mode_set(mode="EDIT")
+        bones = armature.data.edit_bones
+        parent = None
+        for index, name in enumerate(("j_kao", "j_ex_earring_a_r", "j_ex_earring_b_r")):
+            bone = bones.new(name)
+            bone.head = (0.0, 0.0, 3.0 - 0.1 * index)
+            bone.tail = (0.0, 0.0, 2.9 - 0.1 * index)
+            bone.parent = parent
+            parent = bone
+        bpy.ops.object.mode_set(mode="OBJECT")
+        weights = ({"j_ex_earring_a_r": 1.0}, {"j_ex_earring_b_r": 1.0},
+                   {"j_ex_earring_a_r": 0.5, "j_ex_earring_b_r": 0.5}, {"j_kosi": 1.0})
+        earring = part("0.0 Earring", armature, weights)
+        bpy.context.view_layer.update()
+        to_game = GAME_TO_BLENDER.inverted() @ earring.matrix_world
+        before = [Vector(vertex.co) for vertex in earring.data.vertices]
+        select_only(earring)
+        with patch.object(plugin_http, "post_json", reply(response())[0]):
+            result = bpy.ops.xiv_ie.apply_racial_scaling(model_race="201", race="0")
+        kao = {"j_kao": 1.0}
+        error = max((Vector(earring.data.vertices[index].co)
+                     - to_game.inverted() @ (expected_matrix(kao) @ (to_game @ co))).length for index, co in enumerate(before[:3]))
+        require(result == {"FINISHED"} and error < 1e-5,
+                f"custom bones move with their nearest listed parent, j_kao (error {error:.2e})")
+        require((Vector(earring.data.vertices[3].co) - before[3]).length < 1e-6,
+                "a bone without a listed parent still stays put")
+        stored = racial.applied_matrices(earring)
+        require(stored is not None and np.allclose(stored["j_ex_earring_b_r"], np.array(BONES["j_kao"]).reshape(3, 4)),
+                "the inherited matrices are kept with the mark, so undoing takes off the same")
+        with patch.object(plugin_http, "post_json", reply(response(race=201, bones={}))[0]):
+            bpy.ops.xiv_ie.apply_racial_scaling(model_race="201", race="201")
+        error = max((Vector(vertex.co) - co).length for vertex, co in zip(earring.data.vertices, before))
+        require(error < 1e-5 and racial.applied(earring) is None, "the model's own race takes the inherited scaling off")
+
+
 def check_race_detection() -> None:
     racial = module("instant_edit.racial_scaling")
     context = module("instant_edit.context")
@@ -466,6 +508,7 @@ def run() -> None:
     with addon_session(PACKAGE):
         check_reshape()
         check_skips_and_errors()
+        check_custom_bones()
         check_race_detection()
         check_undo()
 

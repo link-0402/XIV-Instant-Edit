@@ -1173,7 +1173,7 @@ class XIVIE_OT_apply_racial_scaling(Operator):
 
     def execute(self, context: Context):
         from .instant_edit.racial_scaling import (
-            PROPERTY, applied, applied_matrices, race_label, request_deformer, set_applied,
+            PROPERTY, applied, applied_matrices, inherit, race_label, request_deformer, set_applied,
         )
 
         # (mesh, model race, race it is shaped for now or None), once per mesh data.
@@ -1201,10 +1201,14 @@ class XIVIE_OT_apply_racial_scaling(Operator):
             if not current:
                 return None
             stored = applied_matrices(obj)
-            return stored if stored is not None else deformer(model_race, current)[1]
+            return stored if stored is not None else inherit(obj, deformer(model_race, current)[1])
+
+        def scaling_for(obj, model_race: int):
+            race, matrices = deformer(model_race, int(self.race))
+            return race, inherit(obj, matrices)
 
         try:
-            steps = [(obj, model_race, current, *deformer(model_race, int(self.race)),
+            steps = [(obj, model_race, current, *scaling_for(obj, model_race),
                       scaling_now(obj, model_race, current))
                      for obj, model_race, current in plans]
         except ValueError as error:

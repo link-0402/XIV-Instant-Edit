@@ -143,6 +143,26 @@ def request_deformer(model_race: int, race: int, port: int | None = None) -> tup
     return parse_deformer(response)
 
 
+def inherit(obj, matrices: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """The deformer's matrices plus, for each of the mesh's vertex groups it doesn't list, the matrix
+    of the group's nearest listed parent in the mesh's armature, as TexTools does: custom bones such
+    as earring bones on j_kao move with the bone they hang from. Groups without one stay put."""
+    armature = obj.find_armature()
+    if armature is None:
+        return matrices
+    result = dict(matrices)
+    for group in obj.vertex_groups:
+        bone = armature.data.bones.get(group.name)
+        if group.name in matrices or bone is None:
+            continue
+        parent = bone.parent
+        while parent is not None and parent.name not in matrices:
+            parent = parent.parent
+        if parent is not None:
+            result[group.name] = matrices[parent.name]
+    return result
+
+
 def parse_deformer(response: dict) -> tuple[int, dict[str, np.ndarray]]:
     """(target race, {bone: 3×4 matrix}) from the plugin's answer; ValueError when malformed."""
     race = response.get("race")
