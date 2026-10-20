@@ -18,7 +18,7 @@ internal static class UiText
     public static string Sanitize(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        var value = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
+        var value = new string(Services.PathRules.PlainDashes(name).Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim();
         return value.Length == 0 ? "Object" : value;
     }
 }

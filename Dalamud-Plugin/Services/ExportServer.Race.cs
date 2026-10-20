@@ -204,6 +204,8 @@ public sealed partial class ExportServer
             return ResultCode.InvalidSize;
         if (request.Sha256.Length != 64 || request.Sha256.Any(c => !Uri.IsHexDigit(c)))
             return ResultCode.InvalidSha256;
+        if (request.NewModName is not null)
+            request.NewModName = PathRules.PlainDashes(request.NewModName);
         if (request.NewModName is not null && !ModPaths.IsSafeNewModName(request.NewModName))
             return ResultCode.InvalidModName;
         return ValidateAttributeGroupEnvelope(

@@ -1060,7 +1060,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     public static string SanitizeFolderName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        var text = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.', ' ');
+        var text = new string(InstantEdit.Services.PathRules.PlainDashes(name).Select(c => invalid.Contains(c) ? '_' : c).ToArray()).Trim().TrimEnd('.', ' ');
         if (text.Length == 0)
             return "Mod";
         var stem = text.Split('.')[0].TrimEnd(' ');

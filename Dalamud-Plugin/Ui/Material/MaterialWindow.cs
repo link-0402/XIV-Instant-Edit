@@ -777,6 +777,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         if (ImGui.IsWindowAppearing())
             ImGui.SetKeyboardFocusHere();
         var enter = ImGui.InputTextWithHint("##material-mod-name", "Mod name", ref newModName, 120, ImGuiInputTextFlags.EnterReturnsTrue);
+        newModName = PathRules.PlainDashes(newModName);
         var name = newModName.Trim();
         var valid = ModPaths.IsSafeNewModName(name);
         if (name.Length > 0 && !valid)

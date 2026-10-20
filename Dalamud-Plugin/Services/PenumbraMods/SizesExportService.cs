@@ -52,7 +52,7 @@ internal sealed class SizesExportService
     internal static string SizeFileStem(string sizeName)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        var cleaned = new string(sizeName.Select(c => invalid.Contains(c) || char.IsControl(c) ? '-' : c).ToArray());
+        var cleaned = new string(PathRules.PlainDashes(sizeName).Select(c => invalid.Contains(c) || char.IsControl(c) ? '-' : c).ToArray());
         return cleaned.Trim().TrimEnd('.').Trim();
     }
 

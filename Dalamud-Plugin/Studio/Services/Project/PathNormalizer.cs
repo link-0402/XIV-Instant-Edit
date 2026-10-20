@@ -80,7 +80,7 @@ internal static class PathNormalizer
     public static string SafeSegment(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
-        var chars = name.Trim().ToCharArray();
+        var chars = InstantEdit.Services.PathRules.PlainDashes(name.Trim()).ToCharArray();
         for (int i = 0; i < chars.Length; i++)
             if (Array.IndexOf(invalid, chars[i]) >= 0)
                 chars[i] = '_';

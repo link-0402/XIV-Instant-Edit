@@ -220,7 +220,7 @@ internal static class AnimationPresentation
         var prefix = !string.IsNullOrWhiteSpace(source?.ModName) ? source.ModName! : AnimationName(capture);
         const string suffix = " - Instant Edit";
         var invalid = Path.GetInvalidFileNameChars().ToHashSet();
-        var clean = new string(prefix.Trim().Select(c => char.IsControl(c) || invalid.Contains(c) || c is '/' or '\\' ? '-' : c).ToArray()).Trim(' ', '.');
+        var clean = new string(PathRules.PlainDashes(prefix.Trim()).Select(c => char.IsControl(c) || invalid.Contains(c) || c is '/' or '\\' ? '-' : c).ToArray()).Trim(' ', '.');
         if (string.IsNullOrWhiteSpace(clean) || clean is "." or "..") clean = "Animation";
         return clean[..Math.Min(clean.Length, 128 - suffix.Length)] + suffix;
     }

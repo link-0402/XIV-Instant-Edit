@@ -570,6 +570,7 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
         if (ImGui.IsWindowAppearing())
             ImGui.SetKeyboardFocusHere();
         var enter = ImGui.InputText("##physics-save-name", ref saveName, 100, ImGuiInputTextFlags.EnterReturnsTrue);
+        saveName = Services.PathRules.PlainDashes(saveName);
         var name = saveName.Trim();
         var valid = Services.PenumbraMods.ModPaths.IsSafeNewModName(name);
         ImGui.TextColored(valid ? Theme.Muted : Theme.Warning, name.Length == 0 ? "Type a name."

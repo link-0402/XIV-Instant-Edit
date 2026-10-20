@@ -331,7 +331,8 @@ internal sealed class TextureSessionsTab
                 : $"{image.Label} goes into a new mod with this name, enabled in the actor's collection.");
             ImGui.Spacing();
             ImGui.SetNextItemWidth(-1);
-            ImGui.InputTextWithHint("##texture-mod-name", "Mod name", ref _textureModName, 120);
+            if (ImGui.InputTextWithHint("##texture-mod-name", "Mod name", ref _textureModName, 120))
+                _textureModName = PathRules.PlainDashes(_textureModName);
             ImGui.Spacing();
             using (ImRaii.Disabled(string.IsNullOrWhiteSpace(_textureModName)))
             {

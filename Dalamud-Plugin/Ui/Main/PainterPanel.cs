@@ -256,7 +256,7 @@ internal sealed class PainterPanel
             var name = draft.NewModName;
             ImGui.SetNextItemWidth(Theme.Scaled(320));
             if (ImGui.InputTextWithHint("##painter-mod-name", "Mod name", ref name, 120))
-                draft.NewModName = name;
+                draft.NewModName = Services.PathRules.PlainDashes(name);
             Widgets.HelpTip("The first send that changes a vanilla texture creates this mod and enables it in the actor's collection. Later vanilla textures from this project join it.");
         }
 

@@ -142,7 +142,7 @@ internal sealed class PreviewModWriter
 
     internal static string UniqueModName(string name, Func<string, bool> taken, string fallbackName = "XIV Instant Edit Mod")
     {
-        var baseName = string.Concat(name.Where(c => !char.IsControl(c) && Array.IndexOf(Path.GetInvalidFileNameChars(), c) < 0)).Trim().TrimEnd('.');
+        var baseName = string.Concat(PathRules.PlainDashes(name).Where(c => !char.IsControl(c) && Array.IndexOf(Path.GetInvalidFileNameChars(), c) < 0)).Trim().TrimEnd('.');
         if (baseName.Length > 100)
             baseName = baseName[..100].TrimEnd();
         if (!IsSafeNewModName(baseName))

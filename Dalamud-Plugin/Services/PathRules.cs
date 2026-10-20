@@ -5,6 +5,9 @@ namespace InstantEdit.Services;
 /// <summary>Shared normalization and containment rules for plugin-controlled paths.</summary>
 internal static class PathRules
 {
+    /// <summary>The name with every em-dash made a plain hyphen: Penumbra refuses mod names with one.</summary>
+    public static string PlainDashes(string name) => name.Replace('—', '-');
+
     public static bool SamePhysicalPath(string? left, string? right)
     {
         if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right) ||

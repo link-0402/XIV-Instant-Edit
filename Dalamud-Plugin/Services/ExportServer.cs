@@ -1352,6 +1352,8 @@ public sealed partial class ExportServer : IDisposable
             return ResultCode.InvalidSha256;
         if (request.Version == 1 && request.NewModName is not null)
             return ResultCode.UnsupportedField;
+        if (request.NewModName is not null)
+            request.NewModName = PathRules.PlainDashes(request.NewModName);
         if (request.NewModName is not null && !ModPaths.IsSafeNewModName(request.NewModName))
             return ResultCode.InvalidModName;
         if (request.VariantName is not null && !IsSafeVariantName(request.VariantName))
