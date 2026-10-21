@@ -57,6 +57,13 @@ public sealed class SimsCasPart
     public string Name = string.Empty;
     public uint   Version;
 
+    /// <summary>What the part is (2 hair, 5 full body, 6 top...), or 0 when it could not be read.</summary>
+    public uint BodyType;
+
+    public const uint HairBodyType = 2;
+
+    public bool IsHair => BodyType == HairBodyType;
+
     public SimsResourceKey Diffuse;
     public SimsResourceKey Normal;
     public SimsResourceKey Specular;
@@ -161,11 +168,73 @@ public static class CasPartReader
 
         br.ReadUInt32();                        // preset count — always 0 in shipped content
         part.Name = ReadName(br);
+        part.BodyType = LocateBodyType(data, (int)ms.Position);
 
         ReadKeyTable(br, ms, tablePosition, part);
         AssignRoles(part);
         LocateLods(data, (int)tablePosition, part);
     }
+
+    /// <summary>
+    /// Finds the body type (hair, full body, top, hat...) the way the LOD list is found: by
+    /// shape, not by walking the version-gated fields in front of it. The tag list sits a
+    /// little after the name: a count, then that many tags of a small category and a value
+    /// (6 bytes each since version 0x25, 4 before). Three fields after it comes the body
+    /// type, and two fields after that the age and gender flags, whose bits are checked. Only
+    /// a single match is taken; none or several give 0, unknown. Validated on 520 CAS parts
+    /// of versions 0x20 to 0x34 (hairs read 2, dresses and bodysuits 5).
+    /// </summary>
+    internal static uint LocateBodyType(byte[] data, int nameEnd)
+    {
+        // Sort priority, secondary sort index, property ID and aural material hash come first.
+        int start = nameEnd + 14;
+        uint found = 0;
+        int matches = 0;
+        for (int p = start; p < start + MaxTagSearch && p + 4 <= data.Length; p++)
+        {
+            int count = BitConverter.ToInt32(data, p);
+            if (count is < 1 or > MaxTags)
+                continue;
+            foreach (int tagSize in new[] { 6, 4 })
+            {
+                int end = p + 4 + count * tagSize;
+                if (end > data.Length || !TagsLookValid(data, p + 4, count, tagSize))
+                    continue;
+                // Price, title key, description key, maybe a create-description key, and a
+                // one-byte unique-texture-space flag lie between the tags and the body type.
+                for (int q = end + 12; q <= end + 17 && q + 12 <= data.Length; q++)
+                {
+                    uint body = BitConverter.ToUInt32(data, q);
+                    uint ageGender = BitConverter.ToUInt32(data, q + 8);
+                    if (body is >= 1 and <= MaxBodyType && AgeGenderLooksValid(ageGender))
+                    {
+                        found = body;
+                        matches++;
+                    }
+                }
+            }
+        }
+        return matches == 1 ? found : 0;
+    }
+
+    private const int MaxTagSearch = 64;
+    private const int MaxTags      = 300;
+    private const uint MaxBodyType = 200;
+
+    private static bool TagsLookValid(byte[] data, int at, int count, int tagSize)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            ushort category = BitConverter.ToUInt16(data, at + i * tagSize);
+            if (category is 0 or >= 0x400)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>Some age bit in the low byte, a male or female bit, and nothing above the gender bits.</summary>
+    private static bool AgeGenderLooksValid(uint flags)
+        => (flags & 0xFF) != 0 && (flags & 0x3000) != 0 && (flags & ~0x3FFFu) == 0;
 
     /// <summary>
     /// Finds the LOD list by trying every offset in front of the key table and keeping

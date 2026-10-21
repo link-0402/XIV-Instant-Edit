@@ -383,6 +383,8 @@ public sealed class PackageImportWindow : Window, IDisposable
             }
         }
 
+        if (_scan.IsHair)
+            Gui.Hint("A hair: its hat versions and all diffuses but the lightest start unticked.");
         if (!_scan.HasCasPartData)
         {
             Gui.Icon(FontAwesomeIcon.ExclamationTriangle, Theme.Warn);
@@ -425,7 +427,7 @@ public sealed class PackageImportWindow : Window, IDisposable
             : null;
 
         foreach (var asset in scan.Meshes)
-            asset.Selected = wanted == null || asset.LodLevel == wanted;
+            asset.Selected = (wanted == null || asset.LodLevel == wanted) && !asset.HatVersion;
     }
 
     private void ApplyUnityTick(UnityScanResult scan)

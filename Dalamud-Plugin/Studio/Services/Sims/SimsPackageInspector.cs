@@ -47,6 +47,9 @@ public sealed class SimsAsset
 
     public string LodLabel => LodLevel == UnknownLod ? "LOD ?" : $"LOD {LodLevel}";
 
+    /// <summary>A hair mesh the game uses under hats, with the top cut off; not ticked by default.</summary>
+    public bool HatVersion;
+
     // Textures
     public int Width;
     public int Height;
@@ -59,7 +62,7 @@ public sealed class SimsAsset
     public string? Error;
 
     public string Describe() => Kind == SimsAssetKind.Mesh
-        ? $"{VertexCount:N0} verts / {FaceCount:N0} tris"
+        ? $"{VertexCount:N0} verts / {FaceCount:N0} tris{(HatVersion ? " · hat version" : "")}"
         : Width > 0 ? $"{Width} x {Height}" : "—";
 }
 
@@ -72,6 +75,9 @@ public sealed class SimsScanResult
 
     /// <summary>True when at least one CAS part parsed, so roles are authoritative.</summary>
     public bool HasCasPartData;
+
+    /// <summary>True when a CAS part is a hair: its hat versions and all but one diffuse start unticked.</summary>
+    public bool IsHair;
 
     /// <summary>Detail levels present in this package, ascending; drives the LOD picker.</summary>
     public List<int> AvailableLods = new();
@@ -109,6 +115,7 @@ public static class SimsPackageInspector
 
         var parts = ReadCasParts(package, result, progress, cancel);
         result.HasCasPartData = parts.Count > 0;
+        result.IsHair = parts.Any(p => p.IsHair);
 
         AddMeshes(package, parts, result, progress, cancel);
         AddTextures(package, parts, result, progress, cancel);
@@ -122,17 +129,16 @@ public static class SimsPackageInspector
 
     /// <summary>
     /// Narrows what starts ticked to what an FFXIV port actually needs: the LOD 0 meshes
-    /// only, since the lower levels are the game's reduced-detail copies. A package with
-    /// no LOD 0 keeps every mesh ticked rather than silently offering nothing. Textures
-    /// have already had the roles a port cannot use unticked as they were listed.
+    /// only, since the lower levels are the game's reduced-detail copies, and of a hair not
+    /// its hat versions. A package with no LOD 0 keeps every level ticked rather than
+    /// silently offering nothing. Textures have already had the roles a port cannot use
+    /// unticked as they were listed.
     /// </summary>
     private static void SelectDefaults(SimsScanResult result)
     {
-        if (!result.AvailableLods.Contains(0))
-            return;
-
+        bool hasLod0 = result.AvailableLods.Contains(0);
         foreach (var asset in result.Meshes)
-            asset.Selected = asset.LodLevel == 0;
+            asset.Selected = (!hasLod0 || asset.LodLevel == 0) && !asset.HatVersion;
     }
 
     private static List<SimsCasPart> ReadCasParts(DbpfPackage package, SimsScanResult result, Action<string>? progress, CancellationToken cancel)
@@ -208,6 +214,8 @@ public static class SimsPackageInspector
         }
 
         int unlevelled = 0;
+        var shapes = new Dictionary<SimsResourceKey, (uint Shader, int Vertices)>();
+        var meshAssets = new Dictionary<SimsResourceKey, SimsAsset>();
 
         foreach (var entry in geomEntries)
         {
@@ -237,7 +245,7 @@ public static class SimsPackageInspector
             if (level == SimsAsset.UnknownLod)
                 unlevelled++;
 
-            result.Assets.Add(new SimsAsset
+            var asset = new SimsAsset
             {
                 Kind        = SimsAssetKind.Mesh,
                 Entry       = entry,
@@ -245,8 +253,13 @@ public static class SimsPackageInspector
                 VertexCount = mesh.VertexCount,
                 FaceCount   = mesh.FaceCount,
                 LodLevel    = level,
-            });
+            };
+            result.Assets.Add(asset);
+            shapes[key] = (mesh.ShaderHash, mesh.VertexCount);
+            meshAssets[key] = asset;
         }
+
+        MarkHatVersions(parts, shapes, meshAssets);
 
         if (unlevelled > 0)
         {
@@ -263,14 +276,41 @@ public static class SimsPackageInspector
             .ToList();
     }
 
+    /// <summary>
+    /// Marks the hat versions of every hair part's detail levels (see <see cref="SimsHairDefaults"/>).
+    /// A mesh one part uses in full stays unmarked even when another part has it as a hat version.
+    /// </summary>
+    private static void MarkHatVersions(List<SimsCasPart> parts, Dictionary<SimsResourceKey, (uint Shader, int Vertices)> shapes,
+        Dictionary<SimsResourceKey, SimsAsset> meshAssets)
+    {
+        var hat = new HashSet<SimsResourceKey>();
+        var full = new HashSet<SimsResourceKey>();
+        foreach (var part in parts.Where(p => p.IsHair))
+            foreach (var lod in part.Lods)
+            {
+                var meshes = lod.Meshes.Distinct().Where(shapes.ContainsKey).Select(k => (k, shapes[k].Shader, shapes[k].Vertices)).ToList();
+                var cut = SimsHairDefaults.HatVersions(meshes);
+                hat.UnionWith(cut);
+                full.UnionWith(meshes.Select(m => m.k).Where(k => !cut.Contains(k)));
+            }
+        foreach (var key in hat.Except(full))
+            meshAssets[key].HatVersion = true;
+    }
+
     private static void AddTextures(DbpfPackage package, List<SimsCasPart> parts,
         SimsScanResult result, Action<string>? progress, CancellationToken cancel)
     {
         // Roles claimed by CAS parts win over the resource-type guess.
         var roles = new Dictionary<SimsResourceKey, (SimsTextureRole Role, string PartName)>();
+        var hairDiffuses = new HashSet<SimsResourceKey>();
         foreach (var part in parts)
             foreach (var (key, role) in part.TextureKeys())
+            {
                 roles.TryAdd(key, (role, part.Name));
+                if (part.IsHair && role == SimsTextureRole.Diffuse)
+                    hairDiffuses.Add(key);
+            }
+        var measured = new List<(SimsAsset Asset, float Lightness, float Saturation)>();
 
         var textureEntries = package.Entries.Where(e => SimsResourceType.IsTexture(e.Type)).ToList();
         if (textureEntries.Count == 0)
@@ -315,6 +355,11 @@ public static class SimsPackageInspector
                 asset.Height       = decoded.Height;
                 asset.SourceFormat = decoded.SourceFormat;
                 asset.ThumbnailPng = decoded.ToThumbnailPng(ThumbnailSize);
+                if (hairDiffuses.Contains(key) && asset.Role == SimsTextureRole.Diffuse)
+                {
+                    var (lightness, saturation) = SimsHairDefaults.Measure(decoded.Rgba);
+                    measured.Add((asset, lightness, saturation));
+                }
             }
             catch (Exception ex)
             {
@@ -324,6 +369,11 @@ public static class SimsPackageInspector
 
             result.Assets.Add(asset);
         }
+
+        // A hair port wants one diffuse of all the swatches, to turn into its normal texture.
+        int keep = SimsHairDefaults.PickDiffuse(measured.Select(m => (m.Lightness, m.Saturation)).ToList());
+        for (int i = 0; i < measured.Count; i++)
+            measured[i].Asset.Selected = i == keep;
 
         // Diffuse first, then the other roles — the diffuse swatches are the long list.
         result.Assets.Sort((a, b) =>

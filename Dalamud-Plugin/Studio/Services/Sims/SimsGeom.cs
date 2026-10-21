@@ -10,6 +10,12 @@ public sealed class SimsGeomMesh
 {
     public uint Version;
 
+    /// <summary>
+    /// The shader of the embedded material, 0 for none. Hairs pair an alpha-card mesh
+    /// (SimGlass, 0x5EDA9CDE) with a solid cap under it (SimSkin, 0x548394B9).
+    /// </summary>
+    public uint ShaderHash;
+
     public Vector3[] Positions = Array.Empty<Vector3>();
     public Vector3[] Normals   = Array.Empty<Vector3>();
 
@@ -109,6 +115,7 @@ public static class SimsGeom
         br.ReadUInt32();                                  // TGI list size
 
         uint embeddedId = br.ReadUInt32();
+        mesh.ShaderHash = embeddedId;
         if (embeddedId != 0)
         {
             // An embedded MTNF material block — skipped wholesale via its own size field.

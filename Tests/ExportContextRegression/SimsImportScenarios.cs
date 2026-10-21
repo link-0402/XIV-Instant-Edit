@@ -25,6 +25,75 @@ internal static class SimsImportScenarios
         NamesFromThePackageStayInsideTheOutputFolder(root);    // sims-6
         ReExtractingReplacesOnlyItsOwnFiles(root);             // sims-4
         SimsWorkStopsWhenCancelled(root);                      // sims-8
+        BodyTypeIsFoundByShape();
+        HairKeepsTheFullMeshOfEachShader();
+        HairKeepsTheLightestGreyDiffuse();
+    }
+
+    /// <summary>The CAS part's body type, after a run of version-gated fields, a tag list and three keys.</summary>
+    private static byte[] CasMiddle(int gap, int tagSize, int tags, uint bodyType, uint ageGender, int afterTags)
+    {
+        var bytes = new List<byte>();
+        bytes.AddRange(new byte[14 + gap]);                          // sort priority .. flags
+        bytes.AddRange(BitConverter.GetBytes(tags));
+        for (int i = 0; i < tags; i++)
+        {
+            bytes.AddRange(BitConverter.GetBytes((ushort)(0x44 + i % 3)));
+            bytes.AddRange(tagSize == 6 ? BitConverter.GetBytes(0x54u + (uint)i) : BitConverter.GetBytes((ushort)(0x54 + i)));
+        }
+        bytes.AddRange(Enumerable.Repeat((byte)0x7A, afterTags));   // price, title and description keys
+        bytes.AddRange(BitConverter.GetBytes(bodyType));
+        bytes.AddRange(BitConverter.GetBytes(0u));                    // body sub-type
+        bytes.AddRange(BitConverter.GetBytes(ageGender));
+        bytes.AddRange(new byte[32]);
+        return bytes.ToArray();
+    }
+
+    private static void BodyTypeIsFoundByShape()
+    {
+        Require(CasPartReader.LocateBodyType(CasMiddle(40, 6, 32, 2, 0x2078, 17), 0) == 2,
+            "a current CAS part (6-byte tags, create-description key) reads as a hair");
+        Require(CasPartReader.LocateBodyType(CasMiddle(18, 6, 25, 5, 0x2078, 13), 0) == 5,
+            "a CAS part without the create-description key reads as a full body");
+        Require(CasPartReader.LocateBodyType(CasMiddle(12, 4, 28, 5, 0x2078, 13), 0) == 5,
+            "an old CAS part with 4-byte tags reads its body type");
+        Require(CasPartReader.LocateBodyType(CasMiddle(40, 6, 32, 2, 0x12345678, 17), 0) == 0,
+            "a body type without valid age and gender flags behind it is not taken");
+        Require(CasPartReader.LocateBodyType(new byte[200], 0) == 0, "a CAS part without a tag list has no body type");
+    }
+
+    private static void HairKeepsTheFullMeshOfEachShader()
+    {
+        const uint glass = 0x5EDA9CDE, skin = 0x548394B9;
+        // Buffy: hair cards and cap, each as the full mesh and two hat versions.
+        var hat = SimsHairDefaults.HatVersions(new[]
+        {
+            ("cards hat 1", glass, 16504), ("cards hat 2", glass, 16795), ("cards", glass, 21456),
+            ("cap hat 1", skin, 1768), ("cap hat 2", skin, 1610), ("cap", skin, 2882),
+        });
+        Require(hat.SetEquals(new[] { "cards hat 1", "cards hat 2", "cap hat 1", "cap hat 2" }),
+            "a hair keeps the mesh with the most vertices of each shader; the rest are hat versions");
+        Require(SimsHairDefaults.HatVersions(new[] { ("a", glass, 100), ("b", skin, 50) }).Count == 0,
+            "meshes of different shaders are never hat versions of each other");
+        Require(SimsHairDefaults.HatVersions(new[] { ("a", glass, 100), ("b", glass, 100) }).SetEquals(new[] { "b" }),
+            "of two equal meshes the first stays");
+    }
+
+    private static void HairKeepsTheLightestGreyDiffuse()
+    {
+        Require(SimsHairDefaults.PickDiffuse(new (float, float)[] { (176, 35), (128, 2.5f), (209, 4.9f), (13, 2) }) == 2,
+            "the lightest grey diffuse is kept");
+        Require(SimsHairDefaults.PickDiffuse(new (float, float)[] { (176, 35), (128, 2.5f), (40, 1) }) == 1,
+            "a lighter tinted swatch loses to a grey one");
+        Require(SimsHairDefaults.PickDiffuse(new (float, float)[] { (150, 40), (176, 35) }) == 1,
+            "without a grey swatch the lightest is kept");
+        Require(SimsHairDefaults.PickDiffuse(new (float, float)[] { (-1, 0) }) == -1 && SimsHairDefaults.PickDiffuse([]) == -1,
+            "a diffuse without opaque pixels is never picked");
+        var rgba = new byte[4 * 70];
+        for (int i = 0; i < 70; i++)
+            (rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3]) = i % 2 == 0 ? ((byte)200, (byte)200, (byte)200, (byte)255) : ((byte)0, (byte)0, (byte)0, (byte)0);
+        var (lightness, saturation) = SimsHairDefaults.Measure(rgba);
+        Require(Math.Abs(lightness - 200) < 0.01 && saturation == 0, "only opaque pixels count towards a diffuse's lightness");
     }
 
     private const long Megabyte = 1024 * 1024;
