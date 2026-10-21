@@ -155,6 +155,38 @@ public sealed class PackageImportWindow : Window, IDisposable
     private static bool IsUnity(string path) => Path.GetExtension(path).Equals(".unitypackage", StringComparison.OrdinalIgnoreCase);
     private static bool IsPackage(string path) => IsUnity(path) || Path.GetExtension(path).Equals(".package", StringComparison.OrdinalIgnoreCase);
 
+    private FileDropRule? _packageDropRule;
+
+    /// <summary>
+    /// What the package field, the list below it and the stash's import button take from a drag: one
+    /// package, which is scanned at once, or folders, which open in the stash.
+    /// </summary>
+    private FileDropRule PackageDrop => _packageDropRule ??= new FileDropRule(
+        p => p.Files.Count == 1 && p.Folders.Count == 0 && IsPackage(p.Files[0]) ? null
+           : p.Folders.Count > 0 && p.Files.Count == 0 ? null
+           : "Drop one .package or .unitypackage file, or folders to open in the stash.",
+        dropped =>
+        {
+            if (dropped.Folders.Count > 0)
+            {
+                foreach (var folder in dropped.Folders)
+                    if (_stash.OpenFolder(folder) == null)
+                        _showStash = true;
+            }
+            else
+            {
+                _packagePath = dropped.Files[0];
+                StartScan();
+            }
+        });
+
+    /// <summary>A drop target on the last drawn item, taking packages and folders as the package field does.</summary>
+    private void PackageDropTarget()
+    {
+        if (!Busy && FileDrop.Target(PackageDrop.Reject, out var dropped))
+            PackageDrop.OnDrop(dropped);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Draw
     // ─────────────────────────────────────────────────────────────────────────
@@ -185,6 +217,7 @@ public sealed class PackageImportWindow : Window, IDisposable
             else                    DrawAssetList(busy);
         }
         ImGui.EndChild();
+        PackageDropTarget();
 
         DrawActions(busy);
     }
@@ -192,8 +225,9 @@ public sealed class PackageImportWindow : Window, IDisposable
     /// <summary>The stash's top line: back to importing, and the Sims shortcut for the extraction just made.</summary>
     private void DrawStashBar()
     {
-        if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Import a package", "Scan and extract another .package or .unitypackage."))
+        if (Gui.IconTextButton(FontAwesomeIcon.FileImport, "Import a package", "Scan and extract another .package or .unitypackage. A package can also be dropped here."))
             _showStash = false;
+        PackageDropTarget();
 
         if (_extraction != null && string.Equals(_stash.Folder, _extraction.RootFolder, StringComparison.OrdinalIgnoreCase))
         {
@@ -259,24 +293,8 @@ public sealed class PackageImportWindow : Window, IDisposable
             float scanW = Theme.S(110);
             Gui.PathPicker("PackagePath", ref _packagePath, "path to a .package or .unitypackage file", PathKind.File,
                 "Packages{.package,.unitypackage}",
-                picked => { _packagePath = picked; SaveSettings(); }, reserveRight: scanW + ImGui.GetStyle().ItemSpacing.X);
-            if (FileDrop.Target(p => p.Files.Count == 1 && p.Folders.Count == 0 && IsPackage(p.Files[0]) ? null
-                                   : p.Folders.Count > 0 && p.Files.Count == 0 ? null
-                                   : "Drop one .package or .unitypackage file, or folders to open in the stash.",
-                    out var dropped))
-            {
-                if (dropped.Folders.Count > 0)
-                {
-                    foreach (var folder in dropped.Folders)
-                        if (_stash.OpenFolder(folder) == null)
-                            _showStash = true;
-                }
-                else
-                {
-                    _packagePath = dropped.Files[0];
-                    StartScan();
-                }
-            }
+                picked => { _packagePath = picked; SaveSettings(); }, reserveRight: scanW + ImGui.GetStyle().ItemSpacing.X,
+                drop: PackageDrop);
 
             ImGui.SameLine();
             if (Gui.PrimaryButton(FontAwesomeIcon.Search, "Scan", scanW, "Reads the package and lists what it holds."))
