@@ -25,7 +25,8 @@ internal static class HairPhysicsBuilder
     /// output. Without chains the file turns physics off. Without <paramref name="donor"/> nothing collides;
     /// a shape the donor lacks is left out with a note. <paramref name="previous"/> is the file the last export
     /// wrote: a chain over the same bones in the same group keeps its tuning (axes and tip offset are rebuilt),
-    /// its simulator keeps that simulator's settings, and copied shapes keep the previous file's values.
+    /// its simulator keeps that simulator's settings, and a copied shape keeps the previous file's shape of
+    /// the same name and type.
     /// </summary>
     public static PhybFile Build(HairSkeletonRequest rig, ImmutableArray<SkeletonBone> bones, PhybFile? donor, PhybFile? previous,
         ICollection<string> notes)
@@ -64,7 +65,9 @@ internal static class HairPhysicsBuilder
                 var built = Chain(chain, preset, bones, model, index, flags);
                 if (Previous(previous, simulator.Group, chain.Bones!) is (var owner, var old))
                 {
-                    Keep(old, built);
+                    // Collision bits index the simulator's refs, so they only carry over to the same refs.
+                    var sameRefs = owner.Collisions.Select(c => c.Name).SequenceEqual(simulator.Collisions.Select(c => c.Name));
+                    Keep(old, built, sameRefs);
                     tuned ??= owner;
                     kept++;
                 }
@@ -98,8 +101,11 @@ internal static class HairPhysicsBuilder
         return null;
     }
 
-    /// <summary>Copies the tuning of a previous chain over the same bones; axes and the tip offset stay the rig's.</summary>
-    private static void Keep(PhybChain old, PhybChain chain)
+    /// <summary>
+    /// Copies the tuning of a previous chain over the same bones; axes and the tip offset stay the rig's,
+    /// and collision bits stay the fresh ones unless <paramref name="sameRefs"/>.
+    /// </summary>
+    private static void Keep(PhybChain old, PhybChain chain, bool sameRefs)
     {
         chain.Dampening = old.Dampening;
         chain.MaxSpeed = old.MaxSpeed;
@@ -109,12 +115,12 @@ internal static class HairPhysicsBuilder
         chain.Type = old.Type;
         var named = old.Nodes.Where(n => !n.Bone.IsEmpty).ToList();
         for (var i = 0; i < named.Count; i++)
-            Keep(named[i], chain.Nodes[i]);
+            Keep(named[i], chain.Nodes[i], sameRefs);
         if (old.Nodes[^1].Bone.IsEmpty)
-            Keep(old.Nodes[^1], chain.Nodes[^1]);
+            Keep(old.Nodes[^1], chain.Nodes[^1], sameRefs);
     }
 
-    private static void Keep(PhybNode old, PhybNode node)
+    private static void Keep(PhybNode old, PhybNode node, bool sameRefs)
     {
         node.Radius = old.Radius;
         node.AttractByAnimation = old.AttractByAnimation;
@@ -122,6 +128,8 @@ internal static class HairPhysicsBuilder
         node.GravityScale = old.GravityScale;
         node.ConeMaxAngle = old.ConeMaxAngle;
         node.ConstraintPlaneNormal = old.ConstraintPlaneNormal;
+        if (!sameRefs)
+            return;
         node.CollisionFlags = old.CollisionFlags;
         node.ContinuousCollisionFlags = old.ContinuousCollisionFlags;
     }

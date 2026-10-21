@@ -23,6 +23,7 @@ internal static class HairPhysicsScenarios
         BytesRoundTrip();
         TunedChainsAreKept();
         MovedBoneKeepsTuning();
+        NewRefsGetFreshCollisionFlags();
         KindChangeTakesPreset();
         ShapesKeepTuning();
     }
@@ -243,12 +244,15 @@ internal static class HairPhysicsScenarios
         tuned.Chains[0].Dampening = 0.3f;
         tuned.Chains[0].Nodes[^1].Radius = 0.05f;
         tuned.Gravity = new(0, -5, 0);
+        tuned.Chains[0].Nodes[0].CollisionFlags = 5;
         var notes = new List<string>();
         var file = Build(Rig(back, Chain(2, "side", new(0.06f, 1.6f, 0), Down, 2, 0.06f)), Donor(), notes, Reread(first));
         var kept = file.Simulators[0];
         Require(kept.Group == 23 && kept.Chains[0].Dampening == 0.3f && kept.Chains[0].Nodes[^1].Radius == 0.05f &&
                 kept.Gravity == new Vector3(0, -5, 0),
             "Hair physics: a re-export keeps the back chain's dampening, tip radius and gravity");
+        Require(kept.Chains[0].Nodes[0].CollisionFlags == 5,
+            "Hair physics: collision bits are kept when the shapes are the same");
         var added = file.Simulators[1];
         Require(added.Group == 24 && added.Chains[0].Dampening == 0.1f && added.Chains[0].Nodes[0].Radius == 0.01f &&
                 added.Gravity == new PhybSimulator().Gravity,
@@ -267,6 +271,19 @@ internal static class HairPhysicsScenarios
         var chain = Build(Rig(back), Donor(), null, Reread(first)).Simulators[0].Chains[0];
         Require(chain.Dampening == 0.3f && Vector3.Dot(chain.Nodes[0].ConeAxisOffset, oldAxis) < 0.9999f,
             "Hair physics: a moved bone keeps the chain's tuning but gets a new axis");
+        var fresh = Build(Rig(back), Donor()).Simulators[0].Chains[0];
+        Require(Near(chain.LastBoneOffset, fresh.LastBoneOffset),
+            "Hair physics: a moved bone gets the rig's tip offset");
+    }
+
+    private static void NewRefsGetFreshCollisionFlags()
+    {
+        var rig = Rig(Chain(4, "back", new(0, 1.6f, -0.08f), Down, 2, 0.06f));
+        var first = Build(rig, null);
+        first.Simulators[0].Chains[0].Dampening = 0.3f;
+        var chain = Build(rig, Donor(), null, Reread(first)).Simulators[0].Chains[0];
+        Require(chain.Dampening == 0.3f && chain.Nodes.All(n => n.CollisionFlags == 7 && n.ContinuousCollisionFlags == 0),
+            "Hair physics: a re-export with new shapes keeps the tuning but collides with all three");
     }
 
     private static void KindChangeTakesPreset()
