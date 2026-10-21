@@ -1447,6 +1447,21 @@ def run_staging_isolation_regression(addon) -> None:
                 {"kind": "back", "bones": ["j_ex_hair_01_b", "j_ex_hair_01_a"]}]))
             _require(payload is None and "List a chain's bones from the root down" in issue,
                      "hair rig: a chain listed tip first is refused")
+            # An unconnected child can start at its parent's head; the plugin refuses chain bones under 1 mm apart.
+            coincident = rig_armature("Coincident Rig", rig_json)
+            bpy.context.view_layer.objects.active = coincident
+            bpy.ops.object.mode_set(mode="EDIT")
+            coincident.data.edit_bones["j_ex_hair_01_b"].head = (0, 0.08, 1.45)
+            bpy.ops.object.mode_set(mode="OBJECT")
+            bpy.context.view_layer.objects.active = previous_active
+            coincident_hair = weighted_mesh("4.0 Coincident Hair", ["j_ex_hair_01_a"], coincident)
+            payload, issue = hair_rig.hair_skeleton_payload([coincident_hair])
+            _require(payload is None and issue == (
+                "j_ex_hair_01_b sits on j_ex_hair_01_a in the back chain of the hair rig on Coincident Rig. "
+                "Move it at least 1 mm away."),
+                     "hair rig: a chain bone on the one before is named with the one it sits on")
+            bpy.data.objects.remove(coincident_hair, do_unlink=True)
+            bpy.data.objects.remove(coincident, do_unlink=True)
             payload, issue = rig_issue(groups=("j_ex_hair_01_a", "j_ex_h0108_01"))
             _require(payload is None and "j_ex_h0108_01" in issue and "4.0 Checked Hair" in issue,
                      "hair rig: weights left on the vanilla hair skeleton's bones are named with their mesh")

@@ -27,7 +27,7 @@ _VANILLA_HAIR_BONE = re.compile(r"j_ex_h[0-9]{4}_")
 # A mesh's bone table holds at most 64 bones.
 MAX_MESH_BONES = 64
 _SCALE_TOLERANCE = 1e-4
-# A chain's tip must be this far from its last bone, in metres.
+# A chain's tip must be this far from its last bone, and each chain bone from the one before, in metres.
 _MIN_CHAIN_TIP = 0.001
 _BLENDER_TO_GAME = Matrix(GAME_TO_BLENDER.tolist()).inverted()
 
@@ -166,6 +166,15 @@ def _chains_issue(chains, armature, matrix) -> str:
         tip = _game_point(matrix, last.tail_local)
         if sum((a - b) ** 2 for a, b in zip(head, tip)) < _MIN_CHAIN_TIP ** 2:
             return f"The {kind} chain of the hair rig on {armature_name} ends in {last.name}, which has no length."
+        # An unconnected child can start at its parent's head; the plugin needs a direction between them.
+        for previous, name in zip(members, members[1:]):
+            start = _game_point(matrix, armature.data.bones[previous].head_local)
+            end = _game_point(matrix, armature.data.bones[name].head_local)
+            if sum((a - b) ** 2 for a, b in zip(start, end)) < _MIN_CHAIN_TIP ** 2:
+                return (
+                    f"{name} sits on {previous} in the {kind} chain of the hair rig on {armature_name}. "
+                    "Move it at least 1 mm away."
+                )
     return ""
 
 

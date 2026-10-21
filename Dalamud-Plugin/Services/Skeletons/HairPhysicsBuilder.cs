@@ -164,7 +164,9 @@ internal static class HairPhysicsBuilder
         {
             var bone = bones[path[i]];
             var axis = Vector3.Transform(points[i + 1] - points[i], Quaternion.Conjugate(model[bone.Parent].Rotation));
-            chain.Nodes.Add(Node(PhybName.From(bone.Name), i == 0 ? preset.Root : preset.Middle, scale, Vector3.Normalize(axis), flags));
+            // Validation keeps chain bones 1 mm apart; a shorter step has no direction, and Normalize would give NaN.
+            axis = axis.Length() < 1e-6f ? Vector3.UnitX : Vector3.Normalize(axis);
+            chain.Nodes.Add(Node(PhybName.From(bone.Name), i == 0 ? preset.Root : preset.Middle, scale, axis, flags));
         }
         chain.Nodes.Add(Node(PhybName.Empty, preset.Tip, scale, Vector3.UnitX, flags));
         return chain;

@@ -31,7 +31,8 @@ public sealed partial class HairSkeletonRequest
     /// <summary>
     /// Envelope check: a player race, 1-64 uniquely named rig bones each after its parent, finite
     /// model transforms with unit rotations, and chains of known kinds over distinct rig bones, each
-    /// running root to tip (every bone the child of the one before) and ending in a tip off its last bone.
+    /// running root to tip (every bone the child of the one before and at least 1 mm from it) and ending
+    /// in a tip off its last bone.
     /// </summary>
     internal static ResultCode? Validate(HairSkeletonRequest? request)
     {
@@ -56,7 +57,7 @@ public sealed partial class HairSkeletonRequest
                 return ResultCode.InvalidHairSkeleton;
             for (var i = 0; i < chain.Bones.Count; i++)
                 if (chain.Bones[i] is not { } name || !bones.TryGetValue(name, out var bone) || !chained.Add(name) ||
-                    (i > 0 && bone.Parent != chain.Bones[i - 1]))
+                    (i > 0 && (bone.Parent != chain.Bones[i - 1] || !Apart(bone.Model!, bones[chain.Bones[i - 1]].Model!))))
                     return ResultCode.InvalidHairSkeleton;
             if (!ValidTip(chain.Tip, bones[chain.Bones[^1]].Model!))
                 return ResultCode.InvalidHairSkeleton;
@@ -75,10 +76,12 @@ public sealed partial class HairSkeletonRequest
 
     // Three finite values at least 1 mm from the last bone's model translation.
     private static bool ValidTip(float[]? tip, float[] last)
+        => tip is { Length: 3 } && tip.All(float.IsFinite) && Apart(tip, last);
+
+    // At least 1 mm between two points' first three values, so a cone axis between them has a direction.
+    private static bool Apart(float[] a, float[] b)
     {
-        if (tip is not { Length: 3 } || tip.Any(value => !float.IsFinite(value)))
-            return false;
-        float x = tip[0] - last[0], y = tip[1] - last[1], z = tip[2] - last[2];
+        float x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
         return MathF.Sqrt(x * x + y * y + z * z) >= 1e-3f;
     }
 }

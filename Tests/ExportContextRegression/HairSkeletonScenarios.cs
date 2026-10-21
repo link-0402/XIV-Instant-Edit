@@ -231,11 +231,14 @@ internal static class HairSkeletonScenarios
         var full = Rig();
         full.Bones = ManyBones(64);
         full.Bones[27].Parent = "j_ex_hair_01_a";
+        full.Bones[27].Model = Model(PositionB, RotationB);
         Require(HairSkeletonRequest.Validate(full) is null, "Hair rig: 64 bones pass");
         var partial = Rig();
         partial.Chains![0].Bones = ["j_ex_hair_01_a"];
         partial.Chains[0].Tip = [PositionA.X, PositionA.Y - 0.06f, PositionA.Z];
         Require(HairSkeletonRequest.Validate(partial) is null, "Hair rig: a bone in no chain passes");
+        partial.Bones![1].Model = Model(PositionA, RotationB);
+        Require(HairSkeletonRequest.Validate(partial) is null, "Hair rig: a bone in no chain may sit on its parent");
 
         Invalid(rig => rig.Race = "c0804", "a non-player race");
         Invalid(rig => rig.Bones = [], "zero bones");
@@ -258,6 +261,8 @@ internal static class HairSkeletonScenarios
         Invalid(rig => rig.Chains![0].Tip![1] = float.NaN, "a NaN in a tip");
         Invalid(rig => rig.Chains![0].Tip = [PositionB.X, PositionB.Y, PositionB.Z], "a tip on the last bone");
         Invalid(rig => rig.Chains![0].Bones = ["j_ex_hair_01_b", "j_ex_hair_01_a"], "a chain listed tip to root");
+        Invalid(rig => rig.Bones![1].Model = Model(PositionA + new Vector3(0.0005f, 0, 0), RotationB),
+            "a chain bone under 1 mm from the one before");
         Invalid(rig =>
         {
             rig.Bones!.Add(new() { Name = "j_ex_hair_02_a", Parent = "j_kao", Model = Model(PositionB, RotationB) });

@@ -26,6 +26,7 @@ internal static class HairPhysicsScenarios
         NewRefsGetFreshCollisionFlags();
         KindChangeTakesPreset();
         ShapesKeepTuning();
+        CoincidentBonesGetAnAxis();
     }
 
     // j_kao turned 90 degrees about Y, so parent-space axes differ from model space.
@@ -312,5 +313,20 @@ internal static class HairPhysicsScenarios
         Require(file.Collision.Capsules.Single(c => c.Name.Text == "hair_capsule_sako_r").Radius == right.Radius &&
                 file.Collision.Spheres.Count == 0,
             "Hair physics: a previous shape of another type doesn't replace the donor's");
+    }
+
+    private static void CoincidentBonesGetAnAxis()
+    {
+        // Validation refuses these rigs; the builder still never writes a NaN or arbitrary axis.
+        // On j_kao's own position the two bones' model positions are exactly equal; 0.1 µm apart they are not.
+        foreach (var (offset, label) in new[] { (0f, "on"), (1e-7f, "0.1 µm from") })
+        {
+            var start = Kao.Reference.Position;
+            var rig = Rig(Chain(4, "back", start, Down, 2, 0.06f));
+            rig.Bones![1].Model = Model(start + new Vector3(0, offset, 0), Quaternion.Identity);
+            var nodes = Build(rig, Donor()).Simulators[0].Chains[0].Nodes;
+            Require(nodes[0].ConeAxisOffset == Vector3.UnitX && nodes.All(n => float.IsFinite(n.ConeAxisOffset.Length())),
+                $"Hair physics: a bone {label} the one before gets the +X axis");
+        }
     }
 }
