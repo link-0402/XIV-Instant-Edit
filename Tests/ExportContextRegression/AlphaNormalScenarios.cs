@@ -16,9 +16,10 @@ internal static class AlphaNormalScenarios
         Directory.CreateDirectory(root);
         var cache = Path.Combine(root, "cache");
 
-        // A flat 4×4 normal, and an 8×8 alpha map: black left half, white right half.
+        // A flat 4×4 normal saved as plain RGB, as base normals usually are, and an 8×8 alpha map:
+        // black left half, white right half.
         var normalPath = Path.Combine(root, "normal.png");
-        using (var normal = new Image<Rgba32>(4, 4, new Rgba32(128, 128, 255, 255)))
+        using (var normal = new Image<Rgb24>(4, 4, new Rgb24(128, 128, 255)))
             normal.SaveAsPng(normalPath);
         var alphaPath = Path.Combine(root, "alpha.png");
         using (var alpha = new Image<Rgba32>(8, 8, new Rgba32(0, 0, 0, 255)))
@@ -39,6 +40,8 @@ internal static class AlphaNormalScenarios
         tex.AlphaSourcePath = alphaPath;
         var made = AlphaNormal.SourceOf(tex, cache, out var error);
         Require(made != null && File.Exists(made), $"alpha normal: the combined image is made ({error})");
+        Require(Image.Identify(made!).PixelType.BitsPerPixel == 32,
+            "alpha normal: the made image keeps an alpha channel although the base normal has none");
         using (var result = Image.Load<Rgba32>(made!))
         {
             Require(result.Width == 8 && result.Height == 8, "alpha normal: the result takes the larger size of the two");

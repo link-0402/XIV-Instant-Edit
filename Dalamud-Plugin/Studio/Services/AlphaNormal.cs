@@ -5,6 +5,7 @@ using InstantEdit.Services.Previews;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services.Sims;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 
@@ -22,7 +23,7 @@ internal static class AlphaNormal
     private const int Keep = 24;
 
     /// <summary>Bumped when the way they are made changes, so old results are not reused.</summary>
-    private const string Version = "1";
+    private const string Version = "2";   // 1 saved RGB bases without their alpha
 
     /// <summary>The image a slot is converted from: its own file, or, with an alpha overlay, the combined image (made if needed). Null with why.</summary>
     public static string? SourceOf(TextureSlot tex, string? cacheDirectory, out string error)
@@ -97,6 +98,11 @@ internal static class AlphaNormal
                     }
                 }
             });
+
+            // A PNG is saved with the colour type it was read with, and a base normal is usually
+            // plain RGB: without this the alpha just put in would be dropped on saving.
+            image.Metadata.GetPngMetadata().ColorType = PngColorType.RgbWithAlpha;
+            image.Metadata.GetPngMetadata().BitDepth  = PngBitDepth.Bit8;
             return image;
         }
         catch
