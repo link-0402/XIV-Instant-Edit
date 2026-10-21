@@ -76,6 +76,7 @@ internal static partial class TextureEditScenarios
                 "working TGA keeps the original texture filename");
             await SessionFailuresAsync(Path.Combine(root, "failures"));
             await ResizeAndEncodingAsync(Path.Combine(root, "resize"));
+            await VersionsAsync(Path.Combine(root, "versions"));
             await IncompleteSessionAsync(Path.Combine(root, "incomplete"));
             await VanillaAsync(Path.Combine(root, "vanilla"));
             await VariantsAsync(Path.Combine(root, "variants"));
@@ -189,6 +190,41 @@ internal static partial class TextureEditScenarios
         File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 52).Concat(new byte[] { 4, 5, 6 }).ToArray());
         await f.Service.ProcessPendingAsync(true);
         Check(f.Backend.Commits == 5, "unchanged pixels and encoding skip recompression");
+    }
+
+    private static async Task VersionsAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var id = await f.Service.StartAsync(f.Request, false);
+        var s = f.Service.Sessions.Single();
+        static string Pixels(byte[] tex) => TextureFiles.Hash(TextureFiles.NormalizeMipOffsets(tex));
+        var saves = new List<string>();
+        for (var i = 0; i < 6; i++)
+        {
+            File.WriteAllBytes(s.WorkingFile, Tga(8, 8, (byte)(60 + i)));
+            await f.Service.ProcessPendingAsync(true);
+            saves.Add(Pixels(File.ReadAllBytes(s.TargetFile)));
+        }
+        var versions = f.Service.Sessions.Single().Versions;
+        Check(f.Backend.Commits == 6 && versions.Count == TextureEditService.KeptVersions && versions.All(v => v.Saved is not null),
+            "the history keeps the last four earlier saves, without the file the first save replaced");
+        Check(versions.Select(v => Pixels(File.ReadAllBytes(v.Backup))).SequenceEqual([saves[4], saves[3], saves[2], saves[1]]),
+            "the history lists earlier saves newest first");
+
+        await f.Service.RestoreVersionAsync(id, versions[2]);
+        var after = f.Service.Sessions.Single();
+        Check(Pixels(File.ReadAllBytes(s.TargetFile)) == saves[2] && after.Paused, "restoring a version writes that save and pauses");
+        Check(after.Versions.Count == TextureEditService.KeptVersions && Pixels(File.ReadAllBytes(after.Versions[0].Backup)) == saves[5],
+            "a restore keeps the save it replaced as the newest version");
+
+        await f.Service.RestoreVersionAsync(id, null);
+        Check(Pixels(File.ReadAllBytes(s.TargetFile)) == Pixels(f.Backend.Original), "restoring the original writes the captured texture");
+
+        f.Service.Dispose();
+        await f.Service.Completion;
+        using var restarted = new TextureEditService(f.Backend, f.Config, f.ConfigDir, f.Backups, (_, _) => { }, false);
+        Check(restarted.Sessions.Single().Versions.Select(v => v.Backup).SequenceEqual(f.Service.Sessions.Single().Versions.Select(v => v.Backup)),
+            "the history survives a restart");
     }
 
     private static async Task IncompleteSessionAsync(string root)

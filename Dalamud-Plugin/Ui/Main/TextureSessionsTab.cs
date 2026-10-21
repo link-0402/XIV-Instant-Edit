@@ -19,6 +19,7 @@ namespace InstantEdit.Ui.Main;
 internal sealed class TextureSessionsTab
 {
     private const string CleanUpTexturesDialog = "Clean up texture sessions";
+    private const string RestorePopup = "##restore-versions";
 
     /// <summary> How long a dragged image has to rest on a texture row before it can be dropped there. </summary>
     private static readonly TimeSpan TextureDropHold = TimeSpan.FromSeconds(1);
@@ -37,6 +38,8 @@ internal sealed class TextureSessionsTab
     private string _textureModName = "";
     private Guid? _discardTexture;
     private bool _cleanUpTextures;
+    /// <summary> The session whose restore picker is open, with the choices taken when it opened. </summary>
+    private (Guid Session, List<RestoreChoice> Choices)? _restoreChoices;
     private readonly Dictionary<Guid, float> _sessionCardHeights = new();
     private string _sessionsTabLabel = "Sessions";
     private int _sessionsTabCount = -1;
@@ -280,15 +283,72 @@ internal sealed class TextureSessionsTab
                 TextureAction(() => _textures.RetryAsync(s.Id));
             ImGui.SameLine();
             if (Widgets.IconButton("##restore", FontAwesomeIcon.History,
-                    "Restore the previous saved texture (or the original before the first edit), then pause. The working TGA is retained.",
+                    "Restore the original or one of the last saves, then pause. The working TGA is kept.",
                     !s.NeedsMod && !s.Conflict))
-                TextureAction(() => _textures.RestoreAsync(s.Id));
+            {
+                _restoreChoices = (s.Id, RestoreChoices(s));
+                ImGui.OpenPopup(RestorePopup);
+            }
             ImGui.SameLine(0, Theme.Scaled(12));
             if (Widgets.IconButton("##discard", FontAwesomeIcon.Trash, "Discard the session's working files"))
                 _discardTexture = s.Id;
         }
+        DrawRestorePopup(s, busy);
         var contentBottom = Math.Max(ImGui.GetCursorPosY() - style.ItemSpacing.Y, style.WindowPadding.Y + Theme.ThumbSize);
         _sessionCardHeights[s.Id] = contentBottom + style.WindowPadding.Y;
+    }
+
+    /// <summary> What the restore picker offers: a label, the TEX file to preview, and the version (null for the original). </summary>
+    private sealed record RestoreChoice(string Label, string File, TextureVersion? Version);
+
+    /// <summary> The captured original, then the session's earlier saves whose backups are still kept, newest first. </summary>
+    private static List<RestoreChoice> RestoreChoices(TextureEditSession s)
+    {
+        var choices = new List<RestoreChoice> { new("Original", Path.Combine(s.Directory, "original.tex"), null) };
+        foreach (var version in s.Versions)
+            if (File.Exists(version.Backup))
+                choices.Add(new RestoreChoice(version.Saved is { } saved
+                    ? $"Saved {saved.ToLocalTime():g}"
+                    : $"Mod file before {version.Replaced.ToLocalTime():g}", version.Backup, version));
+        return choices;
+    }
+
+    /// <summary> The restore button's picker; each choice shows its texture, larger on hover. </summary>
+    private void DrawRestorePopup(TextureEditSession s, bool busy)
+    {
+        if (_restoreChoices is not { } open || open.Session != s.Id)
+            return;
+        using var popup = ImRaii.Popup(RestorePopup);
+        if (!popup.Success)
+        {
+            _restoreChoices = null;
+            return;
+        }
+        var choices = open.Choices;
+        ImGui.TextColored(Theme.Muted, "Restore which texture?");
+        ImGui.Spacing();
+        var thumb = new Vector2(Theme.Scaled(40));
+        using var disabled = ImRaii.Disabled(busy);
+        for (var i = 0; i < choices.Count; i++)
+        {
+            var choice = choices[i];
+            using var id = ImRaii.PushId(i);
+            var entry = _previews.GetTexture(_previews.KeyFor(choice.File, false));
+            Widgets.PreviewImage(entry, thumb);
+            ImGui.SameLine(0, Theme.Gap);
+            if (ImGui.Selectable(choice.Label, false, ImGuiSelectableFlags.None, new Vector2(Theme.Scaled(220), thumb.Y)))
+            {
+                var version = choice.Version;
+                _restoreChoices = null;
+                ImGui.CloseCurrentPopup();
+                TextureAction(() => _textures.RestoreVersionAsync(s.Id, version));
+            }
+            if (!ImGui.IsItemHovered())
+                continue;
+            using var tooltip = ImRaii.Tooltip();
+            Widgets.PreviewImage(entry, new Vector2(Theme.Scaled(256)));
+            Widgets.PreviewCaption(entry);
+        }
     }
 
     /// <summary> Header, path rows and buttons sit at frame height; the status and last-saved lines are plain text. </summary>

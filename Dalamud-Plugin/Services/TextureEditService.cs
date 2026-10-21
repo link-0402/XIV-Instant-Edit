@@ -496,6 +496,7 @@ public sealed class TextureEditService : IDisposable
                 if (rebase.VariantHashes.TryGetValue(variant.Name, out var hash))
                     variant.LastCommittedHash = hash;
             runtime.Variants.Clear();
+            s.ExternalBaseline = true;
             s.Conflict = false;
             ApplyPaused(runtime, false);
             // A save that the conflict stopped goes through now.
@@ -505,7 +506,33 @@ public sealed class TextureEditService : IDisposable
         finally { _gate.Release(); }
     }
 
-    public async Task RestoreAsync(Guid id)
+    /// <summary> How many earlier saves Restore offers besides the captured original. </summary>
+    public const int KeptVersions = 4;
+
+    /// <summary>
+    /// Takes a commit's backup as the session's latest earlier version. Call it before LastSaved moves on,
+    /// since the backup holds what that save wrote. The file before the session's first save is the
+    /// captured original, which Restore always offers, so it isn't listed again.
+    /// </summary>
+    private static void RecordBackup(TextureEditSession s, string backup)
+    {
+        s.LastBackup = backup;
+        var external = s.ExternalBaseline;
+        s.ExternalBaseline = false;
+        if (backup.Length == 0 || (s.LastSaved is null && !external))
+            return;
+        s.Versions = [new TextureVersion { Backup = backup, Saved = external ? null : s.LastSaved, Replaced = DateTimeOffset.UtcNow },
+            ..s.Versions.Take(KeptVersions - 1)];
+    }
+
+    /// <summary> Restores the texture as it was before the last save (the captured original before any), then pauses. </summary>
+    public Task RestoreAsync(Guid id) => RestoreAsync(id, s => s.LastBackup);
+
+    /// <summary> Restores one of the session's <see cref="TextureEditSession.Versions"/>, or the captured original for null, then pauses. </summary>
+    public Task RestoreVersionAsync(Guid id, TextureVersion? version) => RestoreAsync(id, _ => version?.Backup ?? "");
+
+    /// <summary> Commits a managed backup of the destination, or the captured original when <paramref name="backup"/> gives none. </summary>
+    private async Task RestoreAsync(Guid id, Func<TextureEditSession, string> backup)
     {
         await SetPausedAsync(id, true).ConfigureAwait(false);
         await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
@@ -515,8 +542,9 @@ public sealed class TextureEditService : IDisposable
             if (s.NeedsMod || s.Conflict) throw new IOException("There is no safe destination to restore.");
             if (s.PendingCopy is not null) throw new IOException("Nothing was saved yet, so the original is still in place.");
             var target = _backups.Describe(s.ModDirectory, s.RelativePath);
-            var source = string.IsNullOrEmpty(s.LastBackup) ? Path.Combine(s.Directory, "original.tex")
-                : _backups.Resolve(target.Id, Path.GetFileName(s.LastBackup));
+            var chosen = backup(s);
+            var source = string.IsNullOrEmpty(chosen) ? Path.Combine(s.Directory, "original.tex")
+                : _backups.Resolve(target.Id, Path.GetFileName(chosen));
             // Earlier saves may have been resized or stored uncompressed, so the backup's size can differ.
             // A backup of the captured file is restored with its mip offsets normalized.
             var (original, h) = TextureFiles.ReadOriginal(TextureFiles.Read(source));
@@ -524,14 +552,14 @@ public sealed class TextureEditService : IDisposable
             _life.Token.ThrowIfCancellationRequested();
             var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
             s.LastCommittedHash = result.Hash;
-            s.LastBackup = result.Backup;
+            RecordBackup(s, result.Backup);
             s.LastSaved = DateTimeOffset.UtcNow;
             s.SavedFormat = h.Format;
             s.Width = h.Width;
             s.Height = h.Height;
             RaiseFileChanged(s.TargetFile);
             // Intentionally keep the artist's working image and pixel baseline unchanged.
-            s.Status = "Backup restored. Session paused; working TGA retained.";
+            s.Status = (string.IsNullOrEmpty(chosen) ? "Original restored." : "Backup restored.") + " Session paused; working TGA retained.";
             Persist();
             var refresh = await RefreshOneAsync(s, s.OriginalOptionId).ConfigureAwait(false);
             if (refresh.Contains("attention", StringComparison.Ordinal)) s.Status += " " + refresh;
@@ -1005,7 +1033,7 @@ public sealed class TextureEditService : IDisposable
         var (original, header) = TextureFiles.ReadOriginal(TextureFiles.Read(Path.Combine(s.Directory, "original.tex")));
         var result = await _backend.CommitAsync(s, original, current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
-        s.LastBackup = result.Backup;
+        RecordBackup(s, result.Backup);
         s.SavedFormat = header.Format;
         s.Width = header.Width;
         s.Height = header.Height;
@@ -1119,7 +1147,7 @@ public sealed class TextureEditService : IDisposable
         TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
         var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
-        s.LastBackup = result.Backup;
+        RecordBackup(s, result.Backup);
         s.PixelHash = pixelHash;
         s.WorkingHash = hash;
         s.SavedFormat = format;
@@ -1242,7 +1270,7 @@ public sealed class TextureEditService : IDisposable
         TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
         var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
-        s.LastBackup = result.Backup;
+        RecordBackup(s, result.Backup);
         s.PixelHash = pixelHash;
         s.SavedFormat = format;
         s.Width = width;
@@ -1384,7 +1412,7 @@ public sealed class TextureEditService : IDisposable
             if (!TextureFiles.IsSessionFormat(header.Format, s)) throw new IOException("The backup does not match this session.");
             var result = await _backend.CommitAsync(s, original, () => !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
             s.LastCommittedHash = result.Hash;
-            s.LastBackup = result.Backup;
+            RecordBackup(s, result.Backup);
             s.SavedFormat = header.Format;
             s.Width = header.Width;
             s.Height = header.Height;
@@ -1438,7 +1466,7 @@ public sealed class TextureEditService : IDisposable
         var header = TextureFiles.ReadTex(original);
         var result = await _backend.CommitAsync(s, original, () => runtime.Enabled && !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
-        s.LastBackup = result.Backup;
+        RecordBackup(s, result.Backup);
         s.SavedFormat = header.Format;
         s.Width = header.Width;
         s.Height = header.Height;

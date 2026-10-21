@@ -87,6 +87,13 @@ public sealed record TextureEditSession
     public string Status { get; set; } = "Watching for saves";
     public string LastBackup { get; set; } = "";
     public DateTimeOffset? LastSaved { get; set; }
+    /// <summary>
+    /// The texture's earlier saves that Restore offers besides the captured original, newest first. Each
+    /// commit swaps in a new list, so the UI can read it while a save runs.
+    /// </summary>
+    public List<TextureVersion> Versions { get; set; } = [];
+    /// <summary>The destination holds the file a reconnect took as it was, not a save of this session.</summary>
+    public bool ExternalBaseline { get; set; }
     /// <summary>The Single group holding this texture's variants, once the first variant is saved.</summary>
     public Guid? VariantGroupId { get; set; }
     /// <summary>The group's option that maps nothing, so the edited texture itself shows.</summary>
@@ -119,6 +126,18 @@ public sealed record TextureVariant
     public uint SavedFormat { get; set; }
     public string Status { get; set; } = "";
     public DateTimeOffset? LastSaved { get; set; }
+}
+
+/// <summary>
+/// An earlier save of a session's texture: the managed backup the next commit took of the file it replaced.
+/// </summary>
+public sealed record TextureVersion
+{
+    public string Backup { get; init; } = "";
+    /// <summary>When the session saved it; null for a file a reconnect took as it was.</summary>
+    public DateTimeOffset? Saved { get; init; }
+    /// <summary>When the next commit replaced it.</summary>
+    public DateTimeOffset Replaced { get; init; }
 }
 
 /// <summary>
