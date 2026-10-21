@@ -15,7 +15,8 @@ internal static partial class HairSkeletonIds
     // EstType is a MetaIndex: 73 is the hair table.
     private const int HairSlotNumber = 73;
 
-    [GeneratedRegex(@"skeleton/hair/h(\d{4})/", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    // [0-9], not \d: \d matches any Unicode digit, which int.Parse refuses.
+    [GeneratedRegex("skeleton/hair/h([0-9]{4})/", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex HairSkeletonFile();
 
     /// <summary>Every hair skeleton ID the game's hair EST table names, for any race.</summary>
@@ -40,7 +41,7 @@ internal static partial class HairSkeletonIds
     /// The hair skeleton IDs the mods in a Penumbra mod folder use: the IDs in their
     /// <c>skeleton/hair/hNNNN/</c> file keys and the entries of their hair EST manipulations, read
     /// from each mod's <c>meta.json</c>, <c>default_mod.json</c> and <c>group_*.json</c>. Files that
-    /// can't be read are skipped.
+    /// can't be read, parsed or walked (duplicate property names among them) are skipped.
     /// </summary>
     public static IReadOnlySet<int> Library(string modRoot)
     {
@@ -63,8 +64,12 @@ internal static partial class HairSkeletonIds
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
             foreach (var file in files)
             {
-                try { Collect(JsonNode.Parse(File.ReadAllText(file)), ids); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { }
+                // A JsonObject with a duplicate property name throws ArgumentException when first read.
+                var found = new HashSet<int>();
+                try { Collect(JsonNode.Parse(File.ReadAllText(file)), found); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or
+                                              ArgumentException or FormatException or OverflowException) { continue; }
+                ids.UnionWith(found);
             }
         }
         return ids;

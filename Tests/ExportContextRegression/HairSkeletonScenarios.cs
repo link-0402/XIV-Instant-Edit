@@ -116,8 +116,17 @@ internal static class HairSkeletonScenarios
                 ["Manipulations"] = new JsonArray(Est("Hair", 5000), Est("Face", 6000)),
             }),
         }.ToJsonString());
-        Require(HairSkeletonIds.Library(root).SetEquals([4821, 5000]),
-            "Hair IDs: library IDs come from file keys and hair Est entries");
+        // Duplicate property names parse but throw when read; Arabic-Indic digits are not an ID.
+        WriteJson(Path.Combine(root, "Duplicate keys mod"), "meta.json",
+            """{"Name": "a", "Name": "b", "DefaultData": {"Files": {"chara/human/c0801/skeleton/hair/h7001/skl_c0801h7001.sklb": "x"}}}""");
+        WriteJson(Path.Combine(root, "Odd digits mod"), "meta.json",
+            """{"DefaultData": {"Files": {"chara/human/c0801/skeleton/hair/h١٢٣٤/skl_c0801h1234.sklb": "x"}}}""");
+        WriteJson(Path.Combine(root, "Odd digits mod"), "default_mod.json", new JsonObject
+        {
+            ["Files"] = new JsonObject { ["chara/human/c0801/skeleton/hair/h4822/skl_c0801h4822.sklb"] = "x" },
+        }.ToJsonString());
+        Require(HairSkeletonIds.Library(root).SetEquals([4821, 4822, 5000]),
+            "Hair IDs: library IDs come from file keys and hair Est entries; odd files are skipped");
     }
 
     // Two rig bones in game model space: translation, rotation x/y/z/w, scale.

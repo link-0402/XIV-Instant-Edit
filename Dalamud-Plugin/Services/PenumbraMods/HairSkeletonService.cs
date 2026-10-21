@@ -43,6 +43,12 @@ internal sealed class HairSkeletonService(
                 rig, modFolder, modDirectory, modelRelativePath, sources, store)).ConfigureAwait(false);
             return (plan, null);
         }
+        catch (InvalidDataException e)
+        {
+            // A refusal of the user's rig or mod, not a fault: no stack trace.
+            log.Warning("Could not build the hair skeleton: {Message}", e.Message);
+            return (null, $"The hair skeleton could not be built: {e.Message}");
+        }
         catch (Exception e)
         {
             log.Error(e, "Could not build the hair skeleton.");
