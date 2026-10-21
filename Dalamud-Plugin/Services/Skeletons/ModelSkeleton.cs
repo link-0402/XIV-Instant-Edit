@@ -181,6 +181,10 @@ internal sealed class EstTable
 
     public int Count => entries.Count;
 
+    /// <summary>Every (gender-race, set) lookup the table holds, with its skeleton ID.</summary>
+    public IEnumerable<(ushort GenderRace, ushort Set, ushort Entry)> Rows
+        => entries.Select(pair => (pair.Key.GenderRace, pair.Key.Set, pair.Value));
+
     public static string GamePath(EstSlot slot) => slot switch
     {
         EstSlot.Face => "chara/xls/charadb/faceskeletontemplate.est",
