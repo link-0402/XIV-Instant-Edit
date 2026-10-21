@@ -20,6 +20,7 @@ internal static class HairSkeletonScenarios
         IdsAvoidVanillaAndLibrary();
         TemplateIsLowestExisting();
         LibraryScan(Path.Combine(testRoot, "HairIds"));
+        UsersNamesFolders(Path.Combine(testRoot, "HairIdUsers"));
         RequestValidation();
         EnvelopeChecksHairSkeleton();
         FingerprintIncludesHairSkeleton();
@@ -42,6 +43,8 @@ internal static class HairSkeletonScenarios
         OldBackupDropsPhysics(Path.Combine(testRoot, "HairPhysicsOldBackup"));
         UnreadablePreviousPhysics(Path.Combine(testRoot, "HairPhysicsUnreadable"));
         TuningSurvivesReexport(Path.Combine(testRoot, "HairPhysicsTuning"));
+        ClashMovesTheId(Path.Combine(testRoot, "HairClash"));
+        OwnFolderIsNotAClash(Path.Combine(testRoot, "HairOwnFolder"));
     }
 
     /// <summary>An EST table's bytes: a count, the (set, gender-race) pairs, then one entry per pair.</summary>
@@ -132,6 +135,29 @@ internal static class HairSkeletonScenarios
         }.ToJsonString());
         Require(HairSkeletonIds.Library(root).SetEquals([4821, 4822, 5000]),
             "Hair IDs: library IDs come from file keys and hair Est entries; odd files are skipped");
+    }
+
+    private static void UsersNamesFolders(string root)
+    {
+        const string Key = "chara/human/c0801/skeleton/hair/h1500/skl_c0801h1500.sklb";
+        WriteJson(Path.Combine(root, "Mod A"), "meta.json",
+            new JsonObject { ["DefaultData"] = new JsonObject { ["Files"] = new JsonObject { [Key] = "x" } } }.ToJsonString());
+        WriteJson(Path.Combine(root, "Mod A"), "default_mod.json",
+            new JsonObject { ["Files"] = new JsonObject { [Key] = "x" } }.ToJsonString());
+        WriteJson(Path.Combine(root, "Mod B"), "group_001_x.json", new JsonObject
+        {
+            ["Options"] = new JsonArray(new JsonObject { ["Manipulations"] = new JsonArray(Est("Hair", 1500)) }),
+        }.ToJsonString());
+        WriteJson(Path.Combine(root, "Mod B"), "meta.json", "{");
+        Require(HairSkeletonIds.Users(root, null) is { Count: 1 } all && all[1500].Order().SequenceEqual(["Mod A", "Mod B"]),
+            "Hair ID users: each ID names its folders once, past a broken file");
+        Require(HairSkeletonIds.Users(root, "mod a") is { Count: 1 } others && others[1500].SequenceEqual(["Mod B"]),
+            "Hair ID users: the excepted folder is left out, whatever its case");
+        // Reject also takes an IOException, which a missing folder would throw unasked.
+        var threw = false;
+        try { HairSkeletonIds.Users(Path.Combine(root, "missing"), null); }
+        catch (InvalidDataException e) { threw = e.Message == "The Penumbra mod folder can't be read."; }
+        Require(threw, "Hair ID users: a missing mod folder throws");
     }
 
     // Two rig bones in game model space: translation, rotation x/y/z/w, scale.
@@ -366,9 +392,9 @@ internal static class HairSkeletonScenarios
 
     /// <summary>
     /// Fake game data: <see cref="Table"/>'s hair EST table, any skeleton file, c0801's h0182 physics (c1401
-    /// has none), and a writer that names its bone count.
+    /// has none), a writer that names its bone count, and no other mod using any ID unless <paramref name="taken"/> says so.
     /// </summary>
-    private static HairSkeletonSources Sources(int seed, Func<string, bool>? exists = null)
+    private static HairSkeletonSources Sources(int seed, Func<string, bool>? exists = null, Func<IReadOnlySet<int>>? taken = null)
         => new(
             path => path == EstTable.GamePath(EstSlot.Hair)
                 ? EstBytes([(801, 1, 2), (801, 2, 3), (1401, 1, 160)])
@@ -377,7 +403,7 @@ internal static class HairSkeletonScenarios
             exists ?? (_ => true),
             (_, bones) => Encoding.UTF8.GetBytes($"sklb {bones.Length}"),
             _ => Kao,
-            () => new HashSet<int>(),
+            taken ?? (() => new HashSet<int>()),
             new Random(seed));
 
     private static string Sklb(int genderRace, int id)
@@ -806,5 +832,67 @@ internal static class HairSkeletonScenarios
             "Hair physics files: a re-export keeps the back chain's tuned dampening");
         Require(plan.Notes.Contains("c0801: Kept your physics settings for 1 of 1 chains."),
             "Hair physics files: the builder's notes name the race");
+    }
+
+    private static void ClashMovesTheId(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], [MiqoteHair]);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        var tuned = ReadPhyb(mod, Phyb(801, id));
+        tuned.Simulators[0].Chains[0].Dampening = 0.3f;
+        File.WriteAllBytes(mod.FilePath(Phyb(801, id)), tuned.ToBytes());
+
+        // Another mod now uses the recorded ID.
+        var plan = PrepareAndApply(mod, Sources(8, taken: () => new HashSet<int> { id }));
+        var moved = plan.SkeletonId;
+        Require(moved != id && plan.PreviousId == id, "Hair ID clash: the export moves to a new ID and names the old one");
+        var meta = mod.Meta();
+        var containers = new[] { meta["DefaultData"]!.AsObject(), Option(meta, OptionA), Option(meta, OptionB) };
+        Require(containers.All(container => !container["Files"]!.AsObject()
+                    .Any(pair => pair.Key.Contains($"/h{id:D4}/", StringComparison.Ordinal))) &&
+                SklbKeys(Option(meta, OptionA)).SetEquals([Sklb(801, moved), Sklb(1401, moved)]) &&
+                PhybKeys(Option(meta, OptionB)).SetEquals([Phyb(801, moved)]),
+            "Hair ID clash: no option keeps a key of the old ID; the new ID is mapped instead");
+        Require(new[] { Sklb(801, id), Sklb(1401, id), Phyb(801, id), Phyb(1401, id) }.All(path => !File.Exists(mod.FilePath(path))) &&
+                HasBytes(mod, Sklb(801, moved), "sklb 3") && HasBytes(mod, Sklb(1401, moved), "sklb 3"),
+            "Hair ID clash: the old ID's files are deleted and the new ones written");
+        Require(EstEntry(Option(meta, OptionA), "Miqote") == moved && EstEntry(Option(meta, OptionA), "AuRa") == moved &&
+                EstEntry(Option(meta, OptionB), "Miqote") == moved &&
+                mod.EstStore.Load() is { Count: > 0 } estRecords && estRecords.All(record => record.Entry == moved),
+            "Hair ID clash: the EST entries and their records name the new ID");
+        Require(mod.Store.Load() is [{ SkeletonId: var stored }] && stored == moved,
+            "Hair ID clash: the store holds one record, with the new ID");
+        Require(plan.Notes.Contains($"Hair skeleton h{id:D4} is also used by another mod, so this export moved it to h{moved:D4}."),
+            "Hair ID clash: the notes say the ID moved");
+        Require(ReadPhyb(mod, Phyb(801, moved)).Simulators[0].Chains[0].Dampening == 0.3f &&
+                ReadPhyb(mod, Phyb(1401, moved)).Simulators[0].Chains[0].Dampening == 0.05f,
+            "Hair ID clash: the moved physics keeps the tuned dampening");
+
+        var again = PrepareAndApply(mod, Sources(9, taken: () => new HashSet<int> { id }));
+        Require(again.SkeletonId == moved && again.PreviousId is null && !again.Notes.Any(note => note.Contains("moved it")),
+            "Hair ID clash: the next export keeps the new ID");
+    }
+
+    private static void OwnFolderIsNotAClash(string root)
+    {
+        const string HairY = "chara/human/c0801/obj/hair/h0109/model/c0801h0109_hir.mdl";
+        const string ModelY = "Files/hair/c0801h0109_hir.mdl";
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], []);
+        Func<IReadOnlySet<int>> library = () => HairSkeletonIds.Users(root, ModDirectory).Keys.ToHashSet();
+        var id = PrepareAndApply(mod, Sources(7, taken: library)).SkeletonId;
+        var plan = PrepareAndApply(mod, Sources(8, taken: library));
+        Require(HairSkeletonIds.Users(root, null).ContainsKey(id) && plan.SkeletonId == id && plan.PreviousId is null &&
+                !plan.Notes.Any(note => note.Contains("moved it")),
+            "Hair ID clash: the mod's own folder is no clash, so the ID stays");
+
+        // The library scan leaves this mod out, so another model's ID in it must still count as taken.
+        var meta = mod.Meta();
+        Option(meta, OptionA)["Files"]![HairY] = ModelY.Replace('/', '\\');
+        mod.Save(meta);
+        var free = id == 1000 ? 1001 : 1000;
+        Func<IReadOnlySet<int>> allButTwo = () => Enumerable.Range(1000, 9000).Where(other => other != id && other != free).ToHashSet();
+        Require(Enumerable.Range(0, 8).All(seed => HairSkeletonFiles.Prepare(
+                    Rig(), mod.ModFolder, ModDirectory, ModelY, Sources(seed, taken: allButTwo), mod.Store).SkeletonId == free),
+            "Hair ID clash: a new pick avoids the IDs the mod's own options use");
     }
 }

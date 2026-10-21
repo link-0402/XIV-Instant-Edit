@@ -12,7 +12,7 @@ namespace InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// Where a hair skeleton's inputs come from: game files, the skeleton writer, the <c>j_kao</c> of a
-/// template, and the hair skeleton IDs the mod library uses.
+/// template, and the hair skeleton IDs the library's other mods use.
 /// </summary>
 internal sealed record HairSkeletonSources(
     Func<string, byte[]?> GameFile,
@@ -25,8 +25,12 @@ internal sealed record HairSkeletonSources(
 /// <summary>One race's skeleton and physics files; their game paths are also their mod-relative paths.</summary>
 internal sealed record HairSkeletonFile(int GenderRace, string GamePath, byte[] Bytes, string PhysicsPath, byte[] Physics);
 
-/// <summary>The skeleton files of a hair model (mod-relative, <c>/</c> separators) for every race it is used for.</summary>
-internal sealed record HairSkeletonPlan(string Model, int SkeletonId, IReadOnlyList<HairSkeletonFile> Files, IReadOnlyList<string> Notes);
+/// <summary>
+/// The skeleton files of a hair model (mod-relative, <c>/</c> separators) for every race it is used for.
+/// <paramref name="PreviousId"/> is the recorded ID the plan moves away from, because another mod uses it.
+/// </summary>
+internal sealed record HairSkeletonPlan(
+    string Model, int SkeletonId, IReadOnlyList<HairSkeletonFile> Files, IReadOnlyList<string> Notes, int? PreviousId = null);
 
 /// <summary>
 /// A mod's custom hair skeleton for one model file: one <c>.sklb</c> and one <c>.phyb</c> per race the
@@ -56,8 +60,8 @@ internal static partial class HairSkeletonFiles
 
     /// <summary>
     /// Build the skeleton and physics files for every race the model is used as hair for, under the ID the
-    /// store holds for the model or a new free one. Throws <see cref="InvalidDataException"/> when the model
-    /// is used as no hair, or not for the rig's race.
+    /// store holds for the model, or a new free one when there is none or another mod now uses it. Throws
+    /// <see cref="InvalidDataException"/> when the model is used as no hair, or not for the rig's race.
     /// </summary>
     public static HairSkeletonPlan Prepare(
         HairSkeletonRequest rig,
@@ -79,13 +83,27 @@ internal static partial class HairSkeletonFiles
 
         var table = EstTable.Parse(sources.GameFile(EstTable.GamePath(EstSlot.Hair))
             ?? throw new InvalidDataException("The game's hair EST table could not be read."));
-        // The library scan sees this mod's own skeleton too, so a recorded ID wins over the taken ones.
+        // The library scan leaves this mod out, so a recorded ID it names is another mod's too. A new ID
+        // also avoids the IDs this mod's own options use.
         var recorded = Record(store.Load(), EstEntryService.EstModKey(modFolder, modDirectory), model)?.SkeletonId;
-        var id = recorded
-                 ?? HairSkeletonIds.Pick(HairSkeletonIds.Vanilla(table).Union(sources.TakenIds()).ToHashSet(), sources.Random);
+        var taken = sources.TakenIds();
+        var notes = new List<string>();
+        int id;
+        int? previousId = null;
+        if (recorded is { } kept && !taken.Contains(kept))
+            id = kept;
+        else
+        {
+            id = HairSkeletonIds.Pick(HairSkeletonIds.Vanilla(table).Union(taken).Union(HairSkeletonIds.InModFile(meta)).ToHashSet(),
+                sources.Random);
+            if (recorded is { } clashed)
+            {
+                previousId = clashed;
+                notes.Add($"Hair skeleton h{clashed:D4} is also used by another mod, so this export moved it to h{id:D4}.");
+            }
+        }
 
         var files = new List<HairSkeletonFile>();
-        var notes = new List<string>();
         foreach (var race in races)
         {
             var label = RaceLabel(race);
@@ -99,15 +117,16 @@ internal static partial class HairSkeletonFiles
                 ?? throw new InvalidDataException($"The game's hair skeleton {templatePath} could not be read.");
             var bones = HairSkeletonLayout.Bones(rig, sources.TemplateKao(template));
             var physicsPath = HairPhysicsBuilder.PhysicsPath(race, id);
-            // Only the recorded ID's physics is the user's to keep; a new ID starts from the presets.
-            var physics = Physics(rig, bones, race, sources, recorded is null ? null : ReadModFile(modFolder, physicsPath), notes);
+            // Only the recorded ID's physics is the user's to keep, also when the ID moves; a first ID starts from the presets.
+            var previous = recorded is { } own ? ReadModFile(modFolder, HairPhysicsBuilder.PhysicsPath(race, own)) : null;
+            var physics = Physics(rig, bones, race, sources, previous, notes);
             files.Add(new HairSkeletonFile(race, ModelSkeletonPaths.PartialPath(label, EstSlot.Hair, id),
                 sources.Write(template, bones), physicsPath, physics));
         }
         // An empty plan would only take back the model's EST entries.
         if (files.Count == 0)
             throw new InvalidDataException("No race the model is used for has a vanilla hair skeleton.");
-        return new HairSkeletonPlan(model, id, files, notes);
+        return new HairSkeletonPlan(model, id, files, notes, previousId);
     }
 
     /// <summary>
@@ -147,7 +166,8 @@ internal static partial class HairSkeletonFiles
     /// <summary>
     /// Record the ID, write the plan's files into the mod, map each one in the options that use the
     /// model for its race (and nowhere else), delete the ID's files no option maps any more, and set
-    /// the hair EST entries. Returns the plan's notes, then the EST warnings.
+    /// the hair EST entries. A plan that moves off a previous ID first takes back that ID's keys, files
+    /// and EST entries. Returns the plan's notes, then the EST warnings.
     /// </summary>
     public static List<string> Apply(
         HairSkeletonPlan plan,
@@ -177,11 +197,19 @@ internal static partial class HairSkeletonFiles
             WriteAtomic(path, bytes);
 
         var meta = LoadV4ModMetadata(modFolder);
-        var built = plan.Files.ToDictionary(file => file.GenderRace, IReadOnlyList<string> (file) => [file.GamePath, file.PhysicsPath]);
-        var metaChanged = Remap(meta, model, plan.SkeletonId, built);
-        // Races and options that dropped the model keep no EST entry naming the skeleton.
         var estRecords = estStore.Load().ToList();
         var estCount = estRecords.Count;
+        var metaChanged = false;
+        var previousId = plan.PreviousId is { } moved && moved != plan.SkeletonId ? moved : (int?)null;
+        // The previous ID belongs to another mod now: none of its keys or EST entries stay.
+        if (previousId is { } previous)
+        {
+            metaChanged |= Remap(meta, model, previous, new Dictionary<int, IReadOnlyList<string>>());
+            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modKey, model, previous, [], estRecords);
+        }
+        var built = plan.Files.ToDictionary(file => file.GenderRace, IReadOnlyList<string> (file) => [file.GamePath, file.PhysicsPath]);
+        metaChanged |= Remap(meta, model, plan.SkeletonId, built);
+        // Races and options that dropped the model keep no EST entry naming the skeleton.
         metaChanged |= EstEntryService.ReleaseEstEntries(meta, modKey, model, plan.SkeletonId, built.Keys, estRecords);
         // meta.json goes first, so a failed write never leaves an option mapping a deleted file.
         if (metaChanged)
@@ -191,6 +219,8 @@ internal static partial class HairSkeletonFiles
         }
         if (estRecords.Count != estCount)
             estStore.Save(estRecords);
+        if (previousId is { } old)
+            DeleteUnmapped(meta, modFolder, old);
         DeleteUnmapped(meta, modFolder, plan.SkeletonId);
 
         var requests = plan.Files

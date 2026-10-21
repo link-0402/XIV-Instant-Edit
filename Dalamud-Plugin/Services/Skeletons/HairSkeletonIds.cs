@@ -37,21 +37,32 @@ internal static partial class HairSkeletonIds
         return null;
     }
 
+    /// <summary>The hair skeleton IDs the mods in a Penumbra mod folder use; see <see cref="Users"/>.</summary>
+    public static IReadOnlySet<int> Library(string modRoot) => Users(modRoot, null).Keys.ToHashSet();
+
     /// <summary>
-    /// The hair skeleton IDs the mods in a Penumbra mod folder use: the IDs in their
-    /// <c>skeleton/hair/hNNNN/</c> file keys and the entries of their hair EST manipulations, read
-    /// from each mod's <c>meta.json</c>, <c>default_mod.json</c> and <c>group_*.json</c>. Files that
-    /// can't be read, parsed or walked (duplicate property names among them) are skipped.
+    /// The hair skeleton IDs the mods in a Penumbra mod folder use, each with the names of the mod folders
+    /// using it: the IDs in their <c>skeleton/hair/hNNNN/</c> file keys and the entries of their hair EST
+    /// manipulations, read from each mod's <c>meta.json</c>, <c>default_mod.json</c> and <c>group_*.json</c>.
+    /// The folder named <paramref name="exceptFolder"/> (any case) is left out. Files that can't be read,
+    /// parsed or walked (duplicate property names among them) are skipped. Throws
+    /// <see cref="InvalidDataException"/> when the mod folder is missing or can't be listed.
     /// </summary>
-    public static IReadOnlySet<int> Library(string modRoot)
+    public static IReadOnlyDictionary<int, IReadOnlyList<string>> Users(string modRoot, string? exceptFolder)
     {
-        var ids = new HashSet<int>();
-        if (!Directory.Exists(modRoot)) return ids;
+        const string unreadable = "The Penumbra mod folder can't be read.";
+        if (!Directory.Exists(modRoot))
+            throw new InvalidDataException(unreadable);
         string[] mods;
         try { mods = Directory.EnumerateDirectories(modRoot).ToArray(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return ids; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { throw new InvalidDataException(unreadable, e); }
+        var users = new Dictionary<int, List<string>>();
         foreach (var mod in mods)
         {
+            var name = Path.GetFileName(mod);
+            if (string.Equals(name, exceptFolder, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var ids = new HashSet<int>();
             string[] files;
             try
             {
@@ -71,7 +82,21 @@ internal static partial class HairSkeletonIds
                                               ArgumentException or FormatException or OverflowException) { continue; }
                 ids.UnionWith(found);
             }
+            foreach (var id in ids)
+            {
+                if (!users.TryGetValue(id, out var folders))
+                    users[id] = folders = [];
+                folders.Add(name);
+            }
         }
+        return users.ToDictionary(pair => pair.Key, IReadOnlyList<string> (pair) => pair.Value);
+    }
+
+    /// <summary>The hair skeleton IDs one mod file's JSON names, by the same rules as <see cref="Users"/>.</summary>
+    public static IReadOnlySet<int> InModFile(JsonNode? modFile)
+    {
+        var ids = new HashSet<int>();
+        Collect(modFile, ids);
         return ids;
     }
 
