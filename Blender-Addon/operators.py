@@ -2,8 +2,8 @@ from pathlib import Path
 import uuid
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
-from bpy.types import Context, Operator
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, IntProperty, StringProperty
+from bpy.types import Context, Operator, OperatorFileListElement
 
 from .instant_edit.context import ContextValidationError
 from .materials import (
@@ -347,10 +347,13 @@ _IMPORT_SUFFIXES = {"MDL": (".mdl",), "FBX": (".fbx",), "GLTF": (".gltf", ".glb"
 class XIVIE_OT_simple_import(Operator):
     bl_idname = "xiv_ie.simple_import"
     bl_label = "Import Model File"
-    bl_description = "Import an MDL, FBX, or glTF file into the current scene"
+    bl_description = "Import one or more MDL, FBX, or glTF files into the current scene"
     bl_options = {"REGISTER", "UNDO"}
 
     filepath: StringProperty(options={"HIDDEN"})  # type: ignore
+    # The file browser fills these when several files are selected.
+    directory: StringProperty(subtype="DIR_PATH", options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+    files: CollectionProperty(type=OperatorFileListElement, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
     filter_glob: StringProperty(
         default="*.mdl;*.fbx;*.gltf;*.glb",
         subtype="FILE_PATH",
@@ -378,27 +381,26 @@ class XIVIE_OT_simple_import(Operator):
         context.window_manager.fileselect_add(self)
         return {"RUNNING_MODAL"}
 
-    def execute(self, context: Context):
-        file_path = Path(bpy.path.abspath(self.filepath)).resolve()
-        suffix = file_path.suffix.casefold()
+    def _file_paths(self) -> list[Path]:
+        names = [item.name for item in self.files if item.name]
+        if names and self.directory:
+            directory = Path(bpy.path.abspath(self.directory))
+            return [(directory / name).resolve() for name in names]
+        return [Path(bpy.path.abspath(self.filepath)).resolve()]
+
+    def _import_format(self, file_path: Path) -> tuple[str, tuple]:
+        """The format to import file_path as and the suffixes that format takes."""
         import_format = self.import_format
         if import_format == "AUTO":
+            suffix = file_path.suffix.casefold()
             import_format = next(
                 (name for name, suffixes in _IMPORT_SUFFIXES.items() if suffix in suffixes), "")
-        expected_suffixes = _IMPORT_SUFFIXES.get(import_format, ())
-        settings = get_settings()
-        skeleton = settings.simple_import_skeleton
-        use_existing_skeleton = settings.simple_import_use_existing_skeleton
+        return import_format, _IMPORT_SUFFIXES.get(import_format, ())
 
-        if not file_path.is_file() or suffix not in expected_suffixes:
-            valid = "/".join(
-                item[1:].upper() for item in (expected_suffixes or (".mdl", ".fbx", ".gltf", ".glb")))
-            self.report({"ERROR"}, f"Choose a valid {valid} file.")
-            return {"CANCELLED"}
-        if use_existing_skeleton and (skeleton is None or skeleton.type != "ARMATURE"):
-            self.report({"ERROR"}, "Choose an existing Blender Armature for the imported meshes.")
-            return {"CANCELLED"}
-
+    @staticmethod
+    def _import_file(context: Context, file_path: Path, import_format: str, skeleton) -> tuple[list, str]:
+        """Import one file. Returns (its objects, skeleton note); on failure removes what it
+        created and raises."""
         imported_objects = []
         skeleton_note = ""
         try:
@@ -414,7 +416,7 @@ class XIVIE_OT_simple_import(Operator):
                 )
                 imported_objects = list(created_objects or imported)
                 mesh_objects = [obj for obj in imported_objects if obj.type == "MESH"]
-                if use_existing_skeleton:
+                if skeleton is not None:
                     imported_objects = _simple_import_bind_existing_skeleton(imported_objects, skeleton)
                 elif mesh_objects:
                     _armature, skeleton_note = _simple_import_create_armature(
@@ -436,36 +438,87 @@ class XIVIE_OT_simple_import(Operator):
                             filepath=str(file_path),
                             disable_bone_shape=True,
                         )
-                    if "FINISHED" not in result:
-                        return set(result)
                 imported_objects = tracker.created
-                if use_existing_skeleton:
+                if "FINISHED" not in result:
+                    raise RuntimeError("the importer was cancelled")
+                if skeleton is not None:
                     imported_objects = _simple_import_bind_existing_skeleton(imported_objects, skeleton)
 
                 import_instance_id = uuid.uuid4().hex
                 for obj in imported_objects:
                     if obj.type == "MESH":
                         obj["instant_edit_import_instance_id"] = import_instance_id
-
-            _simple_import_select_objects(imported_objects)
-            imported_count = sum(obj.type == "MESH" for obj in imported_objects)
-            if settings.simple_import_set_export_directory:
-                settings.export_directory = str(file_path.parent)
-        except Exception as error:
+        except Exception:
             _simple_import_remove_objects(imported_objects)
-            self.report({"ERROR"}, f"Import failed: {error}")
+            raise
+        return imported_objects, skeleton_note
+
+    def execute(self, context: Context):
+        file_paths = self._file_paths()
+        settings = get_settings()
+        skeleton = settings.simple_import_skeleton
+        use_existing_skeleton = settings.simple_import_use_existing_skeleton
+
+        if use_existing_skeleton and (skeleton is None or skeleton.type != "ARMATURE"):
+            self.report({"ERROR"}, "Choose an existing Blender Armature for the imported meshes.")
             return {"CANCELLED"}
+
+        jobs = []
+        problems = []
+        for file_path in file_paths:
+            import_format, expected_suffixes = self._import_format(file_path)
+            if file_path.is_file() and file_path.suffix.casefold() in expected_suffixes:
+                jobs.append((file_path, import_format))
+                continue
+            valid = "/".join(
+                item[1:].upper() for item in (expected_suffixes or (".mdl", ".fbx", ".gltf", ".glb")))
+            if len(file_paths) == 1:
+                self.report({"ERROR"}, f"Choose a valid {valid} file.")
+                return {"CANCELLED"}
+            problems.append(f"{file_path.name} is not a valid {valid} file")
+
+        all_objects = []
+        imported_names = []
+        skeleton_notes = []
+        last_folder = None
+        for file_path, import_format in jobs:
+            try:
+                imported_objects, skeleton_note = self._import_file(
+                    context, file_path, import_format, skeleton if use_existing_skeleton else None)
+            except Exception as error:
+                if len(file_paths) == 1:
+                    self.report({"ERROR"}, f"Import failed: {error}")
+                    return {"CANCELLED"}
+                problems.append(f"{file_path.name} failed: {error}")
+                continue
+            all_objects.extend(imported_objects)
+            imported_names.append(file_path.name)
+            if skeleton_note:
+                skeleton_notes.append(
+                    skeleton_note if len(jobs) == 1 else f"{file_path.name}: {skeleton_note}")
+            last_folder = file_path.parent
+
+        if not imported_names:
+            self.report({"ERROR"}, "Import failed: " + "; ".join(problems))
+            return {"CANCELLED"}
+
+        _simple_import_select_objects(all_objects)
+        if settings.simple_import_set_export_directory and last_folder is not None:
+            settings.export_directory = str(last_folder)
 
         from .instant_edit.ops import refresh_variant_targets_after_operation
 
         refresh_error = refresh_variant_targets_after_operation(context)
+        imported_count = sum(obj.type == "MESH" for obj in all_objects)
         count_text = f" ({imported_count} mesh object{'s' if imported_count != 1 else ''})" if imported_count else ""
-        message = f"Imported {file_path.name}{count_text}"
-        if skeleton_note:
-            message += f"; {skeleton_note}"
+        files_text = imported_names[0] if len(imported_names) == 1 else f"{len(imported_names)} files"
+        message = f"Imported {files_text}{count_text}"
+        notes = skeleton_notes + problems
+        if notes:
+            message += "; " + "; ".join(notes)
         if refresh_error is not None:
             message += f"; Penumbra targets could not refresh: {refresh_error}"
-        self.report({"WARNING"} if refresh_error is not None or skeleton_note else {"INFO"}, message)
+        self.report({"WARNING"} if refresh_error is not None or notes else {"INFO"}, message)
         return {"FINISHED"}
 
 

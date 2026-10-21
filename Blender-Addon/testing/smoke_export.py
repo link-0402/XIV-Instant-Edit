@@ -271,6 +271,40 @@ def assert_simple_import_folder(addon):
                     if Path(settings.export_directory).resolve() != source_folder.resolve():
                         raise AssertionError("Simple Import did not set the export folder to its source folder")
 
+                    # Several files picked at once: each is imported, all end up selected, and a
+                    # failing file is skipped without undoing the others.
+                    second_file = source_folder / "simple-import-second.mdl"
+                    second_file.write_bytes(b"placeholder")
+                    broken_file = source_folder / "simple-import-broken.mdl"
+                    broken_file.write_bytes(b"placeholder")
+
+                    def fake_or_fail_import(file_path, import_name, **kwargs):
+                        if Path(file_path).name == broken_file.name:
+                            raise RuntimeError("forced import failure")
+                        return fake_simple_import(file_path, import_name, **kwargs)
+
+                    simple_import_module.ModelImport.from_file = staticmethod(fake_or_fail_import)
+                    before_multi = set(bpy.data.objects)
+                    if bpy.ops.xiv_ie.simple_import(
+                        "EXEC_DEFAULT", directory=str(source_folder), import_format="MDL",
+                        files=[{"name": source_file.name}, {"name": second_file.name}],
+                    ) != {"FINISHED"}:
+                        raise AssertionError("Simple Import of two files failed")
+                    multi_new = [item for item in bpy.data.objects if item not in before_multi]
+                    # Each MDL brings its own armature.
+                    if (sum(item.type == "MESH" for item in multi_new) != 2
+                            or set(bpy.context.selected_objects) != set(multi_new)):
+                        raise AssertionError("Simple Import of two files did not import and select both")
+                    before_mixed = set(bpy.data.objects)
+                    if bpy.ops.xiv_ie.simple_import(
+                        "EXEC_DEFAULT", directory=str(source_folder), import_format="MDL",
+                        files=[{"name": broken_file.name}, {"name": second_file.name}],
+                    ) != {"FINISHED"}:
+                        raise AssertionError("Simple Import cancelled when only one of two files failed")
+                    if sum(item.type == "MESH" for item in bpy.data.objects if item not in before_mixed) != 1:
+                        raise AssertionError("Simple Import did not keep the file that imported")
+                    simple_import_module.ModelImport.from_file = staticmethod(fake_simple_import)
+
                     def fail_simple_import(*_args, **_kwargs):
                         raise RuntimeError("forced import failure")
 
@@ -295,6 +329,7 @@ def assert_simple_import_folder(addon):
                     if item.as_pointer() not in before_simple_import:
                         bpy.data.objects.remove(item, do_unlink=True)
             print("[PASS] Simple Import updates its export folder only after success")
+            print("[PASS] Simple Import takes several files and skips the ones that fail")
 
     finally:
         for name, value in saved.items():
