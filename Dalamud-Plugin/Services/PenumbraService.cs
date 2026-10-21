@@ -126,7 +126,8 @@ public sealed class PenumbraService : IDisposable
         IObjectTable objects,
         IDataManager data,
         ModelBackupStore backups,
-        EstEntryStore estEntries)
+        EstEntryStore estEntries,
+        HairSkeletonStore hairSkeletons)
     {
         // The services no longer check for these on each call, as the old optional ones were: a
         // missing one fails here, not halfway through an export.
@@ -134,18 +135,21 @@ public sealed class PenumbraService : IDisposable
         ArgumentNullException.ThrowIfNull(data);
         ArgumentNullException.ThrowIfNull(backups);
         ArgumentNullException.ThrowIfNull(estEntries);
+        ArgumentNullException.ThrowIfNull(hairSkeletons);
         Ipc = new PenumbraIpc(pi, framework, log);
         var activation = new ModActivation(Ipc, framework, log, objects);
         Sources = new SourceMods(Ipc, framework, log);
         var writer = new ModelFileWriter(backups);
         var attributes = new AttributeGroupService(data, log);
         var est = new EstEntryService(estEntries, log);
+        var hair = new HairSkeletonService(framework, log, data, Ipc, estEntries, hairSkeletons);
         RaceExports = new RaceExportService(framework, log, _exportGate, data, backups, Sources, activation, writer, attributes, est);
         SizesExports = new SizesExportService(framework, log, _exportGate, Sources, activation, writer, attributes, est,
             RaceExports);
         ModelExports = new ModelExportService(Ipc, framework, log, _exportGate, backups, Sources, activation, writer, attributes,
-            est, RaceExports);
-        ModelBackups = new ModelBackupService(framework, log, _exportGate, backups, Sources, activation, writer, est, RaceExports);
+            est, RaceExports, hair);
+        ModelBackups = new ModelBackupService(framework, log, _exportGate, backups, Sources, activation, writer, est, RaceExports,
+            hair);
         Mashups = new MashupService(Ipc, framework, log, _exportGate, data, Sources, activation, attributes, est);
         Scanner = new ModResourceScanner(framework, log, Sources);
         Textures = new TextureModBackend(Ipc, framework, objects, data, backups, _exportGate, Sources, activation);

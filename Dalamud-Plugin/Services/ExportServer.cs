@@ -84,6 +84,10 @@ public sealed partial class ExportServer : IDisposable
         /// <summary>The race the meshes are reshaped for (801 for c0801), when racially scaled; see <see cref="ScaledModelRace"/>.</summary>
         [JsonPropertyName("racialScalingRace")]
         public int? RacialScalingRace { get; set; }
+
+        /// <summary>A custom hair skeleton for the hair model; null takes back the one an earlier export made.</summary>
+        [JsonPropertyName("hairSkeleton")]
+        public HairSkeletonRequest? HairSkeleton { get; set; }
     }
 
     private sealed class ReattachRequest
@@ -1156,7 +1160,8 @@ public sealed partial class ExportServer : IDisposable
                         export.AttributeTags,
                         export.AttributeMasks,
                         export.EstEntries,
-                        ScaledModelRace(target, export.RacialScalingRace)).ConfigureAwait(false);
+                        ScaledModelRace(target, export.RacialScalingRace),
+                        export.HairSkeleton).ConfigureAwait(false);
                 }
             }
             catch (Exception e)
@@ -1187,7 +1192,8 @@ public sealed partial class ExportServer : IDisposable
             IReadOnlyList<string>? attributeTags,
             IReadOnlyDictionary<string, int>? attributeMasks,
             IReadOnlyList<EstEntryRequest>? estEntries,
-            int? racialScalingRace)
+            int? racialScalingRace,
+            HairSkeletonRequest? hairSkeleton)
         {
             if (target.DestinationState == InstantEditImportContext.NewModRequiredDestination)
             {
@@ -1196,7 +1202,8 @@ public sealed partial class ExportServer : IDisposable
                 if (setupVariantInPenumbra || variantName is not null || variantTarget is not null || backupExisting)
                     return new ExportReceipt(false, ResultCode.InvalidPendingExport, "a first vanilla export cannot target variants or backups");
                 return await CreateGameModelModAsync(
-                    target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries)
+                    target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries,
+                    hairSkeleton: hairSkeleton)
                     .ConfigureAwait(false);
             }
             if (newModName is not null)
@@ -1227,7 +1234,8 @@ public sealed partial class ExportServer : IDisposable
                 target.ResolvedGamePath,
                 AttributeGroupService.KnownManipulations(target),
                 estEntries,
-                racialScalingRace).ConfigureAwait(false);
+                racialScalingRace,
+                hairSkeleton).ConfigureAwait(false);
             return new ExportReceipt(
                 result.Success,
                 result.Code,
@@ -1249,10 +1257,12 @@ public sealed partial class ExportServer : IDisposable
         IReadOnlyList<string>? attributeTags,
         IReadOnlyDictionary<string, int>? attributeMasks,
         IReadOnlyList<EstEntryRequest>? estEntries,
-        int? race = null)
+        int? race = null,
+        HairSkeletonRequest? hairSkeleton = null)
     {
         var created = await _modelExports.CreateGameModelModAsync(
-                target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries, race)
+                target, filePath, newModName, createAttributeGroups, attributeTags, attributeMasks, estEntries, race,
+                hairSkeleton)
             .ConfigureAwait(false);
         if (!created.Result.Success)
             return new ExportReceipt(false, created.Result.Code, created.Result.Message, created.Result.WarningList);
@@ -1299,6 +1309,7 @@ public sealed partial class ExportServer : IDisposable
             request.AttributeMasks,
             request.EstEntries,
             request.RacialScalingRace,
+            request.HairSkeleton,
         })));
 
     private T? DeserializeRequest<T>(
@@ -1377,9 +1388,13 @@ public sealed partial class ExportServer : IDisposable
         if (request.SetupInPenumbra && request.VariantTarget is not "new_group" &&
             string.IsNullOrWhiteSpace(request.VariantTargetId))
             return ResultCode.MissingVariantTarget;
+        // A hair skeleton sets the hair EST entries itself.
+        if (request.HairSkeleton is not null && request.EstEntries is not null)
+            return ResultCode.InvalidHairSkeleton;
         return ValidateAttributeGroupEnvelope(
                    request.CreateAttributeGroups, request.AttributeTags, request.AttributeMasks) ??
-               EstEntryService.ValidateEstEntryRequests(request.EstEntries);
+               EstEntryService.ValidateEstEntryRequests(request.EstEntries) ??
+               HairSkeletonRequest.Validate(request.HairSkeleton);
     }
 
     /// <summary>Shared preamble for envelopes with exactly one supported schema/version pair.</summary>

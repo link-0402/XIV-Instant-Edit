@@ -9,8 +9,8 @@ using static InstantEdit.Services.PenumbraMods.ModPaths;
 namespace InstantEdit.Services.PenumbraMods;
 
 /// <summary>
-/// The managed backups of a source model: restoring one over the model, with the EST entries and race
-/// export changes it carries, and clearing them.
+/// The managed backups of a source model: restoring one over the model, with the EST entries, hair
+/// skeleton and race export changes it carries, and clearing them.
 /// </summary>
 internal sealed class ModelBackupService
 {
@@ -23,9 +23,11 @@ internal sealed class ModelBackupService
     private readonly ModelFileWriter _writer;
     private readonly EstEntryService _est;
     private readonly RaceExportService _race;
+    private readonly HairSkeletonService _hair;
 
     public ModelBackupService(IFramework framework, IPluginLog log, SemaphoreSlim exportGate, ModelBackupStore backups,
-        SourceMods sources, ModActivation activation, ModelFileWriter writer, EstEntryService est, RaceExportService race)
+        SourceMods sources, ModActivation activation, ModelFileWriter writer, EstEntryService est, RaceExportService race,
+        HairSkeletonService hair)
     {
         _framework = framework;
         _log = log;
@@ -36,6 +38,7 @@ internal sealed class ModelBackupService
         _writer = writer;
         _est = est;
         _race = race;
+        _hair = hair;
     }
 
     /// <summary>Restore a timestamped MDL backup beside an authorized source model.</summary>
@@ -113,9 +116,13 @@ internal sealed class ModelBackupService
                 _log.Warning(e, "Could not read the EST entries to keep with the pre-restore backup.");
             }
             var restoredEst = _backups.ReadEstState(backupPath);
+            // The hair skeleton goes with the model the same way.
+            var currentHairSkeleton = _hair.TryCaptureState(resolved.Target.Folder, resolved.Target.Directory, effectiveRelativePath);
+            var restoredHairSkeleton = _backups.ReadHairSkeletonState(backupPath);
             // A race export's restore point also undoes what the export changed in the mod's options.
             var raceState = _backups.ReadRaceState(backupPath);
-            var writeError = _writer.RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath, currentEst);
+            var writeError = _writer.RestoreModelBackup(targetPath, backupPath, sourceModDirectory, effectiveRelativePath, currentEst,
+                currentHairSkeleton);
             if (writeError is not null)
                 return new ExportResult(false, ResultCode.RestoreWriteFailed, writeError);
             committedTarget = targetPath;
@@ -133,6 +140,9 @@ internal sealed class ModelBackupService
                     warnings.Add($"The backup's EST entries could not be restored: {e.Message}");
                 }
             }
+            if (restoredHairSkeleton is not null)
+                warnings.AddRange(_hair.TryRestoreState(
+                    resolved.Target.Folder, resolved.Target.Directory, effectiveRelativePath, restoredHairSkeleton));
             if (raceState is not null)
             {
                 try

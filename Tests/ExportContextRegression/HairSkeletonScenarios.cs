@@ -20,6 +20,8 @@ internal static class HairSkeletonScenarios
         TemplateIsLowestExisting();
         LibraryScan(Path.Combine(testRoot, "HairIds"));
         RequestValidation();
+        EnvelopeChecksHairSkeleton();
+        FingerprintIncludesHairSkeleton();
         LayoutKeepsModelSpace();
         PrepareAndApplyMapsEveryRace(Path.Combine(testRoot, "HairApply"));
         MappingsFollowEachOption(Path.Combine(testRoot, "HairOptions"));
@@ -179,6 +181,36 @@ internal static class HairSkeletonScenarios
         Invalid(rig => rig.Chains![0].Bones!.Add("j_ex_hair_02_a"), "a chain naming an unknown bone");
         Invalid(rig => rig.Chains!.Add(new() { Kind = "side", Bones = ["j_ex_hair_01_b"] }), "one bone in two chains");
         Invalid(rig => rig.Chains![0].Bones = [], "an empty chain");
+    }
+
+    private static ExportServer.ExportRequest Export(HairSkeletonRequest? rig) => new()
+    {
+        Schema = "instant-edit.export", Version = 3, PluginInstanceId = "p", ContextId = "c", ExportId = "e",
+        Capability = "k", FilePath = "C:/Temp/export.mdl", Size = 1, Sha256 = new string('a', 64),
+        HairSkeleton = rig,
+    };
+
+    private static void EnvelopeChecksHairSkeleton()
+    {
+        Require(ExportServer.ValidateEnvelope(Export(Rig())) is null, "Hair envelope: a valid rig passes");
+        var invalid = Rig();
+        invalid.Bones![0].Parent = "j_kosi";
+        Require(ExportServer.ValidateEnvelope(Export(invalid)) == ResultCode.InvalidHairSkeleton,
+            "Hair envelope: an invalid rig is refused");
+        var withEst = Export(Rig());
+        withEst.EstEntries = [];
+        Require(ExportServer.ValidateEnvelope(withEst) == ResultCode.InvalidHairSkeleton,
+            "Hair envelope: a rig with EST entries is refused");
+    }
+
+    private static void FingerprintIncludesHairSkeleton()
+    {
+        var moved = Rig();
+        moved.Bones![1].Model![0] += 0.01f;
+        Require(ExportServer.ExportRequestFingerprint(Export(Rig())) == ExportServer.ExportRequestFingerprint(Export(Rig())),
+            "Hair fingerprint: equal rigs give equal fingerprints");
+        Require(ExportServer.ExportRequestFingerprint(Export(Rig())) != ExportServer.ExportRequestFingerprint(Export(moved)),
+            "Hair fingerprint: a moved rig bone changes the fingerprint");
     }
 
     private static void LayoutKeepsModelSpace()

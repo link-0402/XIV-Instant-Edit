@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.Skeletons;
 using static InstantEdit.Services.PenumbraMods.AttributeGroupService;
 using static InstantEdit.Services.PenumbraMods.FrameworkThread;
 using static InstantEdit.Services.PenumbraMods.MashupPlanning;
@@ -29,10 +30,11 @@ internal sealed class ModelExportService
     private readonly AttributeGroupService _attributes;
     private readonly EstEntryService _est;
     private readonly RaceExportService _race;
+    private readonly HairSkeletonService _hair;
 
     public ModelExportService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate,
         ModelBackupStore backups, SourceMods sources, ModActivation activation, ModelFileWriter writer,
-        AttributeGroupService attributes, EstEntryService est, RaceExportService race)
+        AttributeGroupService attributes, EstEntryService est, RaceExportService race, HairSkeletonService hair)
     {
         _ipc = ipc;
         _framework = framework;
@@ -45,6 +47,7 @@ internal sealed class ModelExportService
         _attributes = attributes;
         _est = est;
         _race = race;
+        _hair = hair;
     }
 
     /// <summary>
@@ -53,6 +56,8 @@ internal sealed class ModelExportService
     /// is alive; only the source mod registration and destination folder are
     /// checked again before writing. Meshes scaled for the race of the model's own path
     /// (<paramref name="racialScalingRace"/>) turn on that race's EQDP model flag when it's off.
+    /// With <paramref name="hairSkeleton"/> the model gets its custom hair skeleton; without one, the
+    /// skeleton an earlier export made for it is taken back.
     /// </summary>
     public async Task<ExportResult> ApplySourceExportAsync(
         string sourceModDirectory,
@@ -76,7 +81,8 @@ internal sealed class ModelExportService
         string? resolvedGamePath = null,
         JsonArray? sourceManipulations = null,
         IReadOnlyList<EstEntryRequest>? estEntries = null,
-        int? racialScalingRace = null)
+        int? racialScalingRace = null,
+        HairSkeletonRequest? hairSkeleton = null)
     {
         resolvedGamePath ??= sourceGamePath;
         if (!IsSafeLocalModelPath(sourceFilePath))
@@ -172,9 +178,24 @@ internal sealed class ModelExportService
                         variantTarget == "group" ? ResultCode.StaleVariantTarget : ResultCode.InvalidVariantGroup, groupError);
             }
             var targetRelative = Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/');
-            // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
-            var estState = backupExisting && File.Exists(targetFile)
+            // A model the mod already maps gets its hair skeleton built before the write, so a rig
+            // that can't be built leaves the mod untouched.
+            HairSkeletonPlan? hairPlan = null;
+            if (hairSkeleton is not null && groupWrite is null)
+            {
+                var prepared = await _hair.PrepareAsync(
+                    hairSkeleton, resolved.Target.Folder, resolved.Target.Directory, targetRelative).ConfigureAwait(false);
+                if (prepared.Error is not null)
+                    return new ExportResult(false, ResultCode.HairSkeletonFailed, prepared.Error);
+                hairPlan = prepared.Plan;
+            }
+            // The backup keeps the model's EST entries and hair skeleton too, so restoring it undoes this export's changes.
+            var backingUp = backupExisting && File.Exists(targetFile);
+            var estState = backingUp
                 ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, targetRelative)
+                : null;
+            var hairSkeletonState = backingUp
+                ? _hair.TryCaptureState(resolved.Target.Folder, resolved.Target.Directory, targetRelative)
                 : null;
             var writeError = _writer.WriteModelToOriginalLocation(
                 resolved.Target.Folder,
@@ -183,7 +204,8 @@ internal sealed class ModelExportService
                 backupExisting,
                 resolved.Target.Directory,
                 targetRelative,
-                estState);
+                estState,
+                hairSkeletonState);
             if (writeError is not null)
                 return new ExportResult(false, ResultCode.WriteFailed, writeError);
             committedTarget = targetFile;
@@ -195,6 +217,15 @@ internal sealed class ModelExportService
                 var groupError = CommitVariantGroup(groupWrite);
                 if (groupError is not null)
                     warnings.Add($"Penumbra variant setup failed: {groupError}");
+                // The new option maps the model only now, so its hair skeleton can only be built after the write.
+                if (hairSkeleton is not null)
+                {
+                    var prepared = await _hair.PrepareAsync(
+                        hairSkeleton, resolved.Target.Folder, resolved.Target.Directory, targetRelative).ConfigureAwait(false);
+                    if (prepared.Error is not null)
+                        warnings.Add(prepared.Error);
+                    hairPlan = prepared.Plan;
+                }
             }
 
             if (createAttributeGroups && attributeTags is { Count: > 0 })
@@ -206,6 +237,10 @@ internal sealed class ModelExportService
                     warnings.Add($"Penumbra attribute group setup failed: {AttributeGroupErrorMessage(attributeError)}");
             }
 
+            if (hairPlan is not null)
+                warnings.AddRange(_hair.TryApply(hairPlan, resolved.Target.Folder, resolved.Target.Directory, targetRelative));
+            else if (hairSkeleton is null)
+                warnings.AddRange(_hair.TryRemove(resolved.Target.Folder, resolved.Target.Directory, targetRelative));
             warnings.AddRange(_est.TryUpdateEstEntries(
                 resolved.Target.Folder, resolved.Target.Directory, targetRelative, estEntries));
             warnings.AddRange(_race.TryEnsureRaceModelEqdp(
@@ -286,6 +321,7 @@ internal sealed class ModelExportService
     /// <summary>
     /// Create the first persistent Penumbra destination for a game-data import. With <paramref name="race"/>
     /// the model is that race's own copy (see RaceModelGamePath), with the EQDP entry that makes the race load it.
+    /// With <paramref name="hairSkeleton"/> the new mod also gets the model's custom hair skeleton.
     /// </summary>
     public async Task<NewModelModResult> CreateGameModelModAsync(
         InstantEditImportContext context,
@@ -295,7 +331,8 @@ internal sealed class ModelExportService
         IReadOnlyList<string>? attributeTags = null,
         IReadOnlyDictionary<string, int>? attributeMasks = null,
         IReadOnlyList<EstEntryRequest>? estEntries = null,
-        int? race = null)
+        int? race = null,
+        HairSkeletonRequest? hairSkeleton = null)
     {
         if (context.SourceKind != InstantEditImportContext.GameSource ||
             context.DestinationState != InstantEditImportContext.NewModRequiredDestination)
@@ -358,12 +395,22 @@ internal sealed class ModelExportService
                     if (attributeError is not null)
                         throw new InvalidDataException(attributeError);
                 }
-                // The staged meta.json already has the mod's identifier, which keys the EST records.
-                var estWarnings = _est.TryUpdateEstEntries(staging, modName, relativeModel, estEntries);
+                // The staged meta.json already has the mod's identifier, which keys the EST and hair skeleton records.
+                var warnings = new List<string>();
+                if (hairSkeleton is not null)
+                {
+                    var prepared = await _hair.PrepareAsync(hairSkeleton, staging, modName, relativeModel).ConfigureAwait(false);
+                    if (prepared.Error is not null)
+                    {
+                        TryDeleteMashupNamespace(root, staging);
+                        return new NewModelModResult(new ExportResult(false, ResultCode.HairSkeletonFailed, prepared.Error));
+                    }
+                    warnings.AddRange(_hair.TryApply(prepared.Plan!, staging, modName, relativeModel));
+                }
+                warnings.AddRange(_est.TryUpdateEstEntries(staging, modName, relativeModel, estEntries));
                 Directory.Move(staging, finalFolder);
                 committed = true;
 
-                var warnings = new List<string>(estWarnings);
                 try
                 {
                     var addError = await _activation.AddNewModAsync(modName).ConfigureAwait(false);
