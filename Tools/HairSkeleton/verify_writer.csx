@@ -129,7 +129,9 @@ await Delay(3);
 // The live hair bones in parent space: unanimated and without a phyb, they sit at the written reference.
 var live = await OnFramework(() => Bones(0, "j_ex_hair", true));
 var liveBones = live.SelectMany(partial => partial!["bones"]!.AsArray()).Select(n => n!).ToList();
-static Vector3 V3(JsonNode n) => new(n[0]!.GetValue<float>(), n[1]!.GetValue<float>(), n[2]!.GetValue<float>());
+// Bones() reports its numbers as doubles.
+static float F(JsonNode n) => (float)n.GetValue<double>();
+static Vector3 V3(JsonNode n) => new(F(n[0]!), F(n[1]!), F(n[2]!));
 var liveLocalsMatch = true;
 var liveReport = new List<string>();
 foreach (var bone in bones.Skip(1))
@@ -137,7 +139,7 @@ foreach (var bone in bones.Skip(1))
     var found = liveBones.FirstOrDefault(n => n["name"]!.GetValue<string>() == bone.Name);
     if (found is null) { liveLocalsMatch = false; liveReport.Add($"{bone.Name}: not in the live skeleton"); continue; }
     var r = found["r"]!;
-    var rotation = new Quaternion(r[0]!.GetValue<float>(), r[1]!.GetValue<float>(), r[2]!.GetValue<float>(), r[3]!.GetValue<float>());
+    var rotation = new Quaternion(F(r[0]!), F(r[1]!), F(r[2]!), F(r[3]!));
     var match = Near(V3(found["t"]!), bone.Reference.Position, LiveTolerance) && NearQ(rotation, bone.Reference.Rotation, LiveTolerance) &&
         Near(V3(found["s"]!), bone.Reference.Scale, LiveTolerance);
     liveLocalsMatch &= match;
