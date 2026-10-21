@@ -31,6 +31,7 @@ internal static class ChangelogCatalog
             Entry("Import package opens Sims 4 and Unity packages and folders of loose files. Drag their models and textures onto your mod from the list.", 1),
             Entry("Add weapons and animations from the game, not just gear.", 1),
             Entry("New textures pick their compression on their own and stay uncompressed when compressing would change how they look.", 1),
+            Entry("Texture edits do the same: a compressed texture you save stays compressed unless that would change how it looks. The Recompress saved textures option is gone.", 1),
             Entry("Load a preset onto a material you made, or type where each of its textures goes.", 1),
             Entry("Check a mod for problems, like gear that is invisible on some items or races, and repair them with one click.", 1),
             Entry("Clean up a mod: shrink and compress its textures, tidy its file locations and remove duplicate files. Every change is backed up (for 7 days unless you choose longer) and can be restored.", 1),

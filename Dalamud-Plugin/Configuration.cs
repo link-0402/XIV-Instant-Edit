@@ -35,9 +35,6 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary> Substance Painter executable, started when a project is sent while Painter is closed; empty searches the usual folders. </summary>
     public string PainterExecutablePath { get; set; } = "";
 
-    /// <summary>Re-encode texture saves in their original TEX format instead of uncompressed BGRA32.</summary>
-    public bool RecompressTextures { get; set; } = true;
-
     /// <summary>Base directory for the shared XIV Instant Edit cache.</summary>
     public string TextureCacheDirectory { get; set; } = "";
 

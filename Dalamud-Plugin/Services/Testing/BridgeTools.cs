@@ -132,7 +132,6 @@ internal sealed class BridgeTools : IDisposable
             ["applyTexturesAndMaterials"] = config.ApplyTexturesAndMaterials,
             ["excludeBodyAndGeneralMaterials"] = config.ExcludeBodyAndGeneralMaterials,
             ["includeVanillaResources"] = config.IncludeVanillaResources,
-            ["recompressTextures"] = config.RecompressTextures,
             ["autoCompressTextures"] = config.AutoCompressTextures,
             ["autoFixHeels"] = config.AutoFixHeels,
             ["refitHairUvs"] = config.RefitHairUvs,

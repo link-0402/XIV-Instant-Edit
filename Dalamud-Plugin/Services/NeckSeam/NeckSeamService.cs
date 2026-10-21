@@ -41,18 +41,16 @@ internal sealed class NeckSeamService
     private readonly PreviewModService _previews;
     private readonly IDataManager _data;
     private readonly IPluginLog _log;
-    private readonly Func<bool> _recompress;
     private readonly PainterLiveReader? _live;
 
     /// <param name="live">Reads which parts and shape keys the game draws, so only drawn skin is compared.</param>
-    public NeckSeamService(PreviewModWriter previewMods, ITextureEditBackend textureBackend, IDataManager data, IPluginLog log, string configDirectory, Func<bool> recompress,
+    public NeckSeamService(PreviewModWriter previewMods, ITextureEditBackend textureBackend, IDataManager data, IPluginLog log, string configDirectory,
         PainterLiveReader? live = null)
     {
         _textureBackend = textureBackend;
         _previews = new PreviewModService(previewMods);
         _data = data;
         _log = log;
-        _recompress = recompress;
         _live = live;
         Store = new NeckSeamPreviewStore(configDirectory);
         Store.Load();
@@ -289,8 +287,7 @@ internal sealed class NeckSeamService
         {
             var header = TextureFiles.ReadOriginal(original).Header;
             mips = header.Mips > 1;
-            if (_recompress())
-                type = TextureFiles.OutputType(header.Format);
+            type = TextureFiles.OutputType(header.Format);
         }
         catch (Exception e) when (e is InvalidDataException or NotSupportedException)
         {

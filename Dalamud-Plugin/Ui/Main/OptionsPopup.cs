@@ -3,7 +3,7 @@ using Dalamud.Interface.Utility.Raii;
 
 namespace InstantEdit.Ui.Main;
 
-/// <summary> The toolbar's options popover: model import, texture editing and animation export settings. </summary>
+/// <summary> The toolbar's options popover: model import and animation export settings. </summary>
 internal sealed class OptionsPopup
 {
     private const string OptionsPopupName = "##instant-edit-options";
@@ -29,24 +29,8 @@ internal sealed class OptionsPopup
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
-        Widgets.SectionHeader("Texture editing");
-        DrawTextureOptions();
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
         Widgets.SectionHeader("Animation export");
         DrawAnimationExportOptions();
-    }
-
-    private void DrawTextureOptions()
-    {
-        var recompress = _config.RecompressTextures;
-        if (ImGui.Checkbox("Recompress saved textures", ref recompress))
-        {
-            _config.RecompressTextures = recompress;
-            _saveConfig();
-        }
-        Widgets.HintWrapped("Texture edits keep their original compression (BC1–BC7). When off, saves are written uncompressed: larger files without compression artifacts.");
     }
 
     private void DrawModelOptions()

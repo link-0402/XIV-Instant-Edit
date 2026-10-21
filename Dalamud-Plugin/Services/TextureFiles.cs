@@ -34,7 +34,7 @@ internal static class TextureFiles
         System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     public const int MaxBytes = 512 * 1024 * 1024;
     public const int MaxDimension = 8192;
-    private const uint Uncompressed = (uint)TexFile.TextureFormat.B8G8R8A8;
+    internal const uint Uncompressed = (uint)TexFile.TextureFormat.B8G8R8A8;
     public static string Hash(ReadOnlySpan<byte> data) => Convert.ToHexString(SHA256.HashData(data));
     public static TextureType OutputType(uint format) => (TexFile.TextureFormat)format switch
     {
@@ -54,9 +54,6 @@ internal static class TextureFiles
     };
 
     public static bool IsBlockCompressed(uint format) => OutputType(format) != TextureType.RgbaTex;
-
-    /// <summary>Encoding for the next save: the captured format, or uncompressed when recompression is off.</summary>
-    public static uint SaveFormat(TextureEditSession session, bool recompress) => recompress ? session.Format : Uncompressed;
 
     /// <summary>A session's destination holds either its captured format or an uncompressed save.</summary>
     public static bool IsSessionFormat(uint format, TextureEditSession session) => format == session.Format || format == Uncompressed;
@@ -359,14 +356,6 @@ internal static class TextureFiles
         if (!IsSessionFormat(header.Format, session))
             throw new InvalidDataException($"A {FormatName(session.Format)} session cannot store {FormatName(header.Format)} data.");
         return header;
-    }
-
-    /// <summary>Block-compressed formats encode whole 4 × 4 tiles; Direct3D requires this of the top level.</summary>
-    public static void ValidateEncodable(uint format, int width, int height)
-    {
-        if (IsBlockCompressed(format) && (width % 4 != 0 || height % 4 != 0))
-            throw new InvalidDataException($"{FormatName(format)} needs a width and height divisible by 4; this save is {width} × {height}. " +
-                "Resize it, or turn off texture recompression in Options to save uncompressed.");
     }
 
     /// <summary>Identity of the decoded image. The size participates so a same-area resize still counts as a change.</summary>

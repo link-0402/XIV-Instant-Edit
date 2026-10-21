@@ -58,9 +58,6 @@ internal static partial class TextureEditScenarios
             Reject(() => TextureFiles.ValidateTga(Tga(4, 8, 1), 8, 8), "initial conversion must match the captured size");
             Check(TextureFiles.ValidateTga(Tga(4, 12, 1)) == (4, 12), "resized TGA saves report their dimensions");
             Reject(() => TextureFiles.ValidateTga(Tga(0, 8, 1)), "zero-width TGA rejected");
-            Reject(() => TextureFiles.ValidateEncodable((uint)TexFile.TextureFormat.BC7, 6, 8), "block-compressed saves need whole 4 × 4 tiles");
-            TextureFiles.ValidateEncodable((uint)TexFile.TextureFormat.B8G8R8A8, 6, 7);
-            Check(true, "uncompressed saves accept any supported size");
             var rgba = Tex((uint)TexFile.TextureFormat.B8G8R8A8, 8, 8, 1, 0);
             var hash = TextureFiles.PixelHash(rgba);
             rgba[80] = 123; // RGB under alpha zero must participate in no-op detection.
@@ -161,15 +158,11 @@ internal static partial class TextureEditScenarios
 
         File.WriteAllBytes(s.WorkingFile, Tga(6, 4, 51));
         await f.Service.ProcessPendingAsync(true);
-        Check(f.Backend.Commits == 1 && TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) == resized,
-            "a BC save that is not whole 4 × 4 tiles leaves the destination unchanged");
-
-        f.Config.RecompressTextures = false;
-        await f.Service.ProcessPendingAsync(true);
         header = TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile));
         Check(f.Backend.Commits == 2 && f.Backend.LastFormat == TextureType.RgbaTex && header.Format == bgra &&
-              header is { Width: 6, Height: 4 } && f.Service.Sessions.Single().SavedFormat == bgra,
-            "with recompression off, saves are written uncompressed at any size");
+              header is { Width: 6, Height: 4 } && f.Service.Sessions.Single() is { SavedFormat: var unblocked, Status: var note } &&
+              unblocked == bgra && note.Contains("saved uncompressed"),
+            "a save that is not whole 4 × 4 blocks is written uncompressed, and its status says so");
 
         await f.Service.RestoreAsync(id);
         Check(TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) == resized &&
@@ -178,18 +171,24 @@ internal static partial class TextureEditScenarios
         Check(await f.Service.StartAsync(f.Request, false) == id && !f.Service.Sessions.Single().Paused,
             "opening a paused texture again resumes its session");
 
-        f.Config.RecompressTextures = true;
+        f.Backend.Lossy = true;
         File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 52));
         await f.Service.ProcessPendingAsync(true);
-        f.Config.RecompressTextures = false;
-        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 52).Concat(new byte[] { 1, 2, 3 }).ToArray());
+        header = TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile));
+        // Commits: two saves, the restore, then this one.
+        Check(f.Backend.Commits == 4 && header.Format == bgra && header.Mips == TextureFiles.FullMipCount(8, 8) &&
+              f.Service.Sessions.Single() is { SavedFormat: var kept, Status: var why } && kept == bgra && why.Contains("saved uncompressed"),
+            "a save the compression check fails is written uncompressed with its mip chain");
+        f.Backend.Lossy = false;
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 53));
         await f.Service.ProcessPendingAsync(true);
-        // Commits: two saves, the restore, then the recompressed and the uncompressed save.
-        Check(f.Backend.Commits == 5 && f.Service.Sessions.Single().SavedFormat == bgra,
-            "a recompression change applies on the next save even when pixels are unchanged");
-        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 52).Concat(new byte[] { 4, 5, 6 }).ToArray());
+        Check(f.Backend.Commits == 5 && TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile)).Format == bc7 &&
+              f.Service.Sessions.Single() is { SavedFormat: var passed, Status: var plain } && passed == bc7 && !plain.Contains("uncompressed"),
+            "a save the compression check passes goes back to the captured format");
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 8, 53).Concat(new byte[] { 4, 5, 6 }).ToArray());
         await f.Service.ProcessPendingAsync(true);
-        Check(f.Backend.Commits == 5, "unchanged pixels and encoding skip recompression");
+        Check(f.Backend.Commits == 5, "unchanged pixels skip the encode");
+        Check(!Directory.Exists(Path.Combine(s.Directory, "compression-work")), "the compression check's work folder is removed after a save");
     }
 
     private static async Task VersionsAsync(string root)
@@ -860,8 +859,9 @@ internal static partial class TextureEditScenarios
         results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(Guid.NewGuid(), red)], CancellationToken.None);
         Check(results.Single().Outcome == ExternalTextureOutcome.Failed, "a missing session is reported, not thrown");
         results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(secondId, Tga(6, 8, 1))], CancellationToken.None);
-        Check(results.Single().Outcome == ExternalTextureOutcome.Failed && File.ReadAllBytes(secondTarget)[80] == 88,
-            "an image the texture's compression can't hold is refused and the file stays");
+        Check(results.Single() is { Outcome: ExternalTextureOutcome.Applied, Message: var why } && why.Contains("saved uncompressed") &&
+              TextureFiles.ReadTex(File.ReadAllBytes(secondTarget)).Format == (uint)TexFile.TextureFormat.B8G8R8A8,
+            "an image the texture's compression can't hold is applied uncompressed, and the result says why");
 
         // A Painter project keeps its sessions even when they look stale.
         f.Service.KeepSession = id => id == firstId;
@@ -1106,9 +1106,9 @@ internal static partial class TextureEditScenarios
 
         await RejectAsync(() => service.ReplaceAsync(f.Request, Path.Combine(images, "notes.txt")), "a file that isn't an image is refused");
         result = await service.ReplaceAsync(f.Request, Png(Path.Combine(images, "Odd.png"), 6, 8, 50));
-        Check(result.Outcome == ExternalTextureOutcome.Failed && result.Message.Contains("divisible by 4"),
-            "an image the texture's block compression can't hold is refused with why");
-        Check(f.Backend.Commits == 4 && File.ReadAllBytes(s.TargetFile)[80] == 40, "refused drops leave the texture alone");
+        Check(result.Outcome == ExternalTextureOutcome.Applied && result.Message.Contains("4 × 4 blocks") && f.Backend.Commits == 5 &&
+              TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile)) is { Width: 6, Height: 8 } odd && odd.Format == (uint)TexFile.TextureFormat.B8G8R8A8,
+            "an image the texture's block compression can't hold is dropped in uncompressed, and the result says why");
     }
 
     /// <summary>
@@ -1214,6 +1214,8 @@ internal static partial class TextureEditScenarios
         public Guid? LastShown;
         public TextureType LastFormat;
         public bool FailConversion, RefreshWarning;
+        /// <summary>Block-compressed encodes decode with other colours, so the compression check fails.</summary>
+        public bool Lossy;
         public Action? OnEncode;
         /// <summary>Set to make saves wait, as when Penumbra is unavailable or the character shows another file.</summary>
         public string? Wait;
@@ -1289,16 +1291,24 @@ internal static partial class TextureEditScenarios
             }
             else
             {
-                var tga = File.ReadAllBytes(input);
+                var source = File.ReadAllBytes(input);
                 var code = format switch
                 {
                     TextureType.Bc1Tex => TexFile.TextureFormat.BC1, TextureType.Bc3Tex => TexFile.TextureFormat.BC3,
                     TextureType.Bc4Tex => TexFile.TextureFormat.BC4, TextureType.Bc5Tex => TexFile.TextureFormat.BC5,
                     TextureType.Bc7Tex => TexFile.TextureFormat.BC7, _ => TexFile.TextureFormat.B8G8R8A8,
                 };
-                var (width, height) = TextureFiles.ValidateTga(tga);
-                File.WriteAllBytes(output, Tex((uint)code, width, height, mipMaps ? TextureFiles.FullMipCount(width, height) : 1, tga[18]));
-                if (mipMaps) { LastFormat = format; Encodes++; OnEncode?.Invoke(); }
+                // The compression check converts TEX files; their first data byte stands for every pixel, as a TGA's does.
+                var tex = BinaryPrimitives.ReadUInt32LittleEndian(source) == 0x00800000;
+                var (width, height) = tex
+                    ? (BinaryPrimitives.ReadUInt16LittleEndian(source.AsSpan(8)), BinaryPrimitives.ReadUInt16LittleEndian(source.AsSpan(10)))
+                    : TextureFiles.ValidateTga(source);
+                var value = source[tex ? 80 : 18];
+                if (Lossy && tex && format == TextureType.RgbaTex && TextureFiles.IsBlockCompressed(BinaryPrimitives.ReadUInt32LittleEndian(source.AsSpan(4))))
+                    value += 60;
+                File.WriteAllBytes(output, Tex((uint)code, width, height, mipMaps ? TextureFiles.FullMipCount(width, height) : 1, value));
+                // Decoding the check's encode isn't a save's encode.
+                if (mipMaps && !(tex && format == TextureType.RgbaTex)) { LastFormat = format; Encodes++; OnEncode?.Invoke(); }
             }
             return Task.CompletedTask;
         }

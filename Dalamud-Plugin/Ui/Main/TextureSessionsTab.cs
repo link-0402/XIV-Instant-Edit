@@ -161,9 +161,8 @@ internal sealed class TextureSessionsTab
     public void Draw()
     {
         ImGui.Spacing();
-        Widgets.HintWrapped("Save the TGA file to update the texture in game. You can also change its resolution. " + (_config.RecompressTextures
-            ? "Saves keep the original compression."
-            : "Saves are written uncompressed (BGRA32).") + " Change this under Options. " +
+        Widgets.HintWrapped("Save the TGA file to update the texture in game. You can also change its resolution. " +
+            "Compressed textures stay compressed unless that would change how they look. " +
             "Save a copy under another name in the same folder to add it as a Penumbra option named after the file.");
         if (_textures.StartupError.Length > 0)
         {

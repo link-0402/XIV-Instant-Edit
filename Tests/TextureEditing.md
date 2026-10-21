@@ -22,10 +22,11 @@ agent.
 - Resize the image (for example 2048 → 1024, and a non-square size) and save.
   The TEX must take the new size with a regenerated mip chain, keep its format,
   and render correctly in game. The session must show the new size.
-- Turn off **Recompress saved textures** under Options and save again without
-  changing pixels. The destination must become uncompressed BGRA32 at the same
-  size, and a size that is not divisible by 4 must now be accepted. Turn the
-  option back on and confirm the next save restores the original compression.
+- Save a compressed texture with fine detail the compression check rejects (a
+  sharp cut-out edge in alpha, for example). The destination must become
+  uncompressed BGRA32 at the same size, and the session status must say
+  "saved uncompressed" with the reason. A save at a size not divisible by 4 is
+  also written uncompressed. An ordinary edit must keep the original format.
 - Confirm existing non-mipmapped textures remain single-level. Mipmapped inputs
   should regenerate the full size-appropriate chain, capped at 13 levels.
 - Open a mod texture whose header lists mip offsets written for uncompressed data,

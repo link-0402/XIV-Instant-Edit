@@ -4,6 +4,8 @@ using System.Text.Json;
 using InstantEdit.Models;
 using InstantEdit.Services.Painter;
 using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.TextureCompression;
+using InstantEdit.Studio.Services;
 using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services;
@@ -70,6 +72,8 @@ public sealed class TextureEditService : IDisposable
     private static readonly HashSet<string> ReservedTgaNames = new(StringComparer.OrdinalIgnoreCase) { "snapshot.tga", "texture.tga" };
     /// <summary>Scratch folder for variant conversions, kept out of the watched top level.</summary>
     private const string VariantWorkFolder = "variant-work";
+    /// <summary>Scratch folder for a save's compression check, removed once the save is encoded.</summary>
+    private const string CompressionWorkFolder = "compression-work";
 
     private readonly ITextureEditBackend _backend;
     private readonly Configuration _config;
@@ -145,7 +149,7 @@ public sealed class TextureEditService : IDisposable
                     MigrateLegacyWorkingFile(s);
                     TextureFiles.EnsureLocalPath(s.TargetFile);
                     _ = TextureFiles.OutputType(s.Format);
-                    // Sessions from before optional recompression always saved in their captured format.
+                    // Sessions from before uncompressed saves always saved in their captured format.
                     if (s.SavedFormat == 0) s.SavedFormat = s.Format;
                     if (!TextureFiles.IsSessionFormat(s.SavedFormat, s)) throw new IOException("Invalid texture session format.");
                     // Sessions carry on as they were across plugin reloads and game restarts. One left
@@ -669,6 +673,9 @@ public sealed class TextureEditService : IDisposable
                 Path.GetFileName(session.WorkingFile), "texture.tga",
                 Path.Combine(VariantWorkFolder, "snapshot.tga"), Path.Combine(VariantWorkFolder, "pixels.tex"),
                 Path.Combine(VariantWorkFolder, "converted.tex"),
+                // A save removes these once it is encoded; one that stopped halfway can leave them.
+                Path.Combine(CompressionWorkFolder, "saved.tex"), Path.Combine(CompressionWorkFolder, "original.tex"),
+                Path.Combine(CompressionWorkFolder, "compressed.tex"), Path.Combine(CompressionWorkFolder, "check.tex"),
                 // A drop removes these once it is converted; one that stopped halfway can leave them.
                 Path.Combine(DropWorkFolder, "dropped.dds"), Path.Combine(DropWorkFolder, "dropped.tex"),
                 Path.Combine(DropWorkFolder, "dropped.tga"), Path.Combine(DropWorkFolder, "restored.tex"),
@@ -960,8 +967,6 @@ public sealed class TextureEditService : IDisposable
         if (string.Equals(name, TextureModBackend.OriginalTextureOptionName, StringComparison.OrdinalIgnoreCase))
             throw new IOException($"\"{name}\" is reserved for the edited texture. Rename the TGA.");
         var (width, height) = TextureFiles.ValidateTga(tga);
-        var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
-        TextureFiles.ValidateEncodable(format, width, height);
         await Task.Delay(150, _life.Token).ConfigureAwait(false);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested &&
             generation == Interlocked.Read(ref runtime.VariantGeneration) && TextureFiles.Hash(TextureFiles.Read(file)) == hash;
@@ -973,7 +978,6 @@ public sealed class TextureEditService : IDisposable
         Directory.CreateDirectory(work);
         var snapshot = Path.Combine(work, "snapshot.tga");
         var pixels = Path.Combine(work, "pixels.tex");
-        var output = Path.Combine(work, "converted.tex");
         File.WriteAllBytes(snapshot, tga);
         await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
         _life.Token.ThrowIfCancellationRequested();
@@ -981,7 +985,7 @@ public sealed class TextureEditService : IDisposable
         var pixelHeader = TextureFiles.ReadTex(rawPixels);
         if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the variant image.");
         var pixelHash = TextureFiles.PixelHash(rawPixels);
-        if (existing is not null && pixelHash == existing.PixelHash && format == existing.SavedFormat)
+        if (existing is not null && pixelHash == existing.PixelHash)
         {
             if (!Current()) return;
             existing.WorkingHash = hash;
@@ -992,11 +996,8 @@ public sealed class TextureEditService : IDisposable
         }
         // Nothing is encoded for a save that can't go through now.
         await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
-        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
-        _life.Token.ThrowIfCancellationRequested();
+        var (converted, format, kept) = await EncodeSaveAsync(s, snapshot, width, height).ConfigureAwait(false);
         if (!Current()) return;
-        var converted = TextureFiles.Read(output);
-        TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
         if (s.NeedsMod) await CreateModFromOriginalAsync(s, Current).ConfigureAwait(false);
 
         var variant = existing ?? new TextureVariant { Name = name };
@@ -1019,8 +1020,8 @@ public sealed class TextureEditService : IDisposable
         if (!PersistCommit(runtime)) return;
         _life.Token.ThrowIfCancellationRequested();
         var refresh = await RefreshOneAsync(s, variant.OptionId).ConfigureAwait(false);
-        variant.Status = refresh;
-        s.Status = $"Variant \"{name}\": {refresh}";
+        variant.Status = refresh + Uncompressed(kept);
+        s.Status = $"Variant \"{name}\": {refresh}" + Uncompressed(kept);
         Persist();
     }
 
@@ -1109,8 +1110,6 @@ public sealed class TextureEditService : IDisposable
         }
         if (Environment.TickCount64 < runtime.RetryAt) return;
         var (width, height) = TextureFiles.ValidateTga(tga);
-        var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
-        TextureFiles.ValidateEncodable(format, width, height);
         await Task.Delay(150, _life.Token).ConfigureAwait(false);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested && generation == Interlocked.Read(ref runtime.Generation) &&
             TextureFiles.Hash(TextureFiles.Read(s.WorkingFile)) == hash;
@@ -1119,7 +1118,6 @@ public sealed class TextureEditService : IDisposable
         Publish();
         var snapshot = Path.Combine(s.Directory, "snapshot.tga");
         var pixels = Path.Combine(s.Directory, "pixels.tex");
-        var output = Path.Combine(s.Directory, "converted.tex");
         TextureFiles.EnsureLocalPath(snapshot);
         File.WriteAllBytes(snapshot, tga);
         await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
@@ -1128,8 +1126,7 @@ public sealed class TextureEditService : IDisposable
         var pixelHeader = TextureFiles.ReadTex(rawPixels);
         if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the working image.");
         var pixelHash = TextureFiles.PixelHash(rawPixels);
-        // A recompression setting change is applied by the next save even when its pixels are unchanged.
-        if (pixelHash == s.PixelHash && format == s.SavedFormat)
+        if (pixelHash == s.PixelHash)
         {
             if (!Current()) return;
             s.WorkingHash = hash;
@@ -1140,11 +1137,8 @@ public sealed class TextureEditService : IDisposable
         }
         // Nothing is encoded for a save that can't go through now.
         await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
-        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
-        _life.Token.ThrowIfCancellationRequested();
+        var (converted, format, kept) = await EncodeSaveAsync(s, snapshot, width, height).ConfigureAwait(false);
         if (!Current()) return;
-        var converted = TextureFiles.Read(output);
-        TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
         var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
         RecordBackup(s, result.Backup);
@@ -1160,9 +1154,49 @@ public sealed class TextureEditService : IDisposable
         if (!PersistCommit(runtime)) return;
         _life.Token.ThrowIfCancellationRequested();
         // With variants, the edited texture shows only while the group's Original option is selected.
-        s.Status = await RefreshOneAsync(s, s.OriginalOptionId).ConfigureAwait(false);
+        s.Status = await RefreshOneAsync(s, s.OriginalOptionId).ConfigureAwait(false) + Uncompressed(kept);
         Persist();
     }
+
+    /// <summary>
+    /// Encodes a saved image. A texture captured block-compressed gets its format again when the
+    /// compression check Optimize textures uses (<see cref="VerifiedEncode"/>) finds the encode keeps
+    /// how it looks; otherwise, and at sizes that aren't whole 4 × 4 blocks, it is saved uncompressed.
+    /// Returns the TEX, its format, and why a compressed texture stayed uncompressed (empty otherwise).
+    /// </summary>
+    private async Task<(byte[] Tex, uint Format, string Kept)> EncodeSaveAsync(TextureEditSession s, string image, int width, int height)
+    {
+        var work = Path.Combine(s.Directory, CompressionWorkFolder);
+        TextureFiles.EnsureLocalPath(work);
+        Directory.CreateDirectory(work);
+        try
+        {
+            var savedPath = Path.Combine(work, "saved.tex");
+            await _backend.ConvertAsync(image, savedPath, TextureType.RgbaTex, s.MipMaps).ConfigureAwait(false);
+            _life.Token.ThrowIfCancellationRequested();
+            var plain = TextureFiles.Read(savedPath);
+            TextureFiles.ValidateOutput(plain, TextureFiles.Uncompressed, width, height, s.MipMaps);
+            if (!TextureFiles.IsBlockCompressed(s.Format))
+                return (plain, TextureFiles.Uncompressed, string.Empty);
+            if (width % 4 != 0 || height % 4 != 0)
+                return (plain, TextureFiles.Uncompressed, $"{width} × {height} isn't whole 4 × 4 blocks");
+            var info = TextureCost.Read(plain) ?? throw new InvalidDataException("Penumbra wrote a texture this plugin can't read.");
+            var uses = AutoCompression.UsesFor(s.GamePath, s.RelativePath);
+            var result = await VerifiedEncode.RunAsync(new VerifiedEncodeRequest(plain, info, uses, s.Format, null, AllowSingleColor: false),
+                (input, output, type, mipMaps) => _backend.ConvertAsync(input, output, type, mipMaps), work, _life.Token).ConfigureAwait(false);
+            return result.Outcome == VerifiedEncodeOutcome.Encoded
+                ? (result.Encoded!, s.Format, string.Empty)
+                : (plain, TextureFiles.Uncompressed, result.Check?.Problem ?? "it can't be compressed");
+        }
+        finally
+        {
+            try { Directory.Delete(work, recursive: true); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* cache cleanup skips a session that keeps it */ }
+        }
+    }
+
+    /// <summary>The status note for a save the compression check kept uncompressed.</summary>
+    private static string Uncompressed(string kept) => kept.Length == 0 ? string.Empty : $" (saved uncompressed: {kept})";
 
     private Task<string> RefreshOneAsync(TextureEditSession session, Guid? showOption)
         => _backend.RefreshAsync([new TextureRefresh(session, showOption)], _life.Token);
@@ -1236,13 +1270,10 @@ public sealed class TextureEditService : IDisposable
         var s = runtime.Session;
         EnsureWritable(s);
         var (width, height) = TextureFiles.ValidateTga(tga);
-        var format = TextureFiles.SaveFormat(s, _config.RecompressTextures);
-        TextureFiles.ValidateEncodable(format, width, height);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested;
         var hash = TextureFiles.Hash(tga);
         var snapshot = Path.Combine(s.Directory, "snapshot.tga");
         var pixels = Path.Combine(s.Directory, "pixels.tex");
-        var output = Path.Combine(s.Directory, "converted.tex");
         TextureFiles.EnsureLocalPath(snapshot);
         File.WriteAllBytes(snapshot, tga);
         await _backend.ConvertAsync(snapshot, pixels, TextureType.RgbaTex, false).ConfigureAwait(false);
@@ -1251,7 +1282,7 @@ public sealed class TextureEditService : IDisposable
         var pixelHeader = TextureFiles.ReadTex(rawPixels);
         if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the exported image.");
         var pixelHash = TextureFiles.PixelHash(rawPixels);
-        if (pixelHash == s.PixelHash && format == s.SavedFormat)
+        if (pixelHash == s.PixelHash)
         {
             var mirrored = MirrorWorkingFile(runtime, tga, hash);
             s.Status = (dropped is null ? "Painter texture unchanged" : $"{dropped} is the same as the texture") +
@@ -1263,11 +1294,8 @@ public sealed class TextureEditService : IDisposable
         await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         s.Status = dropped is null ? "Converting Painter texture" : $"Converting {dropped}";
         Publish();
-        await _backend.ConvertAsync(snapshot, output, TextureFiles.OutputType(format), s.MipMaps).ConfigureAwait(false);
-        _life.Token.ThrowIfCancellationRequested();
+        var (converted, format, kept) = await EncodeSaveAsync(s, snapshot, width, height).ConfigureAwait(false);
         if (!Current()) throw new OperationCanceledException("The session was paused.");
-        var converted = TextureFiles.Read(output);
-        TextureFiles.ValidateOutput(converted, format, width, height, s.MipMaps);
         var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
         s.LastCommittedHash = result.Hash;
         RecordBackup(s, result.Backup);
@@ -1276,7 +1304,7 @@ public sealed class TextureEditService : IDisposable
         s.Width = width;
         s.Height = height;
         s.LastSaved = DateTimeOffset.UtcNow;
-        s.Status = dropped is null ? "Saved from Substance Painter" : $"Replaced with {dropped}";
+        s.Status = (dropped is null ? "Saved from Substance Painter" : $"Replaced with {dropped}") + Uncompressed(kept);
         if (dropped is not null)
             s.Replacement = new TextureReplacement { File = dropped, Backup = result.Backup, Hash = result.Hash, At = DateTimeOffset.UtcNow };
         RaiseFileChanged(s.TargetFile);
