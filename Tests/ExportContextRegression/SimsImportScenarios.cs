@@ -94,6 +94,10 @@ internal static class SimsImportScenarios
             (rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3]) = i % 2 == 0 ? ((byte)200, (byte)200, (byte)200, (byte)255) : ((byte)0, (byte)0, (byte)0, (byte)0);
         var (lightness, saturation) = SimsHairDefaults.Measure(rgba);
         Require(Math.Abs(lightness - 200) < 0.01 && saturation == 0, "only opaque pixels count towards a diffuse's lightness");
+
+        var map = SimsHairDefaults.AlphaMap(new byte[] { 90, 60, 30, 255, 200, 10, 10, 0, 5, 5, 5, 100 });
+        Require(map.SequenceEqual(new byte[] { 255, 255, 255, 255, 0, 0, 0, 255, 100, 100, 100, 255 }),
+            "a hair diffuse's alpha map is its alpha as opaque grey: strands white, background black, soft edges grey");
     }
 
     private const long Megabyte = 1024 * 1024;

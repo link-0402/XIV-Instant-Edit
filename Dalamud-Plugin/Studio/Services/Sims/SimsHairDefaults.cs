@@ -16,7 +16,8 @@ namespace InstantEdit.Studio.Services.Sims;
 ///
 /// A hair also ships one diffuse per colour swatch, and a port wants one: the lightest grey,
 /// which is turned into the hair's normal texture. Not every creator includes a white or grey
-/// swatch, so without a near-grey one the lightest of all is taken.
+/// swatch, so without a near-grey one the lightest of all is taken. Its alpha map, the first
+/// step of that, is written beside it on extraction (<see cref="AlphaMap"/>).
 /// </summary>
 public static class SimsHairDefaults
 {
@@ -54,6 +55,24 @@ public static class SimsHairDefaults
                     best = i;
             }
         return best;
+    }
+
+    /// <summary>
+    /// The alpha map of a hair diffuse, the first step of turning it into the port's normal
+    /// texture: opaque straight RGBA8 whose grey is the diffuse's alpha, as Photoshop's Layer
+    /// Mask > From Transparency makes it. Solid strands are white, the background black, and
+    /// the soft strand edges keep their grey. Laid over a base normal, it keeps the normal
+    /// only where the strands are.
+    /// </summary>
+    public static byte[] AlphaMap(byte[] rgba)
+    {
+        var map = new byte[rgba.Length];
+        for (int i = 0; i + 3 < rgba.Length; i += 4)
+        {
+            map[i] = map[i + 1] = map[i + 2] = rgba[i + 3];
+            map[i + 3] = 255;
+        }
+        return map;
     }
 
     /// <summary>

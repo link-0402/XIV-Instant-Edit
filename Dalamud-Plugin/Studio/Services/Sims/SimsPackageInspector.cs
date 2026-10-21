@@ -530,7 +530,7 @@ public static class SimsPackageInspector
                     if (asset.Kind == SimsAssetKind.Mesh)
                         ExtractMesh(package, asset, result, packageName, usedNames, report, progress);
                     else
-                        ExtractTexture(package, asset, result, root, usedNames, report, progress);
+                        ExtractTexture(package, asset, result, root, usedNames, report, progress, scan.IsHair);
                     extracted++;
                 }
                 catch (Exception ex)
@@ -674,8 +674,13 @@ public static class SimsPackageInspector
                           (skippedFaces > 0 ? $", {skippedFaces:N0} with a bad vertex index left out)" : ")"));
     }
 
+    /// <summary>
+    /// Writes one texture as a PNG into the folder of its role. A hair's diffuse also gets its
+    /// alpha map, in a folder of its own beside the diffuse folder: that one is a variant
+    /// folder, where any image counts as another colour.
+    /// </summary>
     private static void ExtractTexture(DbpfPackage package, SimsAsset asset, ExtractionResult result,
-        string root, HashSet<string> usedNames, StringBuilder report, Action<string>? progress)
+        string root, HashSet<string> usedNames, StringBuilder report, Action<string>? progress, bool hair)
     {
         progress?.Invoke($"Writing texture {asset.Entry.Instance:X16}");
 
@@ -717,6 +722,23 @@ public static class SimsPackageInspector
 
         report.AppendLine($"  ok:       textures/{folderName}/{name}  " +
                           $"({decoded.Width}x{decoded.Height}, {decoded.SourceFormat})");
+
+        if (hair && asset.Role == SimsTextureRole.Diffuse)
+        {
+            var alphaFolder = Path.Combine(root, "textures", "alpha");
+            Directory.CreateDirectory(alphaFolder);
+            var alphaName = UniqueName(usedNames, $"{stem}_alpha", ".png");
+            var alphaPath = Path.Combine(alphaFolder, alphaName);
+            var alphaPng = new DecodedTexture
+            {
+                Width  = decoded.Width,
+                Height = decoded.Height,
+                Rgba   = SimsHairDefaults.AlphaMap(decoded.Rgba),
+            }.ToPng();
+            WriteOwned(result, alphaPath, () => File.WriteAllBytes(alphaPath, alphaPng));
+            result.Textures.Add((alphaPath, SimsTextureRole.Unknown, asset.PartName));
+            report.AppendLine($"  ok:       textures/alpha/{alphaName}  (the diffuse's alpha map, to lay over a normal)");
+        }
     }
 
     private static string UniqueName(HashSet<string> used, string stem, string extension)
