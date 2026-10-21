@@ -336,6 +336,83 @@ def assert_simple_import_folder(addon):
             setattr(settings, name, value)
 
 
+def _write_skinned_glb(path, bones, offset=0.0):
+    """Write a .glb with one triangle skinned to bones [(name, head)], like a Sims part."""
+    data = bpy.data.armatures.new("PartRig")
+    rig = bpy.data.objects.new("Sims_Armature", data)
+    bpy.context.collection.objects.link(rig)
+    bpy.context.view_layer.objects.active = rig
+    bpy.ops.object.mode_set(mode="EDIT")
+    for name, head in bones:
+        bone = data.edit_bones.new(name)
+        bone.head = (head[0] + offset, head[1], head[2])
+        bone.tail = (head[0] + offset, head[1], head[2] + 0.1)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    mesh = bpy.data.meshes.new("PartMesh")
+    mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+    part = bpy.data.objects.new(path.stem, mesh)
+    bpy.context.collection.objects.link(part)
+    for name, _head in bones:
+        part.vertex_groups.new(name=name).add([0, 1, 2], 1.0 / len(bones), "REPLACE")
+    part.parent = rig
+    part.modifiers.new("Armature", "ARMATURE").object = rig
+    for item in tuple(bpy.context.selected_objects):
+        item.select_set(False)
+    rig.select_set(True)
+    part.select_set(True)
+    try:
+        bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLB", use_selection=True)
+    finally:
+        bpy.data.objects.remove(part, do_unlink=True)
+        bpy.data.meshes.remove(mesh)
+        bpy.data.objects.remove(rig, do_unlink=True)
+        bpy.data.armatures.remove(data)
+
+
+def assert_simple_import_shares_armatures():
+    settings = bpy.context.scene.xiv_ie_settings
+    saved = {name: getattr(settings, name) for name in (
+        "simple_import_set_export_directory", "simple_import_use_existing_skeleton", "export_directory")}
+    try:
+        with temporary_scene_data(), tempfile.TemporaryDirectory(prefix="xiv-instant-edit-parts-") as root:
+            folder = Path(root)
+            # Hair parts split into files: overlapping bone lists on the same rest layout,
+            # and one file whose shared bone sits elsewhere.
+            _write_skinned_glb(folder / "hair_a.glb", [("bone_root", (0, 0, 0)), ("bone_a", (0, 0, 1))])
+            _write_skinned_glb(folder / "hair_b.glb", [("bone_root", (0, 0, 0)), ("bone_b", (0, 1, 1))])
+            _write_skinned_glb(folder / "other.glb", [("bone_root", (0, 0, 0))], offset=2.0)
+            settings.simple_import_set_export_directory = False
+            settings.simple_import_use_existing_skeleton = False
+            before = set(bpy.data.objects)
+            if bpy.ops.xiv_ie.simple_import(
+                "EXEC_DEFAULT", directory=str(folder),
+                files=[{"name": "hair_a.glb"}, {"name": "hair_b.glb"}, {"name": "other.glb"}],
+            ) != {"FINISHED"}:
+                raise AssertionError("Simple Import of three glTF parts failed")
+            new = [item for item in bpy.data.objects if item not in before]
+            armatures = [item for item in new if item.type == "ARMATURE"]
+            meshes = {item.name.split(".")[0]: item for item in new if item.type == "MESH"}
+            if len(armatures) != 2 or set(meshes) != {"hair_a", "hair_b", "other"}:
+                raise AssertionError(
+                    f"Matching parts did not share one armature: {[(i.name, i.type) for i in new]}")
+
+            def rig_of(mesh):
+                return next(m.object for m in mesh.modifiers if m.type == "ARMATURE")
+
+            shared = rig_of(meshes["hair_a"])
+            if (rig_of(meshes["hair_b"]) is not shared or meshes["hair_b"].parent is not shared
+                    or rig_of(meshes["other"]) is shared):
+                raise AssertionError("Simple Import bound the parts to the wrong armatures")
+            if {bone.name for bone in shared.data.bones} != {"bone_root", "bone_a", "bone_b"}:
+                raise AssertionError("The shared armature did not take the second part's bones")
+            if set(bpy.context.selected_objects) != set(new):
+                raise AssertionError("Simple Import selected a removed armature or missed an object")
+        print("[PASS] Simple Import puts parts with a matching layout on one armature")
+    finally:
+        for name, value in saved.items():
+            setattr(settings, name, value)
+
+
 def assert_mesh_studio(addon, obj, second, added_group):
     materials = importlib.import_module(f"{addon.__name__}.materials")
     with temporary_scene_data():
@@ -2400,6 +2477,7 @@ def run() -> None:
         print("[PASS] Simple Export honors every Export Parts mode and requires Context for its collection")
 
         assert_simple_import_folder(addon)
+        assert_simple_import_shares_armatures()
 
         cache_module = importlib.import_module(f"{addon.__name__}.instant_edit.cache")
         original_auto_cleanup = cache_module.automatic_cleanup_enabled()

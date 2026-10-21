@@ -453,6 +453,25 @@ class XIVIE_OT_simple_import(Operator):
             raise
         return imported_objects, skeleton_note
 
+    @staticmethod
+    def _share_armatures(context: Context, imported_objects: list, batch_armatures: list) -> tuple[list, int]:
+        """Move this file's meshes onto an armature from an earlier file in the batch with the
+        same layout (Sims parts exported one file each), deleting its own copy.
+        Returns (the file's remaining objects, how many armatures were merged)."""
+        from .mesh.armatures import matching_layout, merge_into
+
+        meshes = [obj for obj in imported_objects if obj.type == "MESH"]
+        merged = []
+        for armature in [obj for obj in imported_objects if obj.type == "ARMATURE"]:
+            base = next((kept for kept in batch_armatures if matching_layout(kept, armature)), None)
+            if base is None:
+                batch_armatures.append(armature)
+                continue
+            merge_into(context, base, armature, meshes)
+            merged.append(armature)
+        remaining = [obj for obj in imported_objects if not any(obj is gone for gone in merged)]
+        return remaining, len(merged)
+
     def execute(self, context: Context):
         file_paths = self._file_paths()
         settings = get_settings()
@@ -481,6 +500,9 @@ class XIVIE_OT_simple_import(Operator):
         imported_names = []
         skeleton_notes = []
         last_folder = None
+        # Armatures kept so far; a later file whose armature matches one shares it instead.
+        batch_armatures = []
+        merged_count = 0
         for file_path, import_format in jobs:
             try:
                 imported_objects, skeleton_note = self._import_file(
@@ -491,6 +513,9 @@ class XIVIE_OT_simple_import(Operator):
                     return {"CANCELLED"}
                 problems.append(f"{file_path.name} failed: {error}")
                 continue
+            if not use_existing_skeleton:
+                imported_objects, merged = self._share_armatures(context, imported_objects, batch_armatures)
+                merged_count += merged
             all_objects.extend(imported_objects)
             imported_names.append(file_path.name)
             if skeleton_note:
@@ -514,6 +539,8 @@ class XIVIE_OT_simple_import(Operator):
         files_text = imported_names[0] if len(imported_names) == 1 else f"{len(imported_names)} files"
         message = f"Imported {files_text}{count_text}"
         notes = skeleton_notes + problems
+        if merged_count:
+            message += f"; {merged_count} matching armature{'s' if merged_count != 1 else ''} combined"
         if notes:
             message += "; " + "; ".join(notes)
         if refresh_error is not None:

@@ -137,6 +137,50 @@ def _reassign_mesh(binding, originals, result, context):
         modifier.object = result
 
 
+def _same_matrix(a, b, tolerance=1e-4):
+    return all(abs(x - y) <= tolerance for row_a, row_b in zip(a, b) for x, y in zip(row_a, row_b))
+
+
+def matching_layout(base, additional):
+    """True when two armatures sit in the same place and every bone they share has the same
+    parent and rest transform, so either one's meshes deform the same on the other."""
+    if not _same_matrix(base.matrix_world, additional.matrix_world):
+        return False
+    shared = [bone for bone in additional.data.bones if bone.name in base.data.bones]
+    if not shared:
+        return False
+    for bone in shared:
+        other = base.data.bones[bone.name]
+        if (bone.parent.name if bone.parent else None) != (other.parent.name if other.parent else None):
+            return False
+        if not _same_matrix(bone.matrix_local, other.matrix_local):
+            return False
+    return True
+
+
+def merge_into(context, base, additional, meshes):
+    """Move meshes from additional onto base, adding the bones base lacks, then delete
+    additional. Only for armatures that pass matching_layout."""
+    if any(bone.name not in base.data.bones for bone in additional.data.bones):
+        active = context.view_layer.objects.active
+        context.view_layer.objects.active = base
+        try:
+            _append_bones(base, additional, Matrix.Identity(4))
+        finally:
+            context.view_layer.objects.active = active
+    for obj in meshes:
+        if obj.parent == additional:
+            # Both armatures share a world matrix, so the parent inverse still holds.
+            obj.parent = base
+        for modifier in obj.modifiers:
+            if modifier.type == "ARMATURE" and modifier.object == additional:
+                modifier.object = base
+    data = additional.data
+    bpy.data.objects.remove(additional, do_unlink=True)
+    if data.users == 0:
+        bpy.data.armatures.remove(data)
+
+
 def combine_armatures(context, base, additional):
     """Return (new rig, reassigned mesh count), restoring all state on failure."""
     if context.mode != "OBJECT":
