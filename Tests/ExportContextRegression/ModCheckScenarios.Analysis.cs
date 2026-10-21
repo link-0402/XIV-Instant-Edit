@@ -384,7 +384,7 @@ internal static partial class ModCheckScenarios
         Require(calls == 1 && findings.Length == 3, "the other mods are read once, and each shared hair skeleton ID is one finding");
         Require(findings[0] is { Key: "X005:1612", Category: CheckCategory.Dependencies, Severity: Severity.Warning, GamePath: CustomHairSkeleton } &&
                 findings[0].Title == "Another mod uses the same hair skeleton" &&
-                findings[0].Detail == "Other Mod also uses hair skeleton h1612. When both are on, one hair gets the other's bones. Export this hair again from Blender to move it to a free ID.",
+                findings[0].Detail == "Other Mod also uses hair skeleton h1612. When both are on, one hair gets the other's bones. If Instant Edit made it, export this hair again from Blender to move it to a free ID.",
             "a hair skeleton ID another mod uses is a warning naming that mod and the ID");
         Require(findings[1].Detail.StartsWith("A, B, C and 2 more also use hair skeleton h1613.", StringComparison.Ordinal),
             "at most three mods are named, in name order");

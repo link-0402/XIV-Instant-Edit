@@ -43,7 +43,7 @@ internal sealed partial class ModCheck
             var sorted = mods.Order(StringComparer.OrdinalIgnoreCase).ToArray();
             var names = sorted.Length <= 3 ? string.Join(", ", sorted) : $"{string.Join(", ", sorted.Take(3))} and {sorted.Length - 3} more";
             AddFinding($"X005:{id}", "X005", CheckCategory.Dependencies, Severity.Warning, "Another mod uses the same hair skeleton",
-                $"{names} also {(sorted.Length == 1 ? "uses" : "use")} hair skeleton h{id:D4}. When both are on, one hair gets the other's bones. Export this hair again from Blender to move it to a free ID.",
+                $"{names} also {(sorted.Length == 1 ? "uses" : "use")} hair skeleton h{id:D4}. When both are on, one hair gets the other's bones. If Instant Edit made it, export this hair again from Blender to move it to a free ID.",
                 key);
         }
     }
