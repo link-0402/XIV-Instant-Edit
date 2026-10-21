@@ -28,9 +28,11 @@ internal sealed record HairSkeletonFile(int GenderRace, string GamePath, byte[] 
 /// <summary>
 /// The skeleton files of a hair model (mod-relative, <c>/</c> separators) for every race it is used for.
 /// <paramref name="PreviousId"/> is the recorded ID the plan moves away from, because another mod uses it.
+/// <paramref name="ChainKinds"/> maps each physics chain's first bone to its kind, for the record.
 /// </summary>
 internal sealed record HairSkeletonPlan(
-    string Model, int SkeletonId, IReadOnlyList<HairSkeletonFile> Files, IReadOnlyList<string> Notes, int? PreviousId = null);
+    string Model, int SkeletonId, IReadOnlyList<HairSkeletonFile> Files, IReadOnlyList<string> Notes, int? PreviousId = null,
+    IReadOnlyDictionary<string, string>? ChainKinds = null);
 
 /// <summary>
 /// A mod's custom hair skeleton for one model file: one <c>.sklb</c> and one <c>.phyb</c> per race the
@@ -85,7 +87,8 @@ internal static partial class HairSkeletonFiles
             ?? throw new InvalidDataException("The game's hair EST table could not be read."));
         // The library scan leaves this mod out, so a recorded ID it names is another mod's too. A new ID
         // also avoids the IDs this mod's own options use.
-        var recorded = Record(store.Load(), EstEntryService.EstModKey(modFolder, modDirectory), model)?.SkeletonId;
+        var record = Record(store.Load(), EstEntryService.EstModKey(modFolder, modDirectory), model);
+        var recorded = record?.SkeletonId;
         var taken = sources.TakenIds();
         var notes = new List<string>();
         int id;
@@ -102,6 +105,9 @@ internal static partial class HairSkeletonFiles
                 notes.Add($"Hair skeleton h{clashed:D4} is also used by another mod, so this export moved it to h{id:D4}.");
             }
         }
+        // A move an earlier export didn't finish still takes back its old ID, whose physics is the one tuned.
+        previousId = record?.MovingFrom ?? previousId;
+        var tuningId = record?.MovingFrom ?? recorded;
 
         var files = new List<HairSkeletonFile>();
         foreach (var race in races)
@@ -118,23 +124,25 @@ internal static partial class HairSkeletonFiles
             var bones = HairSkeletonLayout.Bones(rig, sources.TemplateKao(template));
             var physicsPath = HairPhysicsBuilder.PhysicsPath(race, id);
             // Only the recorded ID's physics is the user's to keep, also when the ID moves; a first ID starts from the presets.
-            var previous = recorded is { } own ? ReadModFile(modFolder, HairPhysicsBuilder.PhysicsPath(race, own)) : null;
-            var physics = Physics(rig, bones, race, sources, previous, notes);
+            var previous = tuningId is { } own ? ReadModFile(modFolder, HairPhysicsBuilder.PhysicsPath(race, own)) : null;
+            var physics = Physics(rig, bones, race, sources, previous, record?.ChainKinds, notes);
             files.Add(new HairSkeletonFile(race, ModelSkeletonPaths.PartialPath(label, EstSlot.Hair, id),
                 sources.Write(template, bones), physicsPath, physics));
         }
         // An empty plan would only take back the model's EST entries.
         if (files.Count == 0)
             throw new InvalidDataException("No race the model is used for has a vanilla hair skeleton.");
-        return new HairSkeletonPlan(model, id, files, notes, previousId);
+        var kinds = (rig.Chains ?? []).ToDictionary(chain => chain.Bones![0], chain => chain.Kind!, StringComparer.Ordinal);
+        return new HairSkeletonPlan(model, id, files, notes, previousId, kinds);
     }
 
     /// <summary>
     /// A race's hair physics: shapes from its h0182 physics, and the settings of chains the mod's file
-    /// (<paramref name="previous"/>) already has. The builder's notes get the race in front.
+    /// (<paramref name="previous"/>, written with <paramref name="previousKinds"/>) already has. The
+    /// builder's notes get the race in front.
     /// </summary>
     private static byte[] Physics(HairSkeletonRequest rig, ImmutableArray<SkeletonBone> bones, int race,
-        HairSkeletonSources sources, byte[]? previous, List<string> notes)
+        HairSkeletonSources sources, byte[]? previous, IReadOnlyDictionary<string, string>? previousKinds, List<string> notes)
     {
         var label = RaceLabel(race);
         PhybFile? donor = null, tuned = null;
@@ -149,7 +157,7 @@ internal static partial class HairSkeletonFiles
                 notes.Add($"The hair physics in the mod for {label} could not be read, so every chain gets its preset.");
         }
         var built = new List<string>();
-        var file = HairPhysicsBuilder.Build(rig, bones, donor, tuned, built);
+        var file = HairPhysicsBuilder.Build(rig, bones, donor, tuned, built, previousKinds);
         notes.AddRange(built.Select(note => $"{label}: {note}"));
         return file.ToBytes();
     }
@@ -167,7 +175,8 @@ internal static partial class HairSkeletonFiles
     /// Record the ID, write the plan's files into the mod, map each one in the options that use the
     /// model for its race (and nowhere else), delete the ID's files no option maps any more, and set
     /// the hair EST entries. A plan that moves off a previous ID first takes back that ID's keys, files
-    /// and EST entries. Returns the plan's notes, then the EST warnings.
+    /// and EST entries; the record names that ID until they are gone, so a failed move is finished by the
+    /// next export. Returns the plan's notes, then the EST warnings.
     /// </summary>
     public static List<string> Apply(
         HairSkeletonPlan plan,
@@ -189,9 +198,12 @@ internal static partial class HairSkeletonFiles
             })
             .ToList();
         // Record the ID before the first write, so a step that fails later never orphans its keys and files.
+        // Until the move is done, the record also names the previous ID, and keeps the chain kinds of its physics.
         var modKey = EstEntryService.EstModKey(modFolder, modDirectory);
-        var records = store.Load().Where(record => !SameRecord(record, modKey, model)).ToList();
-        records.Add(new ManagedHairSkeleton(modKey, model, plan.SkeletonId));
+        var previousId = plan.PreviousId is { } moved && moved != plan.SkeletonId ? moved : (int?)null;
+        var stored = store.Load();
+        var records = stored.Where(record => !SameRecord(record, modKey, model)).ToList();
+        records.Add(new ManagedHairSkeleton(modKey, model, plan.SkeletonId, previousId, Record(stored, modKey, model)?.ChainKinds));
         store.Save(records);
         foreach (var (bytes, path) in targets)
             WriteAtomic(path, bytes);
@@ -200,7 +212,6 @@ internal static partial class HairSkeletonFiles
         var estRecords = estStore.Load().ToList();
         var estCount = estRecords.Count;
         var metaChanged = false;
-        var previousId = plan.PreviousId is { } moved && moved != plan.SkeletonId ? moved : (int?)null;
         // The previous ID belongs to another mod now: none of its keys or EST entries stay.
         if (previousId is { } previous)
         {
@@ -221,6 +232,9 @@ internal static partial class HairSkeletonFiles
             estStore.Save(estRecords);
         if (previousId is { } old)
             DeleteUnmapped(meta, modFolder, old);
+        // The previous ID is gone and the new physics written: the record names only the new ID, with its chain kinds.
+        store.Save(store.Load().Where(record => !SameRecord(record, modKey, model))
+            .Append(new ManagedHairSkeleton(modKey, model, plan.SkeletonId, ChainKinds: plan.ChainKinds)));
         DeleteUnmapped(meta, modFolder, plan.SkeletonId);
 
         var requests = plan.Files

@@ -26,10 +26,11 @@ internal static class HairPhysicsBuilder
     /// a shape the donor lacks is left out with a note. <paramref name="previous"/> is the file the last export
     /// wrote: a chain over the same bones in the same group keeps its tuning (axes and tip offset are rebuilt),
     /// its simulator keeps that simulator's settings, and a copied shape keeps the previous file's shape of
-    /// the same name and type.
+    /// the same name and type. <paramref name="previousKinds"/> are the chain kinds that export recorded, by
+    /// first bone; when given, a chain keeps its tuning only if its kind is unchanged.
     /// </summary>
     public static PhybFile Build(HairSkeletonRequest rig, ImmutableArray<SkeletonBone> bones, PhybFile? donor, PhybFile? previous,
-        ICollection<string> notes)
+        ICollection<string> notes, IReadOnlyDictionary<string, string>? previousKinds = null)
     {
         if (rig.Chains is not { Count: > 0 } chains)
             return new PhybFile { Version = 0, DataType = 0 };
@@ -63,7 +64,7 @@ internal static class HairPhysicsBuilder
             foreach (var chain in members)
             {
                 var built = Chain(chain, preset, bones, model, index, flags);
-                if (Previous(previous, simulator.Group, chain.Bones!) is (var owner, var old))
+                if (Previous(previous, simulator.Group, chain, previousKinds) is (var owner, var old))
                 {
                     // Collision bits index the simulator's refs, so they only carry over to the same refs.
                     var sameRefs = owner.Collisions.Select(c => c.Name).SequenceEqual(simulator.Collisions.Select(c => c.Name));
@@ -89,14 +90,21 @@ internal static class HairPhysicsBuilder
         return file;
     }
 
-    /// <summary>The previous file's chain over the same bones in a simulator of that group, with its simulator.</summary>
-    private static (PhybSimulator Simulator, PhybChain Chain)? Previous(PhybFile? previous, byte group, List<string> bones)
+    /// <summary>
+    /// The previous file's chain over the same bones in a simulator of that group, with its simulator; none
+    /// when <paramref name="kinds"/> are recorded and name another kind for the chain's first bone.
+    /// </summary>
+    private static (PhybSimulator Simulator, PhybChain Chain)? Previous(PhybFile? previous, byte group,
+        HairSkeletonChainRequest request, IReadOnlyDictionary<string, string>? kinds)
     {
         if (previous is null)
             return null;
+        // Back and ponytail share a group, so only the recorded kind tells a changed kind apart.
+        if (kinds is not null && (!kinds.TryGetValue(request.Bones![0], out var kind) || kind != request.Kind))
+            return null;
         foreach (var simulator in previous.Simulators.Where(s => s.Group == group))
             foreach (var chain in simulator.Chains)
-                if (chain.Nodes.Where(n => !n.Bone.IsEmpty).Select(n => n.Bone.Text).SequenceEqual(bones, StringComparer.Ordinal))
+                if (chain.Nodes.Where(n => !n.Bone.IsEmpty).Select(n => n.Bone.Text).SequenceEqual(request.Bones!, StringComparer.Ordinal))
                     return (simulator, chain);
         return null;
     }

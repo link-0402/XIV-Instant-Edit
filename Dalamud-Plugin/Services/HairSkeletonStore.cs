@@ -6,11 +6,18 @@ namespace InstantEdit.Services;
 /// <summary>
 /// The custom hair skeleton XIV Instant Edit made for a model file of a Penumbra mod: the mod (its
 /// EST key), the model's mod-relative path with <c>/</c> separators, and the skeleton ID.
+/// <paramref name="MovingFrom"/> is the ID an export is moving away from until its keys and files are
+/// gone. <paramref name="ChainKinds"/> maps each physics chain's first bone to its kind, as the last
+/// export wrote them. Records from before either field load without it.
 /// </summary>
 public sealed record ManagedHairSkeleton(
     [property: JsonPropertyName("mod")] string Mod,
     [property: JsonPropertyName("model")] string Model,
-    [property: JsonPropertyName("skeletonId")] int SkeletonId);
+    [property: JsonPropertyName("skeletonId")] int SkeletonId,
+    [property: JsonPropertyName("movingFrom"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? MovingFrom = null,
+    [property: JsonPropertyName("chainKinds"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyDictionary<string, string>? ChainKinds = null);
 
 /// <summary>
 /// The hair skeletons exports made, so a later export of the same model reuses its ID and an export
@@ -35,7 +42,9 @@ public sealed class HairSkeletonStore
                 if (!File.Exists(_path))
                     return [];
                 var entries = JsonSerializer.Deserialize<List<ManagedHairSkeleton>>(File.ReadAllText(_path)) ?? [];
+                // A move from an ID outside the custom range would take back a vanilla or modder's skeleton.
                 return entries.Where(entry => entry is { Mod.Length: > 0, Model.Length: > 0, SkeletonId: >= 1000 and <= 9999 })
+                    .Select(entry => entry.MovingFrom is null or (>= 1000 and <= 9999) ? entry : entry with { MovingFrom = null })
                     .ToArray();
             }
             catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)

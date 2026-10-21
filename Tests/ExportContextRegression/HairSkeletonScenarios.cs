@@ -45,6 +45,9 @@ internal static class HairSkeletonScenarios
         TuningSurvivesReexport(Path.Combine(testRoot, "HairPhysicsTuning"));
         ClashMovesTheId(Path.Combine(testRoot, "HairClash"));
         OwnFolderIsNotAClash(Path.Combine(testRoot, "HairOwnFolder"));
+        FailedMoveFinishesNextTime(Path.Combine(testRoot, "HairFailedMove"));
+        KindChangeTakesThePreset(Path.Combine(testRoot, "HairKindChange"));
+        OldRecordsLoad(Path.Combine(testRoot, "HairOldRecords"));
     }
 
     /// <summary>An EST table's bytes: a count, the (set, gender-race) pairs, then one entry per pair.</summary>
@@ -918,5 +921,85 @@ internal static class HairSkeletonScenarios
         Require(Enumerable.Range(0, 8).All(seed => HairSkeletonFiles.Prepare(
                     Rig(), mod.ModFolder, ModDirectory, ModelY, Sources(seed, taken: allButTwo), mod.Store).SkeletonId == free),
             "Hair ID clash: a new pick avoids the IDs the mod's own options use");
+    }
+
+    /// <summary>The mod's physics file at a game path with the first chain's dampening set.</summary>
+    private static void TuneDampening(HairModFixture mod, string gamePath, float dampening)
+    {
+        var tuned = ReadPhyb(mod, gamePath);
+        tuned.Simulators[0].Chains[0].Dampening = dampening;
+        File.WriteAllBytes(mod.FilePath(gamePath), tuned.ToBytes());
+    }
+
+    private static void FailedMoveFinishesNextTime(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], [MiqoteHair]);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        TuneDampening(mod, Phyb(801, id), 0.3f);
+        Func<IReadOnlySet<int>> taken = () => new HashSet<int> { id };
+        var plan = HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel, Sources(8, taken: taken), mod.Store);
+        var moved = plan.SkeletonId;
+
+        // A read-only meta.json makes the move fail after the record and the new files are written.
+        var metaPath = Path.Combine(mod.ModFolder, "meta.json");
+        File.SetAttributes(metaPath, File.GetAttributes(metaPath) | FileAttributes.ReadOnly);
+        var threw = false;
+        try { HairSkeletonFiles.Apply(plan, mod.ModFolder, ModDirectory, HairModel, mod.Store, mod.EstStore); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { threw = true; }
+        finally { File.SetAttributes(metaPath, File.GetAttributes(metaPath) & ~FileAttributes.ReadOnly); }
+        Require(threw && mod.Store.Load() is [{ SkeletonId: var stored, MovingFrom: var from }] && stored == moved && from == id,
+            "Hair ID move: a failed move leaves a record of the new ID that names the old one");
+
+        // The next export no longer clashes with anything, but still finishes the move.
+        var again = PrepareAndApply(mod, Sources(9, taken: taken));
+        Require(again.SkeletonId == moved && again.PreviousId == id, "Hair ID move: the next export moves from the recorded old ID");
+        var meta = mod.Meta();
+        var containers = new[] { meta["DefaultData"]!.AsObject(), Option(meta, OptionA), Option(meta, OptionB) };
+        Require(containers.All(container => !container["Files"]!.AsObject()
+                    .Any(pair => pair.Key.Contains($"/h{id:D4}/", StringComparison.Ordinal))) &&
+                SklbKeys(Option(meta, OptionA)).SetEquals([Sklb(801, moved), Sklb(1401, moved)]) &&
+                EstEntry(Option(meta, OptionA), "Miqote") == moved,
+            "Hair ID move: no key or EST entry of the old ID remains");
+        Require(new[] { Sklb(801, id), Sklb(1401, id), Phyb(801, id), Phyb(1401, id) }.All(path => !File.Exists(mod.FilePath(path))),
+            "Hair ID move: the old ID's files are gone");
+        Require(mod.Store.Load() is [{ SkeletonId: var final, MovingFrom: null }] && final == moved,
+            "Hair ID move: the record names only the new ID");
+        Require(ReadPhyb(mod, Phyb(801, moved)).Simulators[0].Chains[0].Dampening == 0.3f,
+            "Hair ID move: the finished move keeps the tuned dampening");
+    }
+
+    private static void KindChangeTakesThePreset(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair], []);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        Require(mod.Store.Load() is [{ ChainKinds: { } kinds }] && kinds.Count == 1 && kinds["j_ex_hair_01_a"] == "back",
+            "Hair physics kinds: the record keeps each chain's kind by its first bone");
+        TuneDampening(mod, Phyb(801, id), 0.3f);
+        var back = PrepareAndApply(mod, Sources(7));
+        Require(ReadPhyb(mod, Phyb(801, id)).Simulators[0].Chains[0].Dampening == 0.3f &&
+                back.Notes.Any(note => note.Contains("Kept your physics settings", StringComparison.Ordinal)),
+            "Hair physics kinds: a back chain exported as back again keeps its tuning");
+
+        var rig = Rig();
+        rig.Chains![0].Kind = "ponytail";
+        var ponytail = PrepareAndApply(mod, Sources(7), rig);
+        Require(ReadPhyb(mod, Phyb(801, id)).Simulators[0].Chains[0].Dampening == 0.04f &&
+                !ponytail.Notes.Any(note => note.Contains("Kept", StringComparison.Ordinal)),
+            "Hair physics kinds: a back chain exported as a ponytail gets the ponytail preset, without a note");
+        Require(mod.Store.Load() is [{ ChainKinds: { } now }] && now["j_ex_hair_01_a"] == "ponytail",
+            "Hair physics kinds: the record keeps the new kind");
+    }
+
+    private static void OldRecordsLoad(string root)
+    {
+        var config = Path.Combine(root, "config");
+        WriteJson(config, "hair-skeletons.json",
+            """[{"mod": "m", "model": "Files/a.mdl", "skeletonId": 4321}, {"mod": "m", "model": "Files/b.mdl", "skeletonId": 4322, "movingFrom": 7}]""");
+        var store = new HairSkeletonStore(config);
+        Require(store.Load() is [{ SkeletonId: 4321, MovingFrom: null, ChainKinds: null }, { SkeletonId: 4322, MovingFrom: null }],
+            "Hair skeleton store: records without the new fields load, and a move from outside the custom range is dropped");
+        store.Save(store.Load());
+        Require(!File.ReadAllText(Path.Combine(config, "hair-skeletons.json")).Contains("movingFrom", StringComparison.Ordinal),
+            "Hair skeleton store: empty fields are not written");
     }
 }

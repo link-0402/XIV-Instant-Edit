@@ -100,8 +100,9 @@ internal static class HairPhysicsScenarios
         return donor;
     }
 
-    private static PhybFile Build(HairSkeletonRequest rig, PhybFile? donor, List<string>? notes = null, PhybFile? previous = null)
-        => HairPhysicsBuilder.Build(rig, HairSkeletonLayout.Bones(rig, Kao), donor, previous, notes ?? []);
+    private static PhybFile Build(HairSkeletonRequest rig, PhybFile? donor, List<string>? notes = null, PhybFile? previous = null,
+        IReadOnlyDictionary<string, string>? kinds = null)
+        => HairPhysicsBuilder.Build(rig, HairSkeletonLayout.Bones(rig, Kao), donor, previous, notes ?? [], kinds);
 
     /// <summary>The file as the next export reads it from the mod.</summary>
     private static PhybFile Reread(PhybFile file) => PhybFile.Parse(file.ToBytes());
@@ -297,6 +298,22 @@ internal static class HairPhysicsScenarios
         var file = Build(Rig(hair), Donor(), notes, Reread(first));
         Require(file.Simulators.Single() is { Group: 24 } side && side.Chains[0].Dampening == 0.1f && notes.Count == 0,
             "Hair physics: bangs made side hair get the side preset, without a note");
+
+        // Back and ponytail share group 23, so only the recorded kinds tell them apart.
+        var back = Chain(4, "back", new(0, 1.6f, -0.08f), Down, 2, 0.06f);
+        var tuned = Build(Rig(back), Donor());
+        tuned.Simulators[0].Chains[0].Dampening = 0.3f;
+        var kinds = new Dictionary<string, string> { ["j_ex_hair_04_a"] = "back" };
+        back.Chain.Kind = "ponytail";
+        notes.Clear();
+        var ponytail = Build(Rig(back), Donor(), notes, Reread(tuned), kinds).Simulators.Single();
+        Require(ponytail.Group == 23 && ponytail.Chains[0].Dampening == 0.04f && notes.Count == 0,
+            "Hair physics: a back chain made a ponytail gets the ponytail preset, without a note");
+        Require(Build(Rig(back), Donor(), null, Reread(tuned)).Simulators[0].Chains[0].Dampening == 0.3f,
+            "Hair physics: without recorded kinds a chain in the same group keeps its tuning");
+        back.Chain.Kind = "back";
+        Require(Build(Rig(back), Donor(), null, Reread(tuned), kinds).Simulators[0].Chains[0].Dampening == 0.3f,
+            "Hair physics: a back chain recorded as back keeps its tuning");
     }
 
     private static void ShapesKeepTuning()
