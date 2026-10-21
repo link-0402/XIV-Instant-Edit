@@ -48,3 +48,7 @@ docs/superpowers/
 **/CONTEXT.md
 **/CONTEXT-MAP.md
 **/docs/adr/
+
+# Generated tool output.
+Tools/EarringBones/out/
+graphify-out/
