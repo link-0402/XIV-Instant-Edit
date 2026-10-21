@@ -123,6 +123,12 @@ internal sealed partial class EstEntryService
         return result;
     }
 
+    /// <summary>The hair lookups of every container that maps the model, flattened: container key, set ID, gender-race code.</summary>
+    internal static IReadOnlyList<(string Container, int SetId, int GenderRace)> HairUses(JsonObject meta, string modelRelativePath)
+        => EstTargets(meta, modelRelativePath)
+            .SelectMany(target => target.Hair.Select(identity => (target.Container.Key, identity.SetId, identity.GenderRace)))
+            .ToList();
+
     internal static bool SameEstName(JsonNode? node, string expected, string[] names)
     {
         if (node is not JsonValue value)
@@ -206,10 +212,10 @@ internal sealed partial class EstEntryService
     /// <summary>
     /// Bring a mod's hair EST entries in line with the exported meshes. <paramref name="requests"/> null
     /// leaves them alone (the tags were missing from an older add-on or disagreed); empty takes back
-    /// the entries this plugin set for the model; a hair request sets its entry in every option that
-    /// uses the model for the request's race, recording the value it replaced.
+    /// the entries this plugin set for the model; each hair request (at most one per race) sets its
+    /// entry in every option that uses the model for the request's race, recording the value it replaced.
     /// </summary>
-    private static List<string> UpdateEstEntries(
+    internal static List<string> UpdateEstEntries(
         string modFolder,
         string modDirectory,
         string modelRelativePath,
@@ -219,11 +225,17 @@ internal sealed partial class EstEntryService
         var warnings = new List<string>();
         if (requests is null)
             return warnings;
-        var request = requests.FirstOrDefault(item => string.Equals(item.Slot, EstIdentity.Slot, StringComparison.Ordinal));
+        // One request per race; a second one for the same race is ignored (the first wins, as in Penumbra).
+        var hairRequests = requests
+            .Where(item => string.Equals(item.Slot, EstIdentity.Slot, StringComparison.Ordinal))
+            .DistinctBy(item => item.Race, StringComparer.Ordinal)
+            .ToList();
         if (store is null)
         {
-            if (request is not null)
-                warnings.Add($"The hair's EST entry could not be set: XIV Instant Edit's EST records are unavailable. Set Hair EST entry {request.Entry} in Penumbra by hand.");
+            foreach (var request in hairRequests)
+                warnings.Add(hairRequests.Count == 1
+                    ? $"The hair's EST entry could not be set: XIV Instant Edit's EST records are unavailable. Set Hair EST entry {request.Entry} in Penumbra by hand."
+                    : $"The hair's EST entry could not be set: XIV Instant Edit's EST records are unavailable. Set Hair EST entry {request.Entry} for {request.Race} in Penumbra by hand.");
             return warnings;
         }
 
@@ -235,22 +247,34 @@ internal sealed partial class EstEntryService
         var metaChanged = false;
         var recordsChanged = false;
 
-        if (request is not null)
+        if (hairRequests.Count > 0)
         {
-            var raceCode = EstRaceCode(request.Race)
-                ?? throw new InvalidDataException("The EST entry names an invalid race.");
+            var raced = hairRequests
+                .Select(request => (Request: request, RaceCode: EstRaceCode(request.Race)
+                    ?? throw new InvalidDataException("The EST entry names an invalid race.")))
+                .ToList();
             var hairRaces = targets.SelectMany(target => target.Hair).Select(identity => identity.GenderRace)
                 .Distinct().Order().ToArray();
-            var otherRaces = string.Join(", ", hairRaces.Where(code => code != raceCode).Select(EstRaceLabel));
-            if (targets.Count == 0)
-                warnings.Add($"No Penumbra option uses {modelName}, so its EST entry was not set. Set Hair EST entry {request.Entry} for {request.Race} by hand.");
-            else if (hairRaces.Length == 0)
-                warnings.Add($"The meshes are weighted to hair skeleton {request.Entry} ({request.Race}), but {modelName} is not used as a hair model, so no EST entry was set.");
-            else if (!hairRaces.Contains(raceCode))
-                warnings.Add($"The meshes are weighted to {request.Race}'s hair skeleton {request.Entry}, but {modelName} is used for {otherRaces}. Skeleton IDs differ per race, so no EST entry was set; weight the hair to that race's skeleton.");
-            else if (otherRaces.Length > 0)
-                warnings.Add($"{modelName} is also used for {otherRaces}. Hair skeleton {request.Entry} is {request.Race}'s, so only {request.Race} got the EST entry; set the others by hand.");
+            foreach (var (request, raceCode) in raced)
+            {
+                var otherRaces = string.Join(", ", hairRaces.Where(code => code != raceCode).Select(EstRaceLabel));
+                if (targets.Count == 0)
+                    warnings.Add($"No Penumbra option uses {modelName}, so its EST entry was not set. Set Hair EST entry {request.Entry} for {request.Race} by hand.");
+                else if (hairRaces.Length == 0)
+                    warnings.Add($"The meshes are weighted to hair skeleton {request.Entry} ({request.Race}), but {modelName} is not used as a hair model, so no EST entry was set.");
+                else if (!hairRaces.Contains(raceCode))
+                    warnings.Add($"The meshes are weighted to {request.Race}'s hair skeleton {request.Entry}, but {modelName} is used for {otherRaces}. Skeleton IDs differ per race, so no EST entry was set; weight the hair to that race's skeleton.");
+            }
+            // The races the model is used for that no request covers keep their entries; name them once.
+            var served = raced.Where(item => hairRaces.Contains(item.RaceCode)).ToList();
+            var unrequested = string.Join(", ", hairRaces
+                .Where(code => raced.All(item => item.RaceCode != code)).Select(EstRaceLabel));
+            if (served.Count == 1 && unrequested.Length > 0)
+                warnings.Add($"{modelName} is also used for {unrequested}. Hair skeleton {served[0].Request.Entry} is {served[0].Request.Race}'s, so only {served[0].Request.Race} got the EST entry; set the others by hand.");
+            else if (served.Count > 1 && unrequested.Length > 0)
+                warnings.Add($"{modelName} is also used for {unrequested}. Only {string.Join(", ", served.Select(item => item.Request.Race))} got EST entries for their hair skeletons; set the others by hand.");
 
+            foreach (var (request, raceCode) in raced)
             foreach (var target in targets)
             foreach (var identity in target.Hair.Where(identity => identity.GenderRace == raceCode))
             {

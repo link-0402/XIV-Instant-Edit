@@ -22,6 +22,7 @@ internal static class EstEntryScenarios
         MismatchesOnlyWarn(Path.Combine(testRoot, "EstWarnings"));
         BackupsCarryTheEntries(Path.Combine(testRoot, "EstBackups"));
         NewVanillaModGetsTheEntry(Path.Combine(testRoot, "EstVanilla"));
+        TwoRacesGetTheirOwnEntries(Path.Combine(testRoot, "EstTwoRaces"));
     }
 
     private static EstEntryRequest Hair(int entry, string race = "c0801") => new() { Slot = "Hair", Entry = entry, Race = race };
@@ -236,6 +237,23 @@ internal static class EstEntryScenarios
                 store.Load().Single() is { Previous: null, Container: "default" } record &&
                 record.Mod == $"id:{meta["Identifier"]!.GetValue<string>()}",
             "EST: a new mod from a vanilla hair gets the entry, recorded under the mod's identifier");
+    }
+
+    private static void TwoRacesGetTheirOwnEntries(string root)
+    {
+        var store = new EstEntryStore(Path.Combine(root, "config"));
+        var modFolder = Path.Combine(root, "Hair mod");
+        WriteMod(modFolder, HairMod());
+        var warnings = EstEntryService.UpdateEstEntriesForRegression(
+            modFolder, "Hair mod", HairFile, [Hair(4821, "c0801"), Hair(4821, "c1401")], store);
+        var meta = ReadMod(modFolder);
+        Require(Entries(meta, OptionA).Order(StringComparer.Ordinal)
+                    .SequenceEqual(["Female AuRa 108 Hair=4821", "Female Miqote 108 Hair=4821"]),
+            "EST: an option mapping the hair for two races gets each race's own entry");
+        Require(Entries(meta, null).SequenceEqual(["Female Miqote 108 Hair=4821"]),
+            "EST: Default, which maps only Miqo'te, gets only Miqo'te's entry");
+        Require(warnings.Count == 0, "EST: a request for every race the model is used for warns about none");
+        Require(store.Load().Count == 3, "EST: the plugin records every entry it wrote for each race");
     }
 
     private static void BackupsCarryTheEntries(string root)
