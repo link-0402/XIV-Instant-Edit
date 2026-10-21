@@ -23,7 +23,9 @@ internal static class HairPhysicsBuilder
     /// <summary>
     /// Builds the physics for a validated rig. <paramref name="bones"/> is <see cref="HairSkeletonLayout.Bones"/>'s
     /// output. Without chains the file turns physics off. Without <paramref name="donor"/> nothing collides;
-    /// a shape the donor lacks is left out with a note. <paramref name="previous"/> isn't used yet.
+    /// a shape the donor lacks is left out with a note. <paramref name="previous"/> is the file the last export
+    /// wrote: a chain over the same bones in the same group keeps its tuning (axes and tip offset are rebuilt),
+    /// its simulator keeps that simulator's settings, and copied shapes keep the previous file's values.
     /// </summary>
     public static PhybFile Build(HairSkeletonRequest rig, ImmutableArray<SkeletonBone> bones, PhybFile? donor, PhybFile? previous,
         ICollection<string> notes)
@@ -39,6 +41,7 @@ internal static class HairPhysicsBuilder
 
         var file = new PhybFile();
         var missing = new HashSet<string>(StringComparer.Ordinal);
+        var kept = 0;
         foreach (var (kind, left) in Simulators)
         {
             var members = chains.Where(chain => chain.Kind == kind && (kind != "side" || IsLeft(chain) == left)).ToList();
@@ -48,19 +51,79 @@ internal static class HairPhysicsBuilder
             if (donor is not null)
                 foreach (var name in HairPhysicsPresets.Shapes(kind, left))
                 {
-                    if (CopyShape(donor.Collision, file.Collision, name))
+                    if (CopyShape(donor.Collision, previous?.Collision, file.Collision, name))
                         simulator.Collisions.Add(new PhybCollisionRef { Name = PhybName.From(name), Type = PhybCollisionType.Outside });
                     else if (missing.Add(name))
                         notes.Add($"The game's hair physics has no {name}, so the hair doesn't collide with it.");
                 }
             var flags = (1u << simulator.Collisions.Count) - 1;
             var preset = HairPhysicsPresets.For(kind);
+            PhybSimulator? tuned = null;
             foreach (var chain in members)
-                simulator.Chains.Add(Chain(chain, preset, bones, model, index, flags));
+            {
+                var built = Chain(chain, preset, bones, model, index, flags);
+                if (Previous(previous, simulator.Group, chain.Bones!) is (var owner, var old))
+                {
+                    Keep(old, built);
+                    tuned ??= owner;
+                    kept++;
+                }
+                simulator.Chains.Add(built);
+            }
+            if (tuned is not null)
+            {
+                simulator.Gravity = tuned.Gravity;
+                simulator.Wind = tuned.Wind;
+                simulator.ConstraintLoop = tuned.ConstraintLoop;
+                simulator.CollisionLoop = tuned.CollisionLoop;
+                simulator.Flags = tuned.Flags;
+            }
             file.Simulators.Add(simulator);
         }
+        if (kept > 0)
+            notes.Add($"Kept your physics settings for {kept} of {file.Simulators.Sum(s => s.Chains.Count)} chains.");
         file.DataType = file.Collision.IsEmpty ? 2u : 3u;
         return file;
+    }
+
+    /// <summary>The previous file's chain over the same bones in a simulator of that group, with its simulator.</summary>
+    private static (PhybSimulator Simulator, PhybChain Chain)? Previous(PhybFile? previous, byte group, List<string> bones)
+    {
+        if (previous is null)
+            return null;
+        foreach (var simulator in previous.Simulators.Where(s => s.Group == group))
+            foreach (var chain in simulator.Chains)
+                if (chain.Nodes.Where(n => !n.Bone.IsEmpty).Select(n => n.Bone.Text).SequenceEqual(bones, StringComparer.Ordinal))
+                    return (simulator, chain);
+        return null;
+    }
+
+    /// <summary>Copies the tuning of a previous chain over the same bones; axes and the tip offset stay the rig's.</summary>
+    private static void Keep(PhybChain old, PhybChain chain)
+    {
+        chain.Dampening = old.Dampening;
+        chain.MaxSpeed = old.MaxSpeed;
+        chain.Friction = old.Friction;
+        chain.CollisionDampening = old.CollisionDampening;
+        chain.RepulsionStrength = old.RepulsionStrength;
+        chain.Type = old.Type;
+        var named = old.Nodes.Where(n => !n.Bone.IsEmpty).ToList();
+        for (var i = 0; i < named.Count; i++)
+            Keep(named[i], chain.Nodes[i]);
+        if (old.Nodes[^1].Bone.IsEmpty)
+            Keep(old.Nodes[^1], chain.Nodes[^1]);
+    }
+
+    private static void Keep(PhybNode old, PhybNode node)
+    {
+        node.Radius = old.Radius;
+        node.AttractByAnimation = old.AttractByAnimation;
+        node.WindScale = old.WindScale;
+        node.GravityScale = old.GravityScale;
+        node.ConeMaxAngle = old.ConeMaxAngle;
+        node.ConstraintPlaneNormal = old.ConstraintPlaneNormal;
+        node.CollisionFlags = old.CollisionFlags;
+        node.ContinuousCollisionFlags = old.ContinuousCollisionFlags;
     }
 
     /// <summary>
@@ -113,18 +176,21 @@ internal static class HairPhysicsBuilder
         ContinuousCollisionFlags = 0,
     };
 
-    /// <summary>Copies the donor's capsule, sphere or plane of that name once; false when the donor has none.</summary>
-    private static bool CopyShape(PhybCollision donor, PhybCollision target, string name)
+    /// <summary>
+    /// Copies the donor's capsule, sphere or plane of that name once, or the previous file's shape of that
+    /// name and type when it has one; false when the donor has none.
+    /// </summary>
+    private static bool CopyShape(PhybCollision donor, PhybCollision? previous, PhybCollision target, string name)
     {
         bool Named(PhybName shape) => shape.Text == name;
         if (target.Names.Any(Named))
             return true;
         if (donor.Capsules.FirstOrDefault(s => Named(s.Name)) is { } capsule)
-            target.Capsules.Add(capsule.Clone());
+            target.Capsules.Add((previous?.Capsules.FirstOrDefault(s => Named(s.Name)) ?? capsule).Clone());
         else if (donor.Spheres.FirstOrDefault(s => Named(s.Name)) is { } sphere)
-            target.Spheres.Add(sphere.Clone());
+            target.Spheres.Add((previous?.Spheres.FirstOrDefault(s => Named(s.Name)) ?? sphere).Clone());
         else if (donor.NormalPlanes.FirstOrDefault(s => Named(s.Name)) is { } plane)
-            target.NormalPlanes.Add(plane.Clone());
+            target.NormalPlanes.Add((previous?.NormalPlanes.FirstOrDefault(s => Named(s.Name)) ?? plane).Clone());
         else
             return false;
         return true;

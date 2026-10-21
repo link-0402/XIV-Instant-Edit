@@ -21,6 +21,10 @@ internal static class HairPhysicsScenarios
         MissingDonor();
         NoChains();
         BytesRoundTrip();
+        TunedChainsAreKept();
+        MovedBoneKeepsTuning();
+        KindChangeTakesPreset();
+        ShapesKeepTuning();
     }
 
     // j_kao turned 90 degrees about Y, so parent-space axes differ from model space.
@@ -94,8 +98,11 @@ internal static class HairPhysicsScenarios
         return donor;
     }
 
-    private static PhybFile Build(HairSkeletonRequest rig, PhybFile? donor, List<string>? notes = null)
-        => HairPhysicsBuilder.Build(rig, HairSkeletonLayout.Bones(rig, Kao), donor, null, notes ?? []);
+    private static PhybFile Build(HairSkeletonRequest rig, PhybFile? donor, List<string>? notes = null, PhybFile? previous = null)
+        => HairPhysicsBuilder.Build(rig, HairSkeletonLayout.Bones(rig, Kao), donor, previous, notes ?? []);
+
+    /// <summary>The file as the next export reads it from the mod.</summary>
+    private static PhybFile Reread(PhybFile file) => PhybFile.Parse(file.ToBytes());
 
     private static bool Near(Vector3 a, Vector3 b) => Vector3.Distance(a, b) < 1e-5f;
 
@@ -226,5 +233,67 @@ internal static class HairPhysicsScenarios
         Require(parsed.Simulators.Count == 4 && parsed.Simulators.Select(s => s.Group).SequenceEqual(file.Simulators.Select(s => s.Group)) &&
                 Names(parsed).SequenceEqual(Names(file)) && Flags(parsed).SequenceEqual(Flags(file)) && parsed.DataType == 3,
             "Hair physics: the file reads back with its simulators, nodes and flags");
+    }
+
+    private static void TunedChainsAreKept()
+    {
+        var back = Chain(4, "back", new(0, 1.6f, -0.08f), Down, 2, 0.06f);
+        var first = Build(Rig(back), Donor());
+        var tuned = first.Simulators.Single();
+        tuned.Chains[0].Dampening = 0.3f;
+        tuned.Chains[0].Nodes[^1].Radius = 0.05f;
+        tuned.Gravity = new(0, -5, 0);
+        var notes = new List<string>();
+        var file = Build(Rig(back, Chain(2, "side", new(0.06f, 1.6f, 0), Down, 2, 0.06f)), Donor(), notes, Reread(first));
+        var kept = file.Simulators[0];
+        Require(kept.Group == 23 && kept.Chains[0].Dampening == 0.3f && kept.Chains[0].Nodes[^1].Radius == 0.05f &&
+                kept.Gravity == new Vector3(0, -5, 0),
+            "Hair physics: a re-export keeps the back chain's dampening, tip radius and gravity");
+        var added = file.Simulators[1];
+        Require(added.Group == 24 && added.Chains[0].Dampening == 0.1f && added.Chains[0].Nodes[0].Radius == 0.01f &&
+                added.Gravity == new PhybSimulator().Gravity,
+            "Hair physics: a new side chain gets its preset");
+        Require(notes is ["Kept your physics settings for 1 of 2 chains."],
+            "Hair physics: the re-export notes how many chains kept their settings");
+    }
+
+    private static void MovedBoneKeepsTuning()
+    {
+        var back = Chain(4, "back", new(0, 1.6f, -0.08f), Down, 2, 0.06f);
+        var first = Build(Rig(back), Donor());
+        first.Simulators[0].Chains[0].Dampening = 0.3f;
+        var oldAxis = first.Simulators[0].Chains[0].Nodes[0].ConeAxisOffset;
+        back.Bones[1].Model![0] += 0.02f;
+        var chain = Build(Rig(back), Donor(), null, Reread(first)).Simulators[0].Chains[0];
+        Require(chain.Dampening == 0.3f && Vector3.Dot(chain.Nodes[0].ConeAxisOffset, oldAxis) < 0.9999f,
+            "Hair physics: a moved bone keeps the chain's tuning but gets a new axis");
+    }
+
+    private static void KindChangeTakesPreset()
+    {
+        var hair = Chain(1, "bangs", new(0.06f, 1.6f, 0), Down, 2, 0.06f);
+        var first = Build(Rig(hair), Donor());
+        first.Simulators[0].Chains[0].Dampening = 0.3f;
+        hair.Chain.Kind = "side";
+        var notes = new List<string>();
+        var file = Build(Rig(hair), Donor(), notes, Reread(first));
+        Require(file.Simulators.Single() is { Group: 24 } side && side.Chains[0].Dampening == 0.1f && notes.Count == 0,
+            "Hair physics: bangs made side hair get the side preset, without a note");
+    }
+
+    private static void ShapesKeepTuning()
+    {
+        var rig = Rig(Chain(4, "back", new(0, 1.6f, -0.08f), Down, 2, 0.06f));
+        var first = Build(rig, Donor());
+        first.Collision.Capsules.Single(c => c.Name.Text == "hair_capsule_sako_l").Radius = 0.2f;
+        var right = first.Collision.Capsules.Single(c => c.Name.Text == "hair_capsule_sako_r");
+        first.Collision.Capsules.Remove(right);
+        first.Collision.Spheres.Add(new() { Name = right.Name, Bone = PhybName.From("j_kao"), Thickness = 0.3f });
+        var file = Build(rig, Donor(), null, Reread(first));
+        Require(file.Collision.Capsules.Single(c => c.Name.Text == "hair_capsule_sako_l").Radius == 0.2f,
+            "Hair physics: a re-export keeps a tuned shape");
+        Require(file.Collision.Capsules.Single(c => c.Name.Text == "hair_capsule_sako_r").Radius == right.Radius &&
+                file.Collision.Spheres.Count == 0,
+            "Hair physics: a previous shape of another type doesn't replace the donor's");
     }
 }
