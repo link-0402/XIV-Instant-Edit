@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using InstantEdit.Services.Materials;
 using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio.Models;
 
@@ -699,8 +700,12 @@ internal sealed class ModBuilder
         int changes = ModelMaterialLinks.CountChanges(referenced, plan);
         if (changes == 0)
         {
-            File.Copy(sourcePath, targetPath, true);
-            return (false, assigns && referenced.Count > 0 ? "materials left as the file has them" : null);
+            var kept = WithHairUv2(data, item, written, out var uv2);
+            if (kept == data)
+                File.Copy(sourcePath, targetPath, true);
+            else
+                File.WriteAllBytes(targetPath, kept);
+            return (false, Join(assigns && referenced.Count > 0 ? "materials left as the file has them" : null, uv2));
         }
 
         try
@@ -717,15 +722,50 @@ internal sealed class ModBuilder
                 return (true, "copied as it is — the rewritten model would not resolve all of its material names");
             }
 
-            File.WriteAllBytes(targetPath, rewritten);
+            File.WriteAllBytes(targetPath, WithHairUv2(rewritten, item, written, out var uv2));
+            return (false, Join($"{changes} of {referenced.Count} mesh(es) pointed at this mod's materials", uv2));
         }
         catch (Exception ex)
         {
             File.Copy(sourcePath, targetPath, true);
             return (true, $"copied as it is — its materials could not be switched ({ex.Message})");
         }
+    }
 
-        return (false, $"{changes} of {referenced.Count} mesh(es) pointed at this mod's materials");
+    private static string? Join(string? a, string? b) => a == null ? b : b == null ? a : $"{a}; {b}";
+
+    /// <summary>
+    /// hair.shpk reads the normal's alpha, the hair's opacity, through the mesh's second UV map. A
+    /// model exported with one map gives 0, 0 there, so every pixel reads the alpha map's corner and
+    /// the whole hair is cut out. Meshes of this build's hair materials without a second map get a
+    /// copy of the first; anything else, or a model that can't take one, is left as it is.
+    /// </summary>
+    private static byte[] WithHairUv2(byte[] data, ItemBuildRequest item, IReadOnlyList<string> written, out string? detail)
+    {
+        detail = null;
+        int added = 0;
+        string? blocked = null;
+        for (int i = 0; i < item.Materials.Count && i < written.Count; i++)
+        {
+            if (item.Materials[i].ShaderType != ShaderType.Hair)
+                continue;
+            var name = written[i].TrimStart('/');
+            var check = ModelUv2.Check(data, name);
+            if (check.WithoutUv2 == 0)
+                continue;
+            if (!check.CanAdd)
+            {
+                blocked ??= check.Blocked;
+                continue;
+            }
+            data = ModelUv2.Add(data, name);
+            added += check.WithoutUv2;
+        }
+        if (added > 0)
+            detail = $"second UV map copied from the first on {added} hair mesh(es), which read their opacity through it";
+        else if (blocked != null)
+            detail = $"hair mesh(es) without a second UV map show no hair ({blocked})";
+        return data;
     }
 
     /// <summary>
