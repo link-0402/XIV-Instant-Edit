@@ -45,6 +45,15 @@ internal static partial class HairSkeletonFiles
     private static string RaceLabel(int genderRace) => $"c{genderRace:D4}";
 
     /// <summary>
+    /// The warning for a model no option maps yet (a variant saved without Penumbra setup), which gets
+    /// no hair skeleton; null when <see cref="Prepare"/> should run.
+    /// </summary>
+    public static string? UnmappedNote(JsonObject meta, string modelRelativePath)
+        => EstEntryService.MapsModel(meta, modelRelativePath)
+            ? null
+            : $"No Penumbra option uses {Path.GetFileName(PathRules.NormalizeGamePath(modelRelativePath))} yet, so no hair skeleton was built.";
+
+    /// <summary>
     /// Build the skeleton files for every race the model is used as hair for, under the ID the store
     /// holds for the model or a new free one. Throws <see cref="InvalidDataException"/> when the model
     /// is used as no hair, or not for the rig's race.

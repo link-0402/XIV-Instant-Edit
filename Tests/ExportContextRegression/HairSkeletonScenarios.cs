@@ -29,6 +29,7 @@ internal static class HairSkeletonScenarios
         DroppedRaceIsUnmapped(Path.Combine(testRoot, "HairDroppedRace"));
         ExportWithoutRigRemovesOnlyOurs(Path.Combine(testRoot, "HairRemove"));
         RefusesHairNotUsedAsHair(Path.Combine(testRoot, "HairNotHair"));
+        UnmappedVariantIsSkipped(Path.Combine(testRoot, "HairUnmappedVariant"));
         RefusesWithoutAnyTemplate(Path.Combine(testRoot, "HairNoTemplates"));
         FailedApplyKeepsTheRecord(Path.Combine(testRoot, "HairFailedApply"));
         CaptureRestoreRoundTrip(Path.Combine(testRoot, "HairBackupRoundTrip"));
@@ -337,6 +338,20 @@ internal static class HairSkeletonScenarios
 
     private static bool HasBytes(HairModFixture mod, string gamePath, string text)
         => File.Exists(mod.FilePath(gamePath)) && File.ReadAllText(mod.FilePath(gamePath)) == text;
+
+    /// <summary>A variant saved without Penumbra setup is mapped by no option yet: the export skips its skeleton with a note.</summary>
+    private static void UnmappedVariantIsSkipped(string root)
+    {
+        var mod = HairMod(Path.Combine(root, "hair"), [MiqoteHair], []);
+        Require(HairSkeletonFiles.UnmappedNote(mod.Meta(), HairModel) is null,
+            "Hair skip: a model an option maps as hair is prepared");
+        Require(HairSkeletonFiles.UnmappedNote(mod.Meta(), "Files/hair/Long.mdl") ==
+                "No Penumbra option uses Long.mdl yet, so no hair skeleton was built.",
+            "Hair skip: a variant file no option maps is skipped with a note");
+        var gear = HairMod(Path.Combine(root, "gear"), ["chara/equipment/e0001/model/c0101e0001_top.mdl"], []);
+        Require(HairSkeletonFiles.UnmappedNote(gear.Meta(), HairModel) is null,
+            "Hair skip: a model mapped as anything else still goes to Prepare, which refuses it");
+    }
 
     private static HairSkeletonPlan PrepareAndApply(HairModFixture mod, HairSkeletonSources sources)
     {

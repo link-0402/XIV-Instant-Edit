@@ -123,6 +123,9 @@ internal sealed partial class EstEntryService
         return result;
     }
 
+    /// <summary>True when any container's files map the model, at any game path.</summary>
+    internal static bool MapsModel(JsonObject meta, string modelRelativePath) => EstTargets(meta, modelRelativePath).Count > 0;
+
     /// <summary>The hair lookups of every container that maps the model, flattened: container key, set ID, gender-race code.</summary>
     internal static IReadOnlyList<(string Container, int SetId, int GenderRace)> HairUses(JsonObject meta, string modelRelativePath)
         => EstTargets(meta, modelRelativePath)

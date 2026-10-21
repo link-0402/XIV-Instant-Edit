@@ -179,9 +179,12 @@ internal sealed class ModelExportService
             }
             var targetRelative = Path.GetRelativePath(resolved.Target.Folder, targetFile).Replace('\\', '/');
             // A model the mod already maps gets its hair skeleton built before the write, so a rig
-            // that can't be built leaves the mod untouched.
+            // that can't be built leaves the mod untouched. A variant file no option maps yet gets none.
             HairSkeletonPlan? hairPlan = null;
-            if (hairSkeleton is not null && groupWrite is null)
+            var hairSkipped = hairSkeleton is not null && groupWrite is null
+                ? HairSkeletonFiles.UnmappedNote(meta, targetRelative)
+                : null;
+            if (hairSkeleton is not null && groupWrite is null && hairSkipped is null)
             {
                 var prepared = await _hair.PrepareAsync(
                     hairSkeleton, resolved.Target.Folder, resolved.Target.Directory, targetRelative).ConfigureAwait(false);
@@ -211,6 +214,8 @@ internal sealed class ModelExportService
             committedTarget = targetFile;
 
             var warnings = new List<string>();
+            if (hairSkipped is not null)
+                warnings.Add(hairSkipped);
 
             if (groupWrite is not null)
             {
