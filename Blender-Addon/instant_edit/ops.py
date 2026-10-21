@@ -709,9 +709,12 @@ HAIR_RIG_QUICK_EXPORT_ONLY = "Custom hair skeletons export only with Quick Expor
 
 
 def _refuse_hair_rig(export_objects) -> None:
-    """Refuse an export that can't carry the meshes' hair rig (see hair_rig)."""
+    """Refuse an export that can't carry the meshes' hair rig (see hair_rig), with the rig's own
+    problem first when it has one."""
     payload, issue = hair_skeleton_payload(export_objects)
-    if payload is not None or issue:
+    if issue:
+        raise ValueError(issue)
+    if payload is not None:
         raise ValueError(HAIR_RIG_QUICK_EXPORT_ONLY)
 
 
@@ -882,8 +885,9 @@ def export_target_issues(
         if size_issue:
             issues.append(("ERROR", size_issue))
     selection = getattr(props, "variant_target", "NEW_GROUP")
-    # Save to new mod goes through the mashup export, which can't carry the rig either.
-    if (rig_payload is not None or rig_issue) and (
+    # Save to new mod goes through the mashup export, which can't carry the rig either. A rig with
+    # an issue already lists it above.
+    if rig_payload is not None and (
             sized or selection in {MASHUP_TARGET, SAVE_NEW_MOD_TARGET, RACE_TARGET}):
         issues.append(("ERROR", HAIR_RIG_QUICK_EXPORT_ONLY))
     if selection == MASHUP_TARGET:
@@ -3082,7 +3086,8 @@ def instant_export_steps(
         if getattr(props, "create_attribute_groups", False)
         else ((), {})
     )
-    hair_skeleton, hair_skeleton_issue = hair_skeleton_payload(export_objects)
+    hair_skeleton, hair_skeleton_issue = hair_skeleton_payload(
+        export_objects, reset_scaling=get_settings().reset_scaling_on_export)
     if hair_skeleton_issue:
         raise ValueError(hair_skeleton_issue)
     est_entries, est_issue = (None, "") if hair_skeleton is not None else hair_skeleton_tags(export_objects)

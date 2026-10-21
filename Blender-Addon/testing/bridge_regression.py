@@ -1299,7 +1299,7 @@ def run_staging_isolation_regression(addon) -> None:
         hair_rig = importlib.import_module(f"{package_name}.instant_edit.hair_rig")
         previous_active = bpy.context.view_layer.objects.active
         with temporary_scene_data():
-            def rig_armature(name, rig_property):
+            def rig_armature(name, rig_property, extra_bones=()):
                 data = bpy.data.armatures.new(f"{name} Data")
                 armature = bpy.data.objects.new(name, data)
                 bpy.context.collection.objects.link(armature)
@@ -1313,6 +1313,10 @@ def run_staging_isolation_regression(addon) -> None:
                 bone_b = data.edit_bones.new("j_ex_hair_01_b")
                 bone_b.head, bone_b.tail = (0, 0.08, 1.35), (0, 0.08, 1.25)
                 bone_b.parent = bone_a
+                for extra in extra_bones:
+                    bone = data.edit_bones.new(extra)
+                    bone.head, bone.tail = (0, 0.1, 1.4), (0, 0.1, 1.3)
+                    bone.parent = kao
                 bpy.ops.object.mode_set(mode="OBJECT")
                 bpy.context.view_layer.objects.active = previous_active
                 if rig_property is not None:
@@ -1383,11 +1387,98 @@ def run_staging_isolation_regression(addon) -> None:
             second = rig_armature("Second Rig", rig_json)
             other = weighted_mesh("1.0 Other Hair", ["j_ex_hair_01_a"], second)
             payload, issue = hair_rig.hair_skeleton_payload([hair, other])
-            _require(payload is None and issue != "", "hair rig: two rigs are refused")
+            _require(payload is None and "Second Rig" in issue, "hair rig: two rigs are refused, named")
             bpy.data.objects.remove(other, do_unlink=True)
+
+            # A rig comes from the hair groups: a body bound to the rig armature sends none.
+            body = weighted_mesh("3.0 Body", ["j_kosi", "j_kao"], rig)
+            body.vertex_groups.new(name="j_ex_hair_01_a")
+            _require(
+                hair_rig.hair_skeleton_payload([body]) == (None, ""),
+                "hair rig: meshes on the rig armature without weighted j_ex_hair_ groups send none",
+            )
+            _require(
+                hair_rig.hair_skeleton_payload([hair, body])[1] == "",
+                "hair rig: a body exported with the hair keeps the rig",
+            )
+            bpy.data.objects.remove(body, do_unlink=True)
+
+            def rig_issue(rig_property=rig_json, extra_bones=(), groups=("j_ex_hair_01_a",)):
+                armature = rig_armature("Checked Rig", rig_property, extra_bones)
+                mesh = weighted_mesh("4.0 Checked Hair", list(groups), armature)
+                try:
+                    return hair_rig.hair_skeleton_payload([mesh])
+                finally:
+                    bpy.data.objects.remove(mesh, do_unlink=True)
+                    bpy.data.objects.remove(armature, do_unlink=True)
+
+            def rig_with(race="c0801", chains=None):
+                return json.dumps({"race": race, "chains": chains if chains is not None else []})
+
+            payload, issue = rig_issue(extra_bones=("j_ex_hair_01_a.001",))
+            _require(payload is None and "j_ex_hair_01_a.001" in issue,
+                     "hair rig: a j_ex_hair_ bone off the name pattern is named")
+            payload, issue = rig_issue(rig_with(race="c0804"))
+            _require(payload is None and "c0804" in issue, "hair rig: a race that is no player race is named")
+            payload, issue = rig_issue(
+                extra_bones=[f"j_ex_hair_{index:02d}_c" for index in range(63)])
+            _require(payload is None and "65" in issue and "64" in issue,
+                     "hair rig: more than 64 rig bones are refused with the count")
+            payload, issue = rig_issue(rig_with(chains=[{"kind": "tail", "bones": ["j_ex_hair_01_a"]}]))
+            _require(payload is None and "tail" in issue, "hair rig: an unknown chain kind is named")
+            payload, issue = rig_issue(rig_with(chains=[{"kind": "back", "bones": ["j_ex_hair_09_z"]}]))
+            _require(payload is None and "j_ex_hair_09_z" in issue,
+                     "hair rig: a chain bone the rig lacks is named")
+            payload, issue = rig_issue(rig_with(chains=[
+                {"kind": "back", "bones": ["j_ex_hair_01_a"]},
+                {"kind": "side", "bones": ["j_ex_hair_01_a", "j_ex_hair_01_b"]}]))
+            _require(payload is None and "j_ex_hair_01_a" in issue and "more than one chain" in issue,
+                     "hair rig: a bone in two chains is named")
+            payload, issue = rig_issue(rig_with(chains=[{"kind": "side", "bones": []}]))
+            _require(payload is None and "side" in issue and "no bones" in issue,
+                     "hair rig: an empty chain is refused")
+            payload, issue = rig_issue(groups=("j_ex_hair_01_a", "j_ex_h0108_01"))
+            _require(payload is None and "j_ex_h0108_01" in issue and "4.0 Checked Hair" in issue,
+                     "hair rig: weights left on the vanilla hair skeleton's bones are named with their mesh")
+
+            # Reset Armature Scaling exports the mesh at scale 1, so the bones lose the armature's scale too.
+            rig.scale = (2.0, 2.0, 2.0)
+            bpy.context.view_layer.update()
+            scaled = hair_rig.hair_skeleton_payload([hair])[0]["bones"][0]["model"]
+            reset = hair_rig.hair_skeleton_payload([hair], reset_scaling=True)[0]["bones"][0]["model"]
+            _require(
+                all(abs(got - want) < 1e-5 for got, want in zip(scaled[:3], (0.0, 2.9, -0.16))) and
+                all(abs(got - want) < 1e-5 for got, want in zip(reset[:3], (0.0, 1.45, -0.08))),
+                "hair rig: Reset Armature Scaling divides the armature's scale out of the bones",
+            )
+            for bad_scale in ((1.0, 2.0, 1.0), (-1.0, -1.0, -1.0)):
+                rig.scale = bad_scale
+                bpy.context.view_layer.update()
+                payload, issue = hair_rig.hair_skeleton_payload([hair], reset_scaling=True)
+                _require(payload is None and "Hair Rig" in issue and "scale" in issue,
+                         f"hair rig: an armature scale of {bad_scale} is refused")
+            rig.scale = (1.0, 1.0, 1.0)
+            bpy.context.view_layer.update()
+
+            # Exports that can't carry a rig say what is wrong with it before saying so.
+            try:
+                ops._refuse_hair_rig([hair])
+                refused = ""
+            except ValueError as error:
+                refused = str(error)
+            _require(refused == ops.HAIR_RIG_QUICK_EXPORT_ONLY,
+                     "hair rig: a valid rig is refused outside Quick Export")
+            rig[hair_rig.RIG_PROPERTY] = rig_with(race="c0804")
+            try:
+                ops._refuse_hair_rig([hair])
+                refused = ""
+            except ValueError as error:
+                refused = str(error)
+            _require("c0804" in refused, "hair rig: an invalid rig's own issue is raised first")
+
             rig[hair_rig.RIG_PROPERTY] = "{not json"
             payload, issue = hair_rig.hair_skeleton_payload([hair])
-            _require(payload is None and issue != "", "hair rig: a rig property that is not JSON is refused")
+            _require(payload is None and "JSON" in issue, "hair rig: a rig property that is not JSON is refused")
             del rig[hair_rig.RIG_PROPERTY]
             payload, issue = hair_rig.hair_skeleton_payload([hair])
             _require(
