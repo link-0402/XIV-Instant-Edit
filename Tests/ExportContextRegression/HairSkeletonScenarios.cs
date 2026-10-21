@@ -31,6 +31,8 @@ internal static class HairSkeletonScenarios
         FailedApplyKeepsTheRecord(Path.Combine(testRoot, "HairFailedApply"));
         CaptureRestoreRoundTrip(Path.Combine(testRoot, "HairBackupRoundTrip"));
         RestoreBeforeFirstRig(Path.Combine(testRoot, "HairBackupFirstRig"));
+        FailedDeleteKeepsTheRecord(Path.Combine(testRoot, "HairBackupLockedFile"));
+        OtherKeysAreLeftAlone(Path.Combine(testRoot, "HairBackupOtherKeys"));
         OrphanSidecarIsCleaned(Path.Combine(testRoot, "HairBackupSidecar"));
     }
 
@@ -436,36 +438,31 @@ internal static class HairSkeletonScenarios
         => container["Files"]!.AsObject().Where(pair => pair.Key.EndsWith(".sklb", StringComparison.Ordinal))
             .Select(pair => $"{pair.Key}={pair.Value!.GetValue<string>()}").Order(StringComparer.Ordinal).ToArray();
 
-    private static void CaptureRestoreRoundTrip(string root)
+    /// <summary>A mod with the hair skeleton applied under one ID, its state captured, then exported again under another ID.</summary>
+    private static (HairModFixture Mod, JsonObject State, int Id, int Other) ExportedTwice(string root)
     {
-        const string ModderKey = "chara/human/c0801/skeleton/hair/h0160/skl_c0801h0160.sklb";
-        const string ModderFile = "Files/modder/skl_c0801h0160.sklb";
         var mod = HairMod(root, [MiqoteHair, AuRaHair], [MiqoteHair]);
         var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
-        var meta = mod.Meta();
-        Option(meta, OptionB)["Files"]![ModderKey] = ModderFile.Replace('/', '\\');
-        mod.Save(meta);
-        Directory.CreateDirectory(Path.GetDirectoryName(mod.FilePath(ModderFile))!);
-        File.WriteAllText(mod.FilePath(ModderFile), "modder");
-        var pairsA = SklbPairs(Option(meta, OptionA));
-        var pairsB = SklbPairs(Option(meta, OptionB));
-
-        Require(HairSkeletonFiles.CaptureState(mod.ModFolder, ModDirectory, "Files/unused.mdl", mod.Store) is null,
-            "Hair skeleton backups: a model used as no hair keeps no state");
         var state = HairSkeletonFiles.CaptureState(mod.ModFolder, ModDirectory, HairModel, mod.Store)!;
-        Require(state["schema"]?.GetValue<string>() == "instant-edit.hair-skeleton-state" &&
-                state["skeletonId"]?.GetValue<int>() == id && state["entries"]!.AsArray().Count == 4,
-            "Hair skeleton backups: the state keeps the ID and every option's skeleton keys, the modder's too");
-
-        // A later export under another ID; the first ID's file and the modder's mapping change since.
         var other = id == 4321 ? 4322 : 4321;
         mod.Store.Save([mod.Store.Load().Single() with { SkeletonId = other }]);
         Require(PrepareAndApply(mod, Sources(7)).SkeletonId == other, "Hair skeleton backups: the second export uses the other ID");
+        return (mod, state, id, other);
+    }
+
+    private static void CaptureRestoreRoundTrip(string root)
+    {
+        var (mod, state, id, other) = ExportedTwice(root);
+        static string Pair(int genderRace, int skeleton) => $"{Sklb(genderRace, skeleton)}={Sklb(genderRace, skeleton).Replace('/', '\\')}";
+        var pairsA = new[] { Pair(801, id), Pair(1401, id) }.Order(StringComparer.Ordinal).ToArray();
+        var pairsB = new[] { Pair(801, id) };
+        Require(HairSkeletonFiles.CaptureState(mod.ModFolder, ModDirectory, "Files/unused.mdl", mod.Store) is null,
+            "Hair skeleton backups: a model used as no hair keeps no state");
+        Require(state["schema"]?.GetValue<string>() == "instant-edit.hair-skeleton-state" &&
+                state["skeletonId"]?.GetValue<int>() == id && state["entries"]!.AsArray().Count == 3,
+            "Hair skeleton backups: the state keeps the ID and every option's keys of it");
+        // The first ID's file changes since.
         File.WriteAllText(mod.FilePath(Sklb(801, id)), "changed");
-        meta = mod.Meta();
-        Option(meta, OptionB)["Files"]!.AsObject().Remove(ModderKey);
-        mod.Save(meta);
-        File.Delete(mod.FilePath(ModderFile));
 
         var unchanged = File.ReadAllText(Path.Combine(mod.ModFolder, "meta.json"));
         var warnings = HairSkeletonFiles.RestoreState(mod.ModFolder, ModDirectory, HairModel,
@@ -475,12 +472,11 @@ internal static class HairSkeletonScenarios
             "Hair skeleton backups: an unreadable state is one warning and changes nothing");
 
         warnings = HairSkeletonFiles.RestoreState(mod.ModFolder, ModDirectory, HairModel, state, mod.Store);
-        meta = mod.Meta();
+        var meta = mod.Meta();
         Require(warnings.Count == 0 && SklbPairs(Option(meta, OptionA)).SequenceEqual(pairsA) &&
                 SklbPairs(Option(meta, OptionB)).SequenceEqual(pairsB),
             "Hair skeleton backups: restoring puts back every option's keys exactly");
-        Require(HasBytes(mod, Sklb(801, id), "sklb 3") && HasBytes(mod, Sklb(1401, id), "sklb 3") &&
-                HasBytes(mod, ModderFile, "modder"),
+        Require(HasBytes(mod, Sklb(801, id), "sklb 3") && HasBytes(mod, Sklb(1401, id), "sklb 3"),
             "Hair skeleton backups: restoring puts back the files' bytes");
         Require(!File.Exists(mod.FilePath(Sklb(801, other))) && !File.Exists(mod.FilePath(Sklb(1401, other))),
             "Hair skeleton backups: the other ID's files are deleted");
@@ -506,6 +502,62 @@ internal static class HairSkeletonScenarios
             "Hair skeleton backups: restoring a backup from before the first rig removes our keys, files and record");
         Require(EstEntry(optionA, "Miqote") is null && EstEntry(optionA, "AuRa") is null && mod.EstStore.Load().Count == 0,
             "Hair skeleton backups: the EST state restored with it takes back the EST entries");
+    }
+
+    private static void FailedDeleteKeepsTheRecord(string root)
+    {
+        var (mod, state, id, other) = ExportedTwice(root);
+        // An open handle without sharing makes the previous ID's file undeletable during the restore.
+        using (new FileStream(mod.FilePath(Sklb(801, other)), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            try { HairSkeletonFiles.RestoreState(mod.ModFolder, ModDirectory, HairModel, state, mod.Store); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+        Require(File.Exists(mod.FilePath(Sklb(801, other))) && mod.Store.Load() is [{ SkeletonId: var stored }] && stored == id &&
+                SklbKeys(Option(mod.Meta(), OptionA)).SetEquals([Sklb(801, id), Sklb(1401, id)]),
+            "Hair skeleton backups: a previous ID's file that can't be deleted leaves the record naming the restored ID");
+    }
+
+    private static void OtherKeysAreLeftAlone(string root)
+    {
+        const string HairY = "chara/human/c0801/obj/hair/h0109/model/c0801h0109_hir.mdl";
+        const string ModelY = "Files/hair/c0801h0109_hir.mdl";
+        const string ModderKey = "chara/human/c0801/skeleton/hair/h0160/skl_c0801h0160.sklb";
+        const string ModderFile = "Files/skl_c0801h0160.sklb";
+        var mod = HairMod(root, [MiqoteHair], []);
+        var meta = mod.Meta();
+        Option(meta, OptionA)["Files"]![HairY] = ModelY.Replace('/', '\\');
+        Option(meta, OptionA)["Files"]![ModderKey] = ModderFile.Replace('/', '\\');
+        mod.Save(meta);
+        Directory.CreateDirectory(Path.GetDirectoryName(mod.FilePath(ModderFile))!);
+        File.WriteAllText(mod.FilePath(ModderFile), "modder");
+        var idX = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        var planY = HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, ModelY, Sources(8), mod.Store);
+        HairSkeletonFiles.Apply(planY, mod.ModFolder, ModDirectory, ModelY, mod.Store, mod.EstStore);
+        var idY = planY.SkeletonId;
+        Require(idX != idY, "Hair skeleton backups: two hair models in one option get two IDs");
+
+        var state = HairSkeletonFiles.CaptureState(mod.ModFolder, ModDirectory, HairModel, mod.Store)!;
+        Require(state["entries"]!.AsArray().Select(entry => entry!["gamePath"]!.GetValue<string>()).SequenceEqual([Sklb(801, idX)]),
+            "Hair skeleton backups: the state keeps only the model's own ID, not another model's or the modder's");
+        var other = Enumerable.Range(4321, 3).First(candidate => candidate != idX && candidate != idY);
+        var records = mod.Store.Load().ToList();
+        var index = records.FindIndex(record => record.SkeletonId == idX);
+        records[index] = records[index] with { SkeletonId = other };
+        mod.Store.Save(records);
+        PrepareAndApply(mod, Sources(7));
+
+        var warnings = HairSkeletonFiles.RestoreState(mod.ModFolder, ModDirectory, HairModel, state, mod.Store);
+        var optionA = Option(mod.Meta(), OptionA);
+        Require(warnings.Count == 0 && SklbKeys(optionA).SetEquals([Sklb(801, idX), Sklb(801, idY), ModderKey]) &&
+                optionA["Files"]![ModderKey]!.GetValue<string>() == ModderFile.Replace('/', '\\'),
+            "Hair skeleton backups: restoring one model leaves another model's and the modder's keys alone");
+        Require(HasBytes(mod, Sklb(801, idY), "sklb 3") && HasBytes(mod, ModderFile, "modder") &&
+                !File.Exists(mod.FilePath(Sklb(801, other))),
+            "Hair skeleton backups: restoring one model leaves another model's and the modder's files alone");
+        Require(mod.Store.Load().Select(record => (record.Model, record.SkeletonId)).ToHashSet()
+                .SetEquals([(HairModel, idX), (ModelY, idY)]),
+            "Hair skeleton backups: restoring one model leaves another model's record alone");
     }
 
     private static void OrphanSidecarIsCleaned(string root)
