@@ -22,6 +22,12 @@ internal interface IModHandoff
 
     void EditModel(ResourceView row, ActorView mod);
 
+    /// <summary>Why model files on disk can't go to Blender now, or null when they can.</summary>
+    string? ModelFilesBlock(IReadOnlyList<string> files);
+
+    /// <summary>Has Blender import model files on disk; files with a matching armature share one.</summary>
+    void SendModelFiles(IReadOnlyList<string> files);
+
     /// <summary>Why the row's texture can't be edited, or null when it can.</summary>
     string? TextureBlock(ResourceView row);
 

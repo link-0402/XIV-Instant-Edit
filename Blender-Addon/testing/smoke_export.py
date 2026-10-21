@@ -413,6 +413,76 @@ def assert_simple_import_shares_armatures():
             setattr(settings, name, value)
 
 
+def assert_import_files_endpoint(addon):
+    """The plugin's Send to Blender: /import/files runs Simple Import on Blender's main thread."""
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    server = importlib.import_module(f"{addon.__name__}.instant_edit.server")
+    if server.IMPORT_FILES_CAPABILITY not in server._status_payload()["capabilities"]:
+        raise AssertionError("The add-on does not advertise file imports")
+    settings = bpy.context.scene.xiv_ie_settings
+    saved = {name: getattr(settings, name) for name in (
+        "simple_import_set_export_directory", "simple_import_use_existing_skeleton", "export_directory")}
+    listener = ThreadingHTTPServer(("127.0.0.1", 0), server._ImportHandler)
+    threading.Thread(target=listener.serve_forever, daemon=True).start()
+
+    def post(files):
+        outcome = {}
+        body = json.dumps({"schema": "instant-edit.import-files", "version": 1, "files": files}).encode()
+
+        def send():
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{listener.server_address[1]}/import/files", data=body, method="POST",
+                headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    outcome["status"], outcome["body"] = response.status, json.loads(response.read())
+            except urllib.error.HTTPError as error:
+                outcome["status"], outcome["body"] = error.code, json.loads(error.read())
+
+        sender = threading.Thread(target=send, daemon=True)
+        sender.start()
+        deadline = time.monotonic() + 30
+        while sender.is_alive() and time.monotonic() < deadline:
+            server.process_animation_queue()
+            time.sleep(0.01)
+        sender.join(1)
+        return outcome
+
+    try:
+        with temporary_scene_data(), tempfile.TemporaryDirectory(prefix="xiv-instant-edit-send-") as root:
+            folder = Path(root)
+            (folder / "parts").mkdir()
+            _write_skinned_glb(folder / "hair_a.glb", [("bone_root", (0, 0, 0)), ("bone_a", (0, 0, 1))])
+            _write_skinned_glb(folder / "parts" / "hair_b.glb", [("bone_root", (0, 0, 0)), ("bone_b", (0, 1, 1))])
+            (folder / "notes.txt").write_text("not a model")
+            settings.simple_import_set_export_directory = False
+            settings.simple_import_use_existing_skeleton = False
+            before = set(bpy.data.objects)
+            done = post([str(folder / "hair_a.glb"), str(folder / "parts" / "hair_b.glb")])
+            new = [item for item in bpy.data.objects if item not in before]
+            if (done.get("status") != 200 or not done["body"]["imported"]
+                    or "1 matching armature combined" not in done["body"]["message"]
+                    or sum(item.type == "ARMATURE" for item in new) != 1
+                    or sum(item.type == "MESH" for item in new) != 2):
+                raise AssertionError(f"/import/files did not import both parts onto one armature: {done}")
+            relative = post(["hair_a.glb"])
+            unsupported = post([str(folder / "notes.txt")])
+            missing = post([str(folder / "gone.glb")])
+            if (relative.get("status") != 400 or relative["body"]["code"] != "invalid_file_path"
+                    or unsupported.get("status") != 400 or unsupported["body"]["code"] != "unsupported_file_type"
+                    or missing.get("status") != 400 or missing["body"]["code"] != "file_not_found"):
+                raise AssertionError(f"/import/files accepted a bad path: {relative} {unsupported} {missing}")
+        print("[PASS] /import/files imports the plugin's model files and refuses bad paths")
+    finally:
+        listener.shutdown()
+        listener.server_close()
+        for name, value in saved.items():
+            setattr(settings, name, value)
+
+
 def assert_mesh_studio(addon, obj, second, added_group):
     materials = importlib.import_module(f"{addon.__name__}.materials")
     with temporary_scene_data():
@@ -2478,6 +2548,7 @@ def run() -> None:
 
         assert_simple_import_folder(addon)
         assert_simple_import_shares_armatures()
+        assert_import_files_endpoint(addon)
 
         cache_module = importlib.import_module(f"{addon.__name__}.instant_edit.cache")
         original_auto_cleanup = cache_module.automatic_cleanup_enabled()

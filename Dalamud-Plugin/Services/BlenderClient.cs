@@ -49,6 +49,8 @@ public sealed class BlenderClient : IDisposable
     public const string CharacterImportCapability = "instant-edit.character-import.v1";
     /// <summary> The Timeline can read an armature's motion back (Motion from Blender). </summary>
     public const string AnimationReadCapability = "instant-edit.animation-read.v1";
+    /// <summary> Loose model files (.mdl, .fbx, .gltf, .glb) can be sent for Simple Import. </summary>
+    public const string ImportFilesCapability = "instant-edit.import-files.v1";
 
     private readonly HttpClient _http;
     private readonly IPluginLog _log;
@@ -323,6 +325,97 @@ public sealed class BlenderClient : IDisposable
                 _log?.Error(message);
             return new BlenderBridgeException(failure, inner: inner);
         }
+    }
+
+    /// <summary>Returns whether the connected add-on imports loose model files.</summary>
+    public async Task<bool> SupportsImportFilesAsync(int port, CancellationToken cancellationToken = default)
+        => await SupportsCapabilityAsync(port, ImportFilesCapability, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Has Blender import model files from disk with its Simple Import, which puts files with a
+    /// matching armature on one armature. Returns Blender's report once its main thread is done.
+    /// </summary>
+    public async Task<BlenderFileImportResult> SendImportFilesAsync(int port, IReadOnlyList<string> files,
+        CancellationToken cancellationToken = default)
+    {
+        if (port is < 1 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(port));
+        var payload = JsonSerializer.Serialize(new { schema = "instant-edit.import-files", version = 1, files });
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.PostAsync($"http://127.0.0.1:{port}/import/files", content, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException e)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon", "import_files", "transport", ResultCode.BlenderConnectionFailed.Wire(),
+                "The files could not reach Blender's XIV Instant Edit listener.",
+                "Start Blender, verify the configured port, and send the files again.");
+            _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: import_files/transport/{failure.Code}.");
+            throw new BlenderBridgeException(failure, inner: e);
+        }
+        catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
+        {
+            var failure = BridgeFailure.Create(
+                "blender_addon", "import_files", "transport", ResultCode.BlenderRequestTimeout.Wire(),
+                "Blender did not answer while importing the files.",
+                "Check whether Blender is busy, then send the files again.");
+            _log?.Error(e, $"Blender bridge failure {failure.DiagnosticId}: import_files/transport/{failure.Code}.");
+            throw new BlenderBridgeException(failure, inner: e);
+        }
+
+        using (response)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return ParseImportFilesResponse(response.StatusCode, body);
+            }
+            catch (BlenderBridgeException exception)
+            {
+                var failure = exception.Failure;
+                _log?.Error(exception,
+                    $"Blender bridge failure {failure.DiagnosticId}: HTTP {(int)response.StatusCode}; " +
+                    $"{failure.Operation}/{failure.Stage}/{failure.Code}; response={exception.RawResponse}");
+                throw;
+            }
+        }
+    }
+
+    internal static BlenderFileImportResult ParseImportFilesResponse(HttpStatusCode status, string responseBody)
+    {
+        if ((int)status is < 200 or >= 300)
+            throw new BlenderBridgeException(BridgeFailure.FromResponse(status, responseBody, "import_files"), responseBody);
+        try
+        {
+            using var document = JsonDocument.Parse(responseBody);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("imported", out var imported))
+            {
+                if (imported.ValueKind == JsonValueKind.True)
+                {
+                    var message = root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() ?? "" : "";
+                    var warning = root.TryGetProperty("warning", out var w) && w.ValueKind == JsonValueKind.True;
+                    return new BlenderFileImportResult(true, message, warning);
+                }
+                if (imported.ValueKind == JsonValueKind.False && root.TryGetProperty("queued", out var queued) &&
+                    queued.ValueKind == JsonValueKind.True)
+                    return new BlenderFileImportResult(false, string.Empty, false);
+            }
+        }
+        catch (JsonException e)
+        {
+            throw new BlenderBridgeException(BridgeFailure.Create(
+                "blender_addon", "import_files", "response_parsing", ResultCode.InvalidSuccessResponse.Wire(),
+                "Blender accepted the files but returned an invalid confirmation.",
+                "Update and restart the XIV Instant Edit Blender add-on, then send the files again.", (int)status), responseBody, e);
+        }
+        throw new BlenderBridgeException(BridgeFailure.Create(
+            "blender_addon", "import_files", "response_parsing", ResultCode.InvalidSuccessResponse.Wire(),
+            "Blender accepted the files but did not confirm what it did with them.",
+            "Update and restart the XIV Instant Edit Blender add-on, then send the files again.", (int)status), responseBody);
     }
 
     /// <summary>

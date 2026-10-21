@@ -449,6 +449,32 @@ static async Task CheckBridgeResponsesAsync()
         """{"ok":true,"queued":false,"applied":true,"action":"Live pose 19:43:10","armature":"Skeleton","frames":301,"frameRate":60.0,"frameStart":1,"frameEnd":301,"matchedBones":444,"missingBoneCount":0,"missingBones":[],"alignedBoneCount":4,"alignedBones":["j_sebo_a","j_asi_a_l","j_asi_b_l","j_asi_c_l"]}""");
     Require(aligned.AlignedBoneCount == 4 && aligned.Describe().EndsWith("4 bones now inherit scale Aligned, so they scale the game's way.", StringComparison.Ordinal),
         "the animation summary says how many bones Blender set to inherit scale Aligned");
+    var importedFiles = BlenderClient.ParseImportFilesResponse(HttpStatusCode.OK,
+        """{"ok":true,"queued":false,"imported":true,"message":"Imported 6 files (6 mesh objects); 5 matching armatures combined","warning":false}""");
+    Require(importedFiles is { Imported: true, Warning: false } && importedFiles.Message.StartsWith("Imported 6 files", StringComparison.Ordinal),
+        "model files Blender imported report its message");
+    var queuedFiles = BlenderClient.ParseImportFilesResponse(HttpStatusCode.Accepted, """{"ok":true,"queued":true,"imported":false}""");
+    Require(!queuedFiles.Imported, "model files Blender could not import yet are reported as queued");
+    try
+    {
+        BlenderClient.ParseImportFilesResponse((HttpStatusCode)422,
+            """{"component":"blender_addon","operation":"import_files","stage":"import_processing","code":"import_cancelled","cause":"Import failed: hair.glb failed: bad file","remedy":"Correct the reported file or scene issue, then send the files again.","diagnosticId":"89abcdef"}""");
+        throw new InvalidOperationException("file import failure did not throw");
+    }
+    catch (BlenderBridgeException error)
+    {
+        Require(error.Failure.Code == "import_cancelled" && error.Failure.Operation == "import_files",
+            "a file import Blender refused throws its structured failure");
+    }
+    try
+    {
+        BlenderClient.ParseImportFilesResponse(HttpStatusCode.OK, """{"ok":true}""");
+        throw new InvalidOperationException("unconfirmed file import did not throw");
+    }
+    catch (BlenderBridgeException error)
+    {
+        Require(error.Failure.Code == "invalid_success_response", "a file import without a confirmation is refused");
+    }
     var queuedAnimation = BlenderClient.ParseAnimationResponse(HttpStatusCode.Accepted, """{"ok":true,"queued":true,"applied":false}""");
     Require(!queuedAnimation.Applied && queuedAnimation.Describe().Contains("idle", StringComparison.Ordinal),
         "an animation Blender could not key yet is reported as queued");

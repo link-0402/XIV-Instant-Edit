@@ -173,6 +173,67 @@ internal sealed class ModelSender
             cancellationToken));
     }
 
+    /// <summary> The model files on disk Blender's Simple Import takes. </summary>
+    public static bool IsImportableFile(string path)
+        => Path.GetExtension(path).ToLowerInvariant() is ".mdl" or ".fbx" or ".gltf" or ".glb";
+
+    /// <summary> Why <paramref name="files"/> can't go to Blender now, or null when they can. </summary>
+    public string? FilesBlock(IReadOnlyList<string> files)
+    {
+        _blenderConnection.StartCheckIfNeeded();
+        if (files.Count == 0)
+            return "Click a model, or Ctrl or Shift + click several, to send them.";
+        if (!files.Any(IsImportableFile))
+            return "Blender imports .mdl, .fbx, .gltf and .glb files.";
+        if (_blenderConnection.State == BlenderConnectionState.Offline)
+            return "Blender is offline. Start Blender and enable the XIV Instant Edit add-on.";
+        if (_blenderConnection.State == BlenderConnectionState.VersionMismatch)
+            return BlenderClient.VersionMismatchMessage(_blenderConnection.AddonVersion, ComponentVersions.BlenderAddonMinimum);
+        return Busy.IsBusy ? "Another model is being sent." : null;
+    }
+
+    /// <summary>
+    /// Has Blender import model files from disk, as its Simple Import does: files whose armatures
+    /// match share one. Files Blender can't import are left out.
+    /// </summary>
+    public void SendFiles(IReadOnlyList<string> files)
+    {
+        var importable = files.Where(IsImportableFile).ToList();
+        if (importable.Count == 0 || !Busy.TryEnter())
+            return;
+        var port = _config.BlenderPort;
+        var cancellationToken = _lifetime;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (!await _blender.SupportsImportFilesAsync(port, cancellationToken).ConfigureAwait(false))
+                    throw new InvalidOperationException("The XIV Instant Edit add-on is too old to import files. Update the add-on and restart Blender.");
+                var names = importable.Count == 1 ? Path.GetFileName(importable[0]) : $"{importable.Count} models";
+                _feed.SetStatus($"Sending {names} to Blender.", FeedbackSeverity.Info);
+                var result = await _blender.SendImportFilesAsync(port, importable, cancellationToken).ConfigureAwait(false);
+                if (!result.Imported)
+                    _feed.SetStatus($"Blender is busy; it will import {names} when it is free.", FeedbackSeverity.Info);
+                else
+                    _feed.SetStatus(result.Message.Length > 0 ? result.Message : $"Imported {names}.",
+                        result.Warning ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception e)
+            {
+                _log.Error(e, "Failed to send model files to Blender.");
+                var message = e is BlenderBridgeException bridge ? bridge.Failure.UserMessage : e.Message;
+                _feed.SetStatus($"Failed: {message}", FeedbackSeverity.Error);
+            }
+            finally
+            {
+                Busy.Exit();
+            }
+        });
+    }
+
     public void ReportImportFailure(BridgeFailure failure)
     {
         var message = failure.UserMessage;

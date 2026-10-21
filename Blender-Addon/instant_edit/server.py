@@ -1,5 +1,6 @@
 # Modified for XIV Instant Edit, 2026.
 import json
+import os
 import re
 import socket
 import threading
@@ -44,6 +45,13 @@ IMPORT_SKELETON_CAPABILITY = "instant-edit.import-skeleton.v1"
 CHARACTER_IMPORT_CAPABILITY = "instant-edit.character-import.v1"
 # The plugin may read an armature's motion back (see animation_read.py).
 ANIMATION_READ_CAPABILITY = "instant-edit.animation-read.v1"
+# The plugin may send loose model files (.mdl, .fbx, .gltf, .glb) for Simple Import, such as the
+# models of an extracted package.
+IMPORT_FILES_CAPABILITY = "instant-edit.import-files.v1"
+MAX_IMPORT_FILES = 64
+IMPORT_FILE_SUFFIXES = (".mdl", ".fbx", ".gltf", ".glb")
+# How long a file import waits for Blender's main thread before the plugin hears it is queued.
+IMPORT_FILES_WAIT_SECONDS = 60
 MAX_ANIMATION_QUEUE_SIZE = 4
 # How long an animation request waits for Blender's main thread to key it, so the plugin
 # can report the result. Blender busy with a modal tool keeps the request queued instead.
@@ -103,6 +111,7 @@ def _status_payload() -> dict:
             IMPORT_SKELETON_CAPABILITY,
             CHARACTER_IMPORT_CAPABILITY,
             ANIMATION_READ_CAPABILITY,
+            IMPORT_FILES_CAPABILITY,
         ],
         # Imports queued or running: a character send waits for its models before its pose.
         "pendingImports": _import_queue.unfinished_tasks,
@@ -391,6 +400,9 @@ class _ImportHandler(BaseHTTPRequestHandler):
             return
         if endpoint == "/animation/read":
             self._handle_animation_read()
+            return
+        if endpoint == "/import/files":
+            self._handle_import_files()
             return
         is_cache_settings = endpoint == "/settings/cache"
         if endpoint != "/import" and not is_cache_settings:
@@ -688,6 +700,68 @@ class _ImportHandler(BaseHTTPRequestHandler):
             self._respond(422, job["failure"])
             return
         self._respond_bytes(200, job["body"])
+
+    def _handle_import_files(self) -> None:
+        """Have Blender's main thread import loose model files with Simple Import, and report the result."""
+        try:
+            length_header = self.headers.get("Content-Length")
+            try:
+                length = int(length_header) if length_header is not None else -1
+            except ValueError:
+                length = -1
+            if length < 0 or length > MAX_IMPORT_BODY_SIZE:
+                status = 411 if length_header is None else 413 if length > 0 else 400
+                self._respond(status, _failure(
+                    status, "import_files", "request_receipt", "content_length_invalid",
+                    "The file import request has no valid Content-Length header.",
+                    "Update both XIV Instant Edit components and retry.",
+                    endpoint=self.path,
+                ))
+                return
+            body = self.rfile.read(length)
+            if len(body) != length:
+                self._respond(400, _failure(
+                    400, "import_files", "request_receipt", "request_body_incomplete",
+                    "The connection ended before Blender received the complete file import request.",
+                    "Send the files again.",
+                    endpoint=self.path,
+                ))
+                return
+            files = parse_import_files(body)
+        except (socket.timeout, TimeoutError):
+            self._respond(408, _failure(
+                408, "import_files", "request_receipt", "request_body_timeout",
+                "Blender timed out while receiving the file import request.",
+                "Send the files again.",
+                endpoint=self.path,
+            ))
+            return
+        except BridgeRequestError as error:
+            self._respond(400, _failure(
+                400, "import_files", error.stage, error.code, error.cause, error.remedy,
+                endpoint=self.path, exception=error,
+            ))
+            return
+
+        # Runs with the animations, once no Instant Edit import is pending.
+        job = {"files": files, "done": threading.Event(), "result": None, "failure": None}
+        try:
+            _animation_queue.put_nowait(job)
+        except Full:
+            self._respond(503, _failure(
+                503, "import_files", "queueing", "import_queue_full",
+                "Blender is still busy with earlier requests.",
+                "Wait a moment, then send the files again.",
+                endpoint=self.path,
+            ))
+            return
+        if not job["done"].wait(IMPORT_FILES_WAIT_SECONDS):
+            self._respond(202, {"ok": True, "queued": True, "imported": False})
+            return
+        if job["failure"] is not None:
+            self._respond(422, job["failure"])
+            return
+        self._respond(200, {"ok": True, "queued": False, "imported": True, **job["result"]})
 
     @staticmethod
     def _validate_cache_settings(data) -> dict:
@@ -1063,6 +1137,9 @@ def process_animation_queue() -> None:
         if "read" in job:
             _process_animation_read(job)
             continue
+        if "files" in job:
+            _process_import_files(job)
+            continue
         # Imported per job, not per poll: the animation module needs numpy.
         from .animation import AnimationApplyError, apply_take, summary
 
@@ -1092,6 +1169,86 @@ def process_animation_queue() -> None:
             _set_last_status("Animation failed: Blender encountered an unexpected error.")
         finally:
             job["done"].set()
+
+
+def parse_import_files(body: bytes) -> list[Path]:
+    """The files of a /import/files request: local absolute paths of existing model files."""
+    def refuse(code: str, cause: str) -> BridgeRequestError:
+        return BridgeRequestError("request_validation", code, cause, "Update both XIV Instant Edit components and retry.")
+
+    try:
+        data = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise refuse("invalid_json", "The file import request body is not valid JSON.") from error
+    if not isinstance(data, dict) or data.get("schema") != "instant-edit.import-files" or data.get("version") != 1:
+        raise refuse("unsupported_schema", "The file import request uses an unsupported schema.")
+    names = data.get("files")
+    if not isinstance(names, list) or not names or len(names) > MAX_IMPORT_FILES:
+        raise refuse("invalid_files", f"files must list 1 to {MAX_IMPORT_FILES} paths.")
+    files = []
+    for name in names:
+        if not isinstance(name, str) or not name or len(name) > 4096 or name.startswith(("\\\\", "//")):
+            raise refuse("invalid_file_path", "Each file must be a local absolute path.")
+        path = Path(name)
+        if not path.is_absolute():
+            raise refuse("invalid_file_path", "Each file must be a local absolute path.")
+        if path.suffix.casefold() not in IMPORT_FILE_SUFFIXES:
+            raise BridgeRequestError(
+                "request_validation", "unsupported_file_type", f"{path.name} is not an MDL, FBX or glTF file.",
+                "Send only .mdl, .fbx, .gltf or .glb files.")
+        if not path.is_file():
+            raise BridgeRequestError(
+                "request_validation", "file_not_found", f"{path.name} no longer exists.",
+                "Extract the package again, then send the files.")
+        files.append(path)
+    return files
+
+
+def _process_import_files(job: dict) -> None:
+    """Import loose model files with Simple Import. Runs on Blender's main thread.
+
+    Files of one drive go in one import, so their matching armatures are combined."""
+    from ..operators import XIVIE_OT_simple_import
+
+    try:
+        if bpy.context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        by_drive: dict[str, list[Path]] = {}
+        for path in job["files"]:
+            by_drive.setdefault(path.drive.casefold(), []).append(path)
+        messages = []
+        warning = False
+        imported = False
+        for paths in by_drive.values():
+            directory = Path(os.path.commonpath([str(path.parent) for path in paths]))
+            XIVIE_OT_simple_import.last_report = ("INFO", "")
+            result = bpy.ops.xiv_ie.simple_import(
+                "EXEC_DEFAULT", directory=str(directory),
+                files=[{"name": str(path.relative_to(directory))} for path in paths])
+            level, message = XIVIE_OT_simple_import.last_report
+            imported = imported or result == {"FINISHED"}
+            warning = warning or level != "INFO" or result != {"FINISHED"}
+            if message:
+                messages.append(message)
+        message = "; ".join(messages) or "Blender did not import the files."
+        if not imported:
+            job["failure"] = _failure(
+                422, "import_files", "import_processing", "import_cancelled", message,
+                "Correct the reported file or scene issue, then send the files again.",
+                endpoint="/import/files",
+            )
+        else:
+            job["result"] = {"message": message, "warning": warning}
+        _set_last_status(message)
+    except Exception as error:
+        job["failure"] = _failure(
+            500, "import_files", "import_processing", "import_processing_failed",
+            "Blender encountered an unexpected error while importing the files.",
+            "Review the diagnostic report, then send the files again.",
+            endpoint="/import/files", exception=error,
+        )
+    finally:
+        job["done"].set()
 
 
 def _process_animation_read(job: dict) -> None:

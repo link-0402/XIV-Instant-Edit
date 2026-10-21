@@ -472,6 +472,13 @@ class XIVIE_OT_simple_import(Operator):
         remaining = [obj for obj in imported_objects if not any(obj is gone for gone in merged)]
         return remaining, len(merged)
 
+    # The last import's result, for the bridge: the plugin's Send to Blender shows it in game.
+    last_report: tuple[str, str] = ("INFO", "")
+
+    def _finish(self, level: set, message: str) -> None:
+        type(self).last_report = (next(iter(level)), message)
+        self.report(level, message)
+
     def execute(self, context: Context):
         file_paths = self._file_paths()
         settings = get_settings()
@@ -479,7 +486,7 @@ class XIVIE_OT_simple_import(Operator):
         use_existing_skeleton = settings.simple_import_use_existing_skeleton
 
         if use_existing_skeleton and (skeleton is None or skeleton.type != "ARMATURE"):
-            self.report({"ERROR"}, "Choose an existing Blender Armature for the imported meshes.")
+            self._finish({"ERROR"}, "Choose an existing Blender Armature for the imported meshes.")
             return {"CANCELLED"}
 
         jobs = []
@@ -492,7 +499,7 @@ class XIVIE_OT_simple_import(Operator):
             valid = "/".join(
                 item[1:].upper() for item in (expected_suffixes or (".mdl", ".fbx", ".gltf", ".glb")))
             if len(file_paths) == 1:
-                self.report({"ERROR"}, f"Choose a valid {valid} file.")
+                self._finish({"ERROR"}, f"Choose a valid {valid} file.")
                 return {"CANCELLED"}
             problems.append(f"{file_path.name} is not a valid {valid} file")
 
@@ -509,7 +516,7 @@ class XIVIE_OT_simple_import(Operator):
                     context, file_path, import_format, skeleton if use_existing_skeleton else None)
             except Exception as error:
                 if len(file_paths) == 1:
-                    self.report({"ERROR"}, f"Import failed: {error}")
+                    self._finish({"ERROR"}, f"Import failed: {error}")
                     return {"CANCELLED"}
                 problems.append(f"{file_path.name} failed: {error}")
                 continue
@@ -524,7 +531,7 @@ class XIVIE_OT_simple_import(Operator):
             last_folder = file_path.parent
 
         if not imported_names:
-            self.report({"ERROR"}, "Import failed: " + "; ".join(problems))
+            self._finish({"ERROR"}, "Import failed: " + "; ".join(problems))
             return {"CANCELLED"}
 
         _simple_import_select_objects(all_objects)
@@ -545,7 +552,7 @@ class XIVIE_OT_simple_import(Operator):
             message += "; " + "; ".join(notes)
         if refresh_error is not None:
             message += f"; Penumbra targets could not refresh: {refresh_error}"
-        self.report({"WARNING"} if refresh_error is not None or notes else {"INFO"}, message)
+        self._finish({"WARNING"} if refresh_error is not None or notes else {"INFO"}, message)
         return {"FINISHED"}
 
 

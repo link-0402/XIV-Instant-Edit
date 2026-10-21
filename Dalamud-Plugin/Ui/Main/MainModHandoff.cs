@@ -30,6 +30,10 @@ internal sealed class MainModHandoff : IModHandoff
 
     void IModHandoff.EditModel(ResourceView row, ActorView mod) => _models.TryEditNode(row, mod);
 
+    string? IModHandoff.ModelFilesBlock(IReadOnlyList<string> files) => _models.FilesBlock(files);
+
+    void IModHandoff.SendModelFiles(IReadOnlyList<string> files) => _models.SendFiles(files);
+
     string? IModHandoff.TextureBlock(ResourceView row)
     {
         if (!TextureSessionsTab.IsTextureRow(row))

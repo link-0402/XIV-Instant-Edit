@@ -59,6 +59,9 @@ internal sealed class StashView
     /// <summary>Rows marked to be dragged together, in the order they were marked: files of one kind only.</summary>
     private readonly StashMarks _marked = new();
 
+    /// <summary>When Send to Blender was last clicked, so only that send's answer shows.</summary>
+    private DateTimeOffset? _sendStarted;
+
     /// <summary>The markable rows in the order drawn: last frame's, for Shift + click ranges, and this frame's.</summary>
     private List<(string File, StashKind Kind)> _lastOrder = new();
     private List<(string File, StashKind Kind)> _rowOrder = new();
@@ -296,6 +299,8 @@ internal sealed class StashView
 
         DrawHeader(_folder, _manifest);
         DrawTabs(_manifest);
+        if (_tab == StashKind.Model)
+            DrawSendToBlender();
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##StashSearch", "Search names and materials", ref _search, 256);
         ImGui.Spacing();
@@ -307,6 +312,43 @@ internal sealed class StashView
             else DrawRows(_folder, Visible(_manifest).Where(e => e.Kind == _tab).ToList());
         }
         ImGui.EndChild();
+    }
+
+    /// <summary>
+    /// Sends the marked models to Blender in one import, where models with a matching armature
+    /// share one (a Sims hair's parts). Blender's answer shows beside the button.
+    /// </summary>
+    private void DrawSendToBlender()
+    {
+        var files = _marked.Kind == StashKind.Model ? _marked.Files.Where(f => Exists(f, false)).ToList() : new List<string>();
+        var handoff = _host.Handoff;
+        var block = handoff == null ? "Open the main window once, so the plugin can reach Blender." : handoff.ModelFilesBlock(files);
+        var label = files.Count > 1 ? $"Send {files.Count} models to Blender" : "Send to Blender";
+        using (Gui.Disabled(block != null))
+        {
+            if (Gui.IconTextButton(FontAwesomeIcon.Share, label) && handoff != null)
+            {
+                handoff.SendModelFiles(files);
+                _sendStarted = DateTimeOffset.Now;
+            }
+        }
+        Gui.Tooltip(block ?? "Imports the marked models into Blender. Models with a matching armature share one.");
+
+        if (_sendStarted is { } started && handoff?.LatestMessage is { } latest && latest.Time >= started && latest.Text.Length > 0)
+        {
+            ImGui.SameLine();
+            ImGui.AlignTextToFramePadding();
+            var color = latest.Severity switch
+            {
+                InstantEdit.Ui.FeedbackSeverity.Error   => Theme.Bad,
+                InstantEdit.Ui.FeedbackSeverity.Warning => Theme.Warn,
+                InstantEdit.Ui.FeedbackSeverity.Success => Theme.Good,
+                _                                       => Theme.Muted,
+            };
+            ImGui.TextColored(color, ResourceStyle.Fit(latest.Text, ImGui.GetContentRegionAvail().X));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(latest.Text);
+        }
     }
 
     private void DrawHeader(string folder, StashManifest manifest)
