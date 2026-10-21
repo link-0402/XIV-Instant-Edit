@@ -40,10 +40,11 @@ namespace InstantEdit.Studio.Services.Sims;
 public static class SimsMeshExporter
 {
     /// <summary>
-    /// Writes <paramref name="mesh"/> to <paramref name="path"/> as a .glb.
+    /// Writes <paramref name="mesh"/> to <paramref name="path"/> as a .glb, with its UVs moved
+    /// onto a cut-out of its texture sheet when <paramref name="uvRegion"/> is given.
     /// </summary>
     /// <returns>How many faces were left out because an index fell outside the vertex list.</returns>
-    public static int ExportGlb(SimsGeomMesh mesh, string path, string meshName)
+    public static int ExportGlb(SimsGeomMesh mesh, string path, string meshName, UvRegion? uvRegion = null)
     {
         if (mesh.VertexCount == 0 || mesh.FaceCount == 0)
             throw new InvalidOperationException("Mesh has no geometry to export.");
@@ -56,9 +57,9 @@ public static class SimsMeshExporter
         var material = new MaterialBuilder(meshName).WithDoubleSide(true);
 
         if (mesh.HasSkin)
-            BuildSkinned(mesh, scene, material, meshName);
+            BuildSkinned(mesh, scene, material, meshName, uvRegion);
         else
-            BuildRigid(mesh, scene, material, meshName);
+            BuildRigid(mesh, scene, material, meshName, uvRegion);
 
         scene.ToGltf2().SaveGLB(path);
         return skipped;
@@ -77,25 +78,25 @@ public static class SimsMeshExporter
     private static bool InRange(SimsGeomMesh mesh, int index) => (uint)index < (uint)mesh.VertexCount;
 
     private static void BuildRigid(SimsGeomMesh mesh, SceneBuilder scene, MaterialBuilder material,
-        string meshName)
+        string meshName, UvRegion? uvRegion)
     {
         var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1>(meshName);
         var prim = builder.UsePrimitive(material);
 
         AddTriangles(mesh, (a, b, c) => prim.AddTriangle(
-            RigidVertex(mesh, a), RigidVertex(mesh, b), RigidVertex(mesh, c)));
+            RigidVertex(mesh, a, uvRegion), RigidVertex(mesh, b, uvRegion), RigidVertex(mesh, c, uvRegion)));
 
         scene.AddRigidMesh(builder, Matrix4x4.Identity);
     }
 
     private static void BuildSkinned(SimsGeomMesh mesh, SceneBuilder scene, MaterialBuilder material,
-        string meshName)
+        string meshName, UvRegion? uvRegion)
     {
         var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexJoints4>(meshName);
         var prim = builder.UsePrimitive(material);
 
         AddTriangles(mesh, (a, b, c) => prim.AddTriangle(
-            SkinnedVertex(mesh, a), SkinnedVertex(mesh, b), SkinnedVertex(mesh, c)));
+            SkinnedVertex(mesh, a, uvRegion), SkinnedVertex(mesh, b, uvRegion), SkinnedVertex(mesh, c, uvRegion)));
 
         // One identity joint per bone; the root keeps them together in Blender.
         var root = new NodeBuilder("Sims_Armature");
@@ -118,11 +119,11 @@ public static class SimsMeshExporter
         }
     }
 
-    private static (VertexPositionNormal, VertexTexture1) RigidVertex(SimsGeomMesh mesh, int i)
-        => (Geometry(mesh, i), Uv(mesh, i));
+    private static (VertexPositionNormal, VertexTexture1) RigidVertex(SimsGeomMesh mesh, int i, UvRegion? uvRegion)
+        => (Geometry(mesh, i), Uv(mesh, i, uvRegion));
 
-    private static (VertexPositionNormal, VertexTexture1, VertexJoints4) SkinnedVertex(SimsGeomMesh mesh, int i)
-        => (Geometry(mesh, i), Uv(mesh, i), Joints(mesh, i));
+    private static (VertexPositionNormal, VertexTexture1, VertexJoints4) SkinnedVertex(SimsGeomMesh mesh, int i, UvRegion? uvRegion)
+        => (Geometry(mesh, i), Uv(mesh, i, uvRegion), Joints(mesh, i));
 
     private static VertexPositionNormal Geometry(SimsGeomMesh mesh, int i)
     {
@@ -142,12 +143,24 @@ public static class SimsMeshExporter
     /// UV0. Only channel 0 is exported: the Sims stores a second channel whose U runs
     /// to -1, so it is not a texture coordinate.
     /// </summary>
-    private static VertexTexture1 Uv(SimsGeomMesh mesh, int i)
+    private static VertexTexture1 Uv(SimsGeomMesh mesh, int i, UvRegion? uvRegion)
     {
         if (mesh.UvChannels.Count == 0 || mesh.UvChannels[0].Length <= i)
             return new VertexTexture1(Vector2.Zero);
 
-        return new VertexTexture1(mesh.UvChannels[0][i]);
+        var uv = mesh.UvChannels[0][i];
+        return new VertexTexture1(uvRegion is { } region ? region.Map(uv) : uv);
+    }
+
+    /// <summary>The UV0 of every vertex a face uses, which is what decides how much of the sheet a mesh covers.</summary>
+    public static IEnumerable<Vector2> UsedUvs(SimsGeomMesh mesh)
+    {
+        if (mesh.UvChannels.Count == 0)
+            yield break;
+        var uvs = mesh.UvChannels[0];
+        foreach (var index in mesh.Indices)
+            if (InRange(mesh, index) && index < uvs.Length)
+                yield return uvs[index];
     }
 
     private static VertexJoints4 Joints(SimsGeomMesh mesh, int i)

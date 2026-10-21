@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using System.Threading;
 
@@ -521,6 +522,9 @@ public static class SimsPackageInspector
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int extracted = 0, failed = 0;
 
+            var meshes = new Dictionary<SimsAsset, SimsGeomMesh>();
+            var region = scan.IsHair ? HairRegion(package, scan, meshes, report, cancel) : null;
+
             foreach (var asset in scan.Assets.Where(a => a.Selected))
             {
                 // Stops between files; the manifest (finally, below) still lists what was written.
@@ -528,9 +532,9 @@ public static class SimsPackageInspector
                 try
                 {
                     if (asset.Kind == SimsAssetKind.Mesh)
-                        ExtractMesh(package, asset, result, packageName, usedNames, report, progress);
+                        ExtractMesh(package, asset, result, packageName, usedNames, report, progress, meshes, region);
                     else
-                        ExtractTexture(package, asset, result, root, usedNames, report, progress, scan.IsHair);
+                        ExtractTexture(package, asset, result, root, usedNames, report, progress, scan.IsHair, region);
                     extracted++;
                 }
                 catch (Exception ex)
@@ -644,13 +648,51 @@ public static class SimsPackageInspector
         }
     }
 
+    /// <summary>
+    /// The part of the texture sheet a hair's meshes use (see <see cref="SimsHairDefaults.HairRegion"/>),
+    /// measured on the largest ticked texture, or on the usual 1024×2048 hair sheet without one. The
+    /// meshes read for it are kept for writing. Null leaves UVs and textures as they are.
+    /// </summary>
+    private static UvRegion? HairRegion(DbpfPackage package, SimsScanResult scan, Dictionary<SimsAsset, SimsGeomMesh> meshes,
+        StringBuilder report, CancellationToken cancel)
+    {
+        var uvs = new List<Vector2>();
+        foreach (var asset in scan.Assets.Where(a => a.Selected && a.Kind == SimsAssetKind.Mesh))
+        {
+            cancel.ThrowIfCancellationRequested();
+            try
+            {
+                var mesh = SimsGeom.Parse(package.Read(asset.Entry));
+                meshes[asset] = mesh;
+                uvs.AddRange(SimsMeshExporter.UsedUvs(mesh));
+            }
+            catch (Exception)
+            {
+                // Fails again, and is reported, when the mesh itself is written.
+            }
+        }
+
+        var sheet = scan.Assets.Where(a => a.Selected && a.Kind == SimsAssetKind.Texture && a.Width > 0 && a.Height > 0)
+            .OrderByDescending(a => (long)a.Width * a.Height).FirstOrDefault();
+        int width = sheet?.Width ?? 1024, height = sheet?.Height ?? 2048;
+        var region = SimsHairDefaults.HairRegion(uvs, width, height);
+        if (region is { } r)
+        {
+            var (x, y, w, h) = r.Pixels(width, height);
+            report.AppendLine($"Hair sheet:     only {w}x{h} at ({x}, {y}) of the {width}x{height} sheet is used, so textures are cut");
+            report.AppendLine("                down to it and the models' UVs stretched to fill it.");
+            report.AppendLine();
+        }
+        return region;
+    }
+
     private static void ExtractMesh(DbpfPackage package, SimsAsset asset, ExtractionResult result,
-        string packageName, HashSet<string> usedNames, StringBuilder report, Action<string>? progress)
+        string packageName, HashSet<string> usedNames, StringBuilder report, Action<string>? progress,
+        Dictionary<SimsAsset, SimsGeomMesh> parsed, UvRegion? region)
     {
         progress?.Invoke($"Exporting mesh {asset.Entry.Instance:X16}");
 
-        var data = package.Read(asset.Entry);
-        var mesh = SimsGeom.Parse(data);
+        var mesh = parsed.TryGetValue(asset, out var read) ? read : SimsGeom.Parse(package.Read(asset.Entry));
 
         var stem  = MakeSafeName(string.IsNullOrWhiteSpace(asset.PartName) ? packageName : asset.PartName);
         var level = asset.LodLevel == SimsAsset.UnknownLod ? "lodx" : $"lod{asset.LodLevel}";
@@ -658,7 +700,7 @@ public static class SimsPackageInspector
         var path  = Path.Combine(result.ModelFolder, name);
 
         int skippedFaces = 0;
-        WriteOwned(result, path, () => skippedFaces = SimsMeshExporter.ExportGlb(mesh, path, Path.GetFileNameWithoutExtension(name)));
+        WriteOwned(result, path, () => skippedFaces = SimsMeshExporter.ExportGlb(mesh, path, Path.GetFileNameWithoutExtension(name), region));
 
         // The path shown afterwards should be the highest detail one, whatever order
         // the assets happened to be extracted in.
@@ -677,15 +719,23 @@ public static class SimsPackageInspector
     /// <summary>
     /// Writes one texture as a PNG into the folder of its role. A hair's diffuse also gets its
     /// alpha map, in a folder of its own beside the diffuse folder: that one is a variant
-    /// folder, where any image counts as another colour.
+    /// folder, where any image counts as another colour. With a <paramref name="region"/>, only
+    /// that part of the sheet is written.
     /// </summary>
     private static void ExtractTexture(DbpfPackage package, SimsAsset asset, ExtractionResult result,
-        string root, HashSet<string> usedNames, StringBuilder report, Action<string>? progress, bool hair)
+        string root, HashSet<string> usedNames, StringBuilder report, Action<string>? progress, bool hair, UvRegion? region)
     {
         progress?.Invoke($"Writing texture {asset.Entry.Instance:X16}");
 
         var data    = package.Read(asset.Entry);
         var decoded = SimsTextureDecoder.Decode(asset.Entry.Type, data);
+        var sheetSize = $"{decoded.Width}x{decoded.Height}";
+        if (region is { } cut)
+        {
+            decoded.Rgba   = cut.Crop(decoded.Rgba, decoded.Width, decoded.Height, out var croppedWidth, out var croppedHeight);
+            decoded.Width  = croppedWidth;
+            decoded.Height = croppedHeight;
+        }
 
         var folderName = asset.Role switch
         {
@@ -721,7 +771,7 @@ public static class SimsPackageInspector
         }
 
         report.AppendLine($"  ok:       textures/{folderName}/{name}  " +
-                          $"({decoded.Width}x{decoded.Height}, {decoded.SourceFormat})");
+                          $"({decoded.Width}x{decoded.Height}{(region != null ? $", cut from {sheetSize}" : string.Empty)}, {decoded.SourceFormat})");
 
         if (hair && asset.Role == SimsTextureRole.Diffuse)
         {

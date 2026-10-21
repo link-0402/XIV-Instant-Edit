@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 
 namespace InstantEdit.Studio.Services.Sims;
 
@@ -76,6 +77,45 @@ public static class SimsHairDefaults
     }
 
     /// <summary>
+    /// The part of a Sims texture sheet a hair uses. A Sims CAS sheet (1024×2048 for a hair) holds
+    /// every body part in its own place, and a hair only takes a square near the top left; a port
+    /// wants that square as its whole texture, so it fits the full-size base normal and mask.
+    ///
+    /// Found from the meshes' UVs measured in pixels of the sheet: the smallest power-of-two square
+    /// on the sheet's grid of that size holding every UV. Null when there is nothing to cut: no UVs,
+    /// UVs off the sheet, or a square as large as the sheet.
+    /// </summary>
+    public static UvRegion? HairRegion(IEnumerable<Vector2> uvs, int sheetWidth, int sheetHeight)
+    {
+        const float Slack = 0.5f;   // half a pixel past an edge still counts as inside
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var uv in uvs)
+        {
+            minX = Math.Min(minX, uv.X * sheetWidth);
+            minY = Math.Min(minY, uv.Y * sheetHeight);
+            maxX = Math.Max(maxX, uv.X * sheetWidth);
+            maxY = Math.Max(maxY, uv.Y * sheetHeight);
+        }
+        if (minX > maxX || sheetWidth <= 0 || sheetHeight <= 0 ||
+            minX < -Slack || minY < -Slack || maxX > sheetWidth + Slack || maxY > sheetHeight + Slack)
+            return null;
+
+        minX = Math.Max(0, minX);
+        minY = Math.Max(0, minY);
+        int side = 64;
+        while (side < Math.Max(maxX - minX, maxY - minY))
+            side *= 2;
+        for (; side < Math.Max(sheetWidth, sheetHeight); side *= 2)
+        {
+            int x0 = (int)(minX / side) * side, y0 = (int)(minY / side) * side;
+            int w = Math.Min(side, sheetWidth - x0), h = Math.Min(side, sheetHeight - y0);
+            if (maxX <= x0 + w + Slack && maxY <= y0 + h + Slack)
+                return new UvRegion((float)x0 / sheetWidth, (float)y0 / sheetHeight, (float)w / sheetWidth, (float)h / sheetHeight);
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Mean lightness (0-255) and colour spread of the opaque pixels of straight RGBA8 data,
     /// sampled every few pixels. (-1, 0) when none is opaque.
     /// </summary>
@@ -94,5 +134,32 @@ public static class SimsHairDefaults
             count++;
         }
         return count == 0 ? (-1f, 0f) : ((float)(lightness / count), (float)(saturation / count));
+    }
+}
+
+/// <summary>A rectangle of a texture sheet in UV units (origin top left), and how UVs and images are cut down to it.</summary>
+public readonly record struct UvRegion(float U, float V, float Width, float Height)
+{
+    /// <summary>A UV of the sheet as a UV of the cut-out.</summary>
+    public Vector2 Map(Vector2 uv) => new((uv.X - U) / Width, (uv.Y - V) / Height);
+
+    /// <summary>The region in pixels of an image of the given size, which may differ from the sheet the region was measured on.</summary>
+    public (int X, int Y, int Width, int Height) Pixels(int width, int height)
+    {
+        int x = Math.Clamp((int)MathF.Round(U * width), 0, width - 1);
+        int y = Math.Clamp((int)MathF.Round(V * height), 0, height - 1);
+        return (x, y, Math.Clamp((int)MathF.Round(Width * width), 1, width - x), Math.Clamp((int)MathF.Round(Height * height), 1, height - y));
+    }
+
+    /// <summary>Straight RGBA8 pixels of an image of the given size, cut down to the region.</summary>
+    public byte[] Crop(byte[] rgba, int width, int height, out int croppedWidth, out int croppedHeight)
+    {
+        var (x, y, w, h) = Pixels(width, height);
+        var cropped = new byte[w * h * 4];
+        for (int row = 0; row < h; row++)
+            Buffer.BlockCopy(rgba, ((y + row) * width + x) * 4, cropped, row * w * 4, w * 4);
+        croppedWidth = w;
+        croppedHeight = h;
+        return cropped;
     }
 }

@@ -28,6 +28,35 @@ internal static class SimsImportScenarios
         BodyTypeIsFoundByShape();
         HairKeepsTheFullMeshOfEachShader();
         HairKeepsTheLightestGreyDiffuse();
+        HairIsCutToItsPartOfTheSheet();
+    }
+
+    private static void HairIsCutToItsPartOfTheSheet()
+    {
+        static System.Numerics.Vector2 Px(float x, float y) => new(x / 1024f, y / 2048f);
+
+        // A hair on the usual 1024×2048 sheet that reaches 497×500 pixels from the top left.
+        var region = SimsHairDefaults.HairRegion([Px(3, 0), Px(497, 120), Px(250, 500)], 1024, 2048);
+        Require(region is { } r && r.Pixels(1024, 2048) == (0, 0, 512, 512),
+            "a hair in the top left of the sheet is cut to the 512×512 square holding it");
+        Require(region!.Value.Map(Px(512, 512)) == new System.Numerics.Vector2(1, 1) && region.Value.Map(Px(256, 128)) == new System.Numerics.Vector2(0.5f, 0.25f),
+            "its UVs are stretched over the whole cut-out");
+        Require(region.Value.Pixels(512, 1024) == (0, 0, 256, 256), "a half-size normal of the same sheet is cut to the same part");
+
+        Require(SimsHairDefaults.HairRegion([Px(520, 10), Px(700, 300)], 1024, 2048)?.Pixels(1024, 2048) == (512, 0, 512, 512),
+            "a hair in another square of the grid is cut there");
+        Require(SimsHairDefaults.HairRegion([Px(400, 10), Px(700, 300)], 1024, 2048)?.Pixels(1024, 2048) == (0, 0, 1024, 1024),
+            "a hair across two squares takes the larger square holding both");
+        Require(SimsHairDefaults.HairRegion([Px(0, 0), Px(1024, 2048)], 1024, 2048) == null, "a hair using the whole sheet is left as it is");
+        Require(SimsHairDefaults.HairRegion([Px(0, 0), Px(1100, 10)], 1024, 2048) == null, "UVs off the sheet leave it as it is");
+        Require(SimsHairDefaults.HairRegion([], 1024, 2048) == null, "without UVs nothing is cut");
+
+        var rgba = new byte[4 * 4 * 4];
+        for (int i = 0; i < 16; i++)
+            rgba[i * 4] = (byte)i;
+        var cut = new UvRegion(0.5f, 0.25f, 0.5f, 0.5f).Crop(rgba, 4, 4, out var w, out var h);
+        Require(w == 2 && h == 2 && cut.Where((_, i) => i % 4 == 0).SequenceEqual(new byte[] { 6, 7, 10, 11 }),
+            "cutting an image keeps exactly the region's pixels, row by row");
     }
 
     /// <summary>The CAS part's body type, after a run of version-gated fields, a tag list and three keys.</summary>
