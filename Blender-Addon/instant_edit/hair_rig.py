@@ -5,7 +5,8 @@ bones form chains, as JSON: {"race": "c0801", "chains": [{"kind": "back", "bones
 ``j_ex_hair_`` bones are the custom skeleton; any other bone (j_kao and the body) is the game's own.
 The hair meshes are weighted to those bones and deformed by the armature through an Armature
 modifier. Quick Export sends the bones in the game's Y-up model space as ``hairSkeleton``, and the
-plugin builds the skeleton file and points the hair's EST entry at it.
+plugin builds the skeleton file and points the hair's EST entry at it. Each bone is turned so its
+game X axis runs from head to tail, as the vanilla hair bones point.
 """
 
 import json
@@ -30,6 +31,8 @@ _SCALE_TOLERANCE = 1e-4
 # A chain's tip must be this far from its last bone, and each chain bone from the one before, in metres.
 _MIN_CHAIN_TIP = 0.001
 _BLENDER_TO_GAME = Matrix(GAME_TO_BLENDER.tolist()).inverted()
+# The game's hair bones point along X, Blender's along Y: this turn makes the bone's Y its X.
+_ALONG_X = Matrix(((0.0, -1.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
 
 
 def _listed(names) -> str:
@@ -115,7 +118,7 @@ def _rig_bones(armature, matrix) -> list[dict]:
         if not bone.name.startswith(BONE_PREFIX):
             continue
         parent = bone.parent.name if bone.parent is not None else ""
-        translation, rotation, _scale = (_BLENDER_TO_GAME @ matrix @ bone.matrix_local).decompose()
+        translation, rotation, _scale = (_BLENDER_TO_GAME @ matrix @ bone.matrix_local @ _ALONG_X).decompose()
         rotation.normalize()
         bones.append({
             "name": bone.name,

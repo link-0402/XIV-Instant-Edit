@@ -18,6 +18,7 @@ from urllib.error import URLError
 
 import bpy
 import numpy as np
+from mathutils import Quaternion, Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from blender_fixtures import addon_session, temporary_scene_data
@@ -1359,6 +1360,12 @@ def run_staging_isolation_regression(addon) -> None:
                 abs(sum(value * value for value in model_a[3:7]) - 1.0) < 1e-5 and
                 model_a[7:] == [1.0, 1.0, 1.0],
                 "hair rig: bone transforms are sent in the game's Y-up model space with unit scale",
+            )
+            rotation = Quaternion((model_a[6], model_a[3], model_a[4], model_a[5]))
+            along = rotation @ Vector((1.0, 0.0, 0.0))
+            _require(
+                (along - Vector((0.0, -1.0, 0.0))).length < 1e-5,
+                "hair rig: a rig bone's game X axis runs along the bone, like vanilla hair chains",
             )
             _require(
                 ops.build_export_payload(
