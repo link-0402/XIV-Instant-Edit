@@ -171,6 +171,7 @@ try
     Scenarios.Run(() => RaceExportScenarios.Run(testRoot));
     Scenarios.Run(() => EstEntryScenarios.Run(testRoot));
     Scenarios.Run(() => HairSkeletonScenarios.Run(testRoot));
+    Scenarios.Run(() => HairPhysicsScenarios.Run());
     Scenarios.Run(() => CheckSessionStore(testRoot));
     Scenarios.Run(() => SelectorStabilityScenarios.Run(testRoot));
     Scenarios.Run(() => ModHandoffScenarios.Run(testRoot));
