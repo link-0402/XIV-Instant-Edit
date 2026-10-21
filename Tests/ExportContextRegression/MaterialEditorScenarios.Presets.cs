@@ -126,6 +126,14 @@ internal static partial class MaterialEditorScenarios
             "translucency is refused on skin and stockings only");
         Require(!PresetNamed("See-through").Applies(Context(PresetDocument(MaskPreset).WithShaderPackage("skin.shpk"))),
             "See-through doesn't apply to skin");
+
+        // characterreflection's visible passes read only the normal's red and green; the cutoff only hides all of it above 1 (disassembled 2026-10-21).
+        Require(PresetChecks.NoPixelAlpha("characterreflection.shpk") && !PresetChecks.NoPixelAlpha("character.shpk") && !PresetChecks.NoPixelAlpha("characterscroll.shpk"),
+            "only the matcap shader is flagged as having no per-pixel alpha");
+        var matcap = PresetNamed("See-through").Apply(Context(PresetDocument(MaskPreset).WithShaderPackage("characterreflection.shpk")), RowTarget.All);
+        Require(matcap.Warnings.Contains(PresetChecks.NoPixelAlphaNote), "See-through on a matcap material warns that it has no per-pixel alpha");
+        var gear = PresetNamed("See-through").Apply(Context(PresetDocument(MaskPreset)), RowTarget.All);
+        Require(!gear.Warnings.Contains(PresetChecks.NoPixelAlphaNote), "See-through on a gear material doesn't");
     }
 
     private static void CheckScrollingPattern()

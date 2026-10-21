@@ -56,6 +56,8 @@ internal sealed partial class MaterialWindow
             ImGui.TextColored(Theme.Hint, $"Other flags 0x{other:X}");
             Tip("Flags the editor does not know. They are kept.");
         }
+        if (translucent && Services.Materials.Presets.PresetChecks.NoPixelAlpha(doc.ShaderPackage))
+            NoPixelAlphaWarning();
 
         if (facts == null)
         {

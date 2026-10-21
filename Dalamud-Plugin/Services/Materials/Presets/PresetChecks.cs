@@ -25,6 +25,15 @@ public static class PresetChecks
         => shaderPackage.Equals("skin.shpk", StringComparison.OrdinalIgnoreCase)
            || shaderPackage.Equals("characterstockings.shpk", StringComparison.OrdinalIgnoreCase);
 
+    public const string NoPixelAlphaNote = "Matcap has no per-pixel alpha, so textures can't make parts see-through. An alpha cutoff over 100% hides the whole material.";
+
+    /// <summary>
+    /// Whether the shader ignores alpha per pixel: characterreflection's visible passes read only the
+    /// normal's red and green, and only test g_AlphaThreshold against 1 (disassembled 2026-10-21).
+    /// </summary>
+    public static bool NoPixelAlpha(string shaderPackage)
+        => shaderPackage.Equals("characterreflection.shpk", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Whether the material has Dawntrail rows its shader reads.</summary>
     public static bool HasRows(PresetContext context)
         => context.Facts.SamplesColorTable && context.Doc.Table is { Kind: ColorTableKind.Dawntrail };

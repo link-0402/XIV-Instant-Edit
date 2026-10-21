@@ -165,7 +165,9 @@ public static class EffectPresets
                 doc = doc.WithConstant(id, [value]);
                 changes.Add(label[..1].ToUpperInvariant() + label[1..] + ".");
             }
-            if (!Reads(context, 0x29AC0223))
+            if (NoPixelAlpha(doc.ShaderPackage))
+                warnings.Add(NoPixelAlphaNote);
+            else if (!Reads(context, 0x29AC0223))
                 warnings.Add("This shader ignores the alpha values; only the translucent flag applies.");
             return Result(doc, changes, warnings);
         }

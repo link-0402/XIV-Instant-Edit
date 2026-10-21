@@ -33,6 +33,8 @@ internal sealed partial class MaterialWindow
                 continue;
             if (!ImGui.CollapsingHeader($"{group}##values-{group}", ImGuiTreeNodeFlags.DefaultOpen))
                 continue;
+            if (group == ShaderLabels.Alpha && Services.Materials.Presets.PresetChecks.NoPixelAlpha(doc.ShaderPackage))
+                NoPixelAlphaWarning();
             DrawValueTable(current, group, shown, ignored: false);
         }
         var ignored = rows.Where(row => !row.Read && row.InMaterial).ToList();
@@ -55,6 +57,13 @@ internal sealed partial class MaterialWindow
                     rows.Add(new ValueRow(ShaderLabels.Constant(id), param.Default, false, true, param.ByteOffset));
         rows.Sort((a, b) => a.Order.CompareTo(b.Order));
         return rows;
+    }
+
+    /// <summary>The matcap shader's note, under Translucent and above the Alpha values.</summary>
+    private static void NoPixelAlphaWarning()
+    {
+        using var colour = ImRaii.PushColor(ImGuiCol.Text, Theme.Warning);
+        ImGui.TextWrapped(Services.Materials.Presets.PresetChecks.NoPixelAlphaNote);
     }
 
     private static int Order(uint id) => ShaderPackages.Param(id)?.ByteOffset ?? int.MaxValue;
