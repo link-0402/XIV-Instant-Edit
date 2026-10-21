@@ -30,7 +30,8 @@ public sealed partial class HairSkeletonRequest
 
     /// <summary>
     /// Envelope check: a player race, 1-64 uniquely named rig bones each after its parent, finite
-    /// model transforms with unit rotations, and chains of known kinds over distinct rig bones.
+    /// model transforms with unit rotations, and chains of known kinds over distinct rig bones, each
+    /// running root to tip (every bone the child of the one before) and ending in a tip off its last bone.
     /// </summary>
     internal static ResultCode? Validate(HairSkeletonRequest? request)
     {
@@ -39,13 +40,13 @@ public sealed partial class HairSkeletonRequest
         if (EstEntryService.EstRaceCode(request.Race) is null || request.Bones is not { Count: >= 1 and <= MaximumBones })
             return ResultCode.InvalidHairSkeleton;
 
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var bones = new Dictionary<string, HairSkeletonBoneRequest>(StringComparer.Ordinal);
         foreach (var bone in request.Bones)
         {
-            if (bone?.Name is not { } name || !BoneName().IsMatch(name) || names.Contains(name) ||
-                bone.Parent is not { } parent || (parent != Root && !names.Contains(parent)) || !ValidModel(bone.Model))
+            if (bone?.Name is not { } name || !BoneName().IsMatch(name) || bones.ContainsKey(name) ||
+                bone.Parent is not { } parent || (parent != Root && !bones.ContainsKey(parent)) || !ValidModel(bone.Model))
                 return ResultCode.InvalidHairSkeleton;
-            names.Add(name);
+            bones.Add(name, bone);
         }
 
         var chained = new HashSet<string>(StringComparer.Ordinal);
@@ -53,9 +54,12 @@ public sealed partial class HairSkeletonRequest
         {
             if (chain is null || !ChainKinds.Contains(chain.Kind, StringComparer.Ordinal) || chain.Bones is not { Count: > 0 })
                 return ResultCode.InvalidHairSkeleton;
-            foreach (var name in chain.Bones)
-                if (name is null || !names.Contains(name) || !chained.Add(name))
+            for (var i = 0; i < chain.Bones.Count; i++)
+                if (chain.Bones[i] is not { } name || !bones.TryGetValue(name, out var bone) || !chained.Add(name) ||
+                    (i > 0 && bone.Parent != chain.Bones[i - 1]))
                     return ResultCode.InvalidHairSkeleton;
+            if (!ValidTip(chain.Tip, bones[chain.Bones[^1]].Model!))
+                return ResultCode.InvalidHairSkeleton;
         }
         return null;
     }
@@ -67,6 +71,15 @@ public sealed partial class HairSkeletonRequest
             return false;
         var length = MathF.Sqrt(model[3] * model[3] + model[4] * model[4] + model[5] * model[5] + model[6] * model[6]);
         return MathF.Abs(length - 1) <= 1e-3f;
+    }
+
+    // Three finite values at least 1 mm from the last bone's model translation.
+    private static bool ValidTip(float[]? tip, float[] last)
+    {
+        if (tip is not { Length: 3 } || tip.Any(value => !float.IsFinite(value)))
+            return false;
+        float x = tip[0] - last[0], y = tip[1] - last[1], z = tip[2] - last[2];
+        return MathF.Sqrt(x * x + y * y + z * z) >= 1e-3f;
     }
 }
 
@@ -84,7 +97,7 @@ public sealed class HairSkeletonBoneRequest
     public float[]? Model { get; set; }
 }
 
-/// <summary>A physics chain: its kind (bangs, side, back, ponytail) and its rig bones.</summary>
+/// <summary>A physics chain: its kind (bangs, side, back, ponytail), its rig bones from root to tip and its tip.</summary>
 public sealed class HairSkeletonChainRequest
 {
     [JsonPropertyName("kind")]
@@ -92,4 +105,8 @@ public sealed class HairSkeletonChainRequest
 
     [JsonPropertyName("bones")]
     public List<string>? Bones { get; set; }
+
+    /// <summary>3 floats: the end of the last bone in game model space.</summary>
+    [JsonPropertyName("tip")]
+    public float[]? Tip { get; set; }
 }

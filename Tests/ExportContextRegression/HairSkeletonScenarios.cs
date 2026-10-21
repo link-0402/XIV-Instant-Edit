@@ -145,7 +145,13 @@ internal static class HairSkeletonScenarios
             new() { Name = "j_ex_hair_01_a", Parent = "j_kao", Model = Model(PositionA, RotationA) },
             new() { Name = "j_ex_hair_01_b", Parent = "j_ex_hair_01_a", Model = Model(PositionB, RotationB) },
         ],
-        Chains = [new() { Kind = "back", Bones = ["j_ex_hair_01_a", "j_ex_hair_01_b"] }],
+        Chains =
+        [
+            new()
+            {
+                Kind = "back", Bones = ["j_ex_hair_01_a", "j_ex_hair_01_b"], Tip = [PositionB.X, PositionB.Y - 0.06f, PositionB.Z],
+            },
+        ],
     };
 
     private static Vector3 RigPosition(string name)
@@ -174,7 +180,12 @@ internal static class HairSkeletonScenarios
             "Hair rig: absent and valid rigs pass");
         var full = Rig();
         full.Bones = ManyBones(64);
+        full.Bones[27].Parent = "j_ex_hair_01_a";
         Require(HairSkeletonRequest.Validate(full) is null, "Hair rig: 64 bones pass");
+        var partial = Rig();
+        partial.Chains![0].Bones = ["j_ex_hair_01_a"];
+        partial.Chains[0].Tip = [PositionA.X, PositionA.Y - 0.06f, PositionA.Z];
+        Require(HairSkeletonRequest.Validate(partial) is null, "Hair rig: a bone in no chain passes");
 
         Invalid(rig => rig.Race = "c0804", "a non-player race");
         Invalid(rig => rig.Bones = [], "zero bones");
@@ -189,8 +200,19 @@ internal static class HairSkeletonScenarios
         Invalid(rig => { for (var i = 3; i < 7; i++) rig.Bones![0].Model![i] *= 0.5f; }, "a rotation of length 0.5");
         Invalid(rig => rig.Chains![0].Kind = "tail", "an unknown chain kind");
         Invalid(rig => rig.Chains![0].Bones!.Add("j_ex_hair_02_a"), "a chain naming an unknown bone");
-        Invalid(rig => rig.Chains!.Add(new() { Kind = "side", Bones = ["j_ex_hair_01_b"] }), "one bone in two chains");
+        Invalid(rig => rig.Chains!.Add(new() { Kind = "side", Bones = ["j_ex_hair_01_b"], Tip = rig.Chains[0].Tip }),
+            "one bone in two chains");
         Invalid(rig => rig.Chains![0].Bones = [], "an empty chain");
+        Invalid(rig => rig.Chains![0].Tip = null, "a chain without a tip");
+        Invalid(rig => rig.Chains![0].Tip = rig.Chains[0].Tip![..2], "a tip of 2 floats");
+        Invalid(rig => rig.Chains![0].Tip![1] = float.NaN, "a NaN in a tip");
+        Invalid(rig => rig.Chains![0].Tip = [PositionB.X, PositionB.Y, PositionB.Z], "a tip on the last bone");
+        Invalid(rig => rig.Chains![0].Bones = ["j_ex_hair_01_b", "j_ex_hair_01_a"], "a chain listed tip to root");
+        Invalid(rig =>
+        {
+            rig.Bones!.Add(new() { Name = "j_ex_hair_02_a", Parent = "j_kao", Model = Model(PositionB, RotationB) });
+            rig.Chains![0].Bones = ["j_ex_hair_01_a", "j_ex_hair_02_a"];
+        }, "a chain bone whose parent is not the previous bone");
     }
 
     private static ExportServer.ExportRequest Export(HairSkeletonRequest? rig) => new()
