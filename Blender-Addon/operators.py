@@ -12,14 +12,18 @@ from .materials import (
     backface_copies,
     commit_mesh_id_plan,
     find_material_group,
+    group_mesh_objects,
     mesh_part_instance_objects,
     mesh_part_instances,
     material_mismatch_parts,
     material_paths,
+    material_sources,
     material_suggestions,
     matching_material_path,
     other_group_materials,
+    same_context_objects,
     set_mesh_part_attribute,
+    shared_base_contexts,
     convert_suffix_mesh_names,
 )
 from .mesh_list import (DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts,
@@ -1559,9 +1563,14 @@ def _model_mesh_objects(context: Context) -> list:
 
 
 def _prepare_quick_materials(context: Context, mesh_group: int) -> tuple:
-    """Offer the materials of the model's other mesh groups in the material dialog."""
+    """Offer the materials of the model's other mesh groups in the material dialog,
+    from the group's own Context only."""
     global _QUICK_MATERIALS, _QUICK_MATERIAL_ITEMS
-    _QUICK_MATERIALS = tuple(other_group_materials(_model_mesh_objects(context), mesh_group))
+    objects = _model_mesh_objects(context)
+    group = next((item for item in group_mesh_objects(objects) if item.mesh_index == mesh_group), None)
+    if group is not None:
+        objects = same_context_objects(objects, group)
+    _QUICK_MATERIALS = tuple(other_group_materials(objects, mesh_group))
     _QUICK_MATERIAL_ITEMS = [(_QUICK_MATERIAL_NONE, "None", "")] + [
         (path, path, f"Use the material of {_mesh_groups_label(groups)}")
         for path, groups in _QUICK_MATERIALS
@@ -1580,7 +1589,8 @@ class XIVIE_OT_mesh_material(Operator):
     @classmethod
     def description(cls, context, properties):
         group = find_material_group(context, properties.mesh_group)
-        paths = material_paths(group.objects) if group is not None else []
+        sources = material_sources(group.objects, visible_meshobj()) if group is not None else []
+        paths = [f"{path} ({mod})" if mod else path for path, mod in sources]
         if len(paths) == 1:
             return f"{paths[0]}\nChange the FFXIV material of mesh group {properties.mesh_group}"
         if paths:
@@ -1589,7 +1599,8 @@ class XIVIE_OT_mesh_material(Operator):
 
     def _material_search(self, context, edit_text):
         group = find_material_group(context, self.mesh_group)
-        suggestions = material_suggestions(group) if group is not None else []
+        suggestions = material_suggestions(
+            group, shared_base_contexts(visible_meshobj())) if group is not None else []
         listed = [path for path, _usage in suggestions]
         suggestions.extend(
             (path, _mesh_groups_label(groups))

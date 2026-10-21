@@ -19,7 +19,7 @@ from bpy.types import Operator, Context
 from ..io.model      import ModelImport
 from ..materials     import (
     attribute_group_data, group_mesh_objects, hair_skeleton_tags,
-    is_body_material,
+    imported_material_path, is_body_material,
 )
 from ..mesh.export   import (export_result, get_export_stats, check_triangulation, check_weights,
                              check_uv_layers, check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode,
@@ -33,6 +33,7 @@ from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, CONTEXT_FIELD_
                              context_metadata_from_wire, reattach_context,
                              context_collections,
                              context_id_for_object, create_collection, mesh_ids_from_name,
+                             try_mesh_ids_from_name,
                              mesh_name_info, MASHUP_SOURCE_MATERIAL_PROPERTY,
                              tag_object,
                              validate_context)
@@ -247,7 +248,55 @@ def mashup_export_selection(context: Context, ref=None, *, minimum_contexts: int
             "Dependency capture failed; re-import after resolving the missing resources: "
             + ", ".join(sorted({item.source_mod_name for item in incomplete})))
 
+    # Contributors are the Contexts whose materials the mesh groups use.
+    object_contexts = _group_material_sources(objects, ordered_refs, object_contexts)
+    materials = {}
+    for context_id, material in object_contexts.values():
+        context_materials = materials.setdefault(context_id, [])
+        if material.casefold() not in {item.casefold() for item in context_materials}:
+            context_materials.append(material)
+    if ref.context_id not in materials:
+        raise ContextValidationError(
+            "All parts of the active Context use another Context's materials; select that Context instead.")
+    ordered_refs = [item for item in ordered_refs if item.context_id in materials]
+
     return objects, ordered_refs, materials, object_contexts
+
+
+def _group_material_sources(objects, refs, object_contexts) -> dict:
+    """Give every part its mesh group's material, taken from a Context whose mod has it.
+
+    The MDL builds each mesh group (per LOD) with the material of its first
+    part, so the other parts take that material too, whatever their own Context.
+    The material comes from the first Context that imported it: the first
+    part's, then the group's other Contexts, then the rest of the mashup.
+    """
+    imported = {
+        item.context_id: {
+            _normalize_mashup_material(path).casefold()
+            for path in map(imported_material_path, item.mesh_objects) if path
+        }
+        for item in refs
+    }
+    order = [item.context_id for item in refs]
+    groups = {}
+    for obj in objects:
+        ids = try_mesh_ids_from_name(obj)
+        if ids is not None and len(obj.data.vertices):
+            groups.setdefault((ids[0], ids[2]), []).append(obj)
+
+    sources = dict(object_contexts)
+    for parts in groups.values():
+        parts.sort(key=lambda obj: (mesh_ids_from_name(obj)[1], obj.name))
+        first_context, material = object_contexts[parts[0].as_pointer()]
+        group_contexts = list(dict.fromkeys(object_contexts[obj.as_pointer()][0] for obj in parts))
+        candidates = group_contexts + [item for item in order if item not in group_contexts]
+        source = next(
+            (item for item in candidates if material.casefold() in imported.get(item, ())),
+            first_context)
+        for obj in parts:
+            sources[obj.as_pointer()] = (source, material)
+    return sources
 
 
 def mashup_target_state(context: Context, ref=None) -> tuple[bool, bool, str]:
@@ -1636,6 +1685,9 @@ def _create_mashup_output_context(
             })
             duplicate["xiv_material"] = alias
             duplicate["instant_edit_xiv_material"] = alias
+            # The mashup's own mod only has the aliases, so the material picker offers those.
+            duplicate["original_material"] = alias
+            duplicate["instant_edit_original_material"] = alias
             duplicate.pop(MASHUP_SOURCE_MATERIAL_PROPERTY, None)
             created_objects.append(duplicate)
 

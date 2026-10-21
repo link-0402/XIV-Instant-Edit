@@ -27,9 +27,10 @@ from .instant_edit.sizes import NO_SIZES, export_names, magic_fit_api, picked_is
 from .materials import (
     attribute_display_name,
     material_mismatch_parts,
-    material_paths,
+    material_sources,
     mesh_display_name,
     mesh_part_attributes,
+    shared_base_contexts,
 )
 from .keymaps import draw_shortcut
 from .mesh_list import layout_rows, lod_zero_objects, placement_plan, scene_parts, untangled_placement
@@ -1017,6 +1018,8 @@ def _draw_mesh_groups(layout, context: Context) -> None:
     for part in parts:
         objects[part.group].extend(part.objects)
     selected = set(context.selected_objects)
+    # Contexts imported from the same base model name the mod each material comes from.
+    shared = shared_base_contexts([obj for part in parts for obj in part.objects])
 
     columns = box.row(align=True).split(factor=0.4, align=True)
     for title in ("OBJECT", "PART", "ATTR"):
@@ -1063,15 +1066,19 @@ def _draw_mesh_groups(layout, context: Context) -> None:
             )
         else:
             mesh_box.separator(type="LINE", factor=0.5)
-            paths = material_paths(objects[row.group])
-            if not paths:
+            sources = material_sources(objects[row.group], (), shared)
+            if not sources:
                 text = "Add Mesh Properties"
-            elif len(paths) > 1:
+            elif len(sources) > 1:
                 text = "Multiple Materials"
             else:
-                text = paths[0]
-            material_row = _aligned_control(mesh_box.column(align=True), "Material:")
+                text = sources[0][0]
+            material_column = mesh_box.column(align=True)
+            material_row = _aligned_control(material_column, "Material:")
             material_row.operator("xiv_ie.mesh_material", text=text).mesh_group = row.group
+            mods = list(dict.fromkeys(mod for _path, mod in sources if mod))
+            if mods:
+                _aligned_control(material_column, "Source:").label(text=", ".join(mods))
 
     selected_triangles = sum(
         _triangle_count(obj)

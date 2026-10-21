@@ -854,7 +854,102 @@ def assign_material_path(objects, value: str) -> str:
     return path
 
 
-def material_suggestions(group: MaterialGroup) -> list[tuple[str, str]]:
+def imported_material_path(obj) -> str:
+    """Return the normalized material path ``obj`` was imported with, if any."""
+    value = _property(obj, "original_material", "")
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    try:
+        return clean_material_path(value.strip())
+    except (AttributeError, TypeError, ValueError):
+        return ""
+
+
+def shared_base_contexts(objects) -> dict:
+    """Map the Contexts of ``objects`` to (source mod name, collection) when two or
+    more of them were imported from the same base model, such as two faces that
+    both replace Miqo'te face 2. Other Contexts are left out."""
+    context_ids = {context_id_for_object(obj) for obj in objects} - {"", None}
+    by_model = defaultdict(dict)
+    for collection in bpy.data.collections:
+        context_id = _property(collection, "context_id", "")
+        if context_id in context_ids:
+            game_path = str(_property(collection, "source_game_path", "")).casefold()
+            mod_name = _property(collection, "source_mod_name", "") or "Unknown mod"
+            by_model[game_path][context_id] = (mod_name, collection)
+    return {
+        context_id: source
+        for contexts in by_model.values() if len(contexts) > 1
+        for context_id, source in contexts.items()
+    }
+
+
+def material_sources(group_objects, objects, shared=None) -> list[tuple[str, str]]:
+    """Return a mesh group's materials, each with the source mod it comes from.
+
+    The mod is only named while visible Contexts share a base model; it is ""
+    otherwise. A material comes from the part's own Context when that Context
+    imported it, else from another Context sharing the base that did, which is
+    where a mashup takes it from too.
+    """
+    shared = shared_base_contexts(objects) if shared is None else shared
+    imported = {
+        context_id: {
+            _material_identity_key(path)
+            for path in map(imported_material_path, collection.all_objects) if path
+        }
+        for context_id, (_mod, collection) in shared.items()
+    }
+    sources = {}
+    for obj in sorted(group_objects, key=lambda obj: (
+            mesh_ids_from_name(obj)[2], mesh_ids_from_name(obj)[1], obj.name.casefold())):
+        path = export_material_path(obj)
+        if not path:
+            continue
+        key = _material_identity_key(path)
+        own = context_id_for_object(obj)
+        candidates = [own] + [context_id for context_id in shared if context_id != own]
+        source = next((context_id for context_id in candidates if key in imported.get(context_id, ())), own)
+        sources.setdefault(key, (path, shared.get(source, ("", None))[0]))
+    return sorted(sources.values(), key=lambda item: item[0].casefold())
+
+
+def same_context_objects(objects, group: MaterialGroup) -> list:
+    """Keep the objects from the Contexts the group's parts belong to.
+
+    A Context's mod only has its own materials, so another Context's material
+    would not load for these parts and would fail a mashup.
+    """
+    contexts = {context_id_for_object(obj) for obj in group.objects}
+    return [obj for obj in objects if context_id_for_object(obj) in contexts]
+
+
+def material_suggestions(group: MaterialGroup, shared=None) -> list[tuple[str, str]]:
+    """Return the group's imported materials first, then its current ones with part counts.
+
+    ``shared`` is shared_base_contexts(): an imported material then names the
+    mod it was imported from."""
+    shared = shared or {}
+    mods = {}
+    for obj in group.objects:
+        path = imported_material_path(obj)
+        if path:
+            mods.setdefault(path, shared.get(context_id_for_object(obj), ("", None))[0])
+    imported = sorted(mods, key=str.casefold)
+    current = _current_material_suggestions(group)
+    suggestions = []
+    for path in imported:
+        usage = next((usage for current_path, usage in current
+                      if matching_material_path(current_path, (path,))), "")
+        label = f"Imported from {mods[path]}" if mods[path] else "Imported"
+        suggestions.append((path, f"{label}, {usage}" if usage else label))
+    suggestions.extend(
+        (path, usage) for path, usage in current
+        if matching_material_path(path, imported) is None)
+    return suggestions
+
+
+def _current_material_suggestions(group: MaterialGroup) -> list[tuple[str, str]]:
     """Return material candidates and per-part usage information for one group."""
     counts = defaultdict(int)
     representatives = {}

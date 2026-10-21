@@ -1103,6 +1103,56 @@ def assert_mesh_material_quick_selectors(addon):
         ]
         if suggested.count(top_b) != 1 or top_a not in suggested:
             raise AssertionError("Material search did not include each other group's material once")
+
+        # A group retargeted to another Context's material still offers the one it was
+        # imported with first, and never another Context's materials.
+        top_c = "/mt_c0201e0501_top_c.mtrl"
+        foreign = "/mt_c0201e0501_foreign.mtrl"
+        for obj in objects:
+            obj["context_id"] = "a" * 32
+        new_part["original_material"] = top_c.lstrip("/")
+        other_context = create("58.0 Quick Other Context", foreign)
+        other_context["context_id"] = "b" * 32
+        dialog.mesh_group = 53
+        operators._prepare_quick_materials(bpy.context, 53)
+        offered = operators.XIVIE_OT_mesh_material._material_search(dialog, bpy.context, "")
+        if offered[0] != (top_c, "Imported"):
+            raise AssertionError(f"The imported material was not offered first: {offered}")
+        if any(path == foreign for path, _usage in offered) or any(
+                path == foreign for path, _groups in operators._QUICK_MATERIALS):
+            raise AssertionError("The material dialog offered another Context's material")
+        new_part["xiv_material"] = top_c
+        offered = operators.XIVIE_OT_mesh_material._material_search(dialog, bpy.context, "")
+        if offered[0] != (top_c, "Imported, 1 part") or [path for path, _ in offered].count(top_c) != 1:
+            raise AssertionError(f"An imported material in use was not listed once: {offered}")
+
+        # Two Contexts from one base model name the mod each material comes from.
+        context_collections = []
+        for context_id, mod_name, imported_part in (("a" * 32, "Luci Sculpt", new_part),
+                                                     ("b" * 32, "Cinder Sculpt", other_context)):
+            collection = bpy.data.collections.new(mod_name)
+            collection["context_id"] = context_id
+            collection["source_game_path"] = "chara/human/c0201/obj/body/b0001/model/c0201b0001_top.mdl"
+            collection["source_mod_name"] = mod_name
+            collection.objects.link(imported_part)
+            bpy.context.scene.collection.children.link(collection)
+            context_collections.append(collection)
+        other_context["original_material"] = foreign.lstrip("/")
+        try:
+            group = materials.find_material_group(bpy.context, 53)
+            shared = materials.shared_base_contexts(bpy.context.visible_objects)
+            if materials.material_sources(group.objects, (), shared) != [(top_c, "Luci Sculpt")]:
+                raise AssertionError("A group's material did not name its own Context's mod")
+            offered = operators.XIVIE_OT_mesh_material._material_search(dialog, bpy.context, "")
+            if offered[0] != (top_c, "Imported from Luci Sculpt, 1 part"):
+                raise AssertionError(f"The imported material did not name its mod: {offered}")
+            new_part["xiv_material"] = foreign
+            if materials.material_sources(group.objects, (), shared) != [(foreign, "Cinder Sculpt")]:
+                raise AssertionError("Another Context's material did not name the mod that has it")
+        finally:
+            new_part["xiv_material"] = top_c
+            for collection in context_collections:
+                bpy.data.collections.remove(collection)
         print("[PASS] Mesh material dialog offers the model's other group materials")
 
 
@@ -2072,6 +2122,40 @@ def run() -> None:
         show, enabled, message = instant_ops.mashup_target_state(bpy.context)
         if not show or not enabled or message:
             raise AssertionError(f"Valid multi-mod Contexts did not enable Create Mashup: {message}")
+        mashup_obj.name = "1.9 Mashup"
+        try:
+            show, enabled, message = instant_ops.mashup_target_state(bpy.context)
+            _objects, _refs, _materials, shared_contexts = instant_ops.mashup_export_selection(bpy.context)
+        finally:
+            mashup_obj.name = "3.0 Mashup"
+        if not show or not enabled or message:
+            raise AssertionError(f"A mesh group shared by two Contexts blocked Create Mashup: {message}")
+        if shared_contexts[mashup_obj.as_pointer()] != shared_contexts[added_group.as_pointer()]:
+            raise AssertionError("A part in another Context's mesh group did not take that group's material")
+
+        # The group's material comes from the Context that imported it, even when
+        # the first part belongs to another Context.
+        first_part = added_group.copy()
+        first_part.data = added_group.data.copy()
+        first_part.name = "20.0 First Part"
+        later_part = added_group.copy()
+        later_part.data = added_group.data.copy()
+        later_part.name = "20.5 Later Part"
+        for part, imported in ((first_part, "mt_c0801f0002_fac_c.mtrl"), (later_part, "mt_c0801f0002_etc_d.mtrl")):
+            bpy.context.scene.collection.objects.link(part)
+            part["original_material"] = imported
+        metal = "/mt_c0801f0002_etc_d.mtrl"
+        try:
+            sources = instant_ops._group_material_sources(
+                (first_part, later_part),
+                (SimpleNamespace(context_id="A", mesh_objects=(first_part,)),
+                 SimpleNamespace(context_id="B", mesh_objects=(later_part,))),
+                {first_part.as_pointer(): ("A", metal), later_part.as_pointer(): ("B", metal)})
+        finally:
+            for part in (first_part, later_part):
+                bpy.data.objects.remove(part, do_unlink=True)
+        if set(sources.values()) != {("B", metal)}:
+            raise AssertionError(f"The group's material did not come from the Context that has it: {sources}")
 
         readiness_clean = instant_ops.export_target_issues(
             bpy.context, ref, material_coverage_warning=False
