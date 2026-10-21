@@ -27,6 +27,8 @@ _VANILLA_HAIR_BONE = re.compile(r"j_ex_h[0-9]{4}_")
 # A mesh's bone table holds at most 64 bones.
 MAX_MESH_BONES = 64
 _SCALE_TOLERANCE = 1e-4
+# A chain's tip must be this far from its last bone, in metres.
+_MIN_CHAIN_TIP = 0.001
 _BLENDER_TO_GAME = Matrix(GAME_TO_BLENDER.tolist()).inverted()
 
 
@@ -123,8 +125,15 @@ def _rig_bones(armature, matrix) -> list[dict]:
     return bones
 
 
-def _chains_issue(chains, bone_names, armature_name) -> str:
+def _game_point(matrix, point) -> list[float]:
+    """An armature-space point in the game's model space."""
+    return list(_BLENDER_TO_GAME @ matrix @ point)
+
+
+def _chains_issue(chains, armature, matrix) -> str:
     """Why the rig's chains break the plugin's rules, or ""."""
+    armature_name = armature.name
+    bone_names = {bone.name for bone in armature.data.bones if bone.name.startswith(BONE_PREFIX)}
     if not isinstance(chains, list):
         return f"The chains of the hair rig on {armature_name} are not a list."
     chained = set()
@@ -144,6 +153,19 @@ def _chains_issue(chains, bone_names, armature_name) -> str:
             if name in chained:
                 return f"{name} is in more than one chain of the hair rig on {armature_name}."
             chained.add(name)
+        for previous, name in zip(members, members[1:]):
+            parent = armature.data.bones[name].parent
+            if parent is None or parent.name != previous:
+                return (
+                    f"{name} follows {previous} in the {kind} chain of the hair rig on {armature_name}, "
+                    f"but its parent is {parent.name if parent is not None else 'none'}. "
+                    "List a chain's bones from the root down."
+                )
+        last = armature.data.bones[members[-1]]
+        head = _game_point(matrix, last.head_local)
+        tip = _game_point(matrix, last.tail_local)
+        if sum((a - b) ** 2 for a, b in zip(head, tip)) < _MIN_CHAIN_TIP ** 2:
+            return f"The {kind} chain of the hair rig on {armature_name} ends in {last.name}, which has no length."
     return ""
 
 
@@ -199,9 +221,13 @@ def hair_skeleton_payload(objects, reset_scaling: bool = False) -> tuple[dict | 
         )
     chains = rig.get("chains")
     chains = [] if chains is None else chains
-    chains_issue = _chains_issue(chains, {bone["name"] for bone in bones}, armature.name)
+    chains_issue = _chains_issue(chains, armature, matrix)
     if chains_issue:
         return None, chains_issue
+    chains = [
+        {**chain, "tip": _game_point(matrix, armature.data.bones[chain["bones"][-1]].tail_local)}
+        for chain in chains
+    ]
     missing = hair_groups - {bone.name for bone in armature.data.bones}
     if missing:
         return None, f"{armature.name} has no bone for the hair groups {_listed(missing)}."

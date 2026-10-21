@@ -1343,8 +1343,14 @@ def run_staging_isolation_regression(addon) -> None:
                 issue == "" and payload is not None and payload["race"] == "c0801" and
                 [bone["name"] for bone in payload["bones"]] == ["j_ex_hair_01_a", "j_ex_hair_01_b"] and
                 [bone["parent"] for bone in payload["bones"]] == ["j_kao", "j_ex_hair_01_a"] and
-                payload["chains"] == [{"kind": "back", "bones": ["j_ex_hair_01_a", "j_ex_hair_01_b"]}],
+                [(chain["kind"], chain["bones"]) for chain in payload["chains"]] ==
+                [("back", ["j_ex_hair_01_a", "j_ex_hair_01_b"])],
                 "hair rig: the rig's j_ex_hair_ bones are sent parents first, under j_kao or a rig bone",
+            )
+            tip = payload["chains"][0].get("tip") or ()
+            _require(
+                len(tip) == 3 and all(abs(got - want) < 1e-5 for got, want in zip(tip, (0.0, 1.25, -0.08))),
+                "hair rig: a chain sends its last bone's tail as its tip, in the game's model space",
             )
             model_a = payload["bones"][0]["model"]
             _require(
@@ -1437,6 +1443,10 @@ def run_staging_isolation_regression(addon) -> None:
             payload, issue = rig_issue(rig_with(chains=[{"kind": "side", "bones": []}]))
             _require(payload is None and "side" in issue and "no bones" in issue,
                      "hair rig: an empty chain is refused")
+            payload, issue = rig_issue(rig_with(chains=[
+                {"kind": "back", "bones": ["j_ex_hair_01_b", "j_ex_hair_01_a"]}]))
+            _require(payload is None and "List a chain's bones from the root down" in issue,
+                     "hair rig: a chain listed tip first is refused")
             payload, issue = rig_issue(groups=("j_ex_hair_01_a", "j_ex_h0108_01"))
             _require(payload is None and "j_ex_h0108_01" in issue and "4.0 Checked Hair" in issue,
                      "hair rig: weights left on the vanilla hair skeleton's bones are named with their mesh")
@@ -1444,13 +1454,29 @@ def run_staging_isolation_regression(addon) -> None:
             # Reset Armature Scaling exports the mesh at scale 1, so the bones lose the armature's scale too.
             rig.scale = (2.0, 2.0, 2.0)
             bpy.context.view_layer.update()
-            scaled = hair_rig.hair_skeleton_payload([hair])[0]["bones"][0]["model"]
-            reset = hair_rig.hair_skeleton_payload([hair], reset_scaling=True)[0]["bones"][0]["model"]
+            scaled_payload = hair_rig.hair_skeleton_payload([hair])[0]
+            reset_payload = hair_rig.hair_skeleton_payload([hair], reset_scaling=True)[0]
+            scaled = scaled_payload["bones"][0]["model"]
+            reset = reset_payload["bones"][0]["model"]
             _require(
                 all(abs(got - want) < 1e-5 for got, want in zip(scaled[:3], (0.0, 2.9, -0.16))) and
                 all(abs(got - want) < 1e-5 for got, want in zip(reset[:3], (0.0, 1.45, -0.08))),
                 "hair rig: Reset Armature Scaling divides the armature's scale out of the bones",
             )
+            scaled_tip = scaled_payload["chains"][0].get("tip") or ()
+            reset_tip = reset_payload["chains"][0].get("tip") or ()
+            _require(
+                len(scaled_tip) == 3 and len(reset_tip) == 3 and
+                all(abs(got - want) < 1e-5 for got, want in zip(scaled_tip, (0.0, 2.5, -0.16))) and
+                all(abs(got - want) < 1e-5 for got, want in zip(reset_tip, (0.0, 1.25, -0.08))),
+                "hair rig: Reset Armature Scaling divides the armature's scale out of the tips too",
+            )
+            # The plugin measures a chain's last bone in the game's model space, scale included.
+            rig.scale = (0.001, 0.001, 0.001)
+            bpy.context.view_layer.update()
+            payload, issue = hair_rig.hair_skeleton_payload([hair])
+            _require(payload is None and "j_ex_hair_01_b" in issue and "has no length" in issue,
+                     "hair rig: a chain whose last bone is under 1 mm long is refused")
             for bad_scale in ((1.0, 2.0, 1.0), (-1.0, -1.0, -1.0)):
                 rig.scale = bad_scale
                 bpy.context.view_layer.update()
