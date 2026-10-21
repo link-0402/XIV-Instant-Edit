@@ -54,6 +54,7 @@ public enum ResultCode
     InvalidContributors,
     InvalidAttributeGroups,
     InvalidEstEntries,
+    InvalidHairSkeleton,
     InvalidBackupName,
     InvalidBackupClear,
     DuplicateContext,
@@ -123,6 +124,7 @@ public enum ResultCode
     SizesExportedWithWarnings,
     AttributeGroupConflict,
     AttributeGroupWriteFailed,
+    HairSkeletonFailed,
 
     // Finding the source mod and its option (SourceMods, ModOptionGroups, ModelExportService).
     DestinationUnavailable,
@@ -271,6 +273,7 @@ public static class ResultCodes
         ResultCode.InvalidContributors => "invalid_contributors",
         ResultCode.InvalidAttributeGroups => "invalid_attribute_groups",
         ResultCode.InvalidEstEntries => "invalid_est_entries",
+        ResultCode.InvalidHairSkeleton => "invalid_hair_skeleton",
         ResultCode.InvalidBackupName => "invalid_backup_name",
         ResultCode.InvalidBackupClear => "invalid_backup_clear",
         ResultCode.DuplicateContext => "duplicate_context",
@@ -337,6 +340,7 @@ public static class ResultCodes
         ResultCode.SizesExportedWithWarnings => "sizes_exported_with_warnings",
         ResultCode.AttributeGroupConflict => "attribute_group_conflict",
         ResultCode.AttributeGroupWriteFailed => "attribute_group_write_failed",
+        ResultCode.HairSkeletonFailed => "hair_skeleton_failed",
 
         ResultCode.DestinationUnavailable => "destination_unavailable",
         ResultCode.DestinationUnresolvable => "destination_unresolvable",

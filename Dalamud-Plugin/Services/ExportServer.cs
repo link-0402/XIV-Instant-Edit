@@ -1876,9 +1876,10 @@ public sealed partial class ExportServer : IDisposable
             ResultCode.InvalidStage or ResultCode.InvalidErrorCode or ResultCode.InvalidCause or
             ResultCode.InvalidRemedy or ResultCode.InvalidDiagnosticId or ResultCode.InvalidExportFile or
             ResultCode.InvalidContributors or ResultCode.InvalidAttributeGroups or ResultCode.InvalidEstEntries or
-            ResultCode.InvalidBackupName or ResultCode.InvalidBackupClear or ResultCode.InvalidRace or
-            ResultCode.InvalidSizes or ResultCode.InvalidSizeName or ResultCode.InvalidDefaultSize or
-            ResultCode.InvalidModelPath or ResultCode.InvalidContext or ResultCode.InvalidCapability or
+            ResultCode.InvalidHairSkeleton or ResultCode.InvalidBackupName or ResultCode.InvalidBackupClear or
+            ResultCode.InvalidRace or ResultCode.InvalidSizes or ResultCode.InvalidSizeName or
+            ResultCode.InvalidDefaultSize or ResultCode.InvalidModelPath or ResultCode.InvalidContext or
+            ResultCode.InvalidCapability or
             ResultCode.InvalidCallbackPort or ResultCode.InvalidExportId or ResultCode.InvalidPendingExport or
             ResultCode.InvalidDestinationState or ResultCode.InvalidVariant or ResultCode.InvalidVariantGroup or
             ResultCode.InvalidRestore or ResultCode.InvalidBackupTarget or ResultCode.InvalidMashup or
@@ -1903,7 +1904,8 @@ public sealed partial class ExportServer : IDisposable
             ResultCode.ApplyFailed or ResultCode.DestinationUnsafe or ResultCode.MissingNewModName or
             ResultCode.UnexpectedNewModName or ResultCode.MissingSourceTarget or ResultCode.StaleVariantTarget or
             ResultCode.AmbiguousSourceOption or ResultCode.SourceOptionUnavailable or ResultCode.WriteFailed or
-            ResultCode.PenumbraRootMissing or ResultCode.PenumbraRootUnsafe or ResultCode.PenumbraUnavailable or
+            ResultCode.HairSkeletonFailed or ResultCode.PenumbraRootMissing or ResultCode.PenumbraRootUnsafe or
+            ResultCode.PenumbraUnavailable or
             ResultCode.VanillaModCreated or ResultCode.VanillaModCreatedWithWarnings or
             ResultCode.VanillaModCreateFailed or ResultCode.RaceModelExported or
             ResultCode.RaceModelExportedWithWarnings or ResultCode.SizesExported or
@@ -1970,8 +1972,9 @@ public sealed partial class ExportServer : IDisposable
             ResultCode.InvalidOperation or ResultCode.InvalidStage or ResultCode.InvalidErrorCode or
             ResultCode.InvalidCause or ResultCode.InvalidRemedy or ResultCode.InvalidDiagnosticId or
             ResultCode.InvalidExportFile or ResultCode.InvalidContributors or ResultCode.InvalidAttributeGroups or
-            ResultCode.InvalidEstEntries or ResultCode.InvalidBackupName or ResultCode.InvalidBackupClear or
-            ResultCode.DuplicateContext or ResultCode.InvalidRace or ResultCode.InvalidSizes or
+            ResultCode.InvalidEstEntries or ResultCode.InvalidHairSkeleton or ResultCode.InvalidBackupName or
+            ResultCode.InvalidBackupClear or ResultCode.DuplicateContext or ResultCode.InvalidRace or
+            ResultCode.InvalidSizes or
             ResultCode.InvalidSizeName or ResultCode.InvalidDefaultSize or ResultCode.InvalidModelPath or
             ResultCode.Accepted or ResultCode.InvalidContext or ResultCode.InvalidCallbackPort or
             ResultCode.ServerStopped or ResultCode.ContextReattached or ResultCode.ContextRevoked or
@@ -1982,7 +1985,8 @@ public sealed partial class ExportServer : IDisposable
             ResultCode.MissingNewModName or ResultCode.UnexpectedNewModName or ResultCode.InvalidPendingExport or
             ResultCode.InvalidDestinationState or ResultCode.MissingSourceTarget or ResultCode.InvalidVariant or
             ResultCode.InvalidVariantGroup or ResultCode.StaleVariantTarget or ResultCode.AmbiguousSourceOption or
-            ResultCode.SourceOptionUnavailable or ResultCode.WriteFailed or ResultCode.PenumbraRootMissing or
+            ResultCode.SourceOptionUnavailable or ResultCode.WriteFailed or ResultCode.HairSkeletonFailed or
+            ResultCode.PenumbraRootMissing or
             ResultCode.PenumbraRootUnsafe or ResultCode.PenumbraUnavailable or ResultCode.VanillaModCreated or
             ResultCode.VanillaModCreatedWithWarnings or ResultCode.VanillaModCreateFailed or
             ResultCode.RaceModelUnavailable or ResultCode.RaceModelExported or
