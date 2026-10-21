@@ -4,14 +4,26 @@ using static InstantEdit.Services.Materials.Presets.PresetChecks;
 
 namespace InstantEdit.Services.Materials.Presets;
 
-/// <summary>The presets the Material window offers, in the order it shows them. Adding one is adding a class here.</summary>
+/// <summary>
+/// The presets the Material window offers, in the order it shows them: shader setups, then looks. Adding
+/// one is adding a class here.
+/// </summary>
 public static class EffectPresets
 {
     public static IReadOnlyList<MaterialEffectPreset> All { get; } =
     [
-        new Metal(), new Glow(), new ScrollingPattern(), new Glass(), new SeeThrough(), new Matcap(), new Dyeable(), new DetailPattern(),
-        new Velvet(), new CleanUp(),
+        new Matcap(), new ScrollingPattern(), new Glass(),
+        new Metal(), new Glow(), new Velvet(), new Dyeable(), new DetailPattern(), new SeeThrough(),
     ];
+
+    /// <summary>Clean up, which the window's menu offers on its own, asking first.</summary>
+    public static MaterialEffectPreset CleanUp { get; } = new CleanUpPreset();
+
+    private const string LegacyRowsNote = "Convert to Dawntrail first: legacy colour rows don't carry over to this shader.";
+
+    /// <summary>Rows only Convert to Dawntrail carries over: a 16-row table, or any table on characterlegacy.shpk, which reads its rows its own way.</summary>
+    private static bool LegacyRows(MaterialDocument doc)
+        => doc.Table is { Kind: ColorTableKind.Legacy } || doc.Table != null && doc.ShaderPackage.Equals(LegacyConversion.LegacyShader, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Builds a result, adding the row target's note to the warnings.</summary>
     private static PresetResult Result(MaterialDocument doc, List<string> changes, List<string> warnings, string? note = null, params PresetTexture[] textures)
@@ -102,29 +114,30 @@ public static class EffectPresets
 
         public override string Name => "Scrolling pattern";
         public override string Description => "Glowing veins scroll across the rows.";
+        public override PresetKind Kind => PresetKind.Setup;
         public override bool NeedsRows => true;
-        public override string Requirement => "Needs normal, mask and index textures.";
-
-        public override bool Applies(PresetContext context)
-            => new[] { NormalSampler, MaskSampler, IndexSampler }.All(sampler => context.Doc.Slots.Any(slot => slot.SamplerId == sampler && slot.Path.Length > 0));
+        public override string Requirement => LegacyRowsNote;
+        public override bool Applies(PresetContext context) => !LegacyRows(context.Doc);
 
         public override PresetResult Apply(PresetContext context, RowTarget target)
         {
             var changes = new List<string>();
-            var doc = Switch(context.Doc, "characterscroll.shpk", changes);
+            var textures = new List<PresetTexture>();
+            var (doc, madeIndex) = WithMissingTextures(context, context.Doc, [NormalSampler, MaskSampler, IndexSampler], changes, textures);
+            doc = Switch(doc, "characterscroll.shpk", changes);
             doc = doc.WithKey(ReflectionSource, Catchlight);
             var existing = doc.Slots.FirstOrDefault(slot => slot.SamplerId == CatchlightSampler && slot.Path.Length > 0);
-            var textures = new List<PresetTexture>();
             if (existing == null)
             {
-                var path = BesideMaterial(context.MaterialGamePath, "_fx.tex");
+                var path = NewTexturePath(context, "_fx.tex");
                 doc = WithSamplerPath(doc, CatchlightSampler, path);
                 textures.Add(new PresetTexture("Scroll pattern", path, ScrollPattern()));
                 changes.Add($"Added the pattern texture {path}. Replace it with your own image later.");
             }
             doc = doc.WithConstant(0x738A241C, [0.2f]).WithConstant(0x71CC9A45, [0.2f]).WithConstant(0x43345395, [1.5f]).WithConstant(0x4172EDCC, [1.5f]);
             changes.Add("Reflections come from the pattern; layer 1 scrolls at 0.2 and repeats 1.5 times.");
-            var (rows, note) = Rows(context with { Doc = doc }, target);
+            // A new index shows pair 1 only, so every row may scroll.
+            var (rows, note) = Rows(context with { Doc = doc }, madeIndex ? RowTarget.All : target);
             doc = EditRows(doc, rows, row => row with { ScrollLayer = 1f, Emissive = ScrollGlow(row) });
             changes.Add($"{RowCount(rows.Length)} show layer 1 and glow, since the pattern shows through the glow.");
             return Result(doc, changes, [], note, [.. textures]);
@@ -135,16 +148,19 @@ public static class EffectPresets
     {
         public override string Name => "Glass";
         public override string Description => "See-through glass that bends what is behind it.";
-        public override bool Applies(PresetContext context) => context.Facts.SamplesColorTable;
-        public override string Requirement => "Needs a gear shader.";
+        public override PresetKind Kind => PresetKind.Setup;
+        public override string Requirement => LegacyRowsNote;
+        public override bool Applies(PresetContext context) => !LegacyRows(context.Doc);
 
         public override PresetResult Apply(PresetContext context, RowTarget target)
         {
             var changes = new List<string>();
-            var doc = Switch(context.Doc, "characterglass.shpk", changes);
+            var textures = new List<PresetTexture>();
+            var (doc, _) = WithMissingTextures(context, context.Doc, [NormalSampler, MaskSampler, IndexSampler], changes, textures);
+            doc = Switch(doc, "characterglass.shpk", changes);
             doc = doc.WithConstant(0x7801E004, [1.5f]).WithConstant(0xC4647F37, [0.1f]).WithFlags(doc.ShaderFlags | Translucent);
             changes.Add("Refraction 1.5, glass thickness 0.1, translucent.");
-            return Result(doc, changes, []);
+            return Result(doc, changes, [], null, [.. textures]);
         }
     }
 
@@ -177,16 +193,18 @@ public static class EffectPresets
     {
         public override string Name => "Matcap";
         public override string Description => "A painted lighting ball from the matcap library shades it.";
-        public override string Requirement => "Needs a normal map.";
-        public override bool Applies(PresetContext context) => context.Doc.Slots.Any(slot => slot.SamplerId == NormalSampler && slot.Path.Length > 0);
+        public override PresetKind Kind => PresetKind.Setup;
+        public override bool Applies(PresetContext context) => true;
 
         public override PresetResult Apply(PresetContext context, RowTarget target)
         {
             var changes = new List<string>();
-            var doc = Switch(context.Doc, "characterreflection.shpk", changes);
+            var textures = new List<PresetTexture>();
+            var (doc, _) = WithMissingTextures(context, context.Doc, [NormalSampler], changes, textures);
+            doc = Switch(doc, "characterreflection.shpk", changes);
             doc = WithSamplerPath(doc, CatchlightSampler, MaterialPatcher.MatcapLibraryDefault);
             changes.Add($"The catchlight texture is {MaterialPatcher.MatcapLibraryDefault}. Pick another from the matcap library in Textures.");
-            return Result(doc, changes, []);
+            return Result(doc, changes, [], null, [.. textures]);
         }
     }
 
@@ -269,7 +287,7 @@ public static class EffectPresets
         }
     }
 
-    private sealed class CleanUp : MaterialEffectPreset
+    private sealed class CleanUpPreset : MaterialEffectPreset
     {
         private const uint VertexColour = 0xF52CCF05;
         private const uint UsualVertexColour = 0xA7D2FF60;

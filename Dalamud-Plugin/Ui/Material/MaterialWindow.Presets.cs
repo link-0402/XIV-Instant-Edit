@@ -63,11 +63,18 @@ internal sealed partial class MaterialWindow
             ImGui.TextColored(Theme.Muted, "Presets need a character shader.");
             return;
         }
-        var context = new PresetContext(doc, facts, usage, selectedPair, mask, current.Source.GamePath)
+        var source = current.Source;
+        var context = new PresetContext(doc, facts, usage, selectedPair, mask, source.GamePath)
         {
             DyeTemplate = stains?.Templates.FirstOrDefault() ?? 0,
+            PathTaken = path => TextureTaken(current, source, path),
         };
-        Widgets.SectionHeader("Presets");
+        Widgets.SectionHeader("Shader setups", "new shader, missing textures added");
+        foreach (var preset in EffectPresets.All.Where(preset => preset.Kind == PresetKind.Setup))
+            DrawPresetCard(current, preset, context, null);
+        ImGui.Spacing();
+        ImGui.Separator();
+        Widgets.SectionHeader("Looks", "keep this shader");
         if (doc.Table is { Kind: ColorTableKind.Dawntrail })
         {
             ImGui.AlignTextToFramePadding();
@@ -89,33 +96,38 @@ internal sealed partial class MaterialWindow
                 $"\nPair {pair}/1 is its top row (row {pair * 2 - 1}), {pair}/2 its bottom row (row {pair * 2}).");
         }
         var maskProblem = MaskAdjustProblem(doc);
-        foreach (var preset in EffectPresets.All)
+        foreach (var preset in EffectPresets.All.Where(preset => preset.Kind == PresetKind.Look))
+            DrawPresetCard(current, preset, context, maskProblem);
+    }
+
+    /// <summary>One preset: its name and Apply button, what it does, and why it can't apply when it can't.</summary>
+    private void DrawPresetCard(MaterialSession current, MaterialEffectPreset preset, PresetContext context, string? maskProblem)
+    {
+        using var id = ImRaii.PushId(preset.Name);
+        ImGui.Separator();
+        var presetContext = preset.MaskEdit != null ? context with { AdjustsMask = adjustMask && maskProblem == null } : context;
+        var applies = preset.Applies(presetContext);
+        ImGui.TextColored(applies ? Theme.Text : Theme.Muted, preset.Name);
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - Theme.Scaled(70)));
+        using (ImRaii.Disabled(!applies || working != null))
         {
-            using var id = ImRaii.PushId(preset.Name);
-            ImGui.Separator();
-            var presetContext = preset.MaskEdit != null ? context with { AdjustsMask = adjustMask && maskProblem == null } : context;
-            var applies = preset.Applies(presetContext);
-            ImGui.TextColored(applies ? Theme.Text : Theme.Muted, preset.Name);
-            ImGui.SameLine();
-            ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - Theme.Scaled(70)));
-            using (ImRaii.Disabled(!applies || working != null))
+            if (ImGui.Button("Apply", Theme.Scaled(70, 0)))
             {
-                if (ImGui.Button("Apply", Theme.Scaled(70, 0)))
-                {
-                    ApplyPreset(current, preset, presetContext);
-                    ImGui.CloseCurrentPopup();
-                }
+                ApplyPreset(current, preset, presetContext);
+                ImGui.CloseCurrentPopup();
             }
-            if (!applies)
-                Tip(preset.Requirement);
-            else if (preset.Name == "Clean up" && ImGui.IsItemHovered())
-                Tip(string.Join("\n", preset.Apply(presetContext, presetTarget).Changes));
-            ImGui.TextColored(Theme.Hint, preset.Description);
-            if (preset.Name == ScrollingPattern)
-                DrawUv2Option(current);
-            if (preset.MaskEdit != null && doc.Table is { Kind: ColorTableKind.Dawntrail })
-                DrawAdjustMask(maskProblem);
         }
+        ImGui.TextColored(Theme.Hint, preset.Description);
+        if (!applies)
+        {
+            ImGui.TextColored(Theme.Warning, preset.Requirement);
+            return;
+        }
+        if (preset.Name == ScrollingPattern)
+            DrawUv2Option(current);
+        if (preset.MaskEdit != null && context.Doc.Table is { Kind: ColorTableKind.Dawntrail })
+            DrawAdjustMask(maskProblem);
     }
 
     private void DrawAdjustMask(string? problem)
@@ -212,7 +224,7 @@ internal sealed partial class MaterialWindow
         if (ShaderPackages.Get(doc.ShaderPackage) is not { } facts)
             return;
         var context = new PresetContext(doc, facts, usage, selectedPair, mask, current.Source.GamePath);
-        pendingCleanUp = EffectPresets.All.Single(preset => preset is { Name: "Clean up" }).Apply(context, RowTarget.All);
+        pendingCleanUp = EffectPresets.CleanUp.Apply(context, RowTarget.All);
         openCleanUp = true;
     }
 
@@ -262,7 +274,8 @@ internal sealed partial class MaterialWindow
         PresetResult result;
         try
         {
-            result = preset.Apply(context, preset.NeedsRows ? presetTarget : RowTarget.All);
+            // Rows to change belongs to the looks; a setup changes the rows the index uses.
+            result = preset.Apply(context, !preset.NeedsRows ? RowTarget.All : preset.Kind == PresetKind.Setup ? RowTarget.Used : presetTarget);
         }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or InvalidDataException)
         {

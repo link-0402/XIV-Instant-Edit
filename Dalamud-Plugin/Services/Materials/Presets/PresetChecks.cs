@@ -107,6 +107,49 @@ public static class PresetChecks
         return doc.WithAddedSlot(sampler, path);
     }
 
+    /// <summary>A free path beside the material for a texture a preset makes, ending in <paramref name="suffix"/>.</summary>
+    public static string NewTexturePath(PresetContext context, string suffix)
+        => MaterialSession.FreeTexturePath(BesideMaterial(context.MaterialGamePath, suffix), context.PathTaken ?? (_ => false));
+
+    /// <summary>
+    /// Gives each of <paramref name="samplers"/> the material has no texture for a plain one beside the
+    /// material: a flat normal (blue, the opacity, full), a neutral mask (full shine, the rows' own
+    /// roughness, full base colour) or an index that shows pair 1's top row everywhere.
+    /// </summary>
+    /// <returns>The document and whether it made the index texture.</returns>
+    public static (MaterialDocument Doc, bool MadeIndex) WithMissingTextures(PresetContext context, MaterialDocument doc, uint[] samplers, List<string> changes,
+        List<PresetTexture> textures)
+    {
+        var madeIndex = false;
+        foreach (var sampler in samplers)
+        {
+            if (doc.Slots.Any(slot => slot.SamplerId == sampler && slot.Path.Length > 0))
+                continue;
+            var (label, suffix, bytes, note) = sampler switch
+            {
+                NormalSampler => ("Flat normal", "_n.tex", Solid(255, 128, 128), "a flat normal map"),
+                MaskSampler => ("Neutral mask", "_m.tex", Solid(255, 128, 255), "a neutral mask"),
+                IndexSampler => ("Pair 1 index", "_id.tex", Solid(0, 255, 0), "an index texture that shows pair 1 everywhere"),
+                _ => throw new ArgumentOutOfRangeException(nameof(samplers), $"No plain texture for sampler 0x{sampler:X8}."),
+            };
+            var path = NewTexturePath(context, suffix);
+            doc = WithSamplerPath(doc, sampler, path);
+            textures.Add(new PresetTexture(label, path, bytes));
+            changes.Add($"Added {note} ({path}). Replace it with your own later.");
+            madeIndex |= sampler == IndexSampler;
+        }
+        return (doc, madeIndex);
+    }
+
+    /// <summary>A 4 x 4 texture of one colour, BGRA with mipmaps.</summary>
+    private static byte[] Solid(byte blue, byte green, byte red)
+    {
+        var bgra = new byte[4 * 4 * 4];
+        for (var i = 0; i < 16; i++)
+            (bgra[i * 4], bgra[i * 4 + 1], bgra[i * 4 + 2], bgra[i * 4 + 3]) = (blue, green, red, 255);
+        return TextureFiles.BgraTexWithMips(bgra, 4, 4);
+    }
+
     /// <summary>
     /// The glow a scrolling row needs, since the pattern only shows through the glow: a row that
     /// glows keeps its colour, a dark one glows in its base colour, a black one in white.

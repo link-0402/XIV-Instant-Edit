@@ -28,6 +28,19 @@ public sealed record PresetContext(MaterialDocument Doc, ShaderPackageFacts Fact
 
     /// <summary>The window paints the preset's <see cref="MaterialEffectPreset.MaskEdit"/> into the mask, so the mask needs no check.</summary>
     public bool AdjustsMask { get; init; }
+
+    /// <summary>Whether a game path is in use already (a game file, a mod file, a texture made this session); textures a setup makes avoid those.</summary>
+    public Func<string, bool>? PathTaken { get; init; }
+}
+
+/// <summary>Where a preset sits in the window.</summary>
+public enum PresetKind
+{
+    /// <summary>Changes values on the shader the material has; it can't apply when that shader can't do the look.</summary>
+    Look,
+
+    /// <summary>Moves to another shader and brings what it needs, making plain textures for the missing ones.</summary>
+    Setup,
 }
 
 /// <summary>A texture a preset adds, to be written beside the material on preview and save.</summary>
@@ -42,6 +55,8 @@ public abstract class MaterialEffectPreset
     public abstract string Name { get; }
 
     public abstract string Description { get; }
+
+    public virtual PresetKind Kind => PresetKind.Look;
 
     /// <summary>The preset edits colour rows, so the window offers a row target.</summary>
     public virtual bool NeedsRows => false;

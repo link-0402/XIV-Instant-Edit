@@ -16,6 +16,7 @@ internal static partial class MaterialEditorScenarios
         CheckModelUv2();
         CheckModelChangeSaves();
         CheckGlass();
+        CheckSetupsMakeMissingTextures();
         CheckCleanUp();
         CheckUsedRowsTarget();
         CheckSingleRowTargets();
@@ -195,15 +196,75 @@ internal static partial class MaterialEditorScenarios
             "Glass moves to the glass shader without the texture mode key, turns translucency on and sets the refraction");
     }
 
+    /// <summary>The Mask material with no textures at all, on the matcap shader (no colour rows), like a bare matcap mod.</summary>
+    private static MaterialDocument BareMatcapDocument()
+    {
+        var doc = PresetDocument(MaskPreset).WithShaderPackage("characterreflection.shpk").WithTable(null);
+        while (doc.Slots.Count > 0)
+            doc = doc.WithoutSlot(doc.Slots.Count - 1);
+        return doc;
+    }
+
+    /// <summary>The first texel of a preset's 4 x 4 texture, as (red, green, blue).</summary>
+    private static (byte Red, byte Green, byte Blue) FirstTexel(PresetResult result, string suffix)
+    {
+        var texture = result.NewTextures.Single(texture => texture.GamePath.EndsWith(suffix, StringComparison.Ordinal));
+        var decoded = TextureDecoder.Decode(texture.Bytes);
+        return (decoded.Bgra[2], decoded.Bgra[1], decoded.Bgra[0]);
+    }
+
+    private static void CheckSetupsMakeMissingTextures()
+    {
+        var bare = BareMatcapDocument();
+        var looks = EffectPresets.All.Where(preset => preset.Kind == PresetKind.Look && !preset.Applies(Context(bare))).Select(preset => preset.Name).ToArray();
+        Require(looks.Contains("Metal") && looks.Contains("Dyeable") && EffectPresets.All.Where(preset => preset.Kind == PresetKind.Setup).All(preset => preset.Applies(Context(bare))),
+            "on the matcap shader the row looks can't apply, but every shader setup can");
+
+        var scroll = PresetNamed("Scrolling pattern").Apply(Context(bare), RowTarget.Used);
+        var doc = scroll.Doc;
+        Require(doc.ShaderPackage == "characterscroll.shpk" && doc.Table is { Kind: ColorTableKind.Dawntrail }
+                && doc.Slots.Select(slot => slot.SamplerId).ToHashSet().SetEquals([0x0C5EC1F1u, 0x8A4E82B6u, 0x565F8FD8u, CatchlightSampler]),
+            "Scrolling pattern on a bare material gets a colour table and normal, mask, index and catchlight slots");
+        Require(scroll.NewTextures.Count == 4 && scroll.NewTextures.All(texture => doc.Slots.Any(slot => slot.Path == texture.GamePath)),
+            "it makes all four textures, and each slot reads one of them");
+        Require(FirstTexel(scroll, "_n.tex") == (128, 128, 255) && FirstTexel(scroll, "_m.tex") == (255, 128, 255) && FirstTexel(scroll, "_id.tex") == (0, 255, 0),
+            "a flat, opaque normal, a neutral mask (full shine, the rows' roughness, full base colour) and an index showing pair 1's top row");
+        Require(doc.Table!.Rows.All(row => row.ScrollLayer == 1f) && !scroll.Warnings.Any(warning => warning.Contains("index", StringComparison.OrdinalIgnoreCase)),
+            "with a new index every row scrolls, and nothing warns that the index couldn't be read");
+        Require(scroll.NewTextures.All(texture => scroll.Changes.Any(change => change.Contains(texture.GamePath, StringComparison.Ordinal))),
+            "the changes name every texture it added");
+
+        var normalPath = PresetChecks.BesideMaterial(Context(bare).MaterialGamePath, "_n.tex");
+        var taken = PresetNamed("Matcap").Apply(Context(bare) with { PathTaken = path => path == normalPath }, RowTarget.All);
+        Require(taken.Doc.ShaderPackage == "characterreflection.shpk" && taken.NewTextures.Single().GamePath == normalPath[..^4] + "_ie.tex",
+            "Matcap makes only the normal map, beside a path that's taken");
+        var glass = PresetNamed("Glass").Apply(Context(bare), RowTarget.All);
+        Require(glass.Doc.ShaderPackage == "characterglass.shpk" && glass.NewTextures.Count == 3 && glass.Doc.Table != null,
+            "Glass on a bare material makes normal, mask and index textures and gets a colour table");
+        var full = PresetNamed("Glass").Apply(Context(PresetDocument(MaskPreset)), RowTarget.All);
+        Require(full.NewTextures.Count == 0, "a setup makes no textures when the material has them all");
+
+        // The bundled legacy materials carry Dawntrail rows; a 16-row table is the legacy shape.
+        var legacyInfo = Preset("characterlegacy/Default Equipment - Mask.mtrl").Clone();
+        legacyInfo.AdditionalData = [0x04, 0, 0, 0];
+        legacyInfo.DataSet = new byte[512];
+        var legacy = MaterialDocument.From(legacyInfo);
+        Require(legacy.Table is { Kind: ColorTableKind.Legacy } &&!PresetNamed("Scrolling pattern").Applies(Context(legacy)) && !PresetNamed("Glass").Applies(Context(legacy)) && PresetNamed("Matcap").Applies(Context(legacy)),
+            "legacy colour rows need Convert to Dawntrail before a setup with rows; Matcap has none");
+        var onLegacyShader = PresetDocument("characterlegacy/Default Equipment - Mask.mtrl");
+        Require(onLegacyShader.Table is { Kind: ColorTableKind.Dawntrail } && !PresetNamed("Scrolling pattern").Applies(Context(onLegacyShader)),
+            "32 rows on characterlegacy.shpk mean other things than on the Dawntrail shaders, so they need Convert to Dawntrail too");
+    }
+
     private static void CheckCleanUp()
     {
         var glass = PresetDocument("characterglass/Glasses.mtrl").WithKey(0xD2777173, 0xF35F5131).WithKey(0xB616DC5A, 0x600EF9DF).WithConstant(0x36080AD0, [1f]);
-        var clean = PresetNamed("Clean up").Apply(Context(glass), RowTarget.All);
+        var clean = EffectPresets.CleanUp.Apply(Context(glass), RowTarget.All);
         Require(clean.Doc.KeyValue(0xD2777173) is null or 0x4242B842 && clean.Doc.KeyValue(0xB616DC5A) == null && clean.Doc.Constant(0x36080AD0) == null
                 && clean.Changes.Count >= 3,
             "Clean up drops a decal value glass has no shader for, a key glass doesn't have and a constant it ignores, and lists them");
         var mask = PresetDocument(MaskPreset).WithKey(0xF52CCF05, 0xDFE74BAC);
-        Require(PresetNamed("Clean up").Apply(Context(mask), RowTarget.All).Doc.KeyValue(0xF52CCF05) == 0xA7D2FF60,
+        Require(EffectPresets.CleanUp.Apply(Context(mask), RowTarget.All).Doc.KeyValue(0xF52CCF05) == 0xA7D2FF60,
             "Clean up sets the vertex colour key to the value mods use");
     }
 
@@ -227,8 +288,10 @@ internal static partial class MaterialEditorScenarios
     private static void CheckEveryPreset()
     {
         var names = EffectPresets.All.Select(preset => preset.Name).ToArray();
-        Require(names.SequenceEqual(["Metal", "Glow", "Scrolling pattern", "Glass", "See-through", "Matcap", "Dyeable", "Detail pattern", "Velvet", "Clean up"]),
-            "the presets are the spec's ten, in its order");
+        Require(names.SequenceEqual(["Matcap", "Scrolling pattern", "Glass", "Metal", "Glow", "Velvet", "Dyeable", "Detail pattern", "See-through"]),
+            "the presets are the three shader setups, then the six looks; Clean up is on its own");
+        Require(EffectPresets.All.Take(3).All(preset => preset.Kind == PresetKind.Setup) && EffectPresets.All.Skip(3).All(preset => preset.Kind == PresetKind.Look),
+            "the first three are shader setups, the rest looks");
         var mask = PresetDocument(MaskPreset);
         var failures = new List<string>();
         foreach (var preset in EffectPresets.All)
