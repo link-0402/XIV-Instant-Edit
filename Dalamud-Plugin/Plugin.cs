@@ -341,6 +341,7 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.Draw += _window.DrawFileDialog;
         _pi.UiBuilder.Draw += _timelineWindow.DrawFileDialog;
         _pi.UiBuilder.Draw += _physicsWindow.DrawFileDialog;
+        _pi.UiBuilder.Draw += _settingsWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi += OpenMainUi;
         _pi.UiBuilder.OpenConfigUi += _settingsWindow.Open;
 
@@ -462,6 +463,7 @@ public sealed class Plugin : IDalamudPlugin
         _pi.UiBuilder.Draw -= _window.DrawFileDialog;
         _pi.UiBuilder.Draw -= _timelineWindow.DrawFileDialog;
         _pi.UiBuilder.Draw -= _physicsWindow.DrawFileDialog;
+        _pi.UiBuilder.Draw -= _settingsWindow.DrawFileDialog;
         _pi.UiBuilder.OpenMainUi -= OpenMainUi;
         _pi.UiBuilder.OpenConfigUi -= _settingsWindow.Open;
         _windowSystem.RemoveWindow(_window);

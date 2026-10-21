@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
@@ -38,6 +39,7 @@ public sealed class SettingsWindow : Window
     private DateTime? _savedFaceLibraries;
     private int? _pendingListenPort;
     private SettingsTab _tab;
+    private readonly FileDialogManager _fileDialog = new();
 
     internal SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
         Action requestCacheSynchronization, Action openSetup, ToolSetupViews tools, string cacheStartupError = "")
@@ -391,7 +393,57 @@ public sealed class SettingsWindow : Window
             studio.TileScale = 1f;
             Save();
         }
+
+        ImGui.Spacing();
+        Widgets.SectionHeader("New hair materials");
+        Widgets.MutedWrapped("Hair materials added in the build window start with these. Pick Add alpha on the normal to put an alpha map into it.");
+        ImGui.Spacing();
+        if (ImagePath("Base normal", "##hair-base-normal", studio.HairBaseNormal, path => studio.HairBaseNormal = path))
+            Save();
+        if (ImagePath("Base mask", "##hair-base-mask", studio.HairBaseMask, path => studio.HairBaseMask = path))
+            Save();
     }
+
+    /// <summary> An image path with a browse button. Returns true when it was changed. </summary>
+    private bool ImagePath(string label, string id, string value, Action<string> set)
+    {
+        var path = value;
+        ImGui.SetNextItemWidth(Theme.Scaled(320));
+        var changed = ImGui.InputTextWithHint(id, "png / jpeg / tga / dds / .tex file", ref path, 1024);
+        if (changed)
+            set(path);
+        if (ImGui.IsItemHovered() && path.Length > 0)
+            ImGui.SetTooltip(File.Exists(path) ? path : $"{path}\n\nFile not found.");
+        ImGui.SameLine(0, ImGui.GetStyle().ItemInnerSpacing.X);
+        using (ImRaii.PushId(id))
+        {
+            if (ImGui.Button("Browse"))
+            {
+                _fileDialog.OpenFileDialog($"Choose the {label.ToLowerInvariant()}", "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}", (success, files) =>
+                {
+                    if (!success || files.Count == 0)
+                        return;
+                    set(files[0]);
+                    Save();
+                }, 1, path.Length > 0 ? Path.GetDirectoryName(path) : null);
+            }
+            ImGui.SameLine(0, ImGui.GetStyle().ItemInnerSpacing.X);
+            using (ImRaii.Disabled(path.Length == 0))
+            {
+                if (ImGui.Button("Clear"))
+                {
+                    set(string.Empty);
+                    changed = true;
+                }
+            }
+        }
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted(label);
+        return changed;
+    }
+
+    public void DrawFileDialog() => _fileDialog.Draw();
 
     // ---- Advanced --------------------------------------------------------------------------
 

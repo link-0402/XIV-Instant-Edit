@@ -17,9 +17,11 @@ namespace InstantEdit.Studio.Windows.UI;
 /// </summary>
 internal sealed class TextureSlotEditor
 {
-    private enum SourceMode { File, Variants, Dummy }
+    private enum SourceMode { File, Variants, Dummy, Alpha }
 
-    private static readonly string[] SourceModeLabels = { "File", "Variants", "Dummy" };
+    private static readonly string[] SourceModeLabels = { "File", "Variants", "Dummy", "Add alpha" };
+
+    private const string ImageFilter = "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}";
 
     private readonly ISetUpSession _session;
     private readonly TextureThumbnailCache _thumbnails;
@@ -31,13 +33,18 @@ internal sealed class TextureSlotEditor
     }
 
     private static SourceMode ModeOf(TextureSlot tex)
-        => tex.UseWhiteDummy ? SourceMode.Dummy : tex.UseVariants ? SourceMode.Variants : SourceMode.File;
+        => tex.UseWhiteDummy ? SourceMode.Dummy : tex.UseVariants ? SourceMode.Variants : tex.UseAlphaOverlay ? SourceMode.Alpha : SourceMode.File;
 
     private static void SetMode(TextureSlot tex, SourceMode mode)
     {
-        tex.UseVariants   = mode == SourceMode.Variants;
-        tex.UseWhiteDummy = mode == SourceMode.Dummy;
+        tex.UseVariants     = mode == SourceMode.Variants;
+        tex.UseWhiteDummy   = mode == SourceMode.Dummy;
+        tex.UseAlphaOverlay = mode == SourceMode.Alpha;
     }
+
+    /// <summary>Add alpha is offered on the normal slot of a hair material, and kept on a slot that already uses it.</summary>
+    private static bool Offers(MaterialSetup? mat, TextureSlot tex, SourceMode mode)
+        => mode != SourceMode.Alpha || tex.UseAlphaOverlay || tex.Type == TextureType.Normal && mat?.ShaderType == ShaderType.Hair;
 
     private static string ModeTooltip(TextureSlot tex, SourceMode mode)
     {
@@ -46,6 +53,7 @@ internal sealed class TextureSlotEditor
         {
             SourceMode.File     => "One image file (png / jpeg / tga / dds), converted to .tex — or a .tex, used as it is.",
             SourceMode.Variants => "Several images — each becomes one option of a switch group in the mod.",
+            SourceMode.Alpha    => "A base normal map with an alpha map put into its alpha: black where there is no hair, white where there is.",
             _ => options.Count > 1
                 ? "A placeholder texture — pick which one. No source image needed."
                 : $"A placeholder texture ({DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).Label}). No source image needed.",
@@ -61,7 +69,7 @@ internal sealed class TextureSlotEditor
         if (paths.Files.Count == 1 && paths.Folders.Count == 0 && ModeOf(tex) != SourceMode.Variants)
         {
             tex.SourcePath = paths.Files[0];
-            SetMode(tex, SourceMode.File);
+            SetMode(tex, ModeOf(tex) == SourceMode.Alpha ? SourceMode.Alpha : SourceMode.File);
             _session.MarkDirty();
             _session.Notify($"{TextureTypeInfo.DisplayName(tex.Type)} ← {paths.Describe()}", Severity.Info);
             return;
@@ -155,7 +163,8 @@ internal sealed class TextureSlotEditor
 
         int modeIdx = (int)mode;
         ImGui.SetNextItemWidth(Theme.S(86));
-        if (ComboWheel.Combo("##mode", ref modeIdx, SourceModeLabels))
+        var labels = SourceModeLabels.Where((_, m) => Offers(null, tex, (SourceMode)m)).ToArray();   // Alpha is last, so indices still match
+        if (ComboWheel.Combo("##mode", ref modeIdx, labels))
         {
             mode = (SourceMode)modeIdx;
             SetMode(tex, mode);
@@ -193,10 +202,14 @@ internal sealed class TextureSlotEditor
             if (FileDrop.Target(drop.Reject, out var dropped))
                 drop.OnDrop(dropped);
         }
+        else if (mode == SourceMode.Alpha)
+        {
+            edited |= DrawAlphaPicker(tex, "src", "alpha map — or drop one here", rightW);
+        }
         else
         {
             string src = tex.SourcePath;
-            if (Gui.PathPicker("src", ref src, "image file — or drop one here", PathKind.File, "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}",
+            if (Gui.PathPicker("src", ref src, "image file — or drop one here", PathKind.File, ImageFilter,
                     picked => { tex.SourcePath = picked; _session.MarkDirty(); }, reserveRight: rightW, drop: DropRule(tex)))
             {
                 tex.SourcePath = src;
@@ -269,7 +282,7 @@ internal sealed class TextureSlotEditor
         var mode = ModeOf(tex);
         for (int m = 0; m < SourceModeLabels.Length; m++)
         {
-            if (!variants && (SourceMode)m == SourceMode.Variants && mode != SourceMode.Variants)
+            if (!variants && (SourceMode)m == SourceMode.Variants && mode != SourceMode.Variants || !Offers(mat, tex, (SourceMode)m))
                 continue;
             if (m > 0) ImGui.SameLine();
             if (ImGui.RadioButton($"{SourceModeLabels[m]}##fullmode", (int)mode == m))
@@ -293,13 +306,20 @@ internal sealed class TextureSlotEditor
         }
         else
         {
-            Gui.Label("File");
+            Gui.Label(mode == SourceMode.Alpha ? "Base normal" : "File",
+                mode == SourceMode.Alpha ? "The normal map the hair starts from. New hair materials take the one set in Settings." : null);
             string src = tex.SourcePath;
-            if (Gui.PathPicker("fullsrc", ref src, "png / jpeg / tga / dds / .tex file", PathKind.File, "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}",
+            if (Gui.PathPicker("fullsrc", ref src, "png / jpeg / tga / dds / .tex file", PathKind.File, ImageFilter,
                     picked => { tex.SourcePath = picked; _session.MarkDirty(); }, drop: DropRule(tex)))
             {
                 tex.SourcePath = src;
                 edited = true;
+            }
+
+            if (mode == SourceMode.Alpha)
+            {
+                Gui.Label("Alpha", "Black where there is no hair, white where there is. Written into the normal's alpha.");
+                edited |= DrawAlphaPicker(tex, "fullalpha", "png / jpeg / tga / dds / .tex file", 0);
             }
         }
 
@@ -350,6 +370,30 @@ internal sealed class TextureSlotEditor
             + "None — no compression. Instant to write, four times the size in game memory.\n\n"
             + "A texture is compressed once, and again only when the image itself changes.");
         return edited;
+    }
+
+    /// <summary>The alpha map of an Add alpha slot; one dropped image sets it.</summary>
+    private bool DrawAlphaPicker(TextureSlot tex, string id, string hint, float reserveRight)
+    {
+        var drop = new FileDropRule(FileDrop.RejectForTextureSlot, paths =>
+        {
+            if (paths.Files.Count != 1 || paths.Folders.Count > 0)
+            {
+                _session.Notify("Drop one image as the alpha map.", Severity.Warning);
+                return;
+            }
+            tex.AlphaSourcePath = paths.Files[0];
+            _session.MarkDirty();
+        });
+
+        string alpha = tex.AlphaSourcePath;
+        if (Gui.PathPicker(id, ref alpha, hint, PathKind.File, ImageFilter,
+                picked => { tex.AlphaSourcePath = picked; _session.MarkDirty(); }, reserveRight: reserveRight, drop: drop))
+        {
+            tex.AlphaSourcePath = alpha;
+            return true;
+        }
+        return false;
     }
 
     /// <summary>Which placeholder fills the slot.</summary>

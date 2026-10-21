@@ -35,6 +35,7 @@ internal sealed class TextureThumbnailCache : IDisposable
 
     private const string GamePrefix   = "game://";
     private const string MemoryPrefix = "mem://";
+    private const string AlphaPrefix  = "alpha://";
 
     private sealed class Entry
     {
@@ -108,7 +109,24 @@ internal sealed class TextureThumbnailCache : IDisposable
             return;
         }
 
+        if (tex.UseAlphaOverlay && File.Exists(tex.SourcePath) && File.Exists(tex.AlphaSourcePath))
+        {
+            // Keyed by both files as they are now, so editing either one makes a new preview.
+            var basePath = tex.SourcePath;
+            var alphaPath = tex.AlphaSourcePath;
+            var key = $"{AlphaPrefix}{TextureCache.KeyFor(basePath)}|{TextureCache.KeyFor(alphaPath)}";
+            DrawLoaded(Get(key, () => AlphaNormalPng(basePath, alphaPath), checkStamp: false), side,
+                $"{Path.GetFileName(basePath)} with the alpha of {Path.GetFileName(alphaPath)}");
+            return;
+        }
+
         DrawFile(tex.SourcePath, side, null);
+    }
+
+    private static byte[] AlphaNormalPng(string basePath, string alphaPath)
+    {
+        using var image = AlphaNormal.Combine(basePath, alphaPath);
+        return ToPng(image);
     }
 
     /// <summary>The first image of a variant folder, with the folder's image count over it.</summary>

@@ -184,6 +184,10 @@ internal static class ReplacementValidator
                 issues.Add(new(Severity.Error, target, $"{slot}: {Path.GetFileName(tex.SourcePath)} is not an image."));
             else if (Path.GetExtension(tex.SourcePath).ToLowerInvariant() is not (".tex" or ".atex") && !images.Read(tex.SourcePath).Ok)
                 issues.Add(new(Severity.Error, target, $"{slot}: {Path.GetFileName(tex.SourcePath)} could not be read as an image."));
+            else if (tex.UseAlphaOverlay && string.IsNullOrWhiteSpace(tex.AlphaSourcePath))
+                issues.Add(new(Severity.Error, target, $"{slot}: no alpha map set."));
+            else if (tex.UseAlphaOverlay && !File.Exists(tex.AlphaSourcePath))
+                issues.Add(new(Severity.Error, target, $"{slot}: {Path.GetFileName(tex.AlphaSourcePath)} does not exist."));
         }
     }
 

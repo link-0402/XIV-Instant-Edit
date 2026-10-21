@@ -138,6 +138,16 @@ public class TextureSlot
     public string DummyPreset { get; set; } = string.Empty;
 
     /// <summary>
+    /// When true (normal slots), the texture is <see cref="SourcePath"/> — a base normal map — with
+    /// the image at <see cref="AlphaSourcePath"/> written into its alpha: black where there is no
+    /// hair, white where there is. See <see cref="Services.AlphaNormal"/>.
+    /// </summary>
+    public bool UseAlphaOverlay { get; set; }
+
+    /// <summary>The black-and-white alpha map put into the base normal's alpha when <see cref="UseAlphaOverlay"/> is set.</summary>
+    public string AlphaSourcePath { get; set; } = string.Empty;
+
+    /// <summary>
     /// When set, this slot writes no texture of its own: the material points at this game path,
     /// which another material (usually on another model, e.g. the same hair for a second race)
     /// already writes. Set when a material is pasted with "keep texture paths". The source fields
@@ -174,5 +184,7 @@ public class TextureSlot
         VariantPaths   = new List<string>(VariantPaths),
         UseWhiteDummy  = UseWhiteDummy,
         DummyPreset    = DummyPreset,
+        UseAlphaOverlay = UseAlphaOverlay,
+        AlphaSourcePath = AlphaSourcePath,
     };
 }

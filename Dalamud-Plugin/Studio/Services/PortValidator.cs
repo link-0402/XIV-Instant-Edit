@@ -423,6 +423,15 @@ internal static class PortValidator
             issues.Add(new(Severity.Error, target, $"{who}: unsupported file type (use png, jpeg, tga, dds or .tex)."));
         else
             ValidateTextureSize(tex, images.Read(tex.SourcePath), target, who, issues);
+
+        if (!tex.UseAlphaOverlay)
+            return;
+        if (string.IsNullOrWhiteSpace(tex.AlphaSourcePath))
+            issues.Add(new(Severity.Error, target, $"{who}: no alpha map set — pick one, or switch the source back to File."));
+        else if (!File.Exists(tex.AlphaSourcePath))
+            issues.Add(new(Severity.Error, target, $"{who}: alpha map not found."));
+        else if (!ImageExtensions.Contains(Path.GetExtension(tex.AlphaSourcePath)))
+            issues.Add(new(Severity.Error, target, $"{who}: the alpha map is not a supported file type (use png, jpeg, tga, dds or .tex)."));
     }
 
     /// <summary>

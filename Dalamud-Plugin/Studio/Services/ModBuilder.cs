@@ -929,11 +929,19 @@ internal sealed class ModBuilder
             return false;
         }
 
-        if (!ConvertTexture(tex.SourcePath, tex.Compression, UsesFor(mat, tex), textureName, out var texData, out var error, out var detail))
+        if (AlphaNormal.SourceOf(tex, _req.CacheDirectory, out var alphaError) is not { } sourcePath)
+        {
+            report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, alphaError, source);
+            return false;
+        }
+
+        if (!ConvertTexture(sourcePath, tex.Compression, UsesFor(mat, tex), textureName, out var texData, out var error, out var detail))
         {
             report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, error, source);
             return false;
         }
+        if (tex.UseAlphaOverlay)
+            detail = $"{Path.GetFileName(tex.SourcePath)} with the alpha of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
 
         File.WriteAllBytes(LocalPath(modPath, rel), texData);
         report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath, detail, source);

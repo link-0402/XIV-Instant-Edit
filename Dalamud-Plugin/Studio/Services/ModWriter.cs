@@ -374,7 +374,7 @@ internal sealed class ModWriter
     private string SlotIntent(TextureSlot tex, IReadOnlyList<TextureUse> uses)
     {
         if (!tex.UseWhiteDummy)
-            return TextureIntent(tex.SourcePath, tex.Compression, uses);
+            return TextureIntent(AlphaNormal.SourceOf(tex, _req.CacheDirectory, out _) ?? tex.SourcePath, tex.Compression, uses);
 
         var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
         return $"dummy:{TextureCache.KeyForGenerated(option, DummyTextureLibrary.Size, TextureCompressionInfo.ForPlaceholder(tex.Compression))}";
@@ -805,8 +805,12 @@ internal sealed class ModWriter
         {
             if (!File.Exists(tex.SourcePath))
                 return Fail(plan, $"file not found ({tex.SourcePath})");
-            if (!ConvertTexture(tex.SourcePath, tex.Compression, uses, plan.Label, out content, out var error, out detail))
+            if (AlphaNormal.SourceOf(tex, _req.CacheDirectory, out var alphaError) is not { } sourcePath)
+                return Fail(plan, alphaError);
+            if (!ConvertTexture(sourcePath, tex.Compression, uses, plan.Label, out content, out var error, out detail))
                 return Fail(plan, error);
+            if (tex.UseAlphaOverlay)
+                detail = $"{Path.GetFileName(tex.SourcePath)} with the alpha of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
         }
 
         Provide(plan, content, prefix + detail);

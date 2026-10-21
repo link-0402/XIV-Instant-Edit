@@ -126,6 +126,12 @@ public sealed class StudioSettings
     /// <summary>Whether texture thumbnails are shown in the library and the inspectors.</summary>
     public bool ShowThumbnails { get; set; } = true;
 
+    /// <summary>The normal map new hair materials in the build window start from; an alpha map can be added on top (Add alpha). Empty leaves the slot empty.</summary>
+    public string HairBaseNormal { get; set; } = string.Empty;
+
+    /// <summary>The mask new hair materials in the build window start from. Empty leaves the slot empty.</summary>
+    public string HairBaseMask { get; set; } = string.Empty;
+
     /// <summary>Last .package file opened in the Sims 4 importer.</summary>
     public string LastSimsPackagePath { get; set; } = string.Empty;
 
