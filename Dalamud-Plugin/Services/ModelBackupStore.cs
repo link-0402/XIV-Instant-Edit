@@ -91,6 +91,16 @@ public sealed partial class ModelBackupStore
     public System.Text.Json.Nodes.JsonObject? ReadRaceState(string backupPath)
         => ReadSidecar(SidecarPath(backupPath, RaceStateSuffix));
 
+    /// <summary>
+    /// The hair skeleton keys and files that belong with a model backup, kept beside it as
+    /// <c>&lt;backup&gt;.hairskel.json</c>. Restoring the backup puts them back.
+    /// </summary>
+    public void WriteHairSkeletonState(string backupPath, System.Text.Json.Nodes.JsonObject state)
+        => WriteSidecar(SidecarPath(backupPath, HairSkeletonStateSuffix), state);
+
+    public System.Text.Json.Nodes.JsonObject? ReadHairSkeletonState(string backupPath)
+        => ReadSidecar(SidecarPath(backupPath, HairSkeletonStateSuffix));
+
     private static void WriteSidecar(string path, System.Text.Json.Nodes.JsonObject state)
     {
         var temporary = path + ".tmp";
@@ -130,11 +140,12 @@ public sealed partial class ModelBackupStore
 
     private const string EstStateSuffix = ".est.json";
     private const string RaceStateSuffix = ".race.json";
+    private const string HairSkeletonStateSuffix = ".hairskel.json";
 
-    // A backup's EST and race states go with it: once the .bak is gone (expired, cleared, or removed by the add-on) so are they.
+    // A backup's EST, race and hair skeleton states go with it: once the .bak is gone (expired, cleared, or removed by the add-on) so are they.
     private static void DeleteOrphanedEstStates(string directory)
     {
-        foreach (var suffix in new[] { EstStateSuffix, RaceStateSuffix })
+        foreach (var suffix in new[] { EstStateSuffix, RaceStateSuffix, HairSkeletonStateSuffix })
             foreach (var path in Directory.EnumerateFiles(directory, "*" + suffix, SearchOption.TopDirectoryOnly))
             {
                 var backup = path[..^suffix.Length];

@@ -31,7 +31,7 @@ internal sealed record HairSkeletonPlan(string Model, int SkeletonId, IReadOnlyL
 /// A mod's custom hair skeleton for one model file: one <c>.sklb</c> per race the model is used as
 /// hair for, mapped in the options that use it for that race, with the hair EST entries naming it.
 /// Every skeleton ID belongs to one (mod, model), so its keys and files are this plugin's to change;
-/// keys of other skeleton IDs are never touched.
+/// keys of other skeleton IDs are never touched, except when a model backup puts back the keys it carries.
 /// </summary>
 internal static partial class HairSkeletonFiles
 {
@@ -180,6 +180,202 @@ internal static partial class HairSkeletonFiles
         records.Remove(record);
         store.Save(records);
         return warnings;
+    }
+
+    private const string StateSchema = "instant-edit.hair-skeleton-state";
+
+    [GeneratedRegex(@"^chara/human/c[0-9]{4}/skeleton/hair/", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex HairSkeletonFolder();
+
+    private static bool IsHairSkeletonKey(string key) => HairSkeletonFolder().IsMatch(PathRules.NormalizeGamePath(key));
+
+    /// <summary>
+    /// The <c>skeleton/hair/</c> keys of every option that uses the model, of any skeleton ID so a
+    /// modder's own mapping is kept too, with the files they map and the model's recorded ID, as a model
+    /// backup carries them; null when the model is used as no hair. A file mapped in several options
+    /// carries its bytes once.
+    /// </summary>
+    public static JsonObject? CaptureState(string modFolder, string modDirectory, string modelRelativePath, HairSkeletonStore store)
+    {
+        var model = PathRules.NormalizeGamePath(modelRelativePath);
+        var meta = LoadV4ModMetadata(modFolder);
+        var users = UsingContainers(meta, model);
+        if (users.Count == 0)
+            return null;
+        var entries = new JsonArray();
+        var captured = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var container in EstEntryService.EstContainers(meta).Where(container => users.Contains(container.Key)))
+        {
+            if (container.Data["Files"] is not JsonObject files)
+                continue;
+            foreach (var (key, value) in files)
+            {
+                if (!IsHairSkeletonKey(key) || JsonString(value) is not { } relative)
+                    continue;
+                var data = captured.Add(PathRules.NormalizeGamePath(relative)) ? ReadModFile(modFolder, relative) : null;
+                entries.Add(new JsonObject
+                {
+                    ["container"] = container.Key,
+                    ["gamePath"] = key,
+                    ["relativePath"] = relative,
+                    ["data"] = data is null ? null : Convert.ToBase64String(data),
+                });
+            }
+        }
+        return new JsonObject
+        {
+            ["schema"] = StateSchema,
+            ["version"] = 1,
+            ["skeletonId"] = Record(store.Load(), EstEntryService.EstModKey(modFolder, modDirectory), model)?.SkeletonId,
+            ["entries"] = entries,
+        };
+    }
+
+    /// <summary>
+    /// Put back the hair skeleton a model backup carries: the options that use the model (and those the
+    /// state names) get exactly the state's <c>skeleton/hair/</c> keys, the state's files are written,
+    /// the current ID's files no option maps any more are deleted, and the record follows the state's ID.
+    /// An unreadable state changes nothing. Returns the warnings.
+    /// </summary>
+    public static List<string> RestoreState(
+        string modFolder,
+        string modDirectory,
+        string modelRelativePath,
+        JsonObject state,
+        HairSkeletonStore store)
+    {
+        if (ReadState(modFolder, state) is not { } read)
+            return ["The backup's hair skeleton is unreadable, so it was not restored."];
+        var (skeletonId, entries) = read;
+        var model = PathRules.NormalizeGamePath(modelRelativePath);
+        var meta = LoadV4ModMetadata(modFolder);
+        var containers = EstEntryService.EstContainers(meta).ToDictionary(container => container.Key, StringComparer.Ordinal);
+        var targets = UsingContainers(meta, model);
+        var warnings = new List<string>();
+        var kept = new List<StateEntry>();
+        foreach (var entry in entries)
+        {
+            if (containers.ContainsKey(entry.Container))
+            {
+                targets.Add(entry.Container);
+                kept.Add(entry);
+            }
+            else if (warnings.Count == 0)
+            {
+                warnings.Add("A Penumbra option the backup's hair skeleton was mapped in no longer exists, so its mapping there was not restored.");
+            }
+        }
+
+        // The files go first, so meta.json never maps one that isn't written yet.
+        var data = entries.Where(entry => entry.Data is not null)
+            .DistinctBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(entry => entry.Path, entry => entry.Data!, StringComparer.OrdinalIgnoreCase);
+        foreach (var path in kept.Select(entry => entry.Path).Distinct(StringComparer.OrdinalIgnoreCase))
+            if (data.TryGetValue(path, out var bytes))
+                WriteAtomic(path, bytes);
+
+        var metaChanged = false;
+        foreach (var key in targets)
+        {
+            var container = containers[key].Data;
+            var wanted = kept.Where(entry => entry.Container == key).Select(entry => (entry.GamePath, entry.RelativePath))
+                .ToHashSet();
+            var files = container["Files"] as JsonObject;
+            var current = (files ?? new JsonObject()).Where(pair => IsHairSkeletonKey(pair.Key))
+                .Select(pair => (GamePath: pair.Key, RelativePath: JsonString(pair.Value))).ToList();
+            if (current.Count == wanted.Count && current.All(pair => pair.RelativePath is not null &&
+                                                                     wanted.Contains((pair.GamePath, pair.RelativePath))))
+                continue;
+            if (files is null)
+                container["Files"] = files = new JsonObject();
+            foreach (var (gamePath, _) in current)
+                files.Remove(gamePath);
+            foreach (var (gamePath, relative) in wanted)
+                files[gamePath] = relative;
+            metaChanged = true;
+        }
+        if (metaChanged)
+        {
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+        }
+
+        var modKey = EstEntryService.EstModKey(modFolder, modDirectory);
+        var records = store.Load().ToList();
+        var record = Record(records, modKey, model);
+        if (record is not null)
+            DeleteUnmapped(meta, modFolder, record.SkeletonId);
+        if (record?.SkeletonId != skeletonId)
+        {
+            records.RemoveAll(item => SameRecord(item, modKey, model));
+            if (skeletonId is { } id)
+                records.Add(new ManagedHairSkeleton(modKey, model, id));
+            store.Save(records);
+        }
+        return warnings;
+    }
+
+    /// <summary>One key of a hair skeleton state, with the full path of its file and the bytes it carries.</summary>
+    private sealed record StateEntry(string Container, string GamePath, string RelativePath, string Path, byte[]? Data);
+
+    /// <summary>A hair skeleton state's ID and keys, or null when anything in it is unreadable or unsafe.</summary>
+    private static (int? SkeletonId, List<StateEntry> Entries)? ReadState(string modFolder, JsonObject state)
+    {
+        if (!string.Equals(JsonString(state["schema"]), StateSchema, StringComparison.Ordinal) ||
+            JsonInt(state["version"]) != 1 || state["entries"] is not JsonArray items)
+            return null;
+        int? skeletonId = null;
+        if (state["skeletonId"] is { } idNode)
+        {
+            if (idNode is not JsonValue idValue || !idValue.TryGetValue<int>(out var id) || id is < 1000 or > 9999)
+                return null;
+            skeletonId = id;
+        }
+        var entries = new List<StateEntry>();
+        foreach (var node in items)
+        {
+            if (node is not JsonObject item || JsonString(item["container"]) is not { Length: > 0 } container ||
+                JsonString(item["gamePath"]) is not { } gamePath || !IsHairSkeletonKey(gamePath) ||
+                JsonString(item["relativePath"]) is not { Length: > 0 } relative)
+                return null;
+            // A file is only ever written under the extension of the game file it stands for.
+            var extension = Path.GetExtension(PathRules.NormalizeGamePath(gamePath));
+            if (extension.Length == 0 || extension.Equals(".json", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Path.GetExtension(PathRules.NormalizeGamePath(relative)), extension,
+                    StringComparison.OrdinalIgnoreCase))
+                return null;
+            byte[]? data = null;
+            if (item["data"] is { } dataNode)
+            {
+                if (JsonString(dataNode) is not { } text)
+                    return null;
+                try { data = Convert.FromBase64String(text); }
+                catch (FormatException) { return null; }
+            }
+            string path;
+            try { path = Destination(modFolder, relative); }
+            catch (InvalidDataException) { return null; }
+            entries.Add(new StateEntry(container, gamePath, relative, path, data));
+        }
+        return (skeletonId, entries);
+    }
+
+    /// <summary>The keys of the containers whose files map the model as hair.</summary>
+    private static HashSet<string> UsingContainers(JsonObject meta, string model)
+        => EstEntryService.HairUses(meta, model).Select(use => use.Container).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>A mod file's bytes, or null when it is missing, unreadable, outside the mod or behind a reparse point.</summary>
+    private static byte[]? ReadModFile(string modFolder, string relativePath)
+    {
+        try
+        {
+            var path = Destination(modFolder, relativePath);
+            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+        }
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private static bool SameRecord(ManagedHairSkeleton record, string modKey, string model)

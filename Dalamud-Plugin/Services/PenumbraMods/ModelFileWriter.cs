@@ -24,7 +24,8 @@ internal sealed class ModelFileWriter
         bool backupExisting = false,
         string? modDirectory = null,
         string? targetRelativePath = null,
-        JsonObject? estState = null)
+        JsonObject? estState = null,
+        JsonObject? hairSkeletonState = null)
     {
         try
         {
@@ -44,6 +45,8 @@ internal sealed class ModelFileWriter
                 var backup = _backups.Create(fullTarget, modDirectory, targetRelativePath);
                 if (estState is not null)
                     _backups.WriteEstState(backup, estState);
+                if (hairSkeletonState is not null)
+                    _backups.WriteHairSkeletonState(backup, hairSkeletonState);
             }
             var temporary = Path.Combine(parent, $".instant-edit-{Guid.NewGuid():N}.tmp");
             try
@@ -66,7 +69,8 @@ internal sealed class ModelFileWriter
     }
 
     internal string? RestoreModelBackup(
-        string targetFile, string backupFile, string modDirectory, string targetRelativePath, JsonObject? estState = null)
+        string targetFile, string backupFile, string modDirectory, string targetRelativePath, JsonObject? estState = null,
+        JsonObject? hairSkeletonState = null)
     {
         try
         {
@@ -75,6 +79,8 @@ internal sealed class ModelFileWriter
                 var backup = _backups.Create(targetFile, modDirectory, targetRelativePath);
                 if (estState is not null)
                     _backups.WriteEstState(backup, estState);
+                if (hairSkeletonState is not null)
+                    _backups.WriteHairSkeletonState(backup, hairSkeletonState);
             }
             var temporary = Path.Combine(Path.GetDirectoryName(targetFile)!, $".instant-edit-restore-{Guid.NewGuid():N}.tmp");
             try
