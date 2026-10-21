@@ -365,7 +365,8 @@ internal static partial class ModCheckScenarios
 
     private static void SharedHairSkeletonIdIsAWarning()
     {
-        using var mod = HairSkeletonMod(CustomHairSkeleton, "chara/human/c0101/skeleton/hair/h1613/skl_c0101h1613.sklb");
+        using var mod = HairSkeletonMod(CustomHairSkeleton, "chara/human/c0101/skeleton/hair/h1613/skl_c0101h1613.sklb",
+            "chara/human/c0101/skeleton/hair/h1614/skl_c0101h1614.sklb");
         var calls = 0;
         var report = Check(mod, hairSkeletonUsers: () =>
         {
@@ -373,19 +374,22 @@ internal static partial class ModCheckScenarios
             return new Dictionary<int, IReadOnlyList<string>>
             {
                 [1612] = ["Other Mod"],
-                [1613] = ["A", "B", "C", "D", "E"],
+                [1613] = ["E", "C", "A", "D", "B"],
+                [1614] = ["Zed", "amy"],
                 [1700] = ["Unrelated"],
             };
         });
 
         var findings = report.Findings.Where(f => f.Code == "X005").OrderBy(f => f.Key, StringComparer.Ordinal).ToArray();
-        Require(calls == 1 && findings.Length == 2, "the other mods are read once, and each shared hair skeleton ID is one finding");
+        Require(calls == 1 && findings.Length == 3, "the other mods are read once, and each shared hair skeleton ID is one finding");
         Require(findings[0] is { Key: "X005:1612", Category: CheckCategory.Dependencies, Severity: Severity.Warning, GamePath: CustomHairSkeleton } &&
                 findings[0].Title == "Another mod uses the same hair skeleton" &&
-                findings[0].Detail == "Other Mod also use hair skeleton h1612. When both are on, one hair gets the other's bones. Export this hair again from Blender to move it to a free ID.",
+                findings[0].Detail == "Other Mod also uses hair skeleton h1612. When both are on, one hair gets the other's bones. Export this hair again from Blender to move it to a free ID.",
             "a hair skeleton ID another mod uses is a warning naming that mod and the ID");
         Require(findings[1].Detail.StartsWith("A, B, C and 2 more also use hair skeleton h1613.", StringComparison.Ordinal),
-            "at most three mods are named");
+            "at most three mods are named, in name order");
+        Require(findings[2].Detail.StartsWith("amy, Zed also use hair skeleton h1614.", StringComparison.Ordinal),
+            "names are sorted ignoring case, and several mods take the plural verb");
         Require(!report.Findings.Any(f => f.Detail.Contains("Unrelated", StringComparison.Ordinal)), "IDs the mod doesn't use are not reported");
     }
 

@@ -151,10 +151,12 @@ internal sealed partial class CheckView
     {
         if (_session.Project is not { } project || Check.Busy)
             return;
-        var input = CheckInput.From(project, _host.GameData.VanillaFiles, _host.GameData, _host.PlayerRace(), null,
-            () => HairSkeletonIds.Users(Path.GetDirectoryName(project.FolderPath)!, Path.GetFileName(project.FolderPath)));
-        var ipc = _host.PenumbraIpc;
+        // Captured now, so a later Relocate can't change which folders the worker reads.
         var folder = project.FolderName;
+        var modRoot = Path.GetDirectoryName(project.FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)) ?? string.Empty;
+        var input = CheckInput.From(project, _host.GameData.VanillaFiles, _host.GameData, _host.PlayerRace(), null,
+            () => HairSkeletonIds.Users(modRoot, folder));
+        var ipc = _host.PenumbraIpc;
         Check.Start(input, Check.UseCollection && ipc.IsAvailable ? () => PenumbraCollectionView.CaptureAsync(ipc, folder) : null);
         SelectedFinding = null;
     }

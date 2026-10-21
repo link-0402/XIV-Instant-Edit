@@ -34,14 +34,16 @@ internal sealed partial class ModCheck
             _notes.Add($"Other mods' hair skeletons could not be checked: {ex.Message}");
             return;
         }
+        _token.ThrowIfCancellationRequested();
 
         foreach (var (id, key) in firstKeys.OrderBy(pair => pair.Key))
         {
             if (users.GetValueOrDefault(id) is not { Count: > 0 } mods)
                 continue;
-            var names = mods.Count <= 3 ? string.Join(", ", mods) : $"{string.Join(", ", mods.Take(3))} and {mods.Count - 3} more";
+            var sorted = mods.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+            var names = sorted.Length <= 3 ? string.Join(", ", sorted) : $"{string.Join(", ", sorted.Take(3))} and {sorted.Length - 3} more";
             AddFinding($"X005:{id}", "X005", CheckCategory.Dependencies, Severity.Warning, "Another mod uses the same hair skeleton",
-                $"{names} also use hair skeleton h{id:D4}. When both are on, one hair gets the other's bones. Export this hair again from Blender to move it to a free ID.",
+                $"{names} also {(sorted.Length == 1 ? "uses" : "use")} hair skeleton h{id:D4}. When both are on, one hair gets the other's bones. Export this hair again from Blender to move it to a free ID.",
                 key);
         }
     }
