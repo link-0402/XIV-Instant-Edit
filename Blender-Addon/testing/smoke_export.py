@@ -1753,6 +1753,33 @@ def run() -> None:
             "/mt_c0101e0001_top_added.mtrl",
         )
 
+        preview_meshes = []
+        for name, path in (("8.0 Preview Source", "/mt_c0101e0001_top_shown.mtrl"),
+                           ("9.0 Preview Target", "/mt_c0101e0001_top_own.mtrl")):
+            preview_mesh = obj.copy()
+            preview_mesh.data = obj.data.copy()
+            preview_mesh.name = name
+            preview_mesh.data.materials.clear()
+            preview_mesh.data.materials.append(bpy.data.materials.new(f"{name} preview"))
+            preview_mesh["xiv_material"] = preview_mesh["original_material"] = path
+            bpy.context.collection.objects.link(preview_mesh)
+            preview_meshes.append(preview_mesh)
+        preview_source, preview_target = preview_meshes
+        shown_preview = preview_source.material_slots[0].material
+        own_preview = preview_target.material_slots[0].material
+        materials.assign_material_path([preview_target], "/mt_c0101e0001_top_shown.mtrl")
+        if preview_target.material_slots[0].material != shown_preview:
+            raise AssertionError("A swapped material did not take the preview of the mesh using it")
+        materials.assign_material_path([preview_target], "/mt_c0101e0001_top_unknown.mtrl")
+        if preview_target.material_slots[0].material.name != "/mt_c0101e0001_top_unknown.mtrl":
+            raise AssertionError("A material without a preview did not get a plain material")
+        materials.assign_material_path([preview_target], "/mt_c0101e0001_top_own.mtrl")
+        if preview_target.material_slots[0].material != own_preview:
+            raise AssertionError("Choosing the imported material again did not restore its preview")
+        for preview_mesh in preview_meshes:
+            bpy.data.objects.remove(preview_mesh, do_unlink=True)
+        print("[PASS] Material assignment swaps the mesh's preview material")
+
         initial_instant_props = bpy.context.scene.xiv_ie_instant_edit_props
         initial_settings = bpy.context.scene.xiv_ie_settings
         initial_scope = initial_instant_props.export_scope

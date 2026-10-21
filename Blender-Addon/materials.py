@@ -844,14 +844,76 @@ def find_material_group(context, mesh_index: int) -> MaterialGroup | None:
 
 
 def assign_material_path(objects, value: str) -> str:
-    """Assign one normalized FFXIV material path to every submesh in a group."""
+    """Assign one normalized FFXIV material path to every submesh in a group.
+
+    The meshes also take the Blender material of a mesh that already uses that
+    path, so the preview shows the new material's textures."""
     path = normalize_material_path(value)
+    preview = preview_material_for(path, objects)
     for obj in objects:
+        _keep_imported_preview(obj)
         obj["xiv_material"] = path
         obj.pop(MASHUP_SOURCE_MATERIAL_PROPERTY, None)
         if "instant_edit_xiv_material" in obj or context_id_for_object(obj):
             obj["instant_edit_xiv_material"] = path
+        if preview is not None:
+            _set_preview_material(obj, preview)
     return path
+
+
+# The Blender material a mesh was imported with, kept once its material path is
+# changed so choosing the imported path again brings that preview back.
+IMPORTED_PREVIEW_PROPERTY = "instant_edit_imported_preview"
+
+
+def _slot_material(obj):
+    slots = getattr(obj, "material_slots", ())
+    return slots[0].material if slots else None
+
+
+def _keep_imported_preview(obj) -> None:
+    if IMPORTED_PREVIEW_PROPERTY in obj:
+        return
+    imported, material = imported_material_path(obj), _slot_material(obj)
+    if material is not None and imported and matching_material_path(export_material_path(obj), (imported,)):
+        obj[IMPORTED_PREVIEW_PROPERTY] = material
+
+
+def _set_preview_material(obj, material) -> None:
+    if obj.type != "MESH":
+        return
+    if not obj.material_slots:
+        obj.data.materials.append(material)
+    for slot in obj.material_slots:
+        slot.material = material
+
+
+def preview_material_for(path: str, objects):
+    """Return the Blender material that previews ``path`` for ``objects``.
+
+    It is a mesh's imported preview of that path, else the material of another
+    mesh exporting that path, from the same Contexts first. With none, it is a
+    plain material named after the path."""
+    target = (path,)
+    group = {obj.as_pointer() for obj in objects}
+    contexts = {context_id_for_object(obj) for obj in objects}
+    candidates = sorted(
+        (obj for obj in bpy.data.objects if obj.type == "MESH"),
+        key=lambda obj: (context_id_for_object(obj) not in contexts, obj.as_pointer() not in group, obj.name),
+    )
+    for obj in candidates:
+        if matching_material_path(imported_material_path(obj), target):
+            kept = obj.get(IMPORTED_PREVIEW_PROPERTY)
+            if isinstance(kept, bpy.types.Material):
+                return kept
+            if matching_material_path(export_material_path(obj), target) and _slot_material(obj) is not None:
+                return _slot_material(obj)
+    for obj in candidates:
+        if obj.as_pointer() not in group and _slot_material(obj) is not None \
+                and matching_material_path(export_material_path(obj), target):
+            return _slot_material(obj)
+    from .io.model.importer import create_material
+    return create_material(path, _mesh_index(objects[0]) if objects else 0)
 
 
 def imported_material_path(obj) -> str:
