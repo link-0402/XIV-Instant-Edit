@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using InstantEdit.Models;
+using InstantEdit.Services.Physics;
 using InstantEdit.Services.Skeletons;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModMetadata;
@@ -21,24 +22,24 @@ internal sealed record HairSkeletonSources(
     Func<IReadOnlySet<int>> TakenIds,
     Random Random);
 
-/// <summary>One race's skeleton file; its game path is also its mod-relative path.</summary>
-internal sealed record HairSkeletonFile(int GenderRace, string GamePath, byte[] Bytes);
+/// <summary>One race's skeleton and physics files; their game paths are also their mod-relative paths.</summary>
+internal sealed record HairSkeletonFile(int GenderRace, string GamePath, byte[] Bytes, string PhysicsPath, byte[] Physics);
 
 /// <summary>The skeleton files of a hair model (mod-relative, <c>/</c> separators) for every race it is used for.</summary>
 internal sealed record HairSkeletonPlan(string Model, int SkeletonId, IReadOnlyList<HairSkeletonFile> Files, IReadOnlyList<string> Notes);
 
 /// <summary>
-/// A mod's custom hair skeleton for one model file: one <c>.sklb</c> per race the model is used as
-/// hair for, mapped in the options that use it for that race, with the hair EST entries naming it.
-/// Every skeleton ID belongs to one (mod, model), so its keys and files are this plugin's to change;
-/// keys of other skeleton IDs are never touched.
+/// A mod's custom hair skeleton for one model file: one <c>.sklb</c> and one <c>.phyb</c> per race the
+/// model is used as hair for, mapped in the options that use it for that race, with the hair EST entries
+/// naming it. Every skeleton ID belongs to one (mod, model), so its keys and files are this plugin's to
+/// change; keys of other skeleton IDs are never touched.
 /// </summary>
 internal static partial class HairSkeletonFiles
 {
     // Player gender-race codes: 101 (c0101) to 1801 (c1801).
     private static readonly int[] PlayerRaces = Enumerable.Range(1, 18).Select(code => code * 100 + 1).ToArray();
 
-    [GeneratedRegex(@"^chara/human/c([0-9]{4})/skeleton/hair/h([0-9]{4})/skl_c\1h\2\.sklb$",
+    [GeneratedRegex(@"^chara/human/c([0-9]{4})/skeleton/hair/h([0-9]{4})/(skl_c\1h\2\.sklb|phy_c\1h\2\.phyb)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex SkeletonKey();
 
@@ -54,8 +55,8 @@ internal static partial class HairSkeletonFiles
             : $"No Penumbra option uses {Path.GetFileName(PathRules.NormalizeGamePath(modelRelativePath))} yet, so no hair skeleton was built.";
 
     /// <summary>
-    /// Build the skeleton files for every race the model is used as hair for, under the ID the store
-    /// holds for the model or a new free one. Throws <see cref="InvalidDataException"/> when the model
+    /// Build the skeleton and physics files for every race the model is used as hair for, under the ID the
+    /// store holds for the model or a new free one. Throws <see cref="InvalidDataException"/> when the model
     /// is used as no hair, or not for the rig's race.
     /// </summary>
     public static HairSkeletonPlan Prepare(
@@ -79,7 +80,8 @@ internal static partial class HairSkeletonFiles
         var table = EstTable.Parse(sources.GameFile(EstTable.GamePath(EstSlot.Hair))
             ?? throw new InvalidDataException("The game's hair EST table could not be read."));
         // The library scan sees this mod's own skeleton too, so a recorded ID wins over the taken ones.
-        var id = Record(store.Load(), EstEntryService.EstModKey(modFolder, modDirectory), model)?.SkeletonId
+        var recorded = Record(store.Load(), EstEntryService.EstModKey(modFolder, modDirectory), model)?.SkeletonId;
+        var id = recorded
                  ?? HairSkeletonIds.Pick(HairSkeletonIds.Vanilla(table).Union(sources.TakenIds()).ToHashSet(), sources.Random);
 
         var files = new List<HairSkeletonFile>();
@@ -95,13 +97,51 @@ internal static partial class HairSkeletonFiles
             var templatePath = ModelSkeletonPaths.PartialPath(label, EstSlot.Hair, templateId);
             var template = sources.GameFile(templatePath)
                 ?? throw new InvalidDataException($"The game's hair skeleton {templatePath} could not be read.");
+            var bones = HairSkeletonLayout.Bones(rig, sources.TemplateKao(template));
+            var physicsPath = HairPhysicsBuilder.PhysicsPath(race, id);
+            // Only the recorded ID's physics is the user's to keep; a new ID starts from the presets.
+            var physics = Physics(rig, bones, race, sources, recorded is null ? null : ReadModFile(modFolder, physicsPath), notes);
             files.Add(new HairSkeletonFile(race, ModelSkeletonPaths.PartialPath(label, EstSlot.Hair, id),
-                sources.Write(template, HairSkeletonLayout.Bones(rig, sources.TemplateKao(template)))));
+                sources.Write(template, bones), physicsPath, physics));
         }
         // An empty plan would only take back the model's EST entries.
         if (files.Count == 0)
             throw new InvalidDataException("No race the model is used for has a vanilla hair skeleton.");
         return new HairSkeletonPlan(model, id, files, notes);
+    }
+
+    /// <summary>
+    /// A race's hair physics: shapes from its h0182 physics, and the settings of chains the mod's file
+    /// (<paramref name="previous"/>) already has. The builder's notes get the race in front.
+    /// </summary>
+    private static byte[] Physics(HairSkeletonRequest rig, ImmutableArray<SkeletonBone> bones, int race,
+        HairSkeletonSources sources, byte[]? previous, List<string> notes)
+    {
+        var label = RaceLabel(race);
+        PhybFile? donor = null, tuned = null;
+        // Without chains the file turns physics off, so neither file is read.
+        if (rig.Chains is { Count: > 0 })
+        {
+            donor = ParsePhysics(sources.GameFile(HairPhysicsPresets.DonorPath(race)));
+            if (donor is null)
+                notes.Add($"The game's hair physics h0182 for {label} could not be read, so that race's hair collides with nothing.");
+            tuned = ParsePhysics(previous);
+            if (previous is not null && tuned is null)
+                notes.Add($"The hair physics in the mod for {label} could not be read, so every chain gets its preset.");
+        }
+        var built = new List<string>();
+        var file = HairPhysicsBuilder.Build(rig, bones, donor, tuned, built);
+        notes.AddRange(built.Select(note => $"{label}: {note}"));
+        return file.ToBytes();
+    }
+
+    /// <summary>A physics file, or null when there are no bytes or they don't parse.</summary>
+    private static PhybFile? ParsePhysics(byte[]? bytes)
+    {
+        if (bytes is null)
+            return null;
+        try { return PhybFile.Parse(bytes); }
+        catch (InvalidDataException) { return null; }
     }
 
     /// <summary>
@@ -121,7 +161,13 @@ internal static partial class HairSkeletonFiles
         if (!string.Equals(plan.Model, model, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("The hair skeleton plan was made for another model.", nameof(plan));
         // Check every destination before the first write.
-        var targets = plan.Files.Select(file => (file.Bytes, Path: Destination(modFolder, file.GamePath))).ToList();
+        var targets = plan.Files
+            .SelectMany(file => new[]
+            {
+                (file.Bytes, Path: Destination(modFolder, file.GamePath)),
+                (Bytes: file.Physics, Path: Destination(modFolder, file.PhysicsPath)),
+            })
+            .ToList();
         // Record the ID before the first write, so a step that fails later never orphans its keys and files.
         var modKey = EstEntryService.EstModKey(modFolder, modDirectory);
         var records = store.Load().Where(record => !SameRecord(record, modKey, model)).ToList();
@@ -131,7 +177,7 @@ internal static partial class HairSkeletonFiles
             WriteAtomic(path, bytes);
 
         var meta = LoadV4ModMetadata(modFolder);
-        var built = plan.Files.ToDictionary(file => file.GenderRace, file => file.GamePath);
+        var built = plan.Files.ToDictionary(file => file.GenderRace, IReadOnlyList<string> (file) => [file.GamePath, file.PhysicsPath]);
         var metaChanged = Remap(meta, model, plan.SkeletonId, built);
         // Races and options that dropped the model keep no EST entry naming the skeleton.
         var estRecords = estStore.Load().ToList();
@@ -172,7 +218,7 @@ internal static partial class HairSkeletonFiles
             return [];
 
         var meta = LoadV4ModMetadata(modFolder);
-        var metaChanged = Remap(meta, model, record.SkeletonId, new Dictionary<int, string>());
+        var metaChanged = Remap(meta, model, record.SkeletonId, new Dictionary<int, IReadOnlyList<string>>());
         var estRecords = estStore.Load().ToList();
         var estCount = estRecords.Count;
         metaChanged |= EstEntryService.ReleaseEstEntries(meta, modKey, model, record.SkeletonId, [], estRecords);
@@ -193,7 +239,7 @@ internal static partial class HairSkeletonFiles
 
     private const string StateSchema = "instant-edit.hair-skeleton-state";
 
-    /// <summary>The skeleton ID of a hair skeleton file key, or null for any other key.</summary>
+    /// <summary>The skeleton ID of a hair skeleton or physics file key, or null for any other key.</summary>
     private static int? SkeletonKeyId(string key)
         => SkeletonKey().Match(PathRules.NormalizeGamePath(key)) is { Success: true } match
             ? int.Parse(match.Groups[2].Value)
@@ -338,11 +384,13 @@ internal static partial class HairSkeletonFiles
         var entries = new List<StateEntry>();
         foreach (var node in items)
         {
-            // Every key is one of the state's own ID, and its file is only ever written as a .sklb.
+            // Every key is one of the state's own ID, and its file is only ever written with the key's type:
+            // a .sklb for a skl_ key, a .phyb for a phy_ key.
             if (node is not JsonObject item || JsonString(item["container"]) is not { Length: > 0 } container ||
                 JsonString(item["gamePath"]) is not { } gamePath || SkeletonKeyId(gamePath) is not { } keyId ||
                 keyId != skeletonId || JsonString(item["relativePath"]) is not { Length: > 0 } relative ||
-                !string.Equals(Path.GetExtension(PathRules.NormalizeGamePath(relative)), ".sklb", StringComparison.OrdinalIgnoreCase))
+                !string.Equals(Path.GetExtension(PathRules.NormalizeGamePath(relative)),
+                    Path.GetExtension(PathRules.NormalizeGamePath(gamePath)), StringComparison.OrdinalIgnoreCase))
                 return null;
             byte[]? data = null;
             if (item["data"] is { } dataNode)
@@ -387,9 +435,9 @@ internal static partial class HairSkeletonFiles
 
     /// <summary>
     /// Give every container exactly the keys of skeleton <paramref name="id"/> for the races it uses the
-    /// model for that <paramref name="built"/> has a file for (gender-race to game path). True when a key changed.
+    /// model for that <paramref name="built"/> has files for (gender-race to game paths). True when a key changed.
     /// </summary>
-    private static bool Remap(JsonObject meta, string model, int id, IReadOnlyDictionary<int, string> built)
+    private static bool Remap(JsonObject meta, string model, int id, IReadOnlyDictionary<int, IReadOnlyList<string>> built)
     {
         var uses = EstEntryService.HairUses(meta, model);
         var changed = false;
@@ -406,17 +454,17 @@ internal static partial class HairSkeletonFiles
                     continue;
                 var race = int.Parse(match.Groups[1].Value);
                 // Keep a key only in the exact form Apply writes; anything else is rewritten below.
-                if (races.Contains(race) && string.Equals(key, built[race], StringComparison.Ordinal) &&
-                    string.Equals(JsonString(value), ModRelative(built[race]), StringComparison.Ordinal))
+                if (races.Contains(race) && built[race].Contains(key, StringComparer.Ordinal) &&
+                    string.Equals(JsonString(value), ModRelative(key), StringComparison.Ordinal))
                     continue;
                 files.Remove(key);
                 changed = true;
             }
-            foreach (var race in races)
+            foreach (var gamePath in races.SelectMany(race => built[race]))
             {
-                if (files.ContainsKey(built[race]))
+                if (files.ContainsKey(gamePath))
                     continue;
-                files[built[race]] = ModRelative(built[race]);
+                files[gamePath] = ModRelative(gamePath);
                 changed = true;
             }
         }
@@ -426,7 +474,7 @@ internal static partial class HairSkeletonFiles
     /// <summary>Penumbra writes mod-relative paths with backslashes.</summary>
     private static string ModRelative(string gamePath) => gamePath.Replace('/', '\\');
 
-    /// <summary>Delete the skeleton's files, at any player race's path, that no container maps.</summary>
+    /// <summary>Delete the skeleton and physics files, at any player race's paths, that no container maps.</summary>
     private static void DeleteUnmapped(JsonObject meta, string modFolder, int id)
     {
         var mapped = EstEntryService.EstContainers(meta)
@@ -434,9 +482,12 @@ internal static partial class HairSkeletonFiles
             .Select(pair => PathRules.NormalizeGamePath(JsonString(pair.Value)))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var root = Path.GetFullPath(modFolder);
-        foreach (var race in PlayerRaces)
+        var paths = PlayerRaces.SelectMany(race => new[]
         {
-            var relative = ModelSkeletonPaths.PartialPath(RaceLabel(race), EstSlot.Hair, id);
+            ModelSkeletonPaths.PartialPath(RaceLabel(race), EstSlot.Hair, id), HairPhysicsBuilder.PhysicsPath(race, id),
+        });
+        foreach (var relative in paths)
+        {
             if (mapped.Contains(relative))
                 continue;
             var path = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));

@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.Physics;
 using InstantEdit.Services.Skeletons;
 using static InstantEdit.TestSupport.Assertions;
 
@@ -37,6 +38,10 @@ internal static class HairSkeletonScenarios
         FailedDeleteKeepsTheRecord(Path.Combine(testRoot, "HairBackupLockedFile"));
         OtherKeysAreLeftAlone(Path.Combine(testRoot, "HairBackupOtherKeys"));
         OrphanSidecarIsCleaned(Path.Combine(testRoot, "HairBackupSidecar"));
+        NoChainsWritesPhysicsOff(Path.Combine(testRoot, "HairPhysicsOff"));
+        OldBackupDropsPhysics(Path.Combine(testRoot, "HairPhysicsOldBackup"));
+        UnreadablePreviousPhysics(Path.Combine(testRoot, "HairPhysicsUnreadable"));
+        TuningSurvivesReexport(Path.Combine(testRoot, "HairPhysicsTuning"));
     }
 
     /// <summary>An EST table's bytes: a count, the (set, gender-race) pairs, then one entry per pair.</summary>
@@ -335,11 +340,39 @@ internal static class HairSkeletonScenarios
         return fixture;
     }
 
-    /// <summary>Fake game data: <see cref="Table"/>'s hair EST table, any skeleton file, and a writer that names its bone count.</summary>
+    /// <summary>The eight shapes vanilla hair collides with, as the race's h0182 physics holds them.</summary>
+    private static byte[] DonorBytes()
+    {
+        var donor = new PhybFile();
+        foreach (var name in new[]
+                 {
+                     "backhair_nplane", "hair_capsule_sako_l", "hair_capsule_sako_r", "sidehair_nplane",
+                     "hair_sphere_kao_l", "sidehair_capsule_sako_l", "hair_sphere_kao_r", "sidehair_capsule_sako_r",
+                 })
+        {
+            if (name.Contains("nplane"))
+                donor.Collision.NormalPlanes.Add(new() { Name = PhybName.From(name), Bone = PhybName.From("j_kao"), Normal = Vector3.UnitZ, Thickness = 0.02f });
+            else if (name.Contains("capsule"))
+                donor.Collision.Capsules.Add(new()
+                {
+                    Name = PhybName.From(name), StartBone = PhybName.From("j_sebo_c"), EndBone = PhybName.From("j_kubi"),
+                    EndOffset = Vector3.UnitY, Radius = 0.03f,
+                });
+            else
+                donor.Collision.Spheres.Add(new() { Name = PhybName.From(name), Bone = PhybName.From("j_kao"), Thickness = 0.04f });
+        }
+        return donor.ToBytes();
+    }
+
+    /// <summary>
+    /// Fake game data: <see cref="Table"/>'s hair EST table, any skeleton file, c0801's h0182 physics (c1401
+    /// has none), and a writer that names its bone count.
+    /// </summary>
     private static HairSkeletonSources Sources(int seed, Func<string, bool>? exists = null)
         => new(
             path => path == EstTable.GamePath(EstSlot.Hair)
                 ? EstBytes([(801, 1, 2), (801, 2, 3), (1401, 1, 160)])
+                : path == HairPhysicsPresets.DonorPath(801) ? DonorBytes()
                 : path.EndsWith(".sklb", StringComparison.Ordinal) ? Encoding.UTF8.GetBytes(path) : null,
             exists ?? (_ => true),
             (_, bones) => Encoding.UTF8.GetBytes($"sklb {bones.Length}"),
@@ -350,13 +383,22 @@ internal static class HairSkeletonScenarios
     private static string Sklb(int genderRace, int id)
         => ModelSkeletonPaths.PartialPath($"c{genderRace:D4}", EstSlot.Hair, id);
 
+    private static string Phyb(int genderRace, int id) => HairPhysicsBuilder.PhysicsPath(genderRace, id);
+
+    /// <summary>The mod's physics file at a game path, parsed.</summary>
+    private static PhybFile ReadPhyb(HairModFixture mod, string gamePath) => PhybFile.Parse(File.ReadAllBytes(mod.FilePath(gamePath)));
+
     private static JsonObject Option(JsonObject meta, Guid option)
         => meta["Groups"]![0]!["Options"]!.AsArray()
             .Single(item => item!["Id"]!.GetValue<string>() == option.ToString("D"))!.AsObject();
 
-    private static HashSet<string> SklbKeys(JsonObject container)
+    private static HashSet<string> SklbKeys(JsonObject container) => Keys(container, ".sklb");
+
+    private static HashSet<string> PhybKeys(JsonObject container) => Keys(container, ".phyb");
+
+    private static HashSet<string> Keys(JsonObject container, string extension)
         => container["Files"]!.AsObject().Select(pair => pair.Key)
-            .Where(key => key.EndsWith(".sklb", StringComparison.Ordinal)).ToHashSet();
+            .Where(key => key.EndsWith(extension, StringComparison.Ordinal)).ToHashSet();
 
     /// <summary>The entry of a container's hair EST manipulation for set 108 and a model race name, or null.</summary>
     private static int? EstEntry(JsonObject container, string race)
@@ -384,9 +426,9 @@ internal static class HairSkeletonScenarios
             "Hair skip: a model mapped as anything else still goes to Prepare, which refuses it");
     }
 
-    private static HairSkeletonPlan PrepareAndApply(HairModFixture mod, HairSkeletonSources sources)
+    private static HairSkeletonPlan PrepareAndApply(HairModFixture mod, HairSkeletonSources sources, HairSkeletonRequest? rig = null)
     {
-        var plan = HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel, sources, mod.Store);
+        var plan = HairSkeletonFiles.Prepare(rig ?? Rig(), mod.ModFolder, ModDirectory, HairModel, sources, mod.Store);
         HairSkeletonFiles.Apply(plan, mod.ModFolder, ModDirectory, HairModel, mod.Store, mod.EstStore);
         return plan;
     }
@@ -409,6 +451,21 @@ internal static class HairSkeletonScenarios
             "Hair skeleton files: both races' EST entries name the ID");
         Require(mod.Store.Load() is [{ SkeletonId: var stored, Model: HairModel }] && stored == id,
             "Hair skeleton files: the store keeps one record");
+
+        // Physics: c0801 has the h0182 donor, c1401 doesn't.
+        Require(plan.Files.All(file => file.PhysicsPath == Phyb(file.GenderRace, id)) &&
+                PhybKeys(optionA).SetEquals([Phyb(801, id), Phyb(1401, id)]) &&
+                optionA["Files"]![Phyb(801, id)]?.GetValue<string>() == Phyb(801, id).Replace('/', '\\'),
+            "Hair physics files: the option maps both races' physics");
+        var miqote = ReadPhyb(mod, Phyb(801, id));
+        var auRa = ReadPhyb(mod, Phyb(1401, id));
+        Require(miqote is { DataType: 3, Simulators.Count: 1 } && !miqote.Collision.IsEmpty &&
+                auRa is { DataType: 2, Simulators.Count: 1 } && auRa.Collision.IsEmpty,
+            "Hair physics files: c0801's physics has shapes, c1401's (no donor) has none");
+        Require(plan.Notes.Contains("The game's hair physics h0182 for c1401 could not be read, so that race's hair collides with nothing.") &&
+                !plan.Notes.Any(note => note.Contains("h0182 for c0801", StringComparison.Ordinal)),
+            "Hair physics files: the missing donor is noted for c1401 only");
+
         Require(HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel, Sources(99), mod.Store).SkeletonId == id,
             "Hair skeleton files: a later export reuses the ID");
     }
@@ -448,8 +505,9 @@ internal static class HairSkeletonScenarios
         Require(PrepareAndApply(mod, Sources(7)).SkeletonId == id, "Hair skeleton files: the dropped race's export keeps the ID");
         var optionA = Option(mod.Meta(), OptionA);
         Require(SklbKeys(optionA).SetEquals([Sklb(801, id)]) && !File.Exists(mod.FilePath(Sklb(1401, id))) &&
+                PhybKeys(optionA).SetEquals([Phyb(801, id)]) && !File.Exists(mod.FilePath(Phyb(1401, id))) &&
                 EstEntry(optionA, "AuRa") is null,
-            "Hair skeleton files: the dropped race's key, file and EST entry are gone");
+            "Hair skeleton files: the dropped race's keys, files and EST entry are gone");
         Require(HasBytes(mod, Sklb(801, id), "sklb 3") && EstEntry(optionA, "Miqote") == id,
             "Hair skeleton files: the kept race's key, file and EST entry stay");
     }
@@ -467,6 +525,9 @@ internal static class HairSkeletonScenarios
         Require(SklbKeys(optionA).SetEquals([ModderKey]) &&
                 !File.Exists(mod.FilePath(Sklb(801, id))) && !File.Exists(mod.FilePath(Sklb(1401, id))),
             "Hair skeleton removal: our keys and files are gone, the modder's key stays");
+        Require(PhybKeys(optionA).Count == 0 &&
+                !File.Exists(mod.FilePath(Phyb(801, id))) && !File.Exists(mod.FilePath(Phyb(1401, id))),
+            "Hair skeleton removal: our physics keys and files are gone too");
         Require(EstEntry(optionA, "Miqote") is null && EstEntry(optionA, "AuRa") is null &&
                 mod.Store.Load().Count == 0 && mod.EstStore.Load().Count == 0,
             "Hair skeleton removal: our EST entries and records are gone");
@@ -511,9 +572,10 @@ internal static class HairSkeletonScenarios
             "Hair skeleton files: the export after a failed one reuses the ID");
     }
 
-    /// <summary>A container's <c>.sklb</c> mappings as <c>key=value</c>, sorted.</summary>
-    private static string[] SklbPairs(JsonObject container)
-        => container["Files"]!.AsObject().Where(pair => pair.Key.EndsWith(".sklb", StringComparison.Ordinal))
+    /// <summary>A container's <c>.sklb</c> and <c>.phyb</c> mappings as <c>key=value</c>, sorted.</summary>
+    private static string[] SkeletonPairs(JsonObject container)
+        => container["Files"]!.AsObject()
+            .Where(pair => pair.Key.EndsWith(".sklb", StringComparison.Ordinal) || pair.Key.EndsWith(".phyb", StringComparison.Ordinal))
             .Select(pair => $"{pair.Key}={pair.Value!.GetValue<string>()}").Order(StringComparer.Ordinal).ToArray();
 
     /// <summary>A mod with the hair skeleton applied under one ID, its state captured, then exported again under another ID.</summary>
@@ -531,16 +593,23 @@ internal static class HairSkeletonScenarios
     private static void CaptureRestoreRoundTrip(string root)
     {
         var (mod, state, id, other) = ExportedTwice(root);
-        static string Pair(int genderRace, int skeleton) => $"{Sklb(genderRace, skeleton)}={Sklb(genderRace, skeleton).Replace('/', '\\')}";
-        var pairsA = new[] { Pair(801, id), Pair(1401, id) }.Order(StringComparer.Ordinal).ToArray();
-        var pairsB = new[] { Pair(801, id) };
+        static string Pair(string gamePath) => $"{gamePath}={gamePath.Replace('/', '\\')}";
+        var pairsA = new[] { Pair(Sklb(801, id)), Pair(Sklb(1401, id)), Pair(Phyb(801, id)), Pair(Phyb(1401, id)) }
+            .Order(StringComparer.Ordinal).ToArray();
+        var pairsB = new[] { Pair(Sklb(801, id)), Pair(Phyb(801, id)) }.Order(StringComparer.Ordinal).ToArray();
         Require(HairSkeletonFiles.CaptureState(mod.ModFolder, ModDirectory, "Files/unused.mdl", mod.Store) is null,
             "Hair skeleton backups: a model used as no hair keeps no state");
+        var entries = state["entries"]!.AsArray();
         Require(state["schema"]?.GetValue<string>() == "instant-edit.hair-skeleton-state" &&
-                state["skeletonId"]?.GetValue<int>() == id && state["entries"]!.AsArray().Count == 3,
-            "Hair skeleton backups: the state keeps the ID and every option's keys of it");
-        // The first ID's file changes since.
+                state["skeletonId"]?.GetValue<int>() == id && entries.Count == 6 &&
+                entries.Count(entry => entry!["container"]!.GetValue<string>() == entries[0]!["container"]!.GetValue<string>()) == 4 &&
+                entries.Count(entry => entry!["gamePath"]!.GetValue<string>().EndsWith(".phyb", StringComparison.Ordinal)) == 3,
+            "Hair skeleton backups: the state keeps the ID and every option's keys of it, 4 for option A's two races");
+        var physics = new[] { Phyb(801, id), Phyb(1401, id) }.ToDictionary(path => path, path => File.ReadAllBytes(mod.FilePath(path)));
+        // The first ID's files change since.
         File.WriteAllText(mod.FilePath(Sklb(801, id)), "changed");
+        foreach (var path in physics.Keys)
+            File.WriteAllText(mod.FilePath(path), "changed");
 
         var unchanged = File.ReadAllText(Path.Combine(mod.ModFolder, "meta.json"));
         var warnings = HairSkeletonFiles.RestoreState(mod.ModFolder, ModDirectory, HairModel,
@@ -551,12 +620,15 @@ internal static class HairSkeletonScenarios
 
         warnings = HairSkeletonFiles.RestoreState(mod.ModFolder, ModDirectory, HairModel, state, mod.Store);
         var meta = mod.Meta();
-        Require(warnings.Count == 0 && SklbPairs(Option(meta, OptionA)).SequenceEqual(pairsA) &&
-                SklbPairs(Option(meta, OptionB)).SequenceEqual(pairsB),
+        Require(warnings.Count == 0 && SkeletonPairs(Option(meta, OptionA)).SequenceEqual(pairsA) &&
+                SkeletonPairs(Option(meta, OptionB)).SequenceEqual(pairsB),
             "Hair skeleton backups: restoring puts back every option's keys exactly");
         Require(HasBytes(mod, Sklb(801, id), "sklb 3") && HasBytes(mod, Sklb(1401, id), "sklb 3"),
             "Hair skeleton backups: restoring puts back the files' bytes");
-        Require(!File.Exists(mod.FilePath(Sklb(801, other))) && !File.Exists(mod.FilePath(Sklb(1401, other))),
+        Require(physics.All(pair => File.ReadAllBytes(mod.FilePath(pair.Key)).AsSpan().SequenceEqual(pair.Value)),
+            "Hair skeleton backups: restoring puts back both physics files byte for byte");
+        Require(!File.Exists(mod.FilePath(Sklb(801, other))) && !File.Exists(mod.FilePath(Sklb(1401, other))) &&
+                !File.Exists(mod.FilePath(Phyb(801, other))) && !File.Exists(mod.FilePath(Phyb(1401, other))),
             "Hair skeleton backups: the other ID's files are deleted");
         Require(mod.Store.Load() is [{ SkeletonId: var stored }] && stored == id,
             "Hair skeleton backups: the record names the restored ID");
@@ -616,7 +688,8 @@ internal static class HairSkeletonScenarios
         Require(idX != idY, "Hair skeleton backups: two hair models in one option get two IDs");
 
         var state = HairSkeletonFiles.CaptureState(mod.ModFolder, ModDirectory, HairModel, mod.Store)!;
-        Require(state["entries"]!.AsArray().Select(entry => entry!["gamePath"]!.GetValue<string>()).SequenceEqual([Sklb(801, idX)]),
+        Require(state["entries"]!.AsArray().Select(entry => entry!["gamePath"]!.GetValue<string>()).ToHashSet()
+                .SetEquals([Sklb(801, idX), Phyb(801, idX)]),
             "Hair skeleton backups: the state keeps only the model's own ID, not another model's or the modder's");
         var other = Enumerable.Range(4321, 3).First(candidate => candidate != idX && candidate != idY);
         var records = mod.Store.Load().ToList();
@@ -670,5 +743,68 @@ internal static class HairSkeletonScenarios
         Require(!File.Exists(firstPath) && !File.Exists(firstPath + ".hairskel.json") &&
                 !File.Exists(secondPath + ".hairskel.json"),
             "Hair skeleton backups: cleanup of an expired backup removes its hair skeleton state");
+    }
+
+    private static void NoChainsWritesPhysicsOff(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], []);
+        var rig = Rig();
+        rig.Chains = null;
+        var plan = PrepareAndApply(mod, Sources(7), rig);
+        var id = plan.SkeletonId;
+        Require(PhybKeys(Option(mod.Meta(), OptionA)).SetEquals([Phyb(801, id), Phyb(1401, id)]) &&
+                ReadPhyb(mod, Phyb(801, id)) is { Version: 0 } && ReadPhyb(mod, Phyb(1401, id)) is { Version: 0 },
+            "Hair physics files: a rig without chains maps physics that turn it off");
+        Require(!plan.Notes.Any(note => note.Contains("physics", StringComparison.Ordinal)),
+            "Hair physics files: a rig without chains notes no missing donor");
+    }
+
+    private static void OldBackupDropsPhysics(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], [MiqoteHair]);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        var state = HairSkeletonFiles.CaptureState(mod.ModFolder, ModDirectory, HairModel, mod.Store)!;
+        // A phase 1 state: the same keys without the physics.
+        var entries = state["entries"]!.AsArray();
+        foreach (var entry in entries.Where(entry => entry!["gamePath"]!.GetValue<string>().Contains("/phy_", StringComparison.Ordinal)).ToList())
+            entries.Remove(entry);
+        PrepareAndApply(mod, Sources(7));
+
+        var warnings = HairSkeletonFiles.RestoreState(mod.ModFolder, ModDirectory, HairModel, state, mod.Store);
+        var meta = mod.Meta();
+        var containers = new[] { meta["DefaultData"]!.AsObject(), Option(meta, OptionA), Option(meta, OptionB) };
+        Require(warnings.Count == 0 && containers.All(container => PhybKeys(container).Count == 0) &&
+                !File.Exists(mod.FilePath(Phyb(801, id))) && !File.Exists(mod.FilePath(Phyb(1401, id))),
+            "Hair physics backups: restoring a backup without physics unmaps and deletes the physics, without warnings");
+        Require(SklbKeys(Option(meta, OptionA)).SetEquals([Sklb(801, id), Sklb(1401, id)]) && HasBytes(mod, Sklb(801, id), "sklb 3"),
+            "Hair physics backups: the backup's skeletons stay");
+    }
+
+    private static void UnreadablePreviousPhysics(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], []);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        File.WriteAllBytes(mod.FilePath(Phyb(801, id)), [1, 2, 3]);
+        HairSkeletonPlan? plan = null;
+        try { plan = PrepareAndApply(mod, Sources(7)); }
+        catch (InvalidDataException) { }
+        Require(plan is not null && ReadPhyb(mod, Phyb(801, id)) is { DataType: 3, Simulators.Count: 1 } &&
+                plan.Notes.Contains("The hair physics in the mod for c0801 could not be read, so every chain gets its preset."),
+            "Hair physics files: unreadable physics in the mod is rebuilt from the presets, with a note");
+    }
+
+    private static void TuningSurvivesReexport(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], []);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        var tuned = ReadPhyb(mod, Phyb(801, id));
+        tuned.Simulators[0].Chains[0].Dampening = 0.3f;
+        File.WriteAllBytes(mod.FilePath(Phyb(801, id)), tuned.ToBytes());
+        var plan = PrepareAndApply(mod, Sources(7));
+        Require(ReadPhyb(mod, Phyb(801, id)).Simulators[0].Chains[0].Dampening == 0.3f &&
+                ReadPhyb(mod, Phyb(1401, id)).Simulators[0].Chains[0].Dampening == 0.05f,
+            "Hair physics files: a re-export keeps the back chain's tuned dampening");
+        Require(plan.Notes.Contains("c0801: Kept your physics settings for 1 of 1 chains."),
+            "Hair physics files: the builder's notes name the race");
     }
 }
