@@ -36,6 +36,7 @@ internal sealed partial class ModCheck
         MaterialProblemFindings();
         RaceFindings();
         LiveFindings();
+        HairSkeletonFindings();
         LeftoverFindings();
 
         foreach (var repair in _repairs)

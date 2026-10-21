@@ -33,6 +33,9 @@ internal static partial class ModCheckScenarios
         ImcGroupsDecideMaterialSets();
         AttributeMasksThatHideEverythingAreReported();
         RaceModelsNoRaceLoadsAreErrors();
+        SharedHairSkeletonIdIsAWarning();
+        VanillaHairSkeletonIdsAreNotLookedUp();
+        UnreadableModLibraryIsANote();
         RunRepairs();
         RunStellarBlade();
     }
@@ -189,8 +192,9 @@ internal static partial class ModCheckScenarios
     private static (byte, ushort)[] GearRow(byte set, ushort mask) => [(1, 0x3FF), (set, mask), (1, 0x3FF), (1, 0x3FF), (1, 0x3FF)];
 
     private static ModCheckReport Check(TestModFolder mod, FakeVanillaFiles? game = null, ushort? player = 201,
-        IItemVariants? items = null, ICollectionView? collection = null)
-        => ModCheck.Run(CheckInput.ForFolder(mod.Path, game ?? GearGame(), items, player, collection), null, default);
+        IItemVariants? items = null, ICollectionView? collection = null,
+        Func<IReadOnlyDictionary<int, IReadOnlyList<string>>>? hairSkeletonUsers = null)
+        => ModCheck.Run(CheckInput.ForFolder(mod.Path, game ?? GearGame(), items, player, collection, hairSkeletonUsers), null, default);
 
     /// <summary>A gear mod: model, one material, one texture, each in the containers its argument names.</summary>
     private static TestModFolder GearMod(string modelIn = "default", string materialIn = "default", string textureIn = "default",
@@ -339,5 +343,66 @@ internal static partial class ModCheckScenarios
         Require(finding.Severity == Severity.Error && table.Shipped.Order().SequenceEqual(new ushort[] { 201, 1401 }) &&
                 table.Rows.Single(row => row.Race == 1401) is { UsesModModel: true, Loaded: 201, ViaFallback: true, IsPlayer: true },
             "a race model the EQDP data never loads is an error; that race wears the model it falls back to");
+    }
+
+    // ── Other mods ───────────────────────────────────────────────────────────
+
+    private const string CustomHairSkeleton = "chara/human/c0801/skeleton/hair/h1612/skl_c0801h1612.sklb";
+
+    /// <summary>A mod whose default files map each game path to one skeleton file.</summary>
+    private static TestModFolder HairSkeletonMod(params string[] gamePaths)
+    {
+        var files = new JObject();
+        foreach (var gamePath in gamePaths)
+            files[gamePath] = "files/skl.sklb";
+        return new TestModFolder().File("files/skl.sklb", new byte[16]).Meta(new JObject
+        {
+            ["FileVersion"] = 4,
+            ["Name"] = "Hair",
+            ["DefaultData"] = new JObject { ["Files"] = files },
+        }.ToString());
+    }
+
+    private static void SharedHairSkeletonIdIsAWarning()
+    {
+        using var mod = HairSkeletonMod(CustomHairSkeleton, "chara/human/c0101/skeleton/hair/h1613/skl_c0101h1613.sklb");
+        var calls = 0;
+        var report = Check(mod, hairSkeletonUsers: () =>
+        {
+            calls++;
+            return new Dictionary<int, IReadOnlyList<string>>
+            {
+                [1612] = ["Other Mod"],
+                [1613] = ["A", "B", "C", "D", "E"],
+                [1700] = ["Unrelated"],
+            };
+        });
+
+        var findings = report.Findings.Where(f => f.Code == "X005").OrderBy(f => f.Key, StringComparer.Ordinal).ToArray();
+        Require(calls == 1 && findings.Length == 2, "the other mods are read once, and each shared hair skeleton ID is one finding");
+        Require(findings[0] is { Key: "X005:1612", Category: CheckCategory.Dependencies, Severity: Severity.Warning, GamePath: CustomHairSkeleton } &&
+                findings[0].Title == "Another mod uses the same hair skeleton" &&
+                findings[0].Detail == "Other Mod also use hair skeleton h1612. When both are on, one hair gets the other's bones. Export this hair again from Blender to move it to a free ID.",
+            "a hair skeleton ID another mod uses is a warning naming that mod and the ID");
+        Require(findings[1].Detail.StartsWith("A, B, C and 2 more also use hair skeleton h1613.", StringComparison.Ordinal),
+            "at most three mods are named");
+        Require(!report.Findings.Any(f => f.Detail.Contains("Unrelated", StringComparison.Ordinal)), "IDs the mod doesn't use are not reported");
+    }
+
+    private static void VanillaHairSkeletonIdsAreNotLookedUp()
+    {
+        using var mod = HairSkeletonMod("chara/human/c0801/skeleton/hair/h0177/skl_c0801h0177.sklb");
+        var report = Check(mod, hairSkeletonUsers: () => throw new InvalidOperationException("called"));
+        Require(!report.Findings.Any(f => f.Code == "X005") && !report.Notes.Any(n => n.Contains("hair skeletons", StringComparison.Ordinal)),
+            "a mod with only vanilla hair skeleton IDs never reads the other mods");
+    }
+
+    private static void UnreadableModLibraryIsANote()
+    {
+        using var mod = HairSkeletonMod(CustomHairSkeleton);
+        var report = Check(mod, hairSkeletonUsers: () => throw new InvalidDataException("The Penumbra mod folder can't be read."));
+        Require(!report.Findings.Any(f => f.Code == "X005") &&
+                report.Notes.Contains("Other mods' hair skeletons could not be checked: The Penumbra mod folder can't be read."),
+            "when the other mods can't be read, the check says so and goes on");
     }
 }

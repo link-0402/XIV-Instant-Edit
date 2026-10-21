@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using InstantEdit.Services.Skeletons;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Backups;
@@ -149,7 +151,8 @@ internal sealed partial class CheckView
     {
         if (_session.Project is not { } project || Check.Busy)
             return;
-        var input = CheckInput.From(project, _host.GameData.VanillaFiles, _host.GameData, _host.PlayerRace(), null);
+        var input = CheckInput.From(project, _host.GameData.VanillaFiles, _host.GameData, _host.PlayerRace(), null,
+            () => HairSkeletonIds.Users(Path.GetDirectoryName(project.FolderPath)!, Path.GetFileName(project.FolderPath)));
         var ipc = _host.PenumbraIpc;
         var folder = project.FolderName;
         Check.Start(input, Check.UseCollection && ipc.IsAvailable ? () => PenumbraCollectionView.CaptureAsync(ipc, folder) : null);

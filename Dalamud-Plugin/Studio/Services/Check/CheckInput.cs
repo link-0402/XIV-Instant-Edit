@@ -53,13 +53,21 @@ internal sealed class CheckInput
     /// <summary>Files this plugin wrote into the mod (the sidecar's ledger), as comparison keys: never offered for deletion.</summary>
     public IReadOnlySet<string> LedgerRelKeys { get; init; } = new HashSet<string>(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The custom hair skeleton IDs other mods in the library use, each with those mods' folder names. Called on
+    /// the worker, and only when the mod maps a custom hair skeleton.
+    /// </summary>
+    public Func<IReadOnlyDictionary<int, IReadOnlyList<string>>>? HairSkeletonUsers { get; init; }
+
     /// <summary>The same input, checked against a collection.</summary>
     public CheckInput WithCollection(ICollectionView? collection) => new()
     {
         Folder = Folder, Meta = Meta, Fingerprint = Fingerprint, Game = Game, Items = Items, PlayerRace = PlayerRace, Collection = collection, LedgerRelKeys = LedgerRelKeys,
+        HairSkeletonUsers = HairSkeletonUsers,
     };
 
-    public static CheckInput From(ModProject project, IVanillaFiles game, IItemVariants? items, ushort? player, ICollectionView? collection)
+    public static CheckInput From(ModProject project, IVanillaFiles game, IItemVariants? items, ushort? player, ICollectionView? collection,
+        Func<IReadOnlyDictionary<int, IReadOnlyList<string>>>? hairSkeletonUsers = null)
     {
         var ledger = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in project.Sidecar.Ledger.Files)
@@ -74,12 +82,13 @@ internal sealed class CheckInput
             PlayerRace    = player,
             Collection    = collection,
             LedgerRelKeys = ledger,
+            HairSkeletonUsers = hairSkeletonUsers,
         };
     }
 
     /// <summary>A check of a mod folder as it is on disk (tests, and the parity harness).</summary>
     public static CheckInput ForFolder(string folder, IVanillaFiles game, IItemVariants? items = null, ushort? player = null,
-        ICollectionView? collection = null)
+        ICollectionView? collection = null, Func<IReadOnlyDictionary<int, IReadOnlyList<string>>>? hairSkeletonUsers = null)
         => new()
         {
             Folder      = folder,
@@ -89,5 +98,6 @@ internal sealed class CheckInput
             Items      = items,
             PlayerRace = player,
             Collection = collection,
+            HairSkeletonUsers = hairSkeletonUsers,
         };
 }
