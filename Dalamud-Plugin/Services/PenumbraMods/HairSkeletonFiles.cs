@@ -89,13 +89,16 @@ internal static partial class HairSkeletonFiles
             files.Add(new HairSkeletonFile(race, ModelSkeletonPaths.PartialPath(label, EstSlot.Hair, id),
                 sources.Write(template, HairSkeletonLayout.Bones(rig, sources.TemplateKao(template)))));
         }
+        // An empty plan would only take back the model's EST entries.
+        if (files.Count == 0)
+            throw new InvalidDataException("No race the model is used for has a vanilla hair skeleton.");
         return new HairSkeletonPlan(model, id, files, notes);
     }
 
     /// <summary>
-    /// Write the plan's files into the mod, map each one in the options that use the model for its
-    /// race (and nowhere else), delete the ID's files no option maps any more, set the hair EST
-    /// entries, and record the ID. Returns the plan's notes, then the EST warnings.
+    /// Record the ID, write the plan's files into the mod, map each one in the options that use the
+    /// model for its race (and nowhere else), delete the ID's files no option maps any more, and set
+    /// the hair EST entries. Returns the plan's notes, then the EST warnings.
     /// </summary>
     public static List<string> Apply(
         HairSkeletonPlan plan,
@@ -110,11 +113,15 @@ internal static partial class HairSkeletonFiles
             throw new ArgumentException("The hair skeleton plan was made for another model.", nameof(plan));
         // Check every destination before the first write.
         var targets = plan.Files.Select(file => (file.Bytes, Path: Destination(modFolder, file.GamePath))).ToList();
+        // Record the ID before the first write, so a step that fails later never orphans its keys and files.
+        var modKey = EstEntryService.EstModKey(modFolder, modDirectory);
+        var records = store.Load().Where(record => !SameRecord(record, modKey, model)).ToList();
+        records.Add(new ManagedHairSkeleton(modKey, model, plan.SkeletonId));
+        store.Save(records);
         foreach (var (bytes, path) in targets)
             WriteAtomic(path, bytes);
 
         var meta = LoadV4ModMetadata(modFolder);
-        var modKey = EstEntryService.EstModKey(modFolder, modDirectory);
         var built = plan.Files.ToDictionary(file => file.GenderRace, file => file.GamePath);
         var metaChanged = Remap(meta, model, plan.SkeletonId, built);
         // Races and options that dropped the model keep no EST entry naming the skeleton.
@@ -135,10 +142,6 @@ internal static partial class HairSkeletonFiles
             .Select(file => new EstEntryRequest { Slot = "Hair", Entry = plan.SkeletonId, Race = RaceLabel(file.GenderRace) })
             .ToList();
         var warnings = EstEntryService.UpdateEstEntries(modFolder, modDirectory, model, requests, estStore);
-
-        var records = store.Load().Where(record => !SameRecord(record, modKey, model)).ToList();
-        records.Add(new ManagedHairSkeleton(modKey, model, plan.SkeletonId));
-        store.Save(records);
         return [.. plan.Notes, .. warnings];
     }
 

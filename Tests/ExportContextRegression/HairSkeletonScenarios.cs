@@ -27,6 +27,8 @@ internal static class HairSkeletonScenarios
         DroppedRaceIsUnmapped(Path.Combine(testRoot, "HairDroppedRace"));
         ExportWithoutRigRemovesOnlyOurs(Path.Combine(testRoot, "HairRemove"));
         RefusesHairNotUsedAsHair(Path.Combine(testRoot, "HairNotHair"));
+        RefusesWithoutAnyTemplate(Path.Combine(testRoot, "HairNoTemplates"));
+        FailedApplyKeepsTheRecord(Path.Combine(testRoot, "HairFailedApply"));
     }
 
     /// <summary>An EST table's bytes: a count, the (set, gender-race) pairs, then one entry per pair.</summary>
@@ -399,5 +401,30 @@ internal static class HairSkeletonScenarios
         var other = HairMod(Path.Combine(root, "OtherRace"), [AuRaHair], []);
         Reject(() => HairSkeletonFiles.Prepare(Rig(), other.ModFolder, ModDirectory, HairModel, Sources(7), other.Store),
             "Hair skeleton files: a rig for a race the model isn't used for is refused");
+    }
+
+    private static void RefusesWithoutAnyTemplate(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], []);
+        var threw = false;
+        try { HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel, Sources(7, _ => false), mod.Store); }
+        catch (InvalidDataException) { threw = true; }
+        Require(threw, "Hair skeleton files: no race with a vanilla template is refused");
+    }
+
+    private static void FailedApplyKeepsTheRecord(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], []);
+        // A folder where the EST records file goes makes the EST step fail.
+        var brokenConfig = Path.Combine(root, "broken config");
+        Directory.CreateDirectory(Path.Combine(brokenConfig, "est-entries.json"));
+        var plan = HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel, Sources(7), mod.Store);
+        var threw = false;
+        try { HairSkeletonFiles.Apply(plan, mod.ModFolder, ModDirectory, HairModel, mod.Store, new EstEntryStore(brokenConfig)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { threw = true; }
+        Require(threw && mod.Store.Load() is [{ SkeletonId: var stored }] && stored == plan.SkeletonId,
+            "Hair skeleton files: a failed EST step leaves the ID recorded");
+        Require(HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel, Sources(99), mod.Store).SkeletonId == plan.SkeletonId,
+            "Hair skeleton files: the export after a failed one reuses the ID");
     }
 }
