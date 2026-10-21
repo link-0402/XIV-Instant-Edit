@@ -40,12 +40,10 @@ namespace InstantEdit.Studio.Services.Sims;
 public static class SimsMeshExporter
 {
     /// <summary>
-    /// Writes <paramref name="mesh"/> to <paramref name="path"/> as a .glb. When
-    /// <paramref name="crop"/> is set, UV0 is rescaled to match textures that had their
-    /// unused half cropped away, so the model and the images stay in step.
+    /// Writes <paramref name="mesh"/> to <paramref name="path"/> as a .glb.
     /// </summary>
     /// <returns>How many faces were left out because an index fell outside the vertex list.</returns>
-    public static int ExportGlb(SimsGeomMesh mesh, string path, string meshName, SimsHalfCrop crop = default)
+    public static int ExportGlb(SimsGeomMesh mesh, string path, string meshName)
     {
         if (mesh.VertexCount == 0 || mesh.FaceCount == 0)
             throw new InvalidOperationException("Mesh has no geometry to export.");
@@ -58,9 +56,9 @@ public static class SimsMeshExporter
         var material = new MaterialBuilder(meshName).WithDoubleSide(true);
 
         if (mesh.HasSkin)
-            BuildSkinned(mesh, scene, material, meshName, crop);
+            BuildSkinned(mesh, scene, material, meshName);
         else
-            BuildRigid(mesh, scene, material, meshName, crop);
+            BuildRigid(mesh, scene, material, meshName);
 
         scene.ToGltf2().SaveGLB(path);
         return skipped;
@@ -79,25 +77,25 @@ public static class SimsMeshExporter
     private static bool InRange(SimsGeomMesh mesh, int index) => (uint)index < (uint)mesh.VertexCount;
 
     private static void BuildRigid(SimsGeomMesh mesh, SceneBuilder scene, MaterialBuilder material,
-        string meshName, SimsHalfCrop crop)
+        string meshName)
     {
         var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1>(meshName);
         var prim = builder.UsePrimitive(material);
 
         AddTriangles(mesh, (a, b, c) => prim.AddTriangle(
-            RigidVertex(mesh, a, crop), RigidVertex(mesh, b, crop), RigidVertex(mesh, c, crop)));
+            RigidVertex(mesh, a), RigidVertex(mesh, b), RigidVertex(mesh, c)));
 
         scene.AddRigidMesh(builder, Matrix4x4.Identity);
     }
 
     private static void BuildSkinned(SimsGeomMesh mesh, SceneBuilder scene, MaterialBuilder material,
-        string meshName, SimsHalfCrop crop)
+        string meshName)
     {
         var builder = new MeshBuilder<VertexPositionNormal, VertexTexture1, VertexJoints4>(meshName);
         var prim = builder.UsePrimitive(material);
 
         AddTriangles(mesh, (a, b, c) => prim.AddTriangle(
-            SkinnedVertex(mesh, a, crop), SkinnedVertex(mesh, b, crop), SkinnedVertex(mesh, c, crop)));
+            SkinnedVertex(mesh, a), SkinnedVertex(mesh, b), SkinnedVertex(mesh, c)));
 
         // One identity joint per bone; the root keeps them together in Blender.
         var root = new NodeBuilder("Sims_Armature");
@@ -120,11 +118,11 @@ public static class SimsMeshExporter
         }
     }
 
-    private static (VertexPositionNormal, VertexTexture1) RigidVertex(SimsGeomMesh mesh, int i, SimsHalfCrop crop)
-        => (Geometry(mesh, i), Uv(mesh, i, crop));
+    private static (VertexPositionNormal, VertexTexture1) RigidVertex(SimsGeomMesh mesh, int i)
+        => (Geometry(mesh, i), Uv(mesh, i));
 
-    private static (VertexPositionNormal, VertexTexture1, VertexJoints4) SkinnedVertex(SimsGeomMesh mesh, int i, SimsHalfCrop crop)
-        => (Geometry(mesh, i), Uv(mesh, i, crop), Joints(mesh, i));
+    private static (VertexPositionNormal, VertexTexture1, VertexJoints4) SkinnedVertex(SimsGeomMesh mesh, int i)
+        => (Geometry(mesh, i), Uv(mesh, i), Joints(mesh, i));
 
     private static VertexPositionNormal Geometry(SimsGeomMesh mesh, int i)
     {
@@ -141,18 +139,15 @@ public static class SimsMeshExporter
     }
 
     /// <summary>
-    /// UV0, rescaled when the textures were cropped. Only channel 0 is exported: the Sims
-    /// stores a second channel whose U runs to -1, so it is not a texture coordinate.
+    /// UV0. Only channel 0 is exported: the Sims stores a second channel whose U runs
+    /// to -1, so it is not a texture coordinate.
     /// </summary>
-    private static VertexTexture1 Uv(SimsGeomMesh mesh, int i, SimsHalfCrop crop)
+    private static VertexTexture1 Uv(SimsGeomMesh mesh, int i)
     {
         if (mesh.UvChannels.Count == 0 || mesh.UvChannels[0].Length <= i)
             return new VertexTexture1(Vector2.Zero);
 
-        var uv = mesh.UvChannels[0][i];
-        return crop.Crops
-            ? new VertexTexture1(new Vector2(uv.X, crop.RemapV(uv.Y)))
-            : new VertexTexture1(uv);
+        return new VertexTexture1(mesh.UvChannels[0][i]);
     }
 
     private static VertexJoints4 Joints(SimsGeomMesh mesh, int i)

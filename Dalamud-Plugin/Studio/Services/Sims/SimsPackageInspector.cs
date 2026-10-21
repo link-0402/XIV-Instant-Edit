@@ -76,12 +76,6 @@ public sealed class SimsScanResult
     /// <summary>Detail levels present in this package, ascending; drives the LOD picker.</summary>
     public List<int> AvailableLods = new();
 
-    /// <summary>
-    /// Which half of the texture sheet the meshes actually use, when they all fit in one.
-    /// Offered in the UI as a crop; see <see cref="SimsHalfCrop"/>.
-    /// </summary>
-    public SimsHalfCrop SuggestedCrop = SimsHalfCrop.None;
-
     public IEnumerable<SimsAsset> Meshes   => Assets.Where(a => a.Kind == SimsAssetKind.Mesh);
     public IEnumerable<SimsAsset> Textures => Assets.Where(a => a.Kind == SimsAssetKind.Texture);
 }
@@ -214,7 +208,6 @@ public static class SimsPackageInspector
         }
 
         int unlevelled = 0;
-        var parsedMeshes = new List<SimsGeomMesh>();
 
         foreach (var entry in geomEntries)
         {
@@ -236,8 +229,6 @@ public static class SimsPackageInspector
                 result.Warnings.Add($"Mesh {entry.KeyString} could not be parsed: {ex.Message}");
                 continue;
             }
-
-            parsedMeshes.Add(mesh);
 
             var key = new SimsResourceKey(entry.Type, entry.Group, entry.Instance);
             owners.TryGetValue(key, out var partName);
@@ -263,10 +254,6 @@ public static class SimsPackageInspector
                 $"{unlevelled} mesh(es) are not listed by any CAS part, so their detail level is unknown. " +
                 "They are grouped under \"LOD ?\".");
         }
-
-        // Detected from every mesh at once: they share one UV rescale, so a crop is only
-        // safe if all of them sit in the same half.
-        result.SuggestedCrop = SimsHalfCrop.Detect(parsedMeshes);
 
         result.AvailableLods = result.Assets
             .Where(a => a.Kind == SimsAssetKind.Mesh)
@@ -404,9 +391,6 @@ public static class SimsPackageInspector
         public int Extracted;
         public int Failed;
 
-        /// <summary>The crop that was applied, for the result panel to describe.</summary>
-        public SimsHalfCrop Crop;
-
         /// <summary>Every file this run wrote, report included; the result list is built from these.</summary>
         public List<string> WrittenFiles = new();
 
@@ -440,7 +424,7 @@ public static class SimsPackageInspector
     /// used instead, so the diffuse variant folder only ever holds this run's swatches.
     /// </summary>
     public static ExtractionResult Extract(SimsScanResult scan, string outputRoot,
-        SimsHalfCrop crop = default, Action<string>? progress = null, CancellationToken cancel = default)
+        Action<string>? progress = null, CancellationToken cancel = default)
     {
         cancel.ThrowIfCancellationRequested();
         var packageName = MakeSafeName(Path.GetFileNameWithoutExtension(scan.PackagePath), "sims_package");
@@ -449,7 +433,7 @@ public static class SimsPackageInspector
         bool finished = false;
         try
         {
-            var extraction = Write(scan, claim.Path, packageName, claim.Numbered, crop, progress, cancel);
+            var extraction = Write(scan, claim.Path, packageName, claim.Numbered, progress, cancel);
             finished = true;
             return extraction;
         }
@@ -461,7 +445,7 @@ public static class SimsPackageInspector
     }
 
     private static ExtractionResult Write(SimsScanResult scan, string root, string packageName, bool newFolder,
-        SimsHalfCrop crop, Action<string>? progress, CancellationToken cancel)
+        Action<string>? progress, CancellationToken cancel)
     {
         var result = new ExtractionResult
         {
@@ -480,11 +464,6 @@ public static class SimsPackageInspector
             report.AppendLine($"Extracted:      {DateTime.Now:yyyy-MM-dd HH:mm}");
             if (newFolder)
                 report.AppendLine($"Folder:         {packageName} holds other files, so this run went into {Path.GetFileName(root)}.");
-            if (crop.Crops)
-            {
-                report.AppendLine($"Half crop:      keeping the {crop.Describe()}; textures are halved " +
-                                   "and UV0 rescaled to match.");
-            }
             report.AppendLine();
 
             using var package = new DbpfPackage(scan.PackagePath);
@@ -499,9 +478,9 @@ public static class SimsPackageInspector
                 try
                 {
                     if (asset.Kind == SimsAssetKind.Mesh)
-                        ExtractMesh(package, asset, result, packageName, usedNames, report, crop, progress);
+                        ExtractMesh(package, asset, result, packageName, usedNames, report, progress);
                     else
-                        ExtractTexture(package, asset, result, root, usedNames, report, crop, progress);
+                        ExtractTexture(package, asset, result, root, usedNames, report, progress);
                     extracted++;
                 }
                 catch (Exception ex)
@@ -513,7 +492,6 @@ public static class SimsPackageInspector
 
             result.Extracted = extracted;
             result.Failed    = failed;
-            result.Crop      = crop;
 
             if (scan.Warnings.Count > 0)
             {
@@ -617,8 +595,7 @@ public static class SimsPackageInspector
     }
 
     private static void ExtractMesh(DbpfPackage package, SimsAsset asset, ExtractionResult result,
-        string packageName, HashSet<string> usedNames, StringBuilder report, SimsHalfCrop crop,
-        Action<string>? progress)
+        string packageName, HashSet<string> usedNames, StringBuilder report, Action<string>? progress)
     {
         progress?.Invoke($"Exporting mesh {asset.Entry.Instance:X16}");
 
@@ -631,7 +608,7 @@ public static class SimsPackageInspector
         var path  = Path.Combine(result.ModelFolder, name);
 
         int skippedFaces = 0;
-        WriteOwned(result, path, () => skippedFaces = SimsMeshExporter.ExportGlb(mesh, path, Path.GetFileNameWithoutExtension(name), crop));
+        WriteOwned(result, path, () => skippedFaces = SimsMeshExporter.ExportGlb(mesh, path, Path.GetFileNameWithoutExtension(name)));
 
         // The path shown afterwards should be the highest detail one, whatever order
         // the assets happened to be extracted in.
@@ -648,21 +625,12 @@ public static class SimsPackageInspector
     }
 
     private static void ExtractTexture(DbpfPackage package, SimsAsset asset, ExtractionResult result,
-        string root, HashSet<string> usedNames, StringBuilder report, SimsHalfCrop crop,
-        Action<string>? progress)
+        string root, HashSet<string> usedNames, StringBuilder report, Action<string>? progress)
     {
         progress?.Invoke($"Writing texture {asset.Entry.Instance:X16}");
 
         var data    = package.Read(asset.Entry);
         var decoded = SimsTextureDecoder.Decode(asset.Entry.Type, data);
-
-        var original = $"{decoded.Width}x{decoded.Height}";
-        bool lostContent = crop.Crops && SimsTextureCrop.DiscardedHalfHasContent(decoded, crop);
-        decoded = SimsTextureCrop.Apply(decoded, crop);
-        string cropNote = crop.Crops
-            ? $", cropped from {original}" +
-              (lostContent ? " — the discarded half held content no mesh references" : string.Empty)
-            : string.Empty;
 
         var folderName = asset.Role switch
         {
@@ -698,7 +666,7 @@ public static class SimsPackageInspector
         }
 
         report.AppendLine($"  ok:       textures/{folderName}/{name}  " +
-                          $"({decoded.Width}x{decoded.Height}, {decoded.SourceFormat}{cropNote})");
+                          $"({decoded.Width}x{decoded.Height}, {decoded.SourceFormat})");
     }
 
     private static string UniqueName(HashSet<string> used, string stem, string extension)

@@ -49,9 +49,6 @@ public sealed class PackageImportWindow : Window, IDisposable
     private SimsScanResult? _scan;
     private SimsPackageInspector.ExtractionResult? _extraction;
 
-    /// <summary>Whether to halve textures whose used content sits in one half.</summary>
-    private bool _cropHalf = true;
-
     /// <summary>Index into <see cref="_lodOptions"/>; 0 is "All LODs".</summary>
     private int _lodChoice;
     private string[] _lodOptions = { AllLodsLabel };
@@ -86,6 +83,14 @@ public sealed class PackageImportWindow : Window, IDisposable
 
     private static readonly string[] UnityTickOptions = { "Textures and models", "Textures only", "Models only", "Nothing" };
     private int _unityTick;
+
+    /// <summary>Rows picked in the list (by index), so a tick on one of them ticks them all; cleared by every scan.</summary>
+    private readonly HashSet<int> _picked = new();
+
+    /// <summary>The row a Shift-click picks from: the last one clicked without Shift.</summary>
+    private int _pickAnchor = -1;
+
+    private static float RowHeight => Theme.S(60);
 
     internal PackageImportWindow(StudioHost host, TextureThumbnailCache thumbnails) : base("Import Package###StudioSimsImport")
     {
@@ -215,6 +220,8 @@ public sealed class PackageImportWindow : Window, IDisposable
         {
             if (_unityScan != null) DrawUnityAssets(busy, _unityScan);
             else                    DrawAssetList(busy);
+            if (!busy)
+                PickAllOnShortcut(_unityScan?.Assets.Count ?? _scan?.Assets.Count ?? 0);
         }
         ImGui.EndChild();
         PackageDropTarget();
@@ -341,12 +348,13 @@ public sealed class PackageImportWindow : Window, IDisposable
     }
 
     /// <summary>
-    /// Sims: the detail-level picker and half-crop toggle. The LOD dropdown only re-ticks the mesh
+    /// Sims: the detail-level picker. The LOD dropdown only re-ticks the mesh
     /// rows, so an individual tick changed afterwards is still respected. Unity: a bulk tick.
     /// </summary>
     private void DrawOptions(bool busy)
     {
-        Gui.SectionHeader("2  Choose what to extract");
+        Gui.SectionHeader("2  Choose what to extract",
+            "Click rows to pick them, Ctrl+click or Shift+click to pick more, Ctrl+A to pick all. Ticking a picked row ticks every picked row.");
         if (_unityScan != null)
         {
             using (Gui.Disabled(busy))
@@ -373,8 +381,6 @@ public sealed class PackageImportWindow : Window, IDisposable
                 ImGui.SameLine();
                 Gui.Hint($"{_scan.Meshes.Count()} mesh(es) in this package");
             }
-
-            DrawCropRow(_scan);
         }
 
         if (!_scan.HasCasPartData)
@@ -384,31 +390,6 @@ public sealed class PackageImportWindow : Window, IDisposable
             ImGui.TextColored(Theme.Warn, "No CAS part could be read, so texture roles are guesses from the resource type. Check them.");
         }
         ImGui.Spacing();
-    }
-
-    /// <summary>
-    /// The half-crop toggle. It is only offered when the meshes actually fit in one half
-    /// of the sheet, since that is what makes rescaling UV0 safe; otherwise the reason is
-    /// shown instead of a control that could not do anything.
-    /// </summary>
-    private void DrawCropRow(SimsScanResult scan)
-    {
-        var crop = scan.SuggestedCrop;
-        Gui.Label("Half crop");
-        if (!crop.Crops)
-        {
-            Gui.Hint("not available: the meshes use both halves of the texture sheet");
-            Gui.Tooltip("Sims sheets are often twice as tall as they need to be, with one half empty. " +
-                       "That can only be cropped away when every mesh sits inside a single half.");
-            return;
-        }
-
-        ImGui.Checkbox($"Crop textures to the {crop.Describe()}##SimsCrop", ref _cropHalf);
-        Gui.Tooltip($"The meshes only use the {crop.Describe()} of the sheet, so the rest is dead space. " +
-                   "Halving it turns a 2048x4096 diffuse into a square 2048x2048, and UV0 on the " +
-                   "exported model is rescaled by the same amount so the two still line up.");
-        ImGui.SameLine();
-        Gui.Hint("(UV0 is rescaled to match)");
     }
 
     /// <summary>
@@ -493,24 +474,25 @@ public sealed class PackageImportWindow : Window, IDisposable
             ImGui.TableHeadersRow();
 
             for (int i = 0; i < _scan.Assets.Count; i++)
-                DrawAssetRow(_scan.Assets[i], i);
+                DrawAssetRow(_scan, _scan.Assets[i], i);
 
             ImGui.EndTable();
         }
     }
 
-    private void DrawAssetRow(SimsAsset asset, int index)
+    private void DrawAssetRow(SimsScanResult scan, SimsAsset asset, int index)
     {
-        ImGui.TableNextRow();
+        ImGui.TableNextRow(ImGuiTableRowFlags.None, RowHeight);
         ImGui.PushID(index);
 
         // Tick
         ImGui.TableNextColumn();
+        DrawRowPicker(index, scan.Assets.Count);
         bool selected = asset.Selected;
         using (Gui.Disabled(asset.Error != null))
         {
             if (ImGui.Checkbox("##Sel", ref selected))
-                asset.Selected = selected;
+                TickPicked(index, selected, scan.Assets.Count, i => scan.Assets[i].Error == null, (i, v) => scan.Assets[i].Selected = v);
         }
 
         // Preview
@@ -598,7 +580,7 @@ public sealed class PackageImportWindow : Window, IDisposable
                 clipper.Begin(scan.Assets.Count, Theme.S(60));
                 while (clipper.Step())
                     for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-                        DrawUnityRow(scan.Assets[i], i);
+                        DrawUnityRow(scan, scan.Assets[i], i);
                 clipper.End();
             }
             finally
@@ -609,17 +591,18 @@ public sealed class PackageImportWindow : Window, IDisposable
         }
     }
 
-    private void DrawUnityRow(UnityAsset asset, int index)
+    private void DrawUnityRow(UnityScanResult scan, UnityAsset asset, int index)
     {
-        ImGui.TableNextRow(ImGuiTableRowFlags.None, Theme.S(60));
+        ImGui.TableNextRow(ImGuiTableRowFlags.None, RowHeight);
         ImGui.PushID(index);
 
         ImGui.TableNextColumn();
+        DrawRowPicker(index, scan.Assets.Count);
         using (Gui.Disabled(!asset.Extractable))
         {
             bool selected = asset.Selected && asset.Extractable;
             if (ImGui.Checkbox("##Sel", ref selected))
-                asset.Selected = selected;
+                TickPicked(index, selected, scan.Assets.Count, i => scan.Assets[i].Extractable, (i, v) => scan.Assets[i].Selected = v);
         }
         if (!asset.Extractable)
             Gui.Tooltip(asset.Kind is UnityAssetKind.Material or UnityAssetKind.Prefab
@@ -652,6 +635,77 @@ public sealed class PackageImportWindow : Window, IDisposable
         ImGui.PopID();
     }
 
+    /// <summary>
+    /// The row's pick highlight, behind the whole row: a click picks the row alone, Ctrl+click adds or
+    /// drops it, Shift+click picks the run from the last clicked row. Leaves the cursor where it was, so
+    /// the tick box is drawn over it.
+    /// </summary>
+    private void DrawRowPicker(int index, int count)
+    {
+        var start = ImGui.GetCursorScreenPos();
+        var height = RowHeight - ImGui.GetStyle().CellPadding.Y * 2;
+        if (ImGui.Selectable("##Pick", _picked.Contains(index), ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowItemOverlap,
+                new Vector2(0, height)))
+        {
+            var io = ImGui.GetIO();
+            if (io.KeyShift && _pickAnchor >= 0 && _pickAnchor < count)
+            {
+                if (!io.KeyCtrl)
+                    _picked.Clear();
+                for (int i = Math.Min(_pickAnchor, index); i <= Math.Max(_pickAnchor, index); i++)
+                    _picked.Add(i);
+            }
+            else
+            {
+                if (io.KeyCtrl)
+                {
+                    if (!_picked.Remove(index))
+                        _picked.Add(index);
+                }
+                else
+                {
+                    _picked.Clear();
+                    _picked.Add(index);
+                }
+                _pickAnchor = index;
+            }
+        }
+        ImGui.SetCursorScreenPos(start);
+    }
+
+    /// <summary>A tick on row <paramref name="index"/>: when it is one of several picked rows, every picked row that can be ticked follows it.</summary>
+    private void TickPicked(int index, bool value, int count, Func<int, bool> canTick, Action<int, bool> set)
+    {
+        if (_picked.Count > 1 && _picked.Contains(index))
+        {
+            foreach (var i in _picked)
+                if (i < count && canTick(i))
+                    set(i, value);
+        }
+        else
+        {
+            set(index, value);
+        }
+    }
+
+    /// <summary>Ctrl+A over the list picks every row.</summary>
+    private void PickAllOnShortcut(int count)
+    {
+        var io = ImGui.GetIO();
+        if (count == 0 || io.WantTextInput || !io.KeyCtrl || !ImGui.IsKeyPressed(ImGuiKey.A)
+            || !ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+            return;
+        _picked.Clear();
+        for (int i = 0; i < count; i++)
+            _picked.Add(i);
+    }
+
+    private void ClearPicks()
+    {
+        _picked.Clear();
+        _pickAnchor = -1;
+    }
+
     private static string FormatSize(long bytes) => bytes switch
     {
         >= 1024 * 1024 => $"{bytes / (1024.0 * 1024):0.0} MB",
@@ -675,8 +729,22 @@ public sealed class PackageImportWindow : Window, IDisposable
         if (_scan != null || _unityScan != null)
         {
             ImGui.SameLine();
+            using (Gui.Disabled(busy || selected == 0))
+            {
+                if (Gui.IconTextButton(FontAwesomeIcon.Square, "Untick all", "Unticks every row."))
+                {
+                    if (_unityScan != null)
+                        foreach (var asset in _unityScan.Assets) asset.Selected = false;
+                    else if (_scan != null)
+                        foreach (var asset in _scan.Assets) asset.Selected = false;
+                }
+            }
+
+            ImGui.SameLine();
             ImGui.AlignTextToFramePadding();
-            Gui.Hint($"{selected} of {total} selected");
+            Gui.Hint(_picked.Count > 1
+                ? $"{selected} of {total} selected, {_picked.Count} rows picked: a tick sets them all"
+                : $"{selected} of {total} selected");
         }
     }
 
@@ -706,6 +774,7 @@ public sealed class PackageImportWindow : Window, IDisposable
         _scan         = null;
         _unityScan    = null;
         _extraction   = null;
+        ClearPicks();
         _errorMessage = string.Empty;
         _applyMessage = string.Empty;
         _status       = string.Empty;
@@ -744,8 +813,7 @@ public sealed class PackageImportWindow : Window, IDisposable
         }
         else if (_scan is { } scan)
         {
-            var crop = _cropHalf ? scan.SuggestedCrop : SimsHalfCrop.None;
-            _extractTask = Task.Run(() => SimsPackageInspector.Extract(scan, outputDir, crop, s => _progress = s, cancel), cancel);
+            _extractTask = Task.Run(() => SimsPackageInspector.Extract(scan, outputDir, s => _progress = s, cancel), cancel);
         }
     }
 
