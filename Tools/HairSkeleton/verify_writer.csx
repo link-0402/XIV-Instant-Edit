@@ -82,6 +82,27 @@ var partitionsOk = before.Partitions.IsEmpty
     : after.Partitions is [var only] && only.Name == before.Partitions[0].Name && only.Start == 0 && only.Count == bones.Length;
 if (!partitionsOk) failures.Add($"partitions [{string.Join(", ", after.Partitions.Select(p => $"{p.Name} {p.Start}+{p.Count}"))}] break the rule");
 
+// The rig hangs from bone 0, so the template's j_kao must be the body's j_kao in model space: the race's
+// base skeleton composed down its parents as HairSkeletonLayout.ModelSpace does.
+var basePath = $"chara/human/{race}/skeleton/base/b0001/skl_{race}b0001.sklb";
+var baseBytes = Data.GetFile(basePath)?.Data;
+var baseSkeleton = baseBytes is null ? null : await OnFramework(() => AnimationSkeleton.Inspect(baseBytes));
+var baseKaoIndex = baseSkeleton is null ? -1 : baseSkeleton.Bones.Select(x => x.Name).ToList().IndexOf("j_kao");
+var templateKao = before.Bones[0];
+var kaoFrameMatches = false;
+var kaoFrame = "";
+if (baseSkeleton is null) failures.Add($"{basePath} could not be read");
+else if (baseKaoIndex < 0) failures.Add($"{basePath} has no j_kao");
+else
+{
+    var baseKao = HairSkeletonLayout.ModelSpace(baseSkeleton.Bones)[baseKaoIndex];
+    kaoFrameMatches = templateKao.Name == "j_kao" && templateKao.Parent < 0 &&
+        Near(templateKao.Reference.Position, baseKao.Position, LiveTolerance) &&
+        NearQ(templateKao.Reference.Rotation, baseKao.Rotation, LiveTolerance);
+    kaoFrame = $"template {templateKao.Name} t {templateKao.Reference.Position} r {templateKao.Reference.Rotation} vs base t {baseKao.Position} r {baseKao.Rotation}";
+    if (!kaoFrameMatches) failures.Add("the template's j_kao is not the base skeleton's j_kao in model space");
+}
+
 // The test mod: the skeleton at its game path, and a hair EST entry pointing the current hair at it.
 var gamePath = $"chara/human/{race}/skeleton/hair/h{SkeletonId:D4}/skl_{race}h{SkeletonId:D4}.sklb";
 var (gender, raceName) = AnimationMetadata.GenderRaceNames(genderRace);
@@ -143,8 +164,8 @@ if (!hairSkeletons.Any(s => s.Contains($"h{SkeletonId:D4}", StringComparison.Ord
 
 new
 {
-    ok = failures.Count == 0 && readBack && liveLocalsMatch, readBack, liveLocalsMatch, failures,
-    race, hairSet = (int)set, template = templatePath, mod, gamePath, bytes = sklb.Length,
+    ok = failures.Count == 0 && readBack && liveLocalsMatch && kaoFrameMatches, readBack, liveLocalsMatch, kaoFrameMatches, failures,
+    race, hairSet = (int)set, template = templatePath, mod, gamePath, bytes = sklb.Length, kaoFrame,
     written = bones.Select(x => $"{x.Name} <- {x.Parent} t {x.Reference.Position} r {x.Reference.Rotation}"),
     live = liveReport, hairSkeletons,
 }
