@@ -42,6 +42,7 @@ internal static class HairSkeletonScenarios
         NoChainsWritesPhysicsOff(Path.Combine(testRoot, "HairPhysicsOff"));
         OldBackupDropsPhysics(Path.Combine(testRoot, "HairPhysicsOldBackup"));
         UnreadablePreviousPhysics(Path.Combine(testRoot, "HairPhysicsUnreadable"));
+        LockedPreviousPhysics(Path.Combine(testRoot, "HairPhysicsLocked"));
         TuningSurvivesReexport(Path.Combine(testRoot, "HairPhysicsTuning"));
         ClashMovesTheId(Path.Combine(testRoot, "HairClash"));
         OwnFolderIsNotAClash(Path.Combine(testRoot, "HairOwnFolder"));
@@ -857,8 +858,23 @@ internal static class HairSkeletonScenarios
         Require(ReadPhyb(mod, Phyb(801, id)).Simulators[0].Chains[0].Dampening == 0.3f &&
                 ReadPhyb(mod, Phyb(1401, id)).Simulators[0].Chains[0].Dampening == 0.05f,
             "Hair physics files: a re-export keeps the back chain's tuned dampening");
-        Require(plan.Notes.Contains("c0801: Kept your physics settings for 1 of 1 chains."),
-            "Hair physics files: the builder's notes name the race");
+        Require(plan.Notes.Count(note => note.Contains("Kept", StringComparison.Ordinal)) == 1 &&
+                plan.Notes.Contains("c0801, c1401: Kept your physics settings for 1 of 1 chains."),
+            "Hair physics files: a builder note the same for several races is one note naming them all");
+    }
+
+    private static void LockedPreviousPhysics(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair], []);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        TuneDampening(mod, Phyb(801, id), 0.3f);
+        // An open handle without sharing makes the previous physics unreadable during Prepare.
+        HairSkeletonPlan plan;
+        using (new FileStream(mod.FilePath(Phyb(801, id)), FileMode.Open, FileAccess.Read, FileShare.None))
+            plan = HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel, Sources(7), mod.Store);
+        Require(plan.Notes.Contains("The hair physics in the mod for c0801 could not be read, so every chain gets its preset.") &&
+                PhybFile.Parse(plan.Files[0].Physics).Simulators[0].Chains[0].Dampening == 0.05f,
+            "Hair physics files: physics in the mod that exists but can't be opened gets the presets, with a note");
     }
 
     private static void ClashMovesTheId(string root)

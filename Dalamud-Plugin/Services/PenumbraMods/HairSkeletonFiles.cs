@@ -110,6 +110,8 @@ internal static partial class HairSkeletonFiles
         var tuningId = record?.MovingFrom ?? recorded;
 
         var files = new List<HairSkeletonFile>();
+        // The physics builder's notes, each with the races it was made for.
+        var raceNotes = new OrderedDictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var race in races)
         {
             var label = RaceLabel(race);
@@ -124,14 +126,16 @@ internal static partial class HairSkeletonFiles
             var bones = HairSkeletonLayout.Bones(rig, sources.TemplateKao(template));
             var physicsPath = HairPhysicsBuilder.PhysicsPath(race, id);
             // Only the recorded ID's physics is the user's to keep, also when the ID moves; a first ID starts from the presets.
-            var previous = tuningId is { } own ? ReadModFile(modFolder, HairPhysicsBuilder.PhysicsPath(race, own)) : null;
-            var physics = Physics(rig, bones, race, sources, previous, record?.ChainKinds, notes);
+            var previous = tuningId is { } own ? ReadPhysicsFile(modFolder, HairPhysicsBuilder.PhysicsPath(race, own)) : default;
+            var physics = Physics(rig, bones, race, sources, previous, record?.ChainKinds, notes, raceNotes);
             files.Add(new HairSkeletonFile(race, ModelSkeletonPaths.PartialPath(label, EstSlot.Hair, id),
                 sources.Write(template, bones), physicsPath, physics));
         }
         // An empty plan would only take back the model's EST entries.
         if (files.Count == 0)
             throw new InvalidDataException("No race the model is used for has a vanilla hair skeleton.");
+        // A note the same for several races is said once, naming them all.
+        notes.AddRange(raceNotes.Select(pair => $"{string.Join(", ", pair.Value)}: {pair.Key}"));
         var kinds = (rig.Chains ?? []).ToDictionary(chain => chain.Bones![0], chain => chain.Kind!, StringComparer.Ordinal);
         return new HairSkeletonPlan(model, id, files, notes, previousId, kinds);
     }
@@ -139,10 +143,11 @@ internal static partial class HairSkeletonFiles
     /// <summary>
     /// A race's hair physics: shapes from its h0182 physics, and the settings of chains the mod's file
     /// (<paramref name="previous"/>, written with <paramref name="previousKinds"/>) already has. The
-    /// builder's notes get the race in front.
+    /// builder's notes go to <paramref name="raceNotes"/> with the race.
     /// </summary>
     private static byte[] Physics(HairSkeletonRequest rig, ImmutableArray<SkeletonBone> bones, int race,
-        HairSkeletonSources sources, byte[]? previous, IReadOnlyDictionary<string, string>? previousKinds, List<string> notes)
+        HairSkeletonSources sources, (byte[]? Bytes, bool Unreadable) previous, IReadOnlyDictionary<string, string>? previousKinds,
+        List<string> notes, OrderedDictionary<string, List<string>> raceNotes)
     {
         var label = RaceLabel(race);
         PhybFile? donor = null, tuned = null;
@@ -152,14 +157,32 @@ internal static partial class HairSkeletonFiles
             donor = ParsePhysics(sources.GameFile(HairPhysicsPresets.DonorPath(race)));
             if (donor is null)
                 notes.Add($"The game's hair physics h0182 for {label} could not be read, so that race's hair collides with nothing.");
-            tuned = ParsePhysics(previous);
-            if (previous is not null && tuned is null)
+            tuned = ParsePhysics(previous.Bytes);
+            if (previous.Unreadable || (previous.Bytes is not null && tuned is null))
                 notes.Add($"The hair physics in the mod for {label} could not be read, so every chain gets its preset.");
         }
         var built = new List<string>();
         var file = HairPhysicsBuilder.Build(rig, bones, donor, tuned, built, previousKinds);
-        notes.AddRange(built.Select(note => $"{label}: {note}"));
+        foreach (var note in built)
+        {
+            if (!raceNotes.TryGetValue(note, out var labels))
+                raceNotes.Add(note, labels = []);
+            labels.Add(label);
+        }
         return file.ToBytes();
+    }
+
+    /// <summary>
+    /// A mod physics file's bytes, or null when it is missing, outside the mod or behind a reparse point;
+    /// <c>Unreadable</c> when it exists but can't be read, so the export says it starts from the presets.
+    /// </summary>
+    private static (byte[]? Bytes, bool Unreadable) ReadPhysicsFile(string modFolder, string relativePath)
+    {
+        string path;
+        try { path = Destination(modFolder, relativePath); }
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException) { return (null, false); }
+        try { return (File.Exists(path) ? File.ReadAllBytes(path) : null, false); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return (null, true); }
     }
 
     /// <summary>A physics file, or null when there are no bytes or they don't parse.</summary>
