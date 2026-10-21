@@ -70,7 +70,7 @@ internal sealed partial class EstEntryService
     private static string EstRaceLabel(int genderRace) => $"c{genderRace:D4}";
 
     /// <summary>Penumbra keeps EST ownership records per mod: its stable identifier, else its directory key.</summary>
-    private static string EstModKey(string modFolder, string modDirectory)
+    internal static string EstModKey(string modFolder, string modDirectory)
         => ReadModStableIdentifier(modFolder) is { } identifier
             ? $"id:{identifier:D}"
             : $"dir:{modDirectory.Trim().ToLowerInvariant()}";
@@ -321,6 +321,45 @@ internal sealed partial class EstEntryService
         if (recordsChanged)
             store.Save(records);
         return warnings;
+    }
+
+    /// <summary>
+    /// Take back the hair EST entries this plugin set to <paramref name="entry"/> in a mod wherever the
+    /// model no longer serves them: a container that stopped mapping the model for the lookup, or a race
+    /// outside <paramref name="races"/>. Changes <paramref name="meta"/> and <paramref name="records"/> in
+    /// memory for the caller to write; true when meta changed.
+    /// </summary>
+    internal static bool ReleaseEstEntries(
+        JsonObject meta,
+        string modKey,
+        string modelRelativePath,
+        int entry,
+        IReadOnlyCollection<int> races,
+        List<ManagedEstEntry> records)
+    {
+        var served = EstTargets(meta, modelRelativePath)
+            .SelectMany(target => target.Hair.Where(identity => races.Contains(identity.GenderRace))
+                .Select(identity => (target.Container.Key, identity)))
+            .ToHashSet();
+        var containers = EstContainers(meta).ToDictionary(container => container.Key, StringComparer.Ordinal);
+        var metaChanged = false;
+        for (var index = records.Count - 1; index >= 0; --index)
+        {
+            var record = records[index];
+            var identity = new EstIdentity(record.SetId, record.GenderRace);
+            if (!string.Equals(record.Mod, modKey, StringComparison.Ordinal) ||
+                !string.Equals(record.Slot, EstIdentity.Slot, StringComparison.Ordinal) ||
+                record.Entry != entry || served.Contains((record.Container, identity)))
+                continue;
+            records.RemoveAt(index);
+            // An entry changed since the export wrote it is the modder's now.
+            if (!containers.TryGetValue(record.Container, out var container) ||
+                CurrentEst(container.Data, identity) != record.Entry)
+                continue;
+            SetEst(container.Data, identity, record.Previous);
+            metaChanged = true;
+        }
+        return metaChanged;
     }
 
     /// <summary>EST setup follows a committed model write, so its failure is a warning, not a failed export.</summary>
