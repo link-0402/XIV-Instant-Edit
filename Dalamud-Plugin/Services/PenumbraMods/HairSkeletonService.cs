@@ -38,7 +38,7 @@ internal sealed class HairSkeletonService(
                 template => framework.RunOnFrameworkThread(() => HairSkeletonWriter.TemplateKao(template))
                     .GetAwaiter().GetResult(),
                 // This mod's own skeletons are no clash.
-                () => HairSkeletonIds.Users(modRoot, modDirectory).Keys.ToHashSet(),
+                () => HairSkeletonIds.TakenByOthers(modRoot, modFolder, modDirectory),
                 Random.Shared);
             var plan = await Task.Run(() => HairSkeletonFiles.Prepare(
                 rig, modFolder, modDirectory, modelRelativePath, sources, store)).ConfigureAwait(false);

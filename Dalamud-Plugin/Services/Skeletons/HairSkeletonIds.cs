@@ -44,6 +44,7 @@ internal static partial class HairSkeletonIds
     /// The hair skeleton IDs the mods in a Penumbra mod folder use, each with the names of the mod folders
     /// using it: the IDs in their <c>skeleton/hair/hNNNN/</c> file keys and the entries of their hair EST
     /// manipulations, read from each mod's <c>meta.json</c>, <c>default_mod.json</c> and <c>group_*.json</c>.
+    /// A file is parsed only when its text names <c>skeleton/hair/h</c> or <c>"Est"</c> (any case).
     /// The folder named <paramref name="exceptFolder"/> (any case) is left out. Files that can't be read,
     /// parsed or walked (duplicate property names among them) are skipped. Throws
     /// <see cref="InvalidDataException"/> when the mod folder is missing or can't be listed.
@@ -75,11 +76,17 @@ internal static partial class HairSkeletonIds
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
             foreach (var file in files)
             {
+                string text;
+                try { text = File.ReadAllText(file); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                // Most of a library names neither a hair skeleton key nor an Est entry, so it is never parsed.
+                if (!text.Contains("skeleton/hair/h", StringComparison.OrdinalIgnoreCase) &&
+                    !text.Contains("\"Est\"", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 // A JsonObject with a duplicate property name throws ArgumentException when first read.
                 var found = new HashSet<int>();
-                try { Collect(JsonNode.Parse(File.ReadAllText(file)), found); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or
-                                              ArgumentException or FormatException or OverflowException) { continue; }
+                try { Collect(JsonNode.Parse(text), found); }
+                catch (Exception e) when (e is JsonException or ArgumentException or FormatException or OverflowException) { continue; }
                 ids.UnionWith(found);
             }
             foreach (var id in ids)
@@ -90,6 +97,19 @@ internal static partial class HairSkeletonIds
             }
         }
         return users.ToDictionary(pair => pair.Key, IReadOnlyList<string> (pair) => pair.Value);
+    }
+
+    /// <summary>
+    /// The hair skeleton IDs the library's other mods use: <see cref="Users"/> without the mod's directory
+    /// name, nor its folder's name in case the two differ, so the mod never sees its own IDs as taken.
+    /// </summary>
+    public static IReadOnlySet<int> TakenByOthers(string modRoot, string modFolder, string modDirectory)
+    {
+        var folderName = Path.GetFileName(Path.TrimEndingDirectorySeparator(modFolder));
+        return Users(modRoot, modDirectory)
+            .Where(pair => pair.Value.Any(name => !string.Equals(name, folderName, StringComparison.OrdinalIgnoreCase)))
+            .Select(pair => pair.Key)
+            .ToHashSet();
     }
 
     /// <summary>The hair skeleton IDs one mod file's JSON names, by the same rules as <see cref="Users"/>.</summary>

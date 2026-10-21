@@ -133,8 +133,16 @@ internal static class HairSkeletonScenarios
         {
             ["Files"] = new JsonObject { ["chara/human/c0801/skeleton/hair/h4822/skl_c0801h4822.sklb"] = "x" },
         }.ToJsonString());
-        Require(HairSkeletonIds.Library(root).SetEquals([4821, 4822, 5000]),
-            "Hair IDs: library IDs come from file keys and hair Est entries; odd files are skipped");
+        // Invalid JSON that names neither marker is skipped unread; one that names a marker is still parsed.
+        WriteJson(Path.Combine(root, "Plain broken mod"), "meta.json", """{"Name": "Hair pack", "Files": {""");
+        WriteJson(Path.Combine(root, "Lower case mod"), "meta.json",
+            """{"DefaultData": {"Manipulations": [{"Type": "est", "Manipulation": {"Slot": "hair", "Entry": 5001}}]}}""");
+        // The scan reads the raw text: an Est entry whose type is escaped names no marker, so the file isn't parsed.
+        WriteJson(Path.Combine(root, "Escaped mod"), "meta.json",
+            """{"DefaultData": {"Manipulations": [{"Type": "TYPE", "Manipulation": {"Slot": "Hair", "Entry": 5002}}]}}"""
+                .Replace("TYPE", @"\" + "u0045st"));
+        Require(HairSkeletonIds.Library(root).SetEquals([4821, 4822, 5000, 5001]),
+            "Hair IDs: library IDs come from file keys and hair Est entries; odd files and files without a marker are skipped");
     }
 
     private static void UsersNamesFolders(string root)
@@ -158,6 +166,17 @@ internal static class HairSkeletonScenarios
         try { HairSkeletonIds.Users(Path.Combine(root, "missing"), null); }
         catch (InvalidDataException e) { threw = e.Message == "The Penumbra mod folder can't be read."; }
         Require(threw, "Hair ID users: a missing mod folder throws");
+
+        // The mod's folder name and its directory name may differ; neither counts as another mod.
+        WriteJson(Path.Combine(root, "Mod C"), "default_mod.json", new JsonObject
+        {
+            ["Files"] = new JsonObject { ["chara/human/c0801/skeleton/hair/h1600/skl_c0801h1600.sklb"] = "x" },
+        }.ToJsonString());
+        Require(HairSkeletonIds.TakenByOthers(root, Path.Combine(root, "Mod C") + Path.DirectorySeparatorChar, "Mod D")
+                    .SetEquals([1500]),
+            "Hair ID users: the mod's folder name is left out when its directory name differs");
+        Require(HairSkeletonIds.TakenByOthers(root, Path.Combine(root, "Mod A"), "Mod C").SetEquals([1500]),
+            "Hair ID users: both names are left out, and an ID another mod shares stays taken");
     }
 
     // Two rig bones in game model space: translation, rotation x/y/z/w, scale.
