@@ -1110,7 +1110,26 @@ def assert_mesh_material_quick_selectors(addon):
         foreign = "/mt_c0201e0501_foreign.mtrl"
         for obj in objects:
             obj["context_id"] = "a" * 32
-        new_part["original_material"] = top_c.lstrip("/")
+        # Imported parts keep their Blender material's name, Context tag included.
+        new_part["original_material"] = top_c.lstrip("/") + " [aaaaaaaa]"
+        if materials.clean_material_path(top_c + " [aaaaaaaa].mtrl") != top_c or \
+                materials.clean_material_path(top_c.lstrip("/") + " [aaaaaaaa].001") != top_c or \
+                materials.clean_material_path(top_c.lstrip("/") + " [[Bibo] Some Mod]") != top_c or \
+                materials.clean_material_path(top_c.lstrip("/") + " [A Mod Name Cut Sh") != top_c:
+            raise AssertionError("A material name's Context tag was kept in its path")
+        context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
+        face = "chara/human/c0801/obj/face/f0002/model/c0801f0002_fac.mdl"
+        taken = bpy.data.collections.new("Quick Mod")
+        try:
+            names = [context_module.context_collection_name(metadata) for metadata in (
+                {"source_mod_name": "Other Mod", "source_game_path": face},
+                {"source_mod_name": "Quick Mod", "source_game_path": face},
+                {"source_mod_name": "", "source_game_path": face},
+            )]
+        finally:
+            bpy.data.collections.remove(taken)
+        if names != ["Other Mod", "Quick Mod (c0801f0002_fac)", "c0801f0002_fac"]:
+            raise AssertionError(f"Context collections were not named after their mods: {names}")
         other_context = create("58.0 Quick Other Context", foreign)
         other_context["context_id"] = "b" * 32
         dialog.mesh_group = 53
@@ -1137,7 +1156,7 @@ def assert_mesh_material_quick_selectors(addon):
             collection.objects.link(imported_part)
             bpy.context.scene.collection.children.link(collection)
             context_collections.append(collection)
-        other_context["original_material"] = foreign.lstrip("/")
+        other_context["original_material"] = foreign.lstrip("/") + " [bbbbbbbb]"
         try:
             group = materials.find_material_group(bpy.context, 53)
             shared = materials.shared_base_contexts(bpy.context.visible_objects)
@@ -2168,7 +2187,8 @@ def run() -> None:
         later_part = added_group.copy()
         later_part.data = added_group.data.copy()
         later_part.name = "20.5 Later Part"
-        for part, imported in ((first_part, "mt_c0801f0002_fac_c.mtrl"), (later_part, "mt_c0801f0002_etc_d.mtrl")):
+        for part, imported in ((first_part, "mt_c0801f0002_fac_c.mtrl [aaaaaaaa]"),
+                               (later_part, "mt_c0801f0002_etc_d.mtrl [bbbbbbbb]")):
             bpy.context.scene.collection.objects.link(part)
             part["original_material"] = imported
         metal = "/mt_c0801f0002_etc_d.mtrl"

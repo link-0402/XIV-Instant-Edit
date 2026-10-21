@@ -764,9 +764,12 @@ def create_preview_material(
     model_material: str,
     fallback_color,
     package: PreviewPackage,
-    context_key: str,
+    source_label: str,
 ):
-    """Create one import-local Principled material, falling back per texture."""
+    """Create one import-local Principled material, falling back per texture.
+
+    ``source_label`` (the Context's mod name) tags the material's name, as in
+    "mt_x.mtrl [Some Mod]"; clean_material_path drops it again."""
     if package.is_excluded(model_material):
         return None
     preview = package.material_for(model_material)
@@ -786,7 +789,7 @@ def create_preview_material(
         return None
 
     label = Path(model_material.replace("\\", "/")).name or "Material"
-    suffix = (context_key or "preview")[:8]
+    suffix = (source_label or "").strip() or "preview"
     created_image_start = len(package.created_images)
     material = bpy.data.materials.new(f"{label} [{suffix}]")
     package.created_materials.append(material)

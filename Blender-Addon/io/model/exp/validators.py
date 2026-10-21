@@ -10,6 +10,9 @@ USHORT_LIMIT = iinfo(ushort).max
 
 def clean_material_path(name: str):
     name = re.sub(r'\.\d{3}$', "", name.strip())
+    # Blender material names carry their Context's tag, as in "mt_x.mtrl [Some Mod]"
+    # (older imports: a Context ID), which may be cut short; a game path never does.
+    name = re.sub(r'(\.mtrl)\s+\[.*$', r'\1', name, flags=re.IGNORECASE)
     if not name.endswith(".mtrl"):
         name = name + ".mtrl"
     if not name.startswith("/"):

@@ -9,6 +9,7 @@ it with metadata produced by the normal exporter.
 
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from pathlib import PurePosixPath
 from typing import Iterable
 import re
 import uuid
@@ -261,12 +262,25 @@ def tag_object(obj, metadata: dict) -> None:
         _set(obj, name, value)
 
 
+def context_collection_name(metadata: dict) -> str:
+    """Name a Context's collection after its source mod, adding the model's file
+    name when that mod already has a collection. The Context ID stays in the
+    collection's properties, which is what every lookup uses."""
+    model = PurePosixPath(str(metadata.get("source_game_path") or "")).stem
+    mod = str(metadata.get("source_mod_name") or "").strip()
+    if not mod:
+        return model or "XIV Instant Edit"
+    if mod not in bpy.data.collections or not model:
+        return mod
+    return f"{mod} ({model})"
+
+
 def create_collection(scene, metadata: dict):
     context_id = metadata["context_id"]
     if any(_value(collection, "context_id") == context_id for collection in bpy.data.collections):
         raise ContextValidationError(f"Context {context_id!r} already exists")
 
-    collection = bpy.data.collections.new(f"XIV Instant Edit [{context_id}]")
+    collection = bpy.data.collections.new(context_collection_name(metadata))
     scene.collection.children.link(collection)
     for name, value in metadata.items():
         _set(collection, name, value)

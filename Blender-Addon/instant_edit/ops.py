@@ -176,6 +176,8 @@ def _plugin_transport_error(
 
 def _normalize_mashup_material(material_name: str) -> str:
     normalized = re.sub(r"\.\d{3}$", "", (material_name or "").strip())
+    # Drop a Blender material name's Context tag, as clean_material_path does.
+    normalized = re.sub(r"(\.mtrl)\s+\[.*$", r"\1", normalized, flags=re.IGNORECASE)
     if not normalized.casefold().endswith(".mtrl"):
         normalized += ".mtrl"
     if not normalized.startswith("/"):
@@ -1362,7 +1364,7 @@ class InstantImport(Operator):
                 require_collection=True,
                 created_objects=created_objects,
                 material_preview=preview_package,
-                material_context_key=self.context_id or collection.name,
+                material_context_key=self.source_mod_name or collection.name,
             )
             if character is not None:
                 skeleton_note, drawn_note = self._bind_character(
