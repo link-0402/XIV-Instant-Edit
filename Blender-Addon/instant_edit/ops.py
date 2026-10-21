@@ -43,6 +43,7 @@ from .material_preview import (cleanup_preview_bundle, discard_preview_data,
 from .cache import create_job, finish_job
 from .diagnostics import record_failure, record_protocol_failure, record_remote_failure
 from .skeleton import create_armature, load_skeleton
+from .hair_rig import hair_skeleton_payload
 from . import character as character_send, racial_scaling, sizes, steps
 
 
@@ -704,6 +705,16 @@ def _material_coverage_warning_message(missing_materials) -> str:
     )
 
 
+HAIR_RIG_QUICK_EXPORT_ONLY = "Custom hair skeletons export only with Quick Export."
+
+
+def _refuse_hair_rig(export_objects) -> None:
+    """Refuse an export that can't carry the meshes' hair rig (see hair_rig)."""
+    payload, issue = hair_skeleton_payload(export_objects)
+    if payload is not None or issue:
+        raise ValueError(HAIR_RIG_QUICK_EXPORT_ONLY)
+
+
 _HAIR_MODEL_PATH = re.compile(
     r"chara/human/(c\d{4})/obj/hair/h\d{4}/model/c\d{4}h\d{4}_hir\.mdl", re.IGNORECASE)
 
@@ -767,6 +778,7 @@ def export_target_issues(
     except ContextValidationError as error:
         export_objects = []
         issues.append(("ERROR", str(error)))
+    rig_payload, rig_issue = hair_skeleton_payload(export_objects)
 
     if not export_objects:
         if not any(message == "No visible mesh objects match Export Parts." for _, message in issues):
@@ -849,13 +861,17 @@ def export_target_issues(
                 "WARNING",
                 _named_readiness_issue("Shape keys left out (Keep Shape Keys is off)", dropped_shape_keys),
             ))
-        est_entries, est_issue = hair_skeleton_tags(export_objects)
-        if est_issue:
-            issues.append(("WARNING", est_issue))
-        elif est_entries:
-            target_issue = hair_skeleton_target_issue(ref.source_game_path, est_entries[0])
-            if target_issue:
-                issues.append(("WARNING", target_issue))
+        if rig_issue:
+            issues.append(("ERROR", rig_issue))
+        elif rig_payload is None:
+            # A hair rig replaces the tagged EST entry, so the tags only matter without one.
+            est_entries, est_issue = hair_skeleton_tags(export_objects)
+            if est_issue:
+                issues.append(("WARNING", est_issue))
+            elif est_entries:
+                target_issue = hair_skeleton_target_issue(ref.source_game_path, est_entries[0])
+                if target_issue:
+                    issues.append(("WARNING", target_issue))
 
     sized = sizes.wanted(props)
     if sized:
@@ -866,6 +882,10 @@ def export_target_issues(
         if size_issue:
             issues.append(("ERROR", size_issue))
     selection = getattr(props, "variant_target", "NEW_GROUP")
+    # Save to new mod goes through the mashup export, which can't carry the rig either.
+    if (rig_payload is not None or rig_issue) and (
+            sized or selection in {MASHUP_TARGET, SAVE_NEW_MOD_TARGET, RACE_TARGET}):
+        issues.append(("ERROR", HAIR_RIG_QUICK_EXPORT_ONLY))
     if selection == MASHUP_TARGET:
         show_target, enabled, message = mashup_target_state(context, ref)
         if not show_target:
@@ -925,11 +945,15 @@ _export_readiness_display_cache: dict = {
 
 
 def detected_hair_skeleton(ref) -> str:
-    """Return "160 (c0801)" when Quick Export will set the meshes' tagged hair EST entry."""
+    """Return "160 (c0801)" when Quick Export will set the meshes' tagged hair EST entry, and
+    "custom" when it sends their hair rig instead."""
     try:
         objects = export_objects_for_scope(ref, getattr(get_instant_edit_props(), "export_scope", "VISIBLE"))
     except ContextValidationError:
         return ""
+    rig_payload, _issue = hair_skeleton_payload(objects)
+    if rig_payload is not None:
+        return "custom"
     entries, _issue = hair_skeleton_tags(objects)
     if not entries or hair_skeleton_target_issue(ref.source_game_path, entries[0]):
         return ""
@@ -1001,7 +1025,7 @@ def cached_export_readiness() -> tuple[list[tuple[str, str]], bool]:
 
 
 def cached_hair_skeleton() -> str:
-    """Return the last computed hair EST entry Quick Export will set, for display."""
+    """Return the last computed hair EST entry Quick Export will set (or "custom"), for display."""
     return _export_readiness_display_cache["hair_skeleton"]
 
 
@@ -2187,13 +2211,15 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
                          attribute_tags: tuple[str, ...] = (),
                          attribute_masks: dict[str, int] | None = None,
                          est_entries: list[dict] | None = None,
-                         racial_scaling_race: int | None = None) -> dict:
+                         racial_scaling_race: int | None = None,
+                         hair_skeleton: dict | None = None) -> dict:
     """Build the versioned Dalamud export envelope.
 
     ``est_entries`` is the hair EST entry from the meshes' Magic Fit tags: omitted
     (None) the plugin leaves the mod's EST entries alone, empty it takes back the
     entry it set before. ``racial_scaling_race`` is the model's race when the meshes
-    are reshaped for it (see racial_scaling.own_race).
+    are reshaped for it (see racial_scaling.own_race). ``hair_skeleton`` is the meshes'
+    hair rig (see hair_rig); the plugin refuses it together with ``est_entries``.
     """
     payload = {
         "schema": "instant-edit.export",
@@ -2221,6 +2247,8 @@ def build_export_payload(ref, export_id: str, mdl_path: Path, byte_size: int,
         payload["estEntries"] = [dict(entry) for entry in est_entries]
     if racial_scaling_race is not None:
         payload["racialScalingRace"] = racial_scaling_race
+    if hair_skeleton is not None:
+        payload["hairSkeleton"] = hair_skeleton
     if setup_in_penumbra:
         if variant_name is not None:
             payload["variantName"] = variant_name
@@ -2792,6 +2820,7 @@ def perform_mashup_export(
         if getattr(get_instant_edit_props(), "create_attribute_groups", False)
         else ((), {})
     )
+    _refuse_hair_rig(export_objects)
     est_entries, est_issue = hair_skeleton_tags(export_objects)
 
     contributors = _mashup_contributor_payload(refs, materials)
@@ -2819,6 +2848,7 @@ def perform_mashup_export(
         if getattr(get_instant_edit_props(), "create_attribute_groups", False):
             attribute_tags, attribute_masks = attribute_group_data(
                 export_objects, use_lods=get_settings().use_lods)
+        _refuse_hair_rig(export_objects)
         est_entries, est_issue = hair_skeleton_tags(export_objects)
     assignments = _mashup_assignment_map(plan, materials)
 
@@ -3052,7 +3082,10 @@ def instant_export_steps(
         if getattr(props, "create_attribute_groups", False)
         else ((), {})
     )
-    est_entries, est_issue = hair_skeleton_tags(export_objects)
+    hair_skeleton, hair_skeleton_issue = hair_skeleton_payload(export_objects)
+    if hair_skeleton_issue:
+        raise ValueError(hair_skeleton_issue)
+    est_entries, est_issue = (None, "") if hair_skeleton is not None else hair_skeleton_tags(export_objects)
 
     export_id = uuid.uuid4().hex
     temp_dir = create_job("exports", export_id)
@@ -3089,6 +3122,7 @@ def instant_export_steps(
                 attribute_masks=attribute_masks,
                 est_entries=est_entries,
                 racial_scaling_race=scaled_race,
+                hair_skeleton=hair_skeleton,
             )
 
         result, ref = yield from _send_with_reattach(ref, payload, "/export", steps.Step("Sending to Penumbra.", 1, 2))
@@ -3234,6 +3268,7 @@ def race_export_steps(context: Context, ref, new_mod_name: str | None = None):
         if getattr(props, "create_attribute_groups", False)
         else ((), {})
     )
+    _refuse_hair_rig(export_objects)
     est_entries, est_issue = hair_skeleton_tags(export_objects)
     pending = ref.destination_state == "new_mod_required"
 
@@ -3381,6 +3416,7 @@ def sizes_export_steps(context: Context, ref):
         if getattr(props, "create_attribute_groups", False)
         else ((), {})
     )
+    _refuse_hair_rig(export_objects)
     est_entries, est_issue = hair_skeleton_tags(export_objects)
 
     export_id = uuid.uuid4().hex

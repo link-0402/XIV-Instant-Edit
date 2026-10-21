@@ -1296,6 +1296,110 @@ def run_staging_isolation_regression(addon) -> None:
             "hair skeleton tags: the Context's path warns about another race or a model that is not hair",
         )
 
+        hair_rig = importlib.import_module(f"{package_name}.instant_edit.hair_rig")
+        previous_active = bpy.context.view_layer.objects.active
+        with temporary_scene_data():
+            def rig_armature(name, rig_property):
+                data = bpy.data.armatures.new(f"{name} Data")
+                armature = bpy.data.objects.new(name, data)
+                bpy.context.collection.objects.link(armature)
+                bpy.context.view_layer.objects.active = armature
+                bpy.ops.object.mode_set(mode="EDIT")
+                kao = data.edit_bones.new("j_kao")
+                kao.head, kao.tail = (0, 0, 0), (0, 0, 0.1)
+                bone_a = data.edit_bones.new("j_ex_hair_01_a")
+                bone_a.head, bone_a.tail = (0, 0.08, 1.45), (0, 0.08, 1.35)
+                bone_a.parent = kao
+                bone_b = data.edit_bones.new("j_ex_hair_01_b")
+                bone_b.head, bone_b.tail = (0, 0.08, 1.35), (0, 0.08, 1.25)
+                bone_b.parent = bone_a
+                bpy.ops.object.mode_set(mode="OBJECT")
+                bpy.context.view_layer.objects.active = previous_active
+                if rig_property is not None:
+                    armature[hair_rig.RIG_PROPERTY] = rig_property
+                return armature
+
+            def weighted_mesh(name, groups, armature=None):
+                data = bpy.data.meshes.new(f"{name} Data")
+                data.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
+                mesh = bpy.data.objects.new(name, data)
+                bpy.context.collection.objects.link(mesh)
+                for group in groups:
+                    mesh.vertex_groups.new(name=group).add([0, 1, 2], 1.0 / len(groups), "REPLACE")
+                if armature is not None:
+                    mesh.modifiers.new("Armature", "ARMATURE").object = armature
+                return mesh
+
+            rig_json = json.dumps({"race": "c0801", "chains": [
+                {"kind": "back", "bones": ["j_ex_hair_01_a", "j_ex_hair_01_b"]}]})
+            rig = rig_armature("Hair Rig", rig_json)
+            hair = weighted_mesh("0.0 Hair", ["j_kao", "j_ex_hair_01_a", "j_ex_hair_01_b"], rig)
+            payload, issue = hair_rig.hair_skeleton_payload([hair])
+            _require(
+                issue == "" and payload is not None and payload["race"] == "c0801" and
+                [bone["name"] for bone in payload["bones"]] == ["j_ex_hair_01_a", "j_ex_hair_01_b"] and
+                [bone["parent"] for bone in payload["bones"]] == ["j_kao", "j_ex_hair_01_a"] and
+                payload["chains"] == [{"kind": "back", "bones": ["j_ex_hair_01_a", "j_ex_hair_01_b"]}],
+                "hair rig: the rig's j_ex_hair_ bones are sent parents first, under j_kao or a rig bone",
+            )
+            model_a = payload["bones"][0]["model"]
+            _require(
+                len(model_a) == 10 and
+                all(abs(got - want) < 1e-5 for got, want in zip(model_a[:3], (0.0, 1.45, -0.08))) and
+                abs(sum(value * value for value in model_a[3:7]) - 1.0) < 1e-5 and
+                model_a[7:] == [1.0, 1.0, 1.0],
+                "hair rig: bone transforms are sent in the game's Y-up model space with unit scale",
+            )
+            _require(
+                ops.build_export_payload(
+                    est_ref, "rig-export-id", Path(tempfile.gettempdir()) / "rig-test.mdl", 1, "0" * 64,
+                    instant_props, None, hair_skeleton=payload)["hairSkeleton"] == payload and
+                "hairSkeleton" not in redraw_payload,
+                "hair rig: the export envelope carries the rig as hairSkeleton",
+            )
+            stray = weighted_mesh("0.1 Hair Stray", ["j_ex_hair_02_a"], rig)
+            payload, issue = hair_rig.hair_skeleton_payload([hair, stray])
+            _require(
+                payload is None and "j_ex_hair_02_a" in issue,
+                "hair rig: a j_ex_hair_ group the rig lacks is named",
+            )
+            bpy.data.objects.remove(stray, do_unlink=True)
+            crowded = weighted_mesh(
+                "0.1 Hair Crowded", [f"j_ex_bone_{index:02d}" for index in range(64)], rig)
+            payload, issue = hair_rig.hair_skeleton_payload([hair, crowded])
+            _require(
+                payload is None and "64" in issue,
+                "hair rig: a mesh group weighting more than 64 bones is refused",
+            )
+            bpy.data.objects.remove(crowded, do_unlink=True)
+            unweighted = weighted_mesh("0.1 Hair Unweighted", ["j_kao"], rig)
+            for index in range(64):
+                unweighted.vertex_groups.new(name=f"j_ex_bone_{index:02d}")
+            _require(
+                hair_rig.hair_skeleton_payload([hair, unweighted])[1] == "",
+                "hair rig: vertex groups that weight nothing don't count toward the 64 bones",
+            )
+            bpy.data.objects.remove(unweighted, do_unlink=True)
+            second = rig_armature("Second Rig", rig_json)
+            other = weighted_mesh("1.0 Other Hair", ["j_ex_hair_01_a"], second)
+            payload, issue = hair_rig.hair_skeleton_payload([hair, other])
+            _require(payload is None and issue != "", "hair rig: two rigs are refused")
+            bpy.data.objects.remove(other, do_unlink=True)
+            rig[hair_rig.RIG_PROPERTY] = "{not json"
+            payload, issue = hair_rig.hair_skeleton_payload([hair])
+            _require(payload is None and issue != "", "hair rig: a rig property that is not JSON is refused")
+            del rig[hair_rig.RIG_PROPERTY]
+            payload, issue = hair_rig.hair_skeleton_payload([hair])
+            _require(
+                payload is None and issue != "",
+                "hair rig: j_ex_hair_ groups without a rig armature are refused",
+            )
+            plain = weighted_mesh("2.0 Plain", ["j_kao"], rig)
+            _require(
+                hair_rig.hair_skeleton_payload([plain]) == (None, ""),
+                "hair rig: meshes without hair groups or a rig send none",
+            )
+
         with temporary_scene_data():
             detection_mesh_data = bpy.data.meshes.new("AttributeDetectionMeshData")
             detection_mesh_data.from_pydata(

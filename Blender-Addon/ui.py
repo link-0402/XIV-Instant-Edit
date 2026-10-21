@@ -776,7 +776,9 @@ def _draw_scope_summary(layout, props, ref, size_names: list[str] | None = None,
     if props.create_attribute_groups:
         notes.append(("Creates an attribute toggle group", "OUTLINER_COLLECTION"))
     hair_skeleton = cached_hair_skeleton()
-    if hair_skeleton:
+    if hair_skeleton == "custom":
+        notes.append(("Builds a custom hair skeleton", "BONE_DATA"))
+    elif hair_skeleton:
         notes.append((f"Sets hair EST entry {hair_skeleton}", "BONE_DATA"))
     column = layout.column(align=True)
     column.active = False
