@@ -12,6 +12,7 @@ using FFXIVClientStructs.Havok.Animation.Playback;
 using FFXIVClientStructs.Havok.Animation.Playback.Control;
 using FFXIVClientStructs.Havok.Animation.Rig;
 using FFXIVClientStructs.Havok.Common.Base.Container.Array;
+using FFXIVClientStructs.Havok.Common.Base.Container.String;
 using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 using FFXIVClientStructs.Havok.Common.Base.System.IO.OStream;
 using FFXIVClientStructs.Havok.Common.Base.Types;
@@ -228,7 +229,26 @@ internal unsafe sealed class AnimationNative
             catch { Dispose(); throw; }
         }
         public void Save(string path)
-            => SaveObject(Root, "hkRootLevelContainer", path);
+        {
+            // Other tools find the container by name (Mare Synchronos' bone cache, for one): a file saved here
+            // names it as the game's own do, whatever its source called it ("Merged Animation Container").
+            const string name = "hkaAnimationContainer";
+            using var arena = new Arena();
+            var renamed = new List<(int Index, hkStringPtr Name)>();
+            try
+            {
+                for (var i = 0; i < Root->NamedVariants.Length; i++)
+                {
+                    var variant = &Root->NamedVariants.Data[i];
+                    if (variant->ClassName.String != name || variant->Name.String == name) continue;
+                    renamed.Add((i, variant->Name));
+                    variant->Name = AnimationSkeleton.String(name, arena);
+                }
+                SaveObject(Root, "hkRootLevelContainer", path);
+            }
+            // The loaded resource keeps its own names; the arena's goes with it.
+            finally { foreach (var (i, old) in renamed) Root->NamedVariants.Data[i].Name = old; }
+        }
 
         public static void SaveObject(void* value, string type, string path)
         {
