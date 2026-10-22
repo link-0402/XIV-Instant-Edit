@@ -139,6 +139,45 @@ internal sealed class TextureSessionsTab
         TextureAction(async () => { await _textures.StartAsync(request).ConfigureAwait(false); });
     }
 
+    /// <summary> Whether the texture comes from another mod than its material, such as a MatCap library. </summary>
+    public static bool FromOtherMod(ResourceView texture, ResourceView? material)
+        => texture.SourceState == ResourceSourceState.LoadedMod && texture.SourceModDirectory.Length > 0 &&
+           material is { SourceState: ResourceSourceState.LoadedMod, SourceModDirectory.Length: > 0 } &&
+           !string.Equals(texture.SourceModDirectory, material.SourceModDirectory, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Copies a texture another mod provides into its material's mod and points the material at the copy,
+    /// so that mod no longer needs the other one.
+    /// </summary>
+    public void DuplicateIntoSourceMod(ResourceView texture, ResourceView material, ActorView actor)
+    {
+        if (!IsTextureRow(texture) || !FromOtherMod(texture, material) || TextureCopyBlock(texture, material) is not null || !Busy.TryEnter())
+            return;
+        var request = TextureRequest(texture, actor) with
+        {
+            Copy = new TextureCopyMaterial(material.GamePath, material.SourceModDirectory, material.SourceModRootPath, material.SourceRelativePath),
+        };
+        var name = Path.GetFileName(texture.GamePath);
+        var mod = UiText.Safe(material.SourceLabel, material.SourceModDirectory);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var refresh = await _textures.DuplicateIntoModAsync(request).ConfigureAwait(false);
+                var attention = refresh.Contains("attention", StringComparison.Ordinal);
+                _feed.SetTextureStatus(attention ? $"{name} copied into {mod}. {refresh}" :$"{name} copied into {mod}.",
+                    attention ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
+            }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+            catch (Exception error)
+            {
+                _log.Warning(error, "Could not duplicate a texture into its material's mod.");
+                _feed.SetTextureStatus($"Could not copy {name} into {mod}: {error.Message}", FeedbackSeverity.Error);
+            }
+            finally { Busy.Exit(); }
+        });
+    }
+
     private static Vector4 SessionColour(SessionState state)
         => state switch
         {

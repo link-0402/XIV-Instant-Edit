@@ -237,6 +237,16 @@ internal sealed class ResourceRows
                     _textureTab.StartTextureCopyEdit(node, parent, actor);
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(blocked ?? "Edit a copy only this material uses.\nSaving gives it its own path; other materials keep the original.");
+            // A texture from another mod, such as a MatCap library: the material's mod gets its own copy.
+            if (TextureSessionsTab.FromOtherMod(node, parent))
+            {
+                using (ImRaii.Disabled(blocked is not null || _textureTab.Busy.IsBusy))
+                    if (ImGui.MenuItem("Duplicate into source mod") && parent is not null)
+                        _textureTab.DuplicateIntoSourceMod(node, parent, actor);
+                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip(blocked ?? $"Copy this texture into {UiText.Safe(parent!.SourceLabel, parent.SourceModDirectory)}.\n" +
+                        $"Its material uses the copy, so it no longer needs {UiText.Safe(node.SourceLabel, node.SourceModDirectory)}.");
+            }
         }
         // Shown while the texture still holds an image dropped on it.
         if (texture && _textureTab.UndoableReplace(node, actor) is { Replacement: { } drop } replaced)

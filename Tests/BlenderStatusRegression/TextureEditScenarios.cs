@@ -95,6 +95,7 @@ internal static partial class TextureEditScenarios
             await DroppedImageAsync(Path.Combine(root, "dropped"));
             await DroppedVanillaImageAsync(Path.Combine(root, "dropped-vanilla"));
             await CopiedTextureAsync(Path.Combine(root, "copied"));
+            await DuplicateIntoModAsync(Path.Combine(root, "duplicate"));
         }
         finally
         {
@@ -1137,6 +1138,23 @@ internal static partial class TextureEditScenarios
             "a copy whose name isn't an image is refused");
         Check(!read && f.Backend.Commits == 1 && File.ReadAllBytes(s.TargetFile)[80] == 70,
             "a refused copy reads nothing and leaves the texture alone");
+    }
+
+    /// <summary>
+    /// Duplicate into source mod: a texture from another mod is captured as a copy for its material and committed
+    /// unchanged at once, then refreshed. No session, working image or conversion is left behind.
+    /// </summary>
+    private static async Task DuplicateIntoModAsync(string root)
+    {
+        var bc7 = (uint)TexFile.TextureFormat.BC7;
+        var intact = Tex(bc7, 8, 8, 3, 12);
+        using var f = new Fixture(root, bc7, original: UncompressedOffsets(intact));
+        var request = f.Request with { Copy = new TextureCopyMaterial("chara/test.mtrl", "Top Mod", Path.Combine(root, "Top Mod"), "chara/test.mtrl") };
+        var status = await f.Service.DuplicateIntoModAsync(request);
+        Check(f.Backend.Commits == 1 && f.Backend.Refreshes == 1 && f.Backend.LastShown is null && status == "Saved and redrawn",
+            "a duplicate commits the texture once and refreshes its mod");
+        Check(File.ReadAllBytes(f.Backend.Target).SequenceEqual(intact), "the duplicate is written with its mip offsets normalized");
+        Check(f.Service.Sessions.Count == 0 && f.Backend.Conversions == 0, "a duplicate opens no session and converts nothing");
     }
 
     /// <summary> An image dropped on a vanilla texture creates its mod; undo puts the game's texture back in that mod. </summary>

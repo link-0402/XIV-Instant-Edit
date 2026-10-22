@@ -320,6 +320,29 @@ public sealed class TextureEditService : IDisposable
     }
 
     /// <summary>
+    /// Copies a texture that another mod provides (a library such as a MatCap pack) into the mod of the material
+    /// in <see cref="TextureEditRequest.Copy"/>, unchanged, and points the material at the copy, so that mod no
+    /// longer needs the other one. No session or editor opens. Returns the refresh's status.
+    /// </summary>
+    public async Task<string> DuplicateIntoModAsync(TextureEditRequest request)
+    {
+        if (request.Copy is null) throw new ArgumentException("A duplicate needs the material it is made for.", nameof(request));
+        await _gate.WaitAsync(_life.Token).ConfigureAwait(false);
+        try
+        {
+            EnsureReady();
+            var source = await _backend.CaptureAsync(request, _life.Token).ConfigureAwait(false);
+            _life.Token.ThrowIfCancellationRequested();
+            // Written with its mip offsets normalized, as a restored original is.
+            var tex = TextureFiles.NormalizeMipOffsets(source.Bytes);
+            await _backend.CommitAsync(source.Session, tex, () => !_life.IsCancellationRequested, _life.Token).ConfigureAwait(false);
+            _life.Token.ThrowIfCancellationRequested();
+            return await _backend.RefreshAsync([new TextureRefresh(source.Session, null)], _life.Token).ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>
     /// A session that finished opening and has no source conflict continues when its texture is opened again.
     /// A vanilla session belongs to its destination mod, so it only continues within the same Painter project.
     /// </summary>
