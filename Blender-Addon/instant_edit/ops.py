@@ -2985,10 +2985,16 @@ def perform_mashup_export(
         if handoff_warnings:
             warnings = list(warnings) + handoff_warnings
         get_instant_edit_props().last_export_id = export_id
+        # Only parts from two or more mods make a mashup.
+        source_mods = {item.source_mod_directory or item.source_mod_name or item.context_id for item in refs}
+        if len(source_mods) > 1:
+            created = "mashup"
+        else:
+            created = "group" if destination == "ACTIVE_MOD" else "mod"
         get_instant_edit_props().last_status = (
-            f"Created mashup {destination_name} at {target} with warnings: "
+            f"Created {created} {destination_name} at {target} with warnings: "
             f"{plugin_warning_summary(warnings)}"
-            if warnings else f"Created mashup {destination_name} at {target}"
+            if warnings else f"Created {created} {destination_name} at {target}"
         )
         # The mashup just bundled the contributing contexts' materials into
         # the target mod, so any cached "missing material" answer for this
