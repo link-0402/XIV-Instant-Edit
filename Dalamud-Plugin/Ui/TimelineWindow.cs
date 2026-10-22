@@ -102,7 +102,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         boneEditor = new BoneEditor(session, decode, posing, this);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder);
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
-        keys = new ShortcutKeys(keyState);
+        keys = new ShortcutKeys(keyState, framework);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
         properties = new PropertiesPanel(session, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
         soundSave = new SoundSaveCheck(session, soundFiles);
@@ -302,6 +302,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         if (disposed)
             return;
         disposed = true;
+        keys.Dispose();
         reader.Dispose();
         decode.Forget();
         poseSources.Drop();
@@ -529,7 +530,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         footerHeight = Math.Max(1, ImGui.GetCursorPosY() - footerStart);
 
         pickers.Draw(editor);
+        var playhead = editor.Playhead;
         canvas.HandleKeys(editor);
+        if (editor.Playhead != playhead)
+            timelinePreview.PauseForStep();
         // Escape cancels a drag; it must not also close the window.
         RespectCloseHotkey = editor.Gesture == TimelineGesture.None;
     }

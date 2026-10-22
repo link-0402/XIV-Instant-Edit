@@ -9,8 +9,11 @@ namespace InstantEdit.Services.Animations.Motion;
 /// seam. A blend adds a quintic correction to one side of the join (or half to each side) that
 /// starts at zero with zero speed and ends at the gap with the speed difference, so the output is
 /// continuous in pose and speed there and frames outside the blend stay as the time map made them.
-/// An eased loop seam changes the time map instead: the faster side's frames next to the seam play
+/// Speeds are compared per output frame, each side at its own part's rate, so a blend into a slowed
+/// part also smooths the change of speed. An eased loop seam changes the time map instead: the faster side's frames next to the seam play
 /// at the slower side's speed and catch up, so every bone passes the seam gently along its own path.
+/// A blend part plays no frames of its own: it moves from the part before's end into the part after's
+/// start, matching pose and speed at both, and the joins at its edges blend nothing.
 /// Pure managed code: the bake and Live use it alike.
 /// </summary>
 internal static class MotionCutter
@@ -41,7 +44,10 @@ internal static class MotionCutter
         {
             SourceTracks = source.SourceTracks, ReferenceFollowers = source.ReferenceFollowers, BlendHint = source.BlendHint, Loops = source.Loops,
         };
-        var scale = (double)cuts.Kept / length;
+        // Source frames each part plays per output frame: a join matches each side's speed at its own rate.
+        var rates = new double[cuts.Parts.Length];
+        for (var i = 0; i < rates.Length; i++)
+            rates[i] = cuts.Rate(i, length);
         var blends = new List<Blend>();
         for (var i = 0; i < cuts.Joins.Length; i++)
         {
@@ -49,8 +55,19 @@ internal static class MotionCutter
             if (before <= 0 && after <= 0)
                 continue;
             int a = cuts.Parts[i].To, b = cuts.Parts[i + 1].From;
-            blends.Add(Gap(source, a, Speed(source, a, 0), b, Speed(source, b, 0), scale, cuts.PartEnd(i, length), before, after,
+            blends.Add(Gap(source, a, Speed(source, a, 0), b, Speed(source, b, 0), rates[i], rates[i + 1], cuts.PartEnd(i, length), before, after,
                 cuts.Joins[i].Placement, seam: false));
+        }
+        // A blend part leaves the part before it as that one ends and arrives in the part after it as that one starts.
+        var fills = new List<Fill>();
+        for (var i = 1; i < cuts.Parts.Length - 1; i++)
+        {
+            if (!cuts.Parts[i].Blend)
+                continue;
+            int a = cuts.Parts[i - 1].To, b = cuts.Parts[i + 1].From;
+            var start = cuts.PartStart(i, length);
+            fills.Add(FillOf(source, a, Speed(source, a, -1), b, Speed(source, b, 1), rates[i - 1], rates[i + 1], start,
+                cuts.PartEnd(i, length) - start));
         }
         var ease = EaseOf(source, cuts, length);
         if (cuts.Seam is { } seam)
@@ -63,7 +80,7 @@ internal static class MotionCutter
                 var (end, start) = (Speed(source, a, -1), Speed(source, b, 1));
                 if (ease.Frames > 0)
                     (end, start) = ease.AtEnd ? (Scaled(end, ease.Rate), start) : (end, Scaled(start, ease.Rate));
-                blends.Add(Gap(source, a, end, b, start, scale, length, before, after, seam.Placement, seam: true));
+                blends.Add(Gap(source, a, end, b, start, rates[^1], rates[0], length, before, after, seam.Placement, seam: true));
             }
         }
 
@@ -78,6 +95,8 @@ internal static class MotionCutter
             Sample(source, cuts.SourceAt(EasedTime(o, ease, length), length), pose, floats);
             foreach (var blend in blends)
                 blend.Correct(o, length, pose, floats);
+            foreach (var fill in fills)
+                fill.Play(o, pose, floats);
             for (var bone = 0; bone < pose.Length; bone++)
             {
                 var value = pose[bone];
@@ -105,12 +124,13 @@ internal static class MotionCutter
     /// <summary>
     /// The output frames a join's blend really uses before and after it, its windows clipped to the
     /// parts they lie on. <paramref name="join"/> -1 is the loop seam, whose before side is the end of
-    /// the last part and whose after side is the start of the first.
+    /// the last part and whose after side is the start of the first. A join at a blend part's edge uses
+    /// none: the blend part lines the motion up there.
     /// </summary>
     public static (double Before, double After) Window(MotionCuts cuts, int join, int length)
     {
         var blend = join < 0 ? cuts.Seam : cuts.Joins[join];
-        if (blend == null || blend.Frames <= 0)
+        if (blend == null || blend.Frames <= 0 || join >= 0 && cuts.BesideBlend(join))
             return (0, 0);
         var left = join < 0 ? cuts.Parts.Length - 1 : join;
         var right = join < 0 ? 0 : join + 1;
@@ -148,8 +168,8 @@ internal static class MotionCutter
     /// <summary>
     /// The loop seam's ease for a cut <paramref name="length"/> frames long: its frames, clipped to the
     /// part it lies on, the rate the eased side plays at the seam (the other side's mean bone speed over
-    /// its own, 1 when the eased side doesn't move, at most <see cref="MaxEaseRate"/>) and whether it is
-    /// the end.
+    /// its own, each per output frame at its part's rate, 1 when the eased side doesn't move, at most
+    /// <see cref="MaxEaseRate"/>) and whether it is the end.
     /// </summary>
     public static (double Frames, double Rate, bool AtEnd) EaseOf(MotionClip source, MotionCuts cuts, int length)
     {
@@ -158,8 +178,10 @@ internal static class MotionCutter
         var (from, to) = cuts.EaseSpan(length);
         var frames = to - from;
         var gap = LoopSeam.Gap(source, cuts.Parts[^1].To, cuts.Parts[0].From);
-        var (eased, other) = cuts.EaseEnd ? (gap.SpeedIn, gap.SpeedOut) : (gap.SpeedOut, gap.SpeedIn);
-        var rate = eased > 1e-3f ? Math.Clamp(other / eased, 0, MaxEaseRate) : 1;
+        double first = cuts.Rate(0, length), last = cuts.Rate(cuts.Parts.Length - 1, length);
+        var (eased, other, easedRate, otherRate) = cuts.EaseEnd ? (gap.SpeedIn, gap.SpeedOut, last, first) : (gap.SpeedOut, gap.SpeedIn, first, last);
+        // Source speeds times their parts' rates; with both rates equal the ratio is the source speeds'.
+        var rate = eased > 1e-3f ? Math.Clamp(other / eased * (otherRate / easedRate), 0, MaxEaseRate) : 1;
         return (frames, rate, cuts.EaseEnd);
     }
 
@@ -262,32 +284,72 @@ internal static class MotionCutter
         return (pose, floats);
     }
 
-    /// <summary>The blend of a join from source frame <paramref name="left"/> to <paramref name="right"/>, met at output frame <paramref name="at"/>.</summary>
+    /// <summary>
+    /// The blend of a join from source frame <paramref name="left"/> to <paramref name="right"/>, met at output
+    /// frame <paramref name="at"/>: speeds per source frame, each side playing <paramref name="leftRate"/> or
+    /// <paramref name="rightRate"/> source frames per output frame.
+    /// </summary>
     private static Blend Gap(MotionClip source, int left, (Vector3[] Position, Vector3[] Rotation, Vector3[] Scale, float[] Floats) leftSpeed,
-        int right, (Vector3[] Position, Vector3[] Rotation, Vector3[] Scale, float[] Floats) rightSpeed, double scale, double at,
-        double before, double after, JoinPlacement placement, bool seam)
+        int right, (Vector3[] Position, Vector3[] Rotation, Vector3[] Scale, float[] Floats) rightSpeed, double leftRate, double rightRate,
+        double at, double before, double after, JoinPlacement placement, bool seam)
     {
         var floatCount = leftSpeed.Floats.Length;
         var (l, lf) = PoseAt(source, left, floatCount);
         var (r, rf) = PoseAt(source, right, floatCount);
         var bones = l.Length;
         var blend = new Blend(at, before, after, placement == JoinPlacement.Centered ? .5f : 1, seam, bones, floatCount);
-        var k = (float)scale;
+        float kl = (float)leftRate, kr = (float)rightRate;
         for (var i = 0; i < bones; i++)
         {
             blend.Position[i] = r[i].Position - l[i].Position;
             blend.Rotation[i] = Log(r[i].Rotation * Quaternion.Conjugate(Quaternion.Normalize(l[i].Rotation)));
             blend.Scale[i] = r[i].Scale - l[i].Scale;
-            blend.PositionSpeed[i] = (rightSpeed.Position[i] - leftSpeed.Position[i]) * k;
-            blend.RotationSpeed[i] = (rightSpeed.Rotation[i] - leftSpeed.Rotation[i]) * k;
-            blend.ScaleSpeed[i] = (rightSpeed.Scale[i] - leftSpeed.Scale[i]) * k;
+            blend.PositionSpeed[i] = rightSpeed.Position[i] * kr - leftSpeed.Position[i] * kl;
+            blend.RotationSpeed[i] = rightSpeed.Rotation[i] * kr - leftSpeed.Rotation[i] * kl;
+            blend.ScaleSpeed[i] = rightSpeed.Scale[i] * kr - leftSpeed.Scale[i] * kl;
         }
         for (var f = 0; f < floatCount; f++)
         {
             blend.Floats[f] = rf[f] - lf[f];
-            blend.FloatSpeed[f] = (rightSpeed.Floats[f] - leftSpeed.Floats[f]) * k;
+            blend.FloatSpeed[f] = rightSpeed.Floats[f] * kr - leftSpeed.Floats[f] * kl;
         }
         return blend;
+    }
+
+    /// <summary>
+    /// A blend part <paramref name="frames"/> output frames long from output frame <paramref name="at"/>: from
+    /// source frame <paramref name="left"/> moving at <paramref name="leftSpeed"/> to <paramref name="right"/>
+    /// moving at <paramref name="rightSpeed"/>, speeds per source frame, the part before playing
+    /// <paramref name="leftRate"/> and the part after <paramref name="rightRate"/> source frames per output frame.
+    /// </summary>
+    private static Fill FillOf(MotionClip source, int left, (Vector3[] Position, Vector3[] Rotation, Vector3[] Scale, float[] Floats) leftSpeed,
+        int right, (Vector3[] Position, Vector3[] Rotation, Vector3[] Scale, float[] Floats) rightSpeed, double leftRate, double rightRate,
+        double at, double frames)
+    {
+        var floatCount = leftSpeed.Floats.Length;
+        var (l, lf) = PoseAt(source, left, floatCount);
+        var (r, rf) = PoseAt(source, right, floatCount);
+        var fill = new Fill(at, frames, l, lf);
+        float kl = (float)leftRate, kr = (float)rightRate;
+        for (var i = 0; i < l.Length; i++)
+        {
+            fill.Position[i] = r[i].Position - l[i].Position;
+            fill.Rotation[i] = Log(r[i].Rotation * Quaternion.Conjugate(Quaternion.Normalize(l[i].Rotation)));
+            fill.Scale[i] = r[i].Scale - l[i].Scale;
+            fill.PositionIn[i] = leftSpeed.Position[i] * kl;
+            fill.RotationIn[i] = leftSpeed.Rotation[i] * kl;
+            fill.ScaleIn[i] = leftSpeed.Scale[i] * kl;
+            fill.PositionOut[i] = rightSpeed.Position[i] * kr;
+            fill.RotationOut[i] = rightSpeed.Rotation[i] * kr;
+            fill.ScaleOut[i] = rightSpeed.Scale[i] * kr;
+        }
+        for (var f = 0; f < floatCount; f++)
+        {
+            fill.Floats[f] = rf[f] - lf[f];
+            fill.FloatIn[f] = leftSpeed.Floats[f] * kl;
+            fill.FloatOut[f] = rightSpeed.Floats[f] * kr;
+        }
+        return fill;
     }
 
     /// <summary>The rotation vector of a rotation, the short way round: its axis scaled by its angle in radians.</summary>
@@ -351,6 +413,39 @@ internal static class MotionCutter
             }
             for (var f = 0; f < floats.Length; f++)
                 floats[f] += Floats[f] * gap + FloatSpeed[f] * speed;
+        }
+    }
+
+    /// <summary>
+    /// One blend part's motion: the start pose, the gap to the end pose, and the speeds it leaves and
+    /// arrives with, per bone and float. It plays the start, plus the gap as it rises, plus each speed
+    /// carried out of the start and into the end, so pose and speed match the parts on both sides.
+    /// </summary>
+    private sealed class Fill(double at, double frames, MotionTransform[] start, float[] startFloats)
+    {
+        public readonly Vector3[] Position = new Vector3[start.Length], Rotation = new Vector3[start.Length], Scale = new Vector3[start.Length];
+        public readonly Vector3[] PositionIn = new Vector3[start.Length], RotationIn = new Vector3[start.Length], ScaleIn = new Vector3[start.Length];
+        public readonly Vector3[] PositionOut = new Vector3[start.Length], RotationOut = new Vector3[start.Length], ScaleOut = new Vector3[start.Length];
+        public readonly float[] Floats = new float[startFloats.Length], FloatIn = new float[startFloats.Length], FloatOut = new float[startFloats.Length];
+
+        /// <summary>Puts the blend's pose for output frame <paramref name="o"/> in place of the motion's, if the part plays it.</summary>
+        public void Play(double o, MotionTransform[] pose, float[] floats)
+        {
+            if (frames <= 0 || o < at || o >= at + frames)
+                return;
+            var s = (float)((o - at) / frames);
+            float gap = Rise(s), leave = (float)frames * FallSpeed(s), arrive = (float)frames * RiseSpeed(s);
+            for (var i = 0; i < pose.Length; i++)
+            {
+                var from = start[i];
+                var turn = Rotation[i] * gap + RotationIn[i] * leave + RotationOut[i] * arrive;
+                pose[i] = new MotionTransform(
+                    from.Position + Position[i] * gap + PositionIn[i] * leave + PositionOut[i] * arrive,
+                    turn == Vector3.Zero ? from.Rotation : Quaternion.Normalize(Exp(turn) * from.Rotation),
+                    from.Scale + Scale[i] * gap + ScaleIn[i] * leave + ScaleOut[i] * arrive);
+            }
+            for (var f = 0; f < floats.Length; f++)
+                floats[f] = startFloats[f] + Floats[f] * gap + FloatIn[f] * leave + FloatOut[f] * arrive;
         }
     }
 }

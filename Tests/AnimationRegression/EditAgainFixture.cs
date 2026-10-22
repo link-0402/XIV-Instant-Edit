@@ -150,6 +150,17 @@ internal static class EditAgainFixture
         var cuts = new MotionCuts(100, [new(0, 40), new(60, 100)], [MotionJoin.ForCut]);
         var cut = AnimationEditService.WithSavedEdit(Saved(80), new AnimationTimelineEdit(false, 0, 80 / 30f, [], "base", cuts), [4], "print").Document!;
         check(cut is { MotionLength: 100, KeptFrames: 80, Stretched: false, Cut: true }, "a cut edit opens again on the whole motion with its cuts");
+        var slowCuts = new MotionCuts(100, [new(0, 40), new(40, 60, Stretch: 3), new(60, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]);
+        var slowAgain = AnimationEditService.WithSavedEdit(Saved(140), new AnimationTimelineEdit(false, 0, 140 / 30f, [], "base", slowCuts), [4], "print").Document!;
+        check(slowAgain is { Length: 140, MotionLength: 100, Cut: true } && slowAgain.Cuts!.Parts[1].Stretch == 3 &&
+              AnimationEditService.RetimeSeconds(slowAgain) == 140 / 30f, "a slowed part opens again slowed, on the motion from before");
+        // The save made the 106-frame motion 110 frames long; the window reads it again from the capture made before.
+        var captured = capture.Clip with { Duration = 106 / 30f };
+        check(AnimationEditService.FileLength(captured, 110 / 30f).Duration == 110 / 30f &&
+              TimelineDocument.MotionFrames(AnimationEditService.FileLength(captured, 110 / 30f).Duration) == 110 &&
+              ReferenceEquals(AnimationEditService.FileLength(captured, null), captured) &&
+              ReferenceEquals(AnimationEditService.FileLength(captured, float.NaN), captured) && ReferenceEquals(AnimationEditService.FileLength(captured, 0), captured),
+            "a clip read again after a save that changed its length takes the file's length, not the capture's");
         var stretch = AnimationEditService.WithSavedEdit(Saved(150), new AnimationTimelineEdit(false, 0, 5, [], "base", MotionCuts.WholeOf(100)), [4], "print").Document!;
         check(stretch is { Stretched: true, Cut: false } && AnimationEditService.RetimeSeconds(stretch) == 5,
             "a stretched edit opens again on the motion it stretched, still stretched");

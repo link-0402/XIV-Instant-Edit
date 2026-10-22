@@ -77,10 +77,13 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
             drawList.AddRect(new Vector2(left, barTop), new Vector2(right, barBottom), TimelineUi.U32(Theme.WithAlpha(motion, .9f)), rounding, ImDrawFlags.None, line);
             if (current.SelectedCut is { Target: TimelineCutTarget.Part, Index: var selected } && selected == i)
                 drawList.AddRect(new Vector2(left - 1, barTop - 1), new Vector2(right + 1, barBottom + 1), TimelineUi.U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
-            if (speeds != null && speedLineMax > 0)
-                DrawSpeedLine(drawList, cuts, ease, doc.Length, view, trackLeft, start, end, speeds, middle, barBottom, line);
+            // A blend part plays none of the motion's own frames: no speed line, a ramp from its start to its end instead.
+            if (cuts.Parts[i].Blend)
+                drawList.AddLine(new Vector2(left, barBottom - Theme.Scaled(2)), new Vector2(right, middle), TimelineUi.U32(Theme.WithAlpha(Theme.Accent, .8f)), line);
+            else if (speeds != null && speedLineMax > 0)
+                DrawSpeedLine(drawList, cuts, ease, doc.Length, view, trackLeft, start, end, cuts.Parts[i].Stretch, speeds, middle, barBottom, line);
             drawList.PushClipRect(new Vector2(left, top), new Vector2(right, bottom), true);
-            drawList.AddText(new Vector2(left + Theme.Scaled(4), barTop + Theme.Scaled(1)), TimelineUi.U32(Theme.Label), TimelineWindowViews.PartLabel(cuts.Parts[i]));
+            drawList.AddText(new Vector2(left + Theme.Scaled(4), barTop + Theme.Scaled(1)), TimelineUi.U32(Theme.Label), TimelineWindowViews.PartLabel(cuts.Parts[i], end - start));
             drawList.PopClipRect();
         }
         // Joins: a bow-tie as wide as the frames each blend really uses.
@@ -134,10 +137,11 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
 
     /// <summary>
     /// The speed line inside one part: the motion's speed at the source frame each output frame plays, in the
-    /// bar's lower half; under the start's <paramref name="ease"/> slowed as much as the ease slows it.
+    /// bar's lower half; under the start's <paramref name="ease"/> slowed as much as the ease slows it, and divided by the
+    /// part's <paramref name="stretch"/>, so a slowed part reads as slower.
     /// </summary>
     private void DrawSpeedLine(ImDrawListPtr drawList, MotionCuts cuts, (double Frames, double Rate, bool AtEnd) ease, int length, TimelineView view,
-        float trackLeft, double start, double end, float[] speeds, float middle, float barBottom, float line)
+        float trackLeft, double start, double end, double stretch, float[] speeds, float middle, float barBottom, float line)
     {
         var first = Math.Max(start, view.First);
         var last = Math.Min(end, view.Last);
@@ -155,7 +159,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
             var probe = at + .1 <= length ? .1 : -.1;
             var pace = ease.Frames > 0 ? (MotionCutter.EasedTime(at + probe, ease, length) - played) / probe : 1;
             var frame = Math.Clamp((int)cuts.SourceAt(played, length), 0, speeds.Length - 1);
-            var speed = (float)(speeds[frame] * pace);
+            var speed = (float)(speeds[frame] * pace / stretch);
             var point = new Vector2(trackLeft + view.X((float)at), barBottom - Math.Min(1, speed / speedLineMax) * height);
             if (previous is { } from)
                 drawList.AddLine(from, point, colour, line);
@@ -275,22 +279,30 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     }
 
     /// <summary>The clip band's tooltip: what the part, edge, join or seam under the pointer does.</summary>
-    public static bool DrawTooltip(TimelineHit hit, bool readOnly)
+    public static bool DrawTooltip(TimelineHit hit, MotionCuts cuts, bool readOnly)
     {
         if (hit.Part is not (TimelinePart.ClipRow or TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or
                 TimelinePart.Join or TimelinePart.JoinEdge or TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge))
             return false;
         if (!Widgets.HoverDelay($"clip:{hit.Part}:{hit.Cut}"))
             return true;
+        // At a blend part, its own edges resize it and its neighbours' edges roll into it.
+        bool Blend(int part) => part >= 0 && part < cuts.Parts.Length && cuts.Parts[part].Blend;
+        var edgeBlend = hit.Part is TimelinePart.ClipLeft or TimelinePart.ClipRight && Blend(hit.Cut);
+        var edgeRoll = hit.Part == TimelinePart.ClipLeft && Blend(hit.Cut - 1) || hit.Part == TimelinePart.ClipRight && Blend(hit.Cut + 1);
         ImGui.SetTooltip(hit.Part switch
         {
+            TimelinePart.ClipLeft or TimelinePart.ClipRight when !readOnly && edgeBlend => TimelineWindowViews.BlendEdgeTip,
+            TimelinePart.ClipLeft when !readOnly && edgeRoll => TimelineWindowViews.RollEdgeTip,
+            // Shift+drag stretches any part that isn't a blend, this one beside a blend included.
+            TimelinePart.ClipRight when !readOnly && edgeRoll => TimelineWindowViews.RollEdgeTip + " " + TimelineWindowViews.StretchEdgeTip,
             TimelinePart.ClipLeft when !readOnly => "Drag to trim the start of this part.",
-            TimelinePart.ClipRight when !readOnly => "Drag to trim the end of this part.",
+            TimelinePart.ClipRight when !readOnly => "Drag to trim the end of this part. " + TimelineWindowViews.StretchEdgeTip,
             TimelinePart.JoinEdge or TimelinePart.SeamEdge when !readOnly => "Drag to change how long the blend is.",
             TimelinePart.EaseEdge when !readOnly => "Drag to change how long the start eases in.",
-            TimelinePart.Join => "The blend where two parts meet. Click to set it.",
-            TimelinePart.Seam => "Where the loop's end runs back into its start. Click to set it.",
-            _ => "C cuts at the playhead. Q and W remove before or after it. Right-click to cut here.",
+            TimelinePart.Join => "The blend where two parts meet. Click to set it, again for the part under it.",
+            TimelinePart.Seam => "Where the loop's end runs back into its start. Click to set it, again for the part under it.",
+            _ => "C cuts at the playhead. Q and W remove before or after it. B blends over the selected part. Right-click to cut here.",
         });
         return true;
     }
@@ -308,6 +320,14 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
         var part = current.SelectedCut is { Target: TimelineCutTarget.Part };
         if (ImGui.MenuItem(menu[3], "Del", false, !readOnly && part))
             current.RemoveSelectedPart();
+        var cuts = CutEdits.CutsOf(current.Document);
+        if (current.SelectedCut is { Target: TimelineCutTarget.Part, Index: var selected } && selected < cuts.Parts.Length)
+        {
+            var blend = cuts.Parts[selected].Blend;
+            if (ImGui.MenuItem(blend ? TimelineWindowViews.PlayItsMotion : TimelineWindowViews.ReplaceWithBlend, "B", false,
+                    !readOnly && (blend || CutEdits.CanBlend(cuts, selected))))
+                current.ToggleSelectedBlend();
+        }
         ImGui.Separator();
         if (ImGui.MenuItem("Fit", "F"))
             current.Fit();

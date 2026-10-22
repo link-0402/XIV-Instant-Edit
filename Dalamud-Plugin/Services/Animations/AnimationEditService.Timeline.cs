@@ -93,6 +93,12 @@ internal sealed partial class AnimationEditService
         var pap = new AnimationPap(bytes);
         var entry = pap.EntryIndex(clip.Name, clip.BindingIndex);
         var tmb = pap.TimelineBytes(entry);
+        // What the loaded file's clip is called by fingerprint, and how long its motion lasts: after a save the game may play
+        // either it or the clip as captured, and a save that cut or stretched the motion changed its length since the capture.
+        var (fingerprint, seconds) = await framework.RunOnFrameworkThread(() =>
+            (AnimationRuntime.InspectPap(bytes).GetValueOrDefault(clip.BindingIndex, string.Empty),
+             AnimationRuntime.InspectPapDurations(bytes).TryGetValue(clip.BindingIndex, out var found) ? found : (float?)null));
+        clip = FileLength(clip, seconds);
         TimelineDocument document;
         try
         {
@@ -103,11 +109,17 @@ internal sealed partial class AnimationEditService
         {
             return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message);
         }
-        // What the loaded file's clip is called by fingerprint: after a save the game may play either it or the clip as captured.
-        var fingerprint = await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(bytes).GetValueOrDefault(clip.BindingIndex, string.Empty));
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
             await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint };
     }
+
+    /// <summary>
+    /// <paramref name="clip"/> as long as the file read says its motion lasts (<paramref name="seconds"/>), not as
+    /// long as when it was captured: after a save that cut or stretched the motion the window reads the clip again
+    /// from the same capture. Unchanged when the file's length is unknown.
+    /// </summary>
+    internal static AnimationClip FileLength(AnimationClip clip, float? seconds) =>
+        seconds is { } length && float.IsFinite(length) && length > 0 && length != clip.Duration ? clip with { Duration = length } : clip;
 
     /// <summary>
     /// Reads the clip <paramref name="journal"/>'s edit saved, with that edit's bone layers back on the

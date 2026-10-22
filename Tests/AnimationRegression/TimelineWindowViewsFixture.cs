@@ -257,8 +257,15 @@ internal static class TimelineWindowViewsFixture
 
     private static void Clips(Action<bool, string> check, List<string> texts)
     {
-        check(TimelineWindowViews.PartLabel(new MotionPart(230, 425)) == "230 - 425" && TimelineWindowViews.RemovedMarker(30) == "-30" &&
+        check(TimelineWindowViews.PartLabel(new MotionPart(230, 425), 195) == "230 - 425" &&
+              TimelineWindowViews.PartLabel(new MotionPart(40, 60, Blend: true), 20) == "Blend, 20 frames" && TimelineWindowViews.RemovedMarker(30) == "-30" &&
               TimelineWindowViews.ClipLegend == "Clip", "clip band texts");
+        check(TimelineWindowViews.PartLabel(new MotionPart(69, 75, Stretch: 3), 18) == "69 - 75 · 33%" &&
+              TimelineWindowViews.PartLabel(new MotionPart(69, 75), 6) == "69 - 75" && TimelineWindowViews.SpeedPercent(.5) == "200%" &&
+              TimelineWindowViews.PlaysOver == "Plays over" && TimelineWindowViews.NormalSpeed == "Normal speed" &&
+              TimelineWindowViews.StretchEdgeTip == "Shift+drag to play it slower or faster.", "part speed texts");
+        texts.AddRange([TimelineWindowViews.PartLabel(new MotionPart(69, 75, Stretch: 3), 18), TimelineWindowViews.PlaysOver,
+            TimelineWindowViews.NormalSpeed, TimelineWindowViews.StretchEdgeTip]);
         texts.AddRange([TimelineWindowViews.ClipLegend, .. TimelineWindowViews.ClipMenu]);
         check(TimelineWindowViews.ClipMenu.SequenceEqual(["Cut here", "Remove from here to the end", "Remove from the start to here", "Remove part"]),
             "the clip band's menu");

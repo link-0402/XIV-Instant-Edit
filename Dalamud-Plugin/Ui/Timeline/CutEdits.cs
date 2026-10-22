@@ -9,7 +9,7 @@ internal readonly record struct CutRemoval(int Events, int Keys);
 
 /// <summary>
 /// Cutting a timeline's motion like a video editor: cut a part in two, remove frames, trim a part's
-/// edges, set the blends at joins and at the loop seam, and fix a loop that stalls. Removing frames
+/// edges, set the blends at joins and at the loop seam, play a blend in a part's place, and fix a loop that stalls. Removing frames
 /// ripples: what played after them moves left, what started inside goes (a locked entry can't, so it
 /// moves to the cut), and bone layers lose their keys inside. Frames are output frames, as the
 /// timeline shows them; with a stretch they map to the motion's own frames, rounded to whole ones.
@@ -35,10 +35,13 @@ internal static class CutEdits
                 return doc;
             if (at < start + part.Frames)
             {
+                // A blend part plays one blend from end to end: cutting it in two would make two next to each other.
+                if (part.Blend)
+                    return doc;
                 var split = part.From + (at - start);
                 return With(doc, cuts with
                 {
-                    Parts = cuts.Parts.SetItem(i, part with { To = split }).Insert(i + 1, new MotionPart(split, part.To)),
+                    Parts = cuts.Parts.SetItem(i, part with { To = split }).Insert(i + 1, part with { From = split }),
                     Joins = cuts.Joins.Insert(i, MotionJoin.ForCut),
                 });
             }
@@ -105,10 +108,152 @@ internal static class CutEdits
     }
 
     /// <summary>
+    /// Makes part <paramref name="part"/> play a blend from the part before it into the part after it
+    /// (<paramref name="blend"/>), or its own motion again. Its frames and the length stay, unless a blend
+    /// longer than the source frames between its neighbours goes back: it gives up the frames that don't
+    /// fit, and what follows moves up. Only a part <see cref="CanBlend"/> allows becomes one.
+    /// </summary>
+    public static TimelineDocument SetBlend(TimelineDocument doc, int part, bool blend)
+    {
+        var cuts = CutsOf(doc);
+        if (doc.Expression || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend == blend || blend && !CanBlend(cuts, part))
+            return doc;
+        if (!blend)
+        {
+            var room = cuts.Parts[part + 1].From - cuts.Parts[part - 1].To;
+            if (room <= 0)
+                return RemovePart(doc, part, out _);
+            if (cuts.Parts[part].Frames > room)
+            {
+                var fitted = Resize(doc, cuts, part, false, room - cuts.Parts[part].Frames, out _);
+                if (ReferenceEquals(fitted, doc))
+                    return doc;
+                (doc, cuts) = (fitted, CutsOf(fitted));
+            }
+        }
+        var p = cuts.Parts[part];
+        // A blend plays at normal speed: it takes as many frames as the stretched part played, so the length stays.
+        if (blend && p.Stretch != 1)
+            p = p with { To = p.From + Math.Clamp((int)Math.Round(p.Frames * p.Stretch, MidpointRounding.AwayFromZero), 1, TimelineDocument.MaxLength), Stretch = 1 };
+        return With(doc, cuts with { Parts = cuts.Parts.SetItem(part, p with { Blend = blend }) });
+    }
+
+    /// <summary>
+    /// Makes blend part <paramref name="part"/> <paramref name="frames"/> output frames long, at least one,
+    /// growing or shrinking at its end; what follows moves with it and the length changes as much.
+    /// </summary>
+    public static TimelineDocument SetBlendLength(TimelineDocument doc, int part, int frames, out CutRemoval removed)
+    {
+        removed = default;
+        var cuts = CutsOf(doc);
+        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || !cuts.Parts[part].Blend)
+            return doc;
+        var target = Math.Max(1, (int)Math.Round(ToSource(cuts, part, doc.Length, frames), MidpointRounding.AwayFromZero));
+        return Resize(doc, cuts, part, false, target - cuts.Parts[part].Frames, out removed);
+    }
+
+    /// <summary>
+    /// Makes part <paramref name="part"/> play over <paramref name="frames"/> output frames by changing its
+    /// stretch, within <see cref="MotionPart.MinStretch"/> to <see cref="MotionPart.MaxStretch"/> and the
+    /// clip's length limits. Every other part keeps its speed; the length changes by the difference. What
+    /// starts inside the part stretches with it, what follows moves; keys a squeeze puts on one frame merge,
+    /// counted in <paramref name="removed"/>. A blend part has no speed.
+    /// </summary>
+    public static TimelineDocument SetPartLength(TimelineDocument doc, int part, int frames, out CutRemoval removed)
+    {
+        var cuts = CutsOf(doc);
+        var length = doc.Length > 0 && part >= 0 && part < cuts.Parts.Length ? cuts.PartEnd(part, doc.Length) - cuts.PartStart(part, doc.Length) : 0;
+        // From the length the field shows, so a part of a half-frame length shows the number typed.
+        return StretchBy(doc, part, frames - TimelineSnap.Round(length), out removed);
+    }
+
+    /// <summary>
+    /// Makes part <paramref name="part"/> play <paramref name="delta"/> output frames longer, shorter when
+    /// negative, as <see cref="SetPartLength"/> does. A drag of its end uses this, so a part whose output
+    /// length is a fraction never changes on a drag that hasn't moved.
+    /// </summary>
+    public static TimelineDocument StretchPart(TimelineDocument doc, int part, int delta, out CutRemoval removed) =>
+        StretchBy(doc, part, delta, out removed);
+
+    /// <summary>The stretch edit of <see cref="SetPartLength"/> and <see cref="StretchPart"/>, by <paramref name="wanted"/> output frames before the clamps.</summary>
+    private static TimelineDocument StretchBy(TimelineDocument doc, int part, int wanted, out CutRemoval removed)
+    {
+        removed = default;
+        var cuts = CutsOf(doc);
+        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend)
+            return doc;
+        var p = cuts.Parts[part];
+        double from = cuts.PartStart(part, doc.Length), to = cuts.PartEnd(part, doc.Length);
+        // The stretch S + D * Span / (Length * F) stays in range for D within these, rounded inward.
+        var low = Math.Max((int)Math.Ceiling((MotionPart.MinStretch - p.Stretch) * doc.Length * p.Frames / cuts.Span - Tolerance),
+            TimelineDocument.MinLength - doc.Length);
+        var high = Math.Min((int)Math.Floor((MotionPart.MaxStretch - p.Stretch) * doc.Length * p.Frames / cuts.Span + Tolerance),
+            TimelineDocument.MaxLength - doc.Length);
+        if (low > high)
+            return doc;
+        var delta = Math.Clamp(wanted, low, high);
+        if (delta == 0)
+            return doc;
+        var stretch = Snap(p.Stretch + delta * cuts.Span / ((double)doc.Length * p.Frames));
+        var retimed = Retime(doc, from, to, delta, out var merged);
+        if (ReferenceEquals(retimed, doc))
+            return doc;
+        removed = new CutRemoval(0, merged);
+        return With(retimed, cuts with { Parts = cuts.Parts.SetItem(part, p with { Stretch = stretch }) });
+    }
+
+    /// <summary>
+    /// Plays part <paramref name="part"/> at normal speed again: its stretch exactly 1, and the length
+    /// <c>round(Length * Span' / Span)</c> so the clip's even stretch stays, within the clip's length limits.
+    /// What starts inside the part scales with it and what follows moves, as <see cref="SetPartLength"/> does;
+    /// keys a squeeze puts on one frame merge, counted in <paramref name="removed"/>. A blend part, a part
+    /// already at normal speed and an expression's are left alone.
+    /// </summary>
+    public static TimelineDocument ResetPartSpeed(TimelineDocument doc, int part, out CutRemoval removed)
+    {
+        removed = default;
+        var cuts = CutsOf(doc);
+        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend || cuts.Parts[part].Stretch == 1)
+            return doc;
+        var normal = cuts with { Parts = cuts.Parts.SetItem(part, cuts.Parts[part] with { Stretch = 1 }) };
+        var length = Math.Clamp((int)Math.Round(doc.Length * normal.Span / cuts.Span, MidpointRounding.AwayFromZero),
+            TimelineDocument.MinLength, TimelineDocument.MaxLength);
+        var delta = length - doc.Length;
+        var retimed = doc;
+        if (delta != 0)
+        {
+            retimed = Retime(doc, cuts.PartStart(part, doc.Length), cuts.PartEnd(part, doc.Length), delta, out var merged);
+            if (ReferenceEquals(retimed, doc))
+                return doc;
+            removed = new CutRemoval(0, merged);
+        }
+        return With(retimed, normal);
+    }
+
+    /// <summary>How far a stretch or a frame bound may drift in floating point and still count as its exact value.</summary>
+    private const double Tolerance = 1e-9;
+
+    /// <summary>A new stretch held in range, exactly at a limit or at normal speed when float drift left it a hair off.</summary>
+    private static double Snap(double stretch)
+    {
+        stretch = Math.Clamp(stretch, MotionPart.MinStretch, MotionPart.MaxStretch);
+        foreach (var exact in (ReadOnlySpan<double>)[MotionPart.MinStretch, 1, MotionPart.MaxStretch])
+            if (Math.Abs(stretch - exact) < Tolerance)
+                return exact;
+        return stretch;
+    }
+
+    /// <summary>Whether part <paramref name="part"/> can become a blend part: it has a part on both sides, neither of them one.</summary>
+    public static bool CanBlend(MotionCuts cuts, int part) =>
+        part > 0 && part < cuts.Parts.Length - 1 && !cuts.Parts[part - 1].Blend && !cuts.Parts[part + 1].Blend;
+
+    /// <summary>
     /// Moves one edge of part <paramref name="part"/> by <paramref name="delta"/> output frames, right when
     /// positive. It can go back into removed frames up to the neighbouring part, which it then joins
     /// again, and never past the part's other edge. Frames it takes away ripple out; frames it brings
-    /// back push what follows to the right.
+    /// back push what follows to the right. A blend part's own edges make the blend longer or shorter, and
+    /// what follows moves. A neighbour's edge at a blend part rolls instead: the one part grows as much
+    /// as the other shrinks, both keep a frame, and the length stays.
     /// </summary>
     public static TimelineDocument TrimPart(TimelineDocument doc, int part, bool left, int delta, out CutRemoval removed)
     {
@@ -116,8 +261,13 @@ internal static class CutEdits
         var cuts = CutsOf(doc);
         if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || delta == 0)
             return doc;
-        var frames = (int)Math.Round(delta * (double)cuts.Kept / doc.Length, MidpointRounding.AwayFromZero);
+        var frames = (int)Math.Round(ToSource(cuts, part, doc.Length, delta), MidpointRounding.AwayFromZero);
         var p = cuts.Parts[part];
+        if (p.Blend)
+            return Resize(doc, cuts, part, left, left ? -frames : frames, out removed);
+        var other = left ? part - 1 : part + 1;
+        if (other >= 0 && other < cuts.Parts.Length && cuts.Parts[other].Blend)
+            return Roll(doc, cuts, Math.Min(part, other), frames);
         var start = Start(cuts, part);
         if (left)
         {
@@ -129,13 +279,13 @@ internal static class CutEdits
                 return doc;
             var parts = cuts.Parts.SetItem(part, p with { From = from });
             var joins = cuts.Joins;
-            // Back to the part before: the two are one again.
-            if (part > 0 && cuts.Parts[part - 1].To == from)
+            // Back to the part before at the same speed: the two are one again.
+            if (part > 0 && cuts.Parts[part - 1].To == from && cuts.Parts[part - 1].Stretch == p.Stretch)
             {
                 parts = parts.SetItem(part - 1, cuts.Parts[part - 1] with { To = p.To }).RemoveAt(part);
                 joins = joins.RemoveAt(part - 1);
             }
-            return Insert(doc, cuts, cuts with { Parts = parts, Joins = joins }, start, -frames);
+            return Insert(doc, cuts, cuts with { Parts = parts, Joins = joins }, start, -frames, part);
         }
         else
         {
@@ -148,12 +298,12 @@ internal static class CutEdits
                 return doc;
             var parts = cuts.Parts.SetItem(part, p with { To = to });
             var joins = cuts.Joins;
-            if (part < cuts.Parts.Length - 1 && cuts.Parts[part + 1].From == to)
+            if (part < cuts.Parts.Length - 1 && cuts.Parts[part + 1].From == to && cuts.Parts[part + 1].Stretch == p.Stretch)
             {
                 parts = parts.SetItem(part, p with { To = cuts.Parts[part + 1].To }).RemoveAt(part + 1);
                 joins = joins.RemoveAt(part);
             }
-            return Insert(doc, cuts, cuts with { Parts = parts, Joins = joins }, end, frames);
+            return Insert(doc, cuts, cuts with { Parts = parts, Joins = joins }, end, frames, part);
         }
     }
 
@@ -308,6 +458,70 @@ internal static class CutEdits
         return doc with { Length = length, Events = events.ToImmutable(), Motion = layers.ToImmutable() };
     }
 
+    /// <summary>
+    /// Moves events and bone layers for output frames <paramref name="from"/> up to <paramref name="to"/>
+    /// now playing over <paramref name="delta"/> frames more (fewer when negative): frames before them stay,
+    /// frames inside scale with them, rounded, and frames after them move by <paramref name="delta"/>, as
+    /// does the length. Keys that land on one frame merge into the later one, whose bone values win;
+    /// <paramref name="merged"/> counts the keys merged away. The cut list is left as it is.
+    /// </summary>
+    private static TimelineDocument Retime(TimelineDocument doc, double from, double to, int delta, out int merged)
+    {
+        merged = 0;
+        var length = doc.Length + delta;
+        var span = to - from;
+        if (delta == 0 || span <= 0 || doc.Expression || length < TimelineDocument.MinLength || length > TimelineDocument.MaxLength)
+            return doc;
+        int Map(int frame) =>
+            frame < from ? frame
+            : frame < to ? (int)Math.Round(from + (frame - from) * (span + delta) / span, MidpointRounding.AwayFromZero)
+            : frame + delta;
+        // A squeezed last part can round its last frame onto the new end: what started before the end stays before it, as SetLength keeps it.
+        int Inside(int frame) => frame < doc.Length ? Math.Min(Map(frame), length - 1) : Map(frame);
+        var events = (doc.Events.IsDefault ? [] : doc.Events).ToBuilder();
+        for (var i = 0; i < events.Count; i++)
+        {
+            var ev = events[i];
+            var start = Math.Min(Inside(ev.Start), TimelineDocument.MaxFrames);
+            var duration = ev.Duration;
+            if (ev.Lane == TimelineLane.Motion && doc.LastsWhole(ev.Duration))
+                duration = length;
+            else if (ev.Duration is > 0 and <= TimelineDocument.MaxFrames)
+                duration = Math.Max(1, Map(TimelineEdits.End(ev)) - Map(ev.Start));
+            if (start != ev.Start || duration != ev.Duration)
+                events[i] = ev with { Start = start, Duration = duration };
+        }
+        var layers = doc.Motion.ToBuilder();
+        for (var i = 0; i < layers.Count; i++)
+        {
+            var layer = layers[i];
+            var keys = ImmutableArray.CreateBuilder<MotionKey>(layer.Keys.Length);
+            foreach (var key in layer.Keys)
+            {
+                var frame = Inside(key.Frame);
+                var moved = frame == key.Frame ? key : key with { Frame = frame };
+                if (keys.Count > 0 && keys[^1].Frame == frame)
+                {
+                    keys[^1] = Merge(keys[^1], moved);
+                    merged++;
+                }
+                else
+                    keys.Add(moved);
+            }
+            var layerStart = Inside(layer.Start);
+            var next = Fit(layer with { Start = layerStart, End = Math.Max(Map(layer.End), layerStart + 1), Keys = keys.ToImmutable() });
+            layers[i] = next;
+        }
+        return doc with { Length = length, Events = events.ToImmutable(), Motion = layers.ToImmutable() };
+    }
+
+    /// <summary>Two keys on one frame as one: <paramref name="later"/>'s bone values, ease and curve, with the bones only <paramref name="earlier"/> holds.</summary>
+    private static MotionKey Merge(MotionKey earlier, MotionKey later) => later with
+    {
+        Bones = earlier.Bones.SetItems(later.Bones),
+        Moved = [.. later.Moved, .. earlier.Moved.Where(bone => !later.Bones.ContainsKey(bone) && !later.Moved.Contains(bone))],
+    };
+
     /// <summary>Removes cut frames <paramref name="from"/> up to <paramref name="to"/> from the parts and ripples the output frames they played at.</summary>
     private static TimelineDocument Remove(TimelineDocument doc, MotionCuts cuts, int from, int to, out CutRemoval removed)
     {
@@ -345,26 +559,138 @@ internal static class CutEdits
         return With(rippled, cut);
     }
 
-    /// <summary><paramref name="cut"/>, with its frames brought back at cut frame <paramref name="at"/> of <paramref name="cuts"/>, rippled in.</summary>
-    private static TimelineDocument Insert(TimelineDocument doc, MotionCuts cuts, MotionCuts cut, int at, int frames)
+    /// <summary>
+    /// <paramref name="cut"/>, with its frames brought back at cut frame <paramref name="at"/> of <paramref name="cuts"/>, rippled in;
+    /// they play at the speed of <paramref name="cuts"/>' part <paramref name="part"/>.
+    /// </summary>
+    private static TimelineDocument Insert(TimelineDocument doc, MotionCuts cuts, MotionCuts cut, int at, int frames, int part)
     {
         var outAt = Output(doc, cuts, at);
-        var outFrames = Math.Max(1, (int)Math.Round(frames * (double)doc.Length / cuts.Kept, MidpointRounding.AwayFromZero));
+        var outFrames = Math.Max(1, (int)Math.Round(frames * (double)doc.Length * cuts.Parts[part].Stretch / cuts.Span, MidpointRounding.AwayFromZero));
         var rippled = Ripple(doc, outAt, outFrames, out _);
         return ReferenceEquals(rippled, doc) ? doc : With(rippled, cut);
     }
 
-    /// <summary>The document with <paramref name="cuts"/>; a cut list that keeps the whole loaded motion is none.</summary>
-    private static TimelineDocument With(TimelineDocument doc, MotionCuts cuts) =>
-        doc with { Cuts = cuts.Whole && cuts.Source == doc.SourceLength ? null : cuts };
+    /// <summary>
+    /// Moves the boundary between part <paramref name="join"/> and the next by <paramref name="frames"/> cut
+    /// frames of the part that plays its own motion, right when positive: the one part grows as much as the
+    /// other shrinks, and each keeps a frame. One of them is a blend part, which gives or takes those frames
+    /// times the other's stretch, rounded, so the span and every other part stay; the other grows only into
+    /// source frames no other part plays.
+    /// </summary>
+    private static TimelineDocument Roll(TimelineDocument doc, MotionCuts cuts, int join, int frames)
+    {
+        MotionPart a = cuts.Parts[join], b = cuts.Parts[join + 1];
+        // A blend's frames are only a count, so its source end moves apart from the other part's edge.
+        var stretch = b.Blend ? a.Stretch : b.Stretch;
+        int low, high;
+        if (b.Blend)
+        {
+            low = 1 - a.Frames;
+            high = Math.Min((int)Math.Floor((b.Frames - 1) / stretch + Tolerance), (join + 2 < cuts.Parts.Length ? cuts.Parts[join + 2].From : cuts.Source) - a.To);
+        }
+        else
+        {
+            low = Math.Max((int)Math.Ceiling((1 - a.Frames) / stretch - Tolerance), (join > 0 ? cuts.Parts[join - 1].To : 0) - b.From);
+            high = b.Frames - 1;
+        }
+        frames = Math.Clamp(frames, low, high);
+        if (frames == 0)
+            return doc;
+        var blendFrames = (int)Math.Round(frames * stretch, MidpointRounding.AwayFromZero);
+        var parts = b.Blend
+            ? cuts.Parts.SetItem(join, a with { To = a.To + frames }).SetItem(join + 1, b with
+            {
+                From = b.From + frames,
+                To = b.From + frames + Math.Clamp(b.Frames - blendFrames, 1, TimelineDocument.MaxLength),
+            })
+            : cuts.Parts.SetItem(join, a with { To = a.From + Math.Clamp(a.Frames + blendFrames, 1, TimelineDocument.MaxLength) })
+                .SetItem(join + 1, b with { From = b.From + frames });
+        return With(doc, cuts with { Parts = parts });
+    }
+
+    /// <summary>
+    /// Makes blend part <paramref name="part"/> <paramref name="change"/> cut frames longer (shorter when
+    /// negative, keeping a frame) at its start or end: frames it gains push what follows to the right,
+    /// frames it loses ripple out.
+    /// </summary>
+    private static TimelineDocument Resize(TimelineDocument doc, MotionCuts cuts, int part, bool atStart, int change, out CutRemoval removed)
+    {
+        removed = default;
+        var p = cuts.Parts[part];
+        change = Math.Max(change, 1 - p.Frames);
+        if (change == 0)
+            return doc;
+        var start = Start(cuts, part);
+        var at = atStart ? start : start + p.Frames;
+        if (change < 0)
+            return atStart ? Remove(doc, cuts, start, start - change, out removed) : Remove(doc, cuts, at + change, at, out removed);
+        // Its frames are only a count, so it grows at its end in the source whichever edge moved.
+        return Insert(doc, cuts, cuts with { Parts = cuts.Parts.SetItem(part, p with { To = p.To + change }) }, at, change, part);
+    }
+
+    /// <summary>
+    /// The document with <paramref name="cuts"/>; a cut list that keeps the whole loaded motion is none. A
+    /// blend part that an edit left first, last or right after another one plays its own motion again:
+    /// the source frames from where it starts, as many as fit between its neighbours' (the rest of the
+    /// clip stretching to keep the length), and with none it goes.
+    /// </summary>
+    private static TimelineDocument With(TimelineDocument doc, MotionCuts cuts)
+    {
+        var parts = cuts.Parts;
+        var joins = cuts.Joins;
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var p = parts[i];
+            if (!p.Blend || i > 0 && i < parts.Length - 1 && !parts[i - 1].Blend)
+                continue;
+            int low = 0, high = cuts.Source;
+            for (var j = i - 1; j >= 0; j--)
+            {
+                if (!parts[j].Blend)
+                {
+                    low = parts[j].To;
+                    break;
+                }
+            }
+            for (var j = i + 1; j < parts.Length; j++)
+            {
+                if (!parts[j].Blend)
+                {
+                    high = parts[j].From;
+                    break;
+                }
+            }
+            var frames = Math.Min(p.Frames, high - low);
+            if (frames <= 0 && parts.Length > 1)
+            {
+                parts = parts.RemoveAt(i);
+                joins = joins.RemoveAt(i == 0 ? 0 : i - 1);
+                i--;
+                continue;
+            }
+            var from = Math.Clamp(p.From, low, high - frames);
+            parts = parts.SetItem(i, new MotionPart(from, from + frames));
+        }
+        if (parts != cuts.Parts)
+            cuts = cuts with { Parts = parts, Joins = joins };
+        return doc with { Cuts = cuts.Whole && cuts.Source == doc.SourceLength ? null : cuts };
+    }
 
     /// <summary>The cut frame (a frame of the kept motion, 0 to its length) output frame <paramref name="output"/> plays.</summary>
     private static int CutFrame(TimelineDocument doc, MotionCuts cuts, double output) =>
-        Math.Clamp((int)Math.Round(output * cuts.Kept / doc.Length, MidpointRounding.AwayFromZero), 0, cuts.Kept);
+        Math.Clamp((int)Math.Round(cuts.CutOf(output, doc.Length), MidpointRounding.AwayFromZero), 0, cuts.Kept);
 
     /// <summary>The output frame cut frame <paramref name="cut"/> plays at, rounded.</summary>
     private static int Output(TimelineDocument doc, MotionCuts cuts, int cut) =>
-        (int)Math.Round(cut * (double)doc.Length / cuts.Kept, MidpointRounding.AwayFromZero);
+        (int)Math.Round(cuts.OutputOf(cut, doc.Length), MidpointRounding.AwayFromZero);
+
+    /// <summary>
+    /// How many source frames <paramref name="output"/> output frames of part <paramref name="part"/> play, unrounded.
+    /// Multiplied before dividing, so at stretch 1 it is exactly output * Kept / length.
+    /// </summary>
+    private static double ToSource(MotionCuts cuts, int part, int length, int output) =>
+        output * cuts.Span / (length * cuts.Parts[part].Stretch);
 
     /// <summary>Where part <paramref name="part"/> starts, in cut frames.</summary>
     private static int Start(MotionCuts cuts, int part)

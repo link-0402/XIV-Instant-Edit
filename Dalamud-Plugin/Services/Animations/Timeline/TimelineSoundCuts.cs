@@ -26,7 +26,8 @@ internal static class TimelineSoundCuts
         if (doc.Cuts is not { Whole: false } cuts || cuts.Kept <= 0 || doc.Length <= 0 || !(audioSeconds > 0))
             return [];
         var spans = ImmutableArray.CreateBuilder<TimelineAudioSpan>();
-        var speed = (double)doc.Length / cuts.Kept;
+        // Output frames per normal-speed frame: removed frames had no stretch of their own.
+        var speed = doc.Length / cuts.Span;
         double removed = 0;
         for (var i = 0; i < cuts.Joins.Length; i++)
         {

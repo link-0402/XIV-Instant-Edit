@@ -15,6 +15,8 @@ internal enum TimelineKey : byte
     RemoveBefore,
     /// <summary>Removes from the playhead to the end of the part under it (W).</summary>
     RemoveAfter,
+    /// <summary>Turns the selected part into a blend, or back into its own motion (B).</summary>
+    Blend,
 }
 
 /// <summary>What on the clip band is selected: a part, a join or the loop seam.</summary>
@@ -52,6 +54,8 @@ internal enum TimelineGesture : byte
     BlendLength,
     /// <summary>Sets how long the loop seam's ease is, by its inner edge.</summary>
     EaseLength,
+    /// <summary>Plays a part slower or faster by its end (Shift on a part's right edge).</summary>
+    Stretch,
 }
 
 /// <summary>
@@ -401,21 +405,27 @@ internal sealed class TimelineEditor
                 break;
             case TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.Join or TimelinePart.JoinEdge or
                 TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge when !doc.Expression:
-                PressClip(hit, doc);
+                PressClip(hit, doc, shift);
                 break;
         }
     }
 
     /// <summary>
-    /// A press on the clip band: a part, join or the seam becomes the selection; a part's edge starts a
-    /// trim and a blend's outer edge a change of its length.
+    /// A press on the clip band: a part, join or the seam becomes the selection (a selected blend's body
+    /// pressed again selects the part under it); a part's edge starts a trim, a part's right edge with
+    /// <paramref name="shift"/> a change of its speed, and a blend's outer edge a change of its length.
     /// </summary>
-    private void PressClip(TimelineHit hit, TimelineDocument doc)
+    private void PressClip(TimelineHit hit, TimelineDocument doc, bool shift)
     {
         var cuts = CutEdits.CutsOf(doc);
         var snap = TimelineSnap.Targets(doc, playhead);
         switch (hit.Part)
         {
+            case TimelinePart.ClipRight when shift && hit.Cut >= 0 && hit.Cut < cuts.Parts.Length && !cuts.Parts[hit.Cut].Blend:
+                SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));
+                gesturePart = hit.Cut;
+                BeginEdit(TimelineGesture.Stretch, [], [TimelineSnap.Round(cuts.PartEnd(hit.Cut, doc.Length))], snap);
+                break;
             case TimelinePart.ClipLeft or TimelinePart.ClipRight when hit.Cut >= 0 && hit.Cut < cuts.Parts.Length:
             {
                 var left = hit.Part == TimelinePart.ClipLeft;
@@ -457,11 +467,8 @@ internal sealed class TimelineEditor
                 gesture = TimelineGesture.Select;
                 break;
             case TimelinePart.Join or TimelinePart.JoinEdge when hit.Cut >= 0:
-                SelectCut(new TimelineCutSelection(TimelineCutTarget.Join, hit.Cut));
-                gesture = TimelineGesture.Select;
-                break;
             case TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge when Loops:
-                SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+                ClickBlend(hit);
                 gesture = TimelineGesture.Select;
                 break;
         }
@@ -556,6 +563,12 @@ internal sealed class TimelineEditor
             case TimelineGesture.TrimLeft or TimelineGesture.TrimRight:
                 next = CutEdits.TrimPart(start, gesturePart, gesture == TimelineGesture.TrimLeft, delta, out var trimmed);
                 LastRemoval = trimmed is { Events: 0, Keys: 0 } ? null : trimmed;
+                landed = ReferenceEquals(next, start) ? -1 : anchors[0] + delta;
+                break;
+            case TimelineGesture.Stretch:
+                // The part's start stays; its end follows the pointer.
+                next = CutEdits.StretchPart(start, gesturePart, delta, out var merged);
+                LastRemoval = merged is { Events: 0, Keys: 0 } ? null : merged;
                 landed = ReferenceEquals(next, start) ? -1 : anchors[0] + delta;
                 break;
             case TimelineGesture.BlendLength:
@@ -678,6 +691,7 @@ internal sealed class TimelineEditor
             case TimelineKey.Cut: return CutAtPlayhead();
             case TimelineKey.RemoveBefore: return RemoveBeforePlayhead();
             case TimelineKey.RemoveAfter: return RemoveAfterPlayhead();
+            case TimelineKey.Blend: return ToggleSelectedBlend();
             case TimelineKey.Duplicate: return SelectedLayer != null ? DuplicateLayer() : DuplicateSelection();
             case TimelineKey.Copy: return Copy();
             case TimelineKey.Paste: return Paste();
@@ -824,6 +838,43 @@ internal sealed class TimelineEditor
         return true;
     }
 
+    /// <summary>Turns the selected part into a blend part, or a blend part back into its own motion, as one undo step.</summary>
+    public bool ToggleSelectedBlend()
+    {
+        if (SelectedCut is not { Target: TimelineCutTarget.Part, Index: var part })
+            return false;
+        var cuts = CutEdits.CutsOf(Document);
+        return part < cuts.Parts.Length && Commit(CutEdits.SetBlend(Document, part, !cuts.Parts[part].Blend));
+    }
+
+    /// <summary>
+    /// Makes blend part <paramref name="part"/> <paramref name="frames"/> frames long, moving what follows: live during a field edit,
+    /// else one undo step. A field edit sets it from the document the edit began on, so a shorter number typed on the way doesn't
+    /// remove the events and keys it passes over.
+    /// </summary>
+    public bool SetBlendLength(int part, int frames) =>
+        Stretching(CutEdits.SetBlendLength(History.GestureStart ?? Document, part, frames, out var removed), removed);
+
+    /// <summary>
+    /// Makes part <paramref name="part"/> play over <paramref name="frames"/> output frames, moving what follows: live during a field
+    /// edit, else one undo step. A field edit sets it from the document the edit began on, so each keystroke replaces the last
+    /// one's stretch instead of stretching its keys and events again.
+    /// </summary>
+    public bool SetPartLength(int part, int frames) =>
+        Stretching(CutEdits.SetPartLength(History.GestureStart ?? Document, part, frames, out var removed), removed);
+
+    /// <summary>Plays part <paramref name="part"/> at normal speed again (stretch exactly 1), moving what follows, as one undo step.</summary>
+    public bool ResetPartSpeed(int part) => Stretching(CutEdits.ResetPartSpeed(Document, part, out var removed), removed);
+
+    /// <summary>Applies a part's new speed or blend length (see <see cref="Change"/>) and remembers what it merged or removed.</summary>
+    private bool Stretching(TimelineDocument next, CutRemoval removed)
+    {
+        if (!Change(next))
+            return false;
+        LastRemoval = removed is { Events: 0, Keys: 0 } ? null : removed;
+        return true;
+    }
+
     /// <summary>Removes output frames <paramref name="from"/> up to <paramref name="to"/>, as one undo step.</summary>
     public bool RemoveRange(int from, int to) => Cutting(CutEdits.RemoveRange(Document, from, to, out var removed), removed);
 
@@ -862,6 +913,20 @@ internal sealed class TimelineEditor
         Primary = null;
         ClearLayerSelection();
         SelectedCut = cut;
+    }
+
+    /// <summary>
+    /// Selects the join or seam blend that was clicked, or when its body is clicked while it is already
+    /// selected, the part under the pointer, so a short part its blends cover can still be picked.
+    /// </summary>
+    public void ClickBlend(TimelineHit hit)
+    {
+        var blend = hit.Part is TimelinePart.Join or TimelinePart.JoinEdge
+            ? new TimelineCutSelection(TimelineCutTarget.Join, hit.Cut)
+            : new TimelineCutSelection(TimelineCutTarget.Seam, -1);
+        var doc = Document;
+        var under = hit.Part is TimelinePart.Join or TimelinePart.Seam && SelectedCut == blend && hit.Frame >= 0 && hit.Frame <= doc.Length;
+        SelectCut(under ? new TimelineCutSelection(TimelineCutTarget.Part, CutEdits.CutsOf(doc).PartAt(hit.Frame, doc.Length)) : blend);
     }
 
     /// <summary>Commits a cut and remembers what it removed with it.</summary>

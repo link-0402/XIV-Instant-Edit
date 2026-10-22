@@ -168,7 +168,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
 
         var resizing = current.Gesture is TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length or
             TimelineGesture.LayerLeft or TimelineGesture.LayerRight or TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or
-            TimelineGesture.BoneKey or TimelineGesture.TrimLeft or TimelineGesture.TrimRight or TimelineGesture.BlendLength or TimelineGesture.EaseLength;
+            TimelineGesture.BoneKey or TimelineGesture.TrimLeft or TimelineGesture.TrimRight or TimelineGesture.BlendLength or TimelineGesture.EaseLength or
+            TimelineGesture.Stretch;
         if (!readOnly && (resizing || hovered && current.Gesture == TimelineGesture.None &&
                 hit.Part is TimelinePart.LeftEdge or TimelinePart.RightEdge or TimelinePart.LengthHandle or TimelinePart.LayerLeft or
                     TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey or
@@ -227,10 +228,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.SelectLayer(hit.Layer);
         else if (hit.Part is TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight && hit.Cut >= 0)
             current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));
-        else if (hit.Part is TimelinePart.Join or TimelinePart.JoinEdge && hit.Cut >= 0)
-            current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Join, hit.Cut));
-        else if (hit.Part is TimelinePart.Seam or TimelinePart.SeamEdge)
-            current.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+        else if (hit.Part is TimelinePart.Join or TimelinePart.JoinEdge && hit.Cut >= 0 || hit.Part is TimelinePart.Seam or TimelinePart.SeamEdge)
+            current.ClickBlend(hit);
         else if (!io.KeyCtrl && !io.KeyShift)
             current.ClearSelection();
     }
@@ -558,7 +557,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             ImGui.TextColored(Theme.Hint, readOnly ? "Click to go here." : TimelineWindowViews.MatchHint);
             return;
         }
-        if (TimelineClipBand.DrawTooltip(hit, readOnly))
+        if (TimelineClipBand.DrawTooltip(hit, CutEdits.CutsOf(current.Document), readOnly))
             return;
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
         {
@@ -802,6 +801,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         if (io.WantTextInput)
             return;
         ImGui.SetNextFrameWantCaptureKeyboard(true);
+        keys.Claim();
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
         var readOnly = session.ReadOnly;
@@ -867,6 +867,11 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         {
             if (!readOnly)
                 current.Key(TimelineKey.RemoveAfter);
+        }
+        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.B, VirtualKey.B))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.Blend);
         }
     }
 }

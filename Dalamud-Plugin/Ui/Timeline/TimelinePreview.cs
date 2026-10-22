@@ -366,6 +366,17 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             PlaybackCall(session.Playback.Pause);
     }
 
+    /// <summary>
+    /// A playhead moved by a key pauses a playing preview: while it plays the playhead follows the clip,
+    /// which would undo the step the next frame (with GPose's motion paused, the clip's time stands still).
+    /// Paused, the pose follows the playhead instead.
+    /// </summary>
+    public void PauseForStep()
+    {
+        if (session.Playback.Active && !session.Playback.Paused)
+            PlaybackCall(session.Playback.Pause);
+    }
+
     private void Replay(TimelineEditor current)
     {
         if (previewFingerprint is not { } fingerprint)

@@ -507,6 +507,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             return;
         // The arrows step the playhead here; the game must not take them as well.
         ImGui.SetNextFrameWantCaptureKeyboard(true);
+        keys.Claim();
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
         var readOnly = session.ReadOnly;
@@ -521,8 +522,14 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 current.Key(TimelineKey.Redo);
         }
         else if (!keys.Alt && keys.Pressed(ImGuiKey.LeftArrow, VirtualKey.LEFT, true))
-            current.Key(TimelineKey.Left, keys.Shift);
+        {
+            if (current.Key(TimelineKey.Left, keys.Shift))
+                timelinePreview.PauseForStep();
+        }
         else if (!keys.Alt && keys.Pressed(ImGuiKey.RightArrow, VirtualKey.RIGHT, true))
-            current.Key(TimelineKey.Right, keys.Shift);
+        {
+            if (current.Key(TimelineKey.Right, keys.Shift))
+                timelinePreview.PauseForStep();
+        }
     }
 }

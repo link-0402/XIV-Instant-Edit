@@ -81,11 +81,56 @@ internal static class MotionCutFixture
         check(MotionCutter.Rise(1) == 1 && MotionCutter.RiseSpeed(1) == 0 && MotionCutter.Fall(0) == 1 && MotionCutter.FallSpeed(1) == 0,
             "the quintic bases end where they should");
         Ease(check);
+        Blend(check);
+        Stretch(check);
         // Edit again of a cut edit: the game plays the saved, shorter file while Live decoded the motion from before.
         check(InstantEdit.Services.Animations.Preview.MotionLiveDisplay.LengthFits(100 / 30f, 100 / 30f, null) &&
               InstantEdit.Services.Animations.Preview.MotionLiveDisplay.LengthFits(80 / 30f, 100 / 30f, 80 / 30f) &&
               !InstantEdit.Services.Animations.Preview.MotionLiveDisplay.LengthFits(80 / 30f, 100 / 30f, null),
             "Live takes a playing file of the decoded motion's length, or of the saved edit's");
+    }
+
+    private static void Blend(Action<bool, string> check)
+    {
+        // Speeding up from 0 (0.1 degrees per frame more each frame), with a 30-degree bump over frames 40 to 60
+        // to blend away, at 10 samples per frame.
+        var source = SpinAt(1001, 100, f => .05f * f * f + (f is > 40 and < 60 ? 30 * MathF.Pow(MathF.Sin(MathF.PI * (f - 40) / 20), 2) : 0));
+        var cuts = new MotionCuts(100, [new(0, 40), new(40, 60, Blend: true), new(60, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]);
+        var blended = MotionCutter.Apply(source, cuts, 100);
+        check(blended.Samples == 1001 && Near(AngleS(blended, 399), AngleS(source, 399)) && Near(AngleS(blended, 600), AngleS(source, 600)) &&
+              Near(AngleS(blended, 395), AngleS(source, 395)) && Near(AngleS(blended, 605), AngleS(source, 605)),
+            "a blend part keeps the length, and the parts on both sides play as they are");
+        check(Near(AngleS(blended, 400), 80) && Math.Abs(AngleS(blended, 500) - AngleS(source, 500)) > 20 &&
+              AngleS(blended, 500) is > 80 and < 180, "the blend leaves the part before's end pose and drops the bump in between");
+        float Step(int sample) => AngleS(blended, sample + 1) - AngleS(blended, sample);
+        check(Math.Abs(Step(399) - Step(400)) < .02f && Math.Abs(Step(598) - Step(600)) < .02f,
+            "the blend leaves and arrives at the speeds of the parts on both sides");
+        check(MotionCutter.Apply(source, cuts with { Parts = [new(0, 40), new(40, 60), new(60, 100)] }, 100) is var plain &&
+              Near(AngleS(plain, 500), AngleS(source, 500)), "without the blend the part plays its own motion");
+        // A 40-frame blend over the 20 frames it replaced: longer, and the part after plays from frame 60 still.
+        var longer = MotionCutter.Apply(source, cuts with { Parts = [new(0, 40), new(40, 80, Blend: true), new(60, 100)] }, 120);
+        check(longer.Samples == 1201 && Near(AngleS(longer, 400), 80) && Near(AngleS(longer, 800), AngleS(source, 600)) &&
+              Math.Abs(AngleS(longer, 802) - AngleS(longer, 801) - (AngleS(longer, 799) - AngleS(longer, 798))) < .02f,
+            "a blend longer than the frames it replaced plays over its own length and arrives on the part after");
+    }
+
+    private static void Stretch(Action<bool, string> check)
+    {
+        // 3 degrees per frame at 10 samples per frame; the middle part plays at a third of the speed.
+        var source = SpinAt(1001, 100, f => 3f * f);
+        var slow = new MotionCuts(100, [new(0, 40), new(40, 60, Stretch: 3), new(60, 100)], [new MotionJoin(0, JoinPlacement.Centered), new MotionJoin(0, JoinPlacement.Centered)]);
+        var played = MotionCutter.Apply(source, slow, 140);
+        check(played.Samples == 1401 && Near(AngleS(played, 300), AngleS(source, 300)) && Near(AngleS(played, 1100), AngleS(source, 700)),
+            "parts around a slowed part play as before, the later one shifted by 40 frames");
+        check(Near(AngleS(played, 701) - AngleS(played, 700), .1f, .005f), "the slowed part turns a third as fast");
+        var blended = MotionCutter.Apply(source, slow with { Joins = [MotionJoin.ForCut, MotionJoin.ForCut] }, 140);
+        float Step(int s) => AngleS(blended, s + 1) - AngleS(blended, s);
+        check(Near(Step(339), .3f, .01f) && Near(Step(459), .1f, .01f), "a centred blend into a slowed part leaves at full speed and arrives at its speed");
+        check(Math.Abs(Step(399) - Step(400)) < .01f && Near(Step(400), .2f, .01f), "both sides meet the join at one speed, between the two parts'");
+        var tiny = new MotionCuts(100, [new(0, 40), new(40, 42, Stretch: 3), new(42, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]);
+        var tight = MotionCutter.Apply(source, tiny, 104);
+        check(MotionCutter.Window(tiny, 0, 104).After <= 6 && Math.Abs(AngleS(tight, 401) - 2 * AngleS(tight, 400) + AngleS(tight, 399)) < .1f,
+            "a blend into a 2-frame slowed part stays inside it and doesn't pop");
     }
 
     private static void Ease(Action<bool, string> check)
@@ -204,10 +249,36 @@ internal static class MotionCutFixture
         reject(() => new MotionCuts(100, [new(0, 100)], [], new MotionJoin(61, JoinPlacement.Before)).Validate(), "a blend over 60 frames is refused");
         reject(() => new MotionCuts(100, [new(0, 100)], [], null, 61).Validate(), "an ease over 60 frames is refused");
         check(!new MotionCuts(100, [new(0, 100)], [], null, MotionCuts.DefaultEase).Whole && MotionCuts.DefaultEase == 30, "an eased start alone changes the motion");
+        reject(() => new MotionCuts(100, [new(0, 40, Blend: true), new(40, 100)], [MotionJoin.ForCut]).Validate(), "a first blend part is refused");
+        reject(() => new MotionCuts(100, [new(0, 40), new(40, 100, Blend: true)], [MotionJoin.ForCut]).Validate(), "a last blend part is refused");
+        reject(() => new MotionCuts(100, [new(0, 40), new(40, 50, Blend: true), new(50, 60, Blend: true), new(60, 100)],
+            [MotionJoin.ForCut, MotionJoin.ForCut, MotionJoin.ForCut]).Validate(), "blend parts next to each other are refused");
+        new MotionCuts(100, [new(0, 40), new(40, 130, Blend: true), new(60, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]).Validate();
+        reject(() => new MotionCuts(100, [new(0, 40), new(40, 130), new(60, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]).Validate(),
+            "only a blend part may run past the source or over the next part's frames");
+        var blendJson = JsonSerializer.Serialize(new MotionCuts(100, [new(0, 40), new(40, 60, Blend: true), new(60, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]));
+        check(JsonSerializer.Deserialize<MotionCuts>(blendJson) is { Parts: [{ Blend: false }, { Blend: true }, { Blend: false }] }, "blend parts survive a journal's JSON");
         var json = JsonSerializer.Serialize(cuts with { Seam = MotionJoin.ForSeam, Ease = 30, EaseEnd = true }, new JsonSerializerOptions { IncludeFields = true });
         check(JsonSerializer.Deserialize<MotionCuts>(json, new JsonSerializerOptions { IncludeFields = true }) is
               { Source: 100, Parts.Length: 2, Seam.Placement: JoinPlacement.Before, Ease: 30, EaseEnd: true } back && back.Parts[1] == new MotionPart(60, 100) &&
               JsonSerializer.Deserialize<MotionCuts>("""{"Source":100,"Parts":[{"From":0,"To":100}],"Joins":[]}""") is { Ease: 0, Seam: null },
             "cuts survive a journal's JSON, and older ones load without an ease");
+        var slow = new MotionCuts(100, [new(0, 40), new(40, 60, Stretch: 3), new(60, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]);
+        check(slow.Span == 140 && slow.PartStart(1, 140) == 40 && slow.PartEnd(1, 140) == 100 && slow.PartStart(2, 140) == 100 &&
+              slow.SourceAt(70, 140) == 50 && slow.SourceAt(100, 140) == 60 && slow.PartAt(99.9, 140) == 1 && slow.PartAt(100, 140) == 2,
+            "a part at a third of the speed plays its 20 frames over 60");
+        check(Math.Abs(slow.Rate(1, 140) - 1 / 3.0) < 1e-9 && slow.Rate(0, 140) == 1 && slow.Rate(1, 280) == 1 / 6.0,
+            "each part's rate, with the clip's even stretch on top");
+        check(slow.OutputOf(50, 140) == 70 && slow.CutOf(70, 140) == 50 && slow.CutOf(slow.OutputOf(63.5, 280), 280) == 63.5,
+            "cut and output frames map both ways through the stretch");
+        check(cuts.OutputOf(40, 80) == 40 && cuts.CutOf(20, 160) == 10 && cuts.Span == 80, "with no stretch the map is today's");
+        check(!new MotionCuts(100, [new(0, 100, Stretch: 2)], []).Whole, "a stretched part is a cut");
+        reject(() => new MotionCuts(100, [new(0, 50, Stretch: .2), new(50, 100)], [MotionJoin.ForCut]).Validate(), "a stretch under 0.25 is refused");
+        reject(() => new MotionCuts(100, [new(0, 50, Stretch: 11), new(50, 100)], [MotionJoin.ForCut]).Validate(), "a stretch over 10 is refused");
+        reject(() => new MotionCuts(100, [new(0, 40), new(40, 60, true, 2), new(60, 100)], [MotionJoin.ForCut, MotionJoin.ForCut]).Validate(),
+            "a stretched blend part is refused");
+        check(JsonSerializer.Deserialize<MotionCuts>(JsonSerializer.Serialize(slow))!.Parts[1].Stretch == 3 &&
+              JsonSerializer.Deserialize<MotionCuts>("""{"Source":100,"Parts":[{"From":0,"To":100}],"Joins":[]}""")!.Parts[0].Stretch == 1,
+            "the stretch survives a journal, and older ones load at 1");
     }
 }

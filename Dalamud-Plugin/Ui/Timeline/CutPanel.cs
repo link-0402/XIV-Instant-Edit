@@ -7,7 +7,7 @@ using InstantEdit.Services.Animations.Timeline;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The properties panel for the clip band: a part (its frames, removing frames, removing it), a join
+/// The properties panel for the clip band: a part (its frames, removing frames, removing it, a blend in its place), a join
 /// (its blend's length and place, the jump it blends away) and the loop seam (its state, the jump,
 /// a stall, its blend, its ease and Fix loop).
 /// </summary>
@@ -50,8 +50,12 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
         var start = cuts.PartStart(index, doc.Length);
         var end = cuts.PartEnd(index, doc.Length);
         Title(FontAwesomeIcon.Film, cuts.Parts.Length == 1 ? "The clip's motion" : $"Part {index + 1} of {cuts.Parts.Length}");
-        Widgets.HintWrapped(TimelineWindowViews.PartRange(part, start, end));
+        Widgets.HintWrapped(part.Blend ? TimelineWindowViews.BlendRange(start, end) : TimelineWindowViews.PartRange(part, start, end));
         ImGui.Spacing();
+        if (part.Blend)
+            DrawBlendLength(current, index, start, end, readOnly);
+        else
+            DrawPlaysOver(current, part, index, start, end, readOnly);
         var key = $"{index}|{TimelineSnap.Round(start)}|{TimelineSnap.Round(end)}";
         if (removeFor != key)
         {
@@ -86,6 +90,72 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(cuts.Parts.Length < 2 ? "Cut the motion first (C at the playhead)." : "Removes this part. What plays after it moves up.");
+        ImGui.SameLine(0, Theme.Gap);
+        var can = part.Blend || CutEdits.CanBlend(cuts, index);
+        using (ImRaii.Disabled(readOnly || !can))
+        {
+            if (ImGui.Button(part.Blend ? TimelineWindowViews.PlayItsMotion : TimelineWindowViews.ReplaceWithBlend))
+                current.ToggleSelectedBlend();
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(TimelineWindowViews.BlendTip(part.Blend, can));
+    }
+
+    /// <summary>A blend part's length in frames; a change moves what follows, and each is one undo step.</summary>
+    private static void DrawBlendLength(TimelineEditor current, int index, double start, double end, bool readOnly)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, TimelineWindowViews.BlendFrames);
+        ImGui.SameLine(0, Theme.Gap);
+        var frames = TimelineSnap.Round(end - start);
+        ImGui.SetNextItemWidth(Theme.Scaled(90));
+        using (ImRaii.Disabled(readOnly || current.Gesture != TimelineGesture.None))
+        {
+            var changed = ImGui.InputInt("##blend-frames", ref frames, 1, 6);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(TimelineWindowViews.BlendFramesTip);
+            if (ImGui.IsItemActivated())
+                current.BeginFieldEdit();
+            if (changed)
+                current.SetBlendLength(index, Math.Max(1, frames));
+            if (ImGui.IsItemDeactivated())
+                current.EndFieldEdit();
+        }
+        ImGui.Spacing();
+    }
+
+    /// <summary>
+    /// How many output frames a part that plays its own motion plays over, which slows or speeds it (live during the edit,
+    /// one undo step), its speed, and a button back to normal speed.
+    /// </summary>
+    private static void DrawPlaysOver(TimelineEditor current, MotionPart part, int index, double start, double end, bool readOnly)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, TimelineWindowViews.PlaysOver);
+        ImGui.SameLine(0, Theme.Gap);
+        var frames = TimelineSnap.Round(end - start);
+        ImGui.SetNextItemWidth(Theme.Scaled(90));
+        using (ImRaii.Disabled(readOnly || current.Gesture != TimelineGesture.None))
+        {
+            var changed = ImGui.InputInt("##plays-over", ref frames, 1, 6);
+            if (ImGui.IsItemActivated())
+                current.BeginFieldEdit();
+            if (changed)
+                current.SetPartLength(index, Math.Max(1, frames));
+            if (ImGui.IsItemDeactivated())
+                current.EndFieldEdit();
+        }
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(Theme.Muted, "frames");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.TextColored(part.Stretch == 1 ? Theme.Muted : Theme.Label, TimelineWindowViews.SpeedPercent(part.Stretch));
+        ImGui.SameLine(0, Theme.Gap);
+        using (ImRaii.Disabled(readOnly || current.Gesture != TimelineGesture.None || part.Stretch == 1))
+        {
+            if (ImGui.Button(TimelineWindowViews.NormalSpeed))
+                current.ResetPartSpeed(index);
+        }
+        ImGui.Spacing();
     }
 
     private void DrawJoinPanel(TimelineEditor current, MotionCuts cuts, int index, MotionClip? decoded)
@@ -95,6 +165,11 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
         Widgets.HintWrapped("The blend where two parts meet, so the motion doesn't jump there.");
         ImGui.Spacing();
         var join = cuts.Joins[index];
+        if (cuts.BesideBlend(index))
+        {
+            Widgets.HintWrapped(TimelineWindowViews.JoinBesideBlend);
+            return;
+        }
         DrawBlend(current, join, MotionCutter.Window(cuts, index, doc.Length), value => current.SetJoin(index, value));
         if (decoded != null)
             Widgets.HintWrapped(TimelineWindowViews.GapText(LoopSeam.Gap(decoded, cuts.Parts[index].To, cuts.Parts[index + 1].From)));

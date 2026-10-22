@@ -585,8 +585,52 @@ internal static partial class TimelineWindowViews
     /// <summary>The clip band's right-click menu: cut at the pointer, remove to the part's end or from its start, remove the part.</summary>
     public static readonly ImmutableArray<string> ClipMenu = ["Cut here", "Remove from here to the end", "Remove from the start to here", "Remove part"];
 
-    /// <summary>A part's label on the clip band: the motion's own frames it keeps.</summary>
-    public static string PartLabel(MotionPart part) => $"{part.From} - {part.To}";
+    /// <summary>A part's label on the clip band: the motion's own frames it keeps, with its speed when it plays slower or faster,
+    /// or for a blend part how long the blend is.</summary>
+    public static string PartLabel(MotionPart part, double frames) =>
+        part.Blend ? string.Create(CultureInfo.InvariantCulture, $"Blend, {frames:0} frames")
+        : part.Stretch != 1 ? $"{part.From} - {part.To} · {SpeedPercent(part.Stretch)}"
+        : $"{part.From} - {part.To}";
+
+    /// <summary>A part's speed as a percentage of normal: 100 over its stretch, so 6 frames played over 18 is 33%.</summary>
+    public static string SpeedPercent(double stretch) => string.Create(CultureInfo.InvariantCulture, $"{100 / stretch:0}%");
+
+    /// <summary>The part panel's length field for a part that plays its own motion, and its button back to stretch 1.</summary>
+    public const string PlaysOver = "Plays over";
+
+    public const string NormalSpeed = "Normal speed";
+
+    /// <summary>Added to the clip band's tooltip on the right edge of a part that isn't a blend.</summary>
+    public const string StretchEdgeTip = "Shift+drag to play it slower or faster.";
+
+    /// <summary>The part panel's blend button, for a part that plays its own motion and for a blend part.</summary>
+    public const string ReplaceWithBlend = "Replace with blend";
+
+    public const string PlayItsMotion = "Play its motion";
+
+    /// <summary>The blend button's tooltip: what it does, or why it can't.</summary>
+    public static string BlendTip(bool blend, bool can) => blend
+        ? "Plays this part's own motion again."
+        : can
+            ? "Blends from the part before into the part after over these frames. The length stays. (B)"
+            : "Only a part between two parts can be a blend, and not next to another blend.";
+
+    /// <summary>A blend part's frames in the part panel: where it plays.</summary>
+    public static string BlendRange(double start, double end) => string.Create(CultureInfo.InvariantCulture,
+        $"Blends from the part before into the part after. Plays at {start:0} to {end:0}.");
+
+    /// <summary>A blend part's length field in the part panel, and its tooltip.</summary>
+    public const string BlendFrames = "Blend frames";
+
+    public const string BlendFramesTip = "How long the blend is. What follows moves, so the clip gets longer or shorter.";
+
+    /// <summary>The clip band's tooltip on a blend part's own edge, and on its neighbour's edge next to it.</summary>
+    public const string BlendEdgeTip = "Drag to make the blend longer or shorter. What follows moves.";
+
+    public const string RollEdgeTip = "Drag to move this edge into the blend or back. The blend gets shorter or longer, and the length stays.";
+
+    /// <summary>A join panel's note when a blend part is on one side of it.</summary>
+    public const string JoinBesideBlend = "A blend part is next to this join and lines the motion up here, so this blend does nothing.";
 
     /// <summary>The ruler's mark where frames were cut out: how many.</summary>
     public static string RemovedMarker(int frames) => $"-{frames}";
