@@ -323,6 +323,8 @@ internal sealed class MashupService
 
         foreach (var assignment in plan.Assignments)
         {
+            if (assignment.PassThrough)
+                continue;   // a shared body material the wearer's body mod provides
             var contributor = contributors.FirstOrDefault(item =>
                 string.Equals(item.Context.ContextId, assignment.ContextId, StringComparison.Ordinal));
             if (contributor is null)

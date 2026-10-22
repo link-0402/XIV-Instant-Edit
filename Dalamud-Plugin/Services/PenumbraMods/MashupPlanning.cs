@@ -215,6 +215,7 @@ internal static class MashupPlanning
             .OrderBy(item => string.Equals(item.Context.ContextId, activeContext.ContextId, StringComparison.Ordinal) ? 0 : 1)
             .ToArray();
         var resolved = new List<(MashupContributor Contributor, string ModelMaterial, MaterialDependency Dependency)>();
+        var passThrough = new List<(MashupContributor Contributor, string ModelMaterial)>();
         foreach (var contributor in ordered)
         {
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -226,6 +227,14 @@ internal static class MashupPlanning
                 var dependency = contributor.Context.ResourceManifest!.Materials.FirstOrDefault(material =>
                     string.Equals(NormalizeModelMaterial(material.ModelMaterial), normalized,
                         StringComparison.OrdinalIgnoreCase));
+                // A shared body material (bibo, pubes, piercings) the game didn't load at import comes
+                // from the wearer's body mod; the model keeps naming it and nothing is copied.
+                if (dependency is null && IsSafeModelMaterialAlias(normalized) &&
+                    MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial(normalized))
+                {
+                    passThrough.Add((contributor, normalized));
+                    continue;
+                }
                 if (dependency is null)
                     return MashupPlanFailure(ResultCode.MashupReimportRequired,
                         $"Material {normalized} is absent from the captured dependency manifest for {contributor.Context.SourceModName ?? contributor.Context.ContextId}; re-import that Context.");
@@ -333,9 +342,14 @@ internal static class MashupPlanning
             }
         }
 
+        foreach (var item in passThrough)
+            assignments.Add(new MashupMaterialAssignment(
+                item.Contributor.Context.ContextId, item.ModelMaterial, item.ModelMaterial, string.Empty, null,
+                PassThrough: true));
+
         var fingerprintSource = $"bundleExternalDependencies={bundleExternalDependencies}\n" +
             string.Join("\n", assignments.Select(item =>
-                $"{item.ContextId}\0{item.ModelMaterial.ToLowerInvariant()}\0{item.Alias.ToLowerInvariant()}\0{item.GamePath.ToLowerInvariant()}"));
+                $"{item.ContextId}\0{item.ModelMaterial.ToLowerInvariant()}\0{item.Alias.ToLowerInvariant()}\0{item.GamePath.ToLowerInvariant()}\0{item.PassThrough}"));
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintSource)))
             .ToLowerInvariant();
         return new MashupPlanResult(true, ResultCode.MashupPlanReady, "Mashup material plan is ready.", assignments, fingerprint);

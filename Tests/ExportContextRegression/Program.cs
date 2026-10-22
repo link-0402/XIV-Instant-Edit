@@ -1565,6 +1565,19 @@ static async Task CheckExportContextsAsync(string testRoot)
     Require(bodyOnlyPlan.Success && bodyOnlyPlan.Assignments[^1].GamePath ==
             "chara/equipment/e8888/material/v0001/mt_c0201e8888_top_b.mtrl",
         "models without a local active material derive the standard model-local fallback namespace");
+    var uncapturedPubePlan = MashupPlanning.BuildMashupPlan(urgfContext,
+    [
+        new MashupContributor(urgfContext,
+            [.. urgfManifest.Materials.Select(item => item.ModelMaterial), "/mt_c0201b0001_bibopube.mtrl"]),
+        new MashupContributor(incomingTopContext, ["/anything.mtrl", "/mt_c0201b0001_bibopube.mtrl"]),
+    ]);
+    Require(uncapturedPubePlan.Success &&
+            uncapturedPubePlan.Assignments.Count(item => item.PassThrough) == 2 &&
+            uncapturedPubePlan.Assignments.Where(item => item.PassThrough).All(item =>
+                item.Alias == "/mt_c0201b0001_bibopube.mtrl" && item.ModelMaterial == item.Alias) &&
+            uncapturedPubePlan.Assignments.Single(item => item.ModelMaterial == "/anything.mtrl").Alias ==
+            "/mt_c0201e6106_top_b.mtrl",
+        "shared body materials missing from a manifest pass through unchanged instead of failing the mashup");
 
     var duplicateAliasManifest = new ResourceDependencyManifest
     {

@@ -52,7 +52,8 @@ public sealed record MashupMaterialAssignment(
     string ModelMaterial,
     string Alias,
     string GamePath,
-    string? Slot);
+    string? Slot,
+    bool PassThrough = false);
 public sealed record MashupPlanResult(
     bool Success,
     ResultCode Code,
