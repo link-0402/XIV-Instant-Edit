@@ -49,11 +49,6 @@ public sealed class PackageImportWindow : Window, IDisposable
     private SimsScanResult? _scan;
     private SimsPackageInspector.ExtractionResult? _extraction;
 
-    /// <summary>Index into <see cref="_lodOptions"/>; 0 is "All LODs".</summary>
-    private int _lodChoice;
-    private string[] _lodOptions = { AllLodsLabel };
-    private const string AllLodsLabel = "All LODs";
-
     private Task<SimsScanResult>? _scanTask;
     private Task<SimsPackageInspector.ExtractionResult>? _extractTask;
 
@@ -369,20 +364,6 @@ public sealed class PackageImportWindow : Window, IDisposable
         if (_scan == null)
             return;
 
-        using (Gui.Disabled(busy))
-        {
-            if (_scan.AvailableLods.Count > 0)
-            {
-                if (Gui.LabeledCombo("Detail", "##SimsLod", ref _lodChoice, _lodOptions,
-                        "Which detail levels to export. LOD 0 is the full-quality mesh and the only one a mod needs, so it is " +
-                        "selected by default; the lower levels are the game's reduced-detail copies. Individual meshes can still be " +
-                        "ticked or unticked below.", Theme.S(220)))
-                    ApplyLodChoice(_scan);
-                ImGui.SameLine();
-                Gui.Hint($"{_scan.Meshes.Count()} mesh(es) in this package");
-            }
-        }
-
         if (_scan.IsHair)
             Gui.Hint("A hair: its hat versions and all diffuses but the lightest start unticked.");
         if (!_scan.HasCasPartData)
@@ -392,42 +373,6 @@ public sealed class PackageImportWindow : Window, IDisposable
             ImGui.TextColored(Theme.Warn, "No CAS part could be read, so texture roles are guesses from the resource type. Check them.");
         }
         ImGui.Spacing();
-    }
-
-    /// <summary>
-    /// Rebuilds the picker for whatever levels the scan actually found and points it at
-    /// the selection the scan already made: LOD 0 where there is one, everything
-    /// otherwise. The scan owns that decision; this only reflects it, so the dropdown
-    /// and the ticks cannot disagree on the first frame.
-    /// </summary>
-    private void BuildLodOptions(SimsScanResult scan)
-    {
-        var options = new List<string> { AllLodsLabel };
-        foreach (var level in scan.AvailableLods)
-        {
-            options.Add(level switch
-            {
-                SimsAsset.UnknownLod => "Unknown level",
-                0                    => "LOD 0 (highest detail)",
-                _                    => $"LOD {level}",
-            });
-        }
-
-        _lodOptions = options.ToArray();
-
-        int lod0 = scan.AvailableLods.IndexOf(0);
-        _lodChoice = lod0 >= 0 ? lod0 + 1 : 0;      // +1 to step over the "All LODs" entry
-    }
-
-    private void ApplyLodChoice(SimsScanResult scan)
-    {
-        // Choice 0 is "All"; the rest line up with AvailableLods, offset by that entry.
-        int? wanted = _lodChoice > 0 && _lodChoice - 1 < scan.AvailableLods.Count
-            ? scan.AvailableLods[_lodChoice - 1]
-            : null;
-
-        foreach (var asset in scan.Meshes)
-            asset.Selected = (wanted == null || asset.LodLevel == wanted) && !asset.HatVersion;
     }
 
     private void ApplyUnityTick(UnityScanResult scan)
@@ -833,7 +778,6 @@ public sealed class PackageImportWindow : Window, IDisposable
             else if (scanTask.IsCompletedSuccessfully)
             {
                 var scan = scanTask.Result;
-                BuildLodOptions(scan);
                 _scan   = scan;
                 _status = $"Found {scan.Meshes.Count()} mesh(es) and {scan.Textures.Count()} texture(s).";
                 if (scan.Warnings.Count > 0)
