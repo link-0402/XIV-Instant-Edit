@@ -186,11 +186,12 @@ internal sealed class RefitModel
 
     /// <summary>
     /// A copy with the UVs of the meshes using <paramref name="materialIndices"/> moved into
-    /// <paramref name="window"/>: both UV sets, as the hair shader reads both. A vertex buffer that
-    /// two LODs share is moved once. Every value must come out exact, which an aligned power-of-two
-    /// window guarantees; anything else throws.
+    /// <paramref name="window"/>: both UV sets for hair, as the hair shader reads both; the first only
+    /// otherwise, as gear's second set places the FC crest. A vertex buffer that two LODs share is
+    /// moved once. Every value must come out exact, which an aligned power-of-two window guarantees;
+    /// anything else throws.
     /// </summary>
-    public byte[] WithWindow(IReadOnlySet<int> materialIndices, UvWindow window)
+    public byte[] WithWindow(IReadOnlySet<int> materialIndices, UvWindow window, bool hair = true)
     {
         var result = (byte[])_bytes.Clone();
         var moved = new HashSet<long>();
@@ -202,7 +203,7 @@ internal sealed class RefitModel
             {
                 var uv = mesh.Uvs[v];
                 var at = (int)(mesh.First + (long)v * mesh.Stride);
-                var moved4 = mesh.FourComponents
+                var moved4 = mesh.FourComponents && hair
                     ? new Vector4(window.MoveU(uv.X), window.MoveV(uv.Y), window.MoveU(uv.Z), window.MoveV(uv.W))
                     : new Vector4(window.MoveU(uv.X), window.MoveV(uv.Y), 0, 0);
                 switch (mesh.Type)
@@ -210,7 +211,7 @@ internal sealed class RefitModel
                     case TypeHalf2 or TypeHalf4:
                         WriteHalf(result, at, moved4.X);
                         WriteHalf(result, at + 2, moved4.Y);
-                        if (mesh.Type == TypeHalf4)
+                        if (mesh.Type == TypeHalf4 && hair)
                         {
                             WriteHalf(result, at + 4, moved4.Z);
                             WriteHalf(result, at + 6, moved4.W);
@@ -219,7 +220,7 @@ internal sealed class RefitModel
                     default:
                         BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(at), moved4.X);
                         BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(at + 4), moved4.Y);
-                        if (mesh.Type == TypeSingle4)
+                        if (mesh.Type == TypeSingle4 && hair)
                         {
                             BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(at + 8), moved4.Z);
                             BinaryPrimitives.WriteSingleLittleEndian(result.AsSpan(at + 12), moved4.W);

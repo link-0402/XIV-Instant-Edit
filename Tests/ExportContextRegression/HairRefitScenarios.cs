@@ -26,6 +26,7 @@ internal static class HairRefitScenarios
         CheckCrop();
         CheckModel();
         CheckPlanner();
+        CheckGear();
         CheckJournal(testRoot);
         CheckViews();
     }
@@ -308,7 +309,7 @@ internal static class HairRefitScenarios
 
         public RefitResult Plan(params string[] seeds)
         {
-            var planner = new HairRefitPlanner(new ModFileMap(Mappings), file => Files.GetValueOrDefault(file),
+            var planner = new RefitPlanner(new ModFileMap(Mappings), file => Files.GetValueOrDefault(file),
                 file =>
                 {
                     if (!Files.TryGetValue(file, out var bytes))
@@ -324,7 +325,7 @@ internal static class HairRefitScenarios
         }
     }
 
-    private static byte[] HairMaterial(string textures, string shader = HairRefitPlanner.HairShader)
+    private static byte[] HairMaterial(string textures, string shader = RefitPlanner.HairShader)
         => TextureCompressionScenarios.Mtrl(shader, [(textures + "norm.tex", 0), (textures + "mask.tex", 0)], [(NormalSampler, 0), (MaskSampler, 1)], [], 0);
 
     /// <summary> A two-race hair mod: the default files for c0201, an option for Miqo'te whose material reads the same textures. </summary>
@@ -389,7 +390,7 @@ internal static class HairRefitScenarios
         var shared = HairMod();
         shared.Map("chara/equipment/e0001/material/v0001/mt_c0201e0001_top_a.mtrl", "gear/top.mtrl", HairMaterial(Hair + "texture/c0201h0154_hir_", "character.shpk"));
         Require(shared.Plan("hair/norm.tex").Refusals.Single().Reason.Contains("character.shpk"),
-            "hair refit: a texture another shader reads too is left alone");
+            "hair refit: a texture a gear shader reads too is left alone");
 
         // The c0201 material and textures without a c0201 model: the game's own hair model uses them.
         var vanillaModel = HairMod();
@@ -410,7 +411,7 @@ internal static class HairRefitScenarios
 
         var gameTexture = HairMod();
         gameTexture.Map(Hair + "material/v0001/mt_c0201h0154_hir_a.mtrl", "hair/c0201_a.mtrl",
-            TextureCompressionScenarios.Mtrl(HairRefitPlanner.HairShader, [(Hair + "texture/c0201h0154_hir_norm.tex", 0), ("chara/common/texture/vanilla_mask.tex", 0)],
+            TextureCompressionScenarios.Mtrl(RefitPlanner.HairShader, [(Hair + "texture/c0201h0154_hir_norm.tex", 0), ("chara/common/texture/vanilla_mask.tex", 0)],
                 [(NormalSampler, 0), (MaskSampler, 1)], [], 0));
         gameTexture.Game.Add("chara/common/texture/vanilla_mask.tex");
         Require(gameTexture.Plan("hair/norm.tex").Refusals.Single().Reason.Contains("vanilla_mask.tex"),
@@ -457,7 +458,7 @@ internal static class HairRefitScenarios
         {
             var textures = model + $"texture/c0801h0132_hir_{part}_";
             mod.Map(root + $"mt_c0201h0132_c0801_hir_{part}_c0801.mtrl", $"doux/{part}.mtrl",
-                HairMaterial(textures, part == "scunchie" ? "character.shpk" : HairRefitPlanner.HairShader));
+                HairMaterial(textures, part == "scunchie" ? "character.shpk" : RefitPlanner.HairShader));
             mod.Map(textures + "norm.tex", $"doux/{part}_norm.tex", part == "mar" ? Labelled(64, 128, 8) : Labelled(64, 64, 7));
             mod.Map(textures + "mask.tex", $"doux/{part}_mask.tex", part == "mar" ? Labelled(64, 128, 8) : Labelled(64, 64, 7));
         }
@@ -469,6 +470,111 @@ internal static class HairRefitScenarios
             "hair refit: hair 101-200 on another race finds its material in the Midlander root, as the game loads it, and its strands are cut");
         Require(mod.Plan("doux/scalp_norm.tex") is { Plans.Count: 0, Refusals.Count: 0 },
             "hair refit: the scalp, spread over its texture, has nothing to cut");
+    }
+
+    // ---- Gear -----------------------------------------------------------------------------------------
+
+    private const string Gear = "chara/equipment/e9001/";
+    private const uint DtTable = 0x534, LegacyTable = 0x424, OpaqueTable = 0x114;
+
+    /// <summary> A material with a colour table of <paramref name="rows"/> rows, every half a different whole number. </summary>
+    private static byte[] GearMaterial(string textures, uint tableFlags = DtTable, int rows = 32, int rowSize = 64, string shader = "character.shpk")
+    {
+        var plain = HairMaterial(textures, shader);
+        var stringsEnd = 16 + 4 * plain[12] + BinaryPrimitives.ReadUInt16LittleEndian(plain.AsSpan(8));
+        var data = new byte[4 + rows * rowSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(data, tableFlags);
+        for (var half = 0; half < rows * rowSize / 2; half++)
+            BinaryPrimitives.WriteHalfLittleEndian(data.AsSpan(4 + half * 2), (Half)(half % 97 + 1));
+        var file = plain[..stringsEnd].Concat(data).Concat(plain[stringsEnd..]).ToArray();
+        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(6), (ushort)(rows * rowSize));
+        file[15] = 4;
+        return file;
+    }
+
+    /// <summary> A top whose UVs use the top-left eighth of its textures; its second UV set (the FC crest) spans the texture. </summary>
+    private static FakeMod GearMod(byte[]? material = null)
+    {
+        var mod = new FakeMod();
+        var textures = Gear + "texture/c0201e9001_top_";
+        mod.Map(Gear + "model/c0201e9001_top.mdl", "gear/top.mdl", Model(["/mt_c0201e9001_top_a.mtrl"],
+            [new MeshSpec(0, [new Vector4(0.01f, 0.02f, 0.05f, 0.05f), new Vector4(0.49f, 0.24f, 0.95f, 0.97f), new Vector4(0.25f, 0.125f, 0.5f, 0.5f)])],
+            [(0, 1)]));
+        mod.Map(Gear + "material/v0001/mt_c0201e9001_top_a.mtrl", "gear/top_a.mtrl", material ?? GearMaterial(textures));
+        mod.Map(textures + "norm.tex", "gear/norm.tex", Labelled(64, 128, 8));
+        mod.Map(textures + "mask.tex", "gear/mask.tex", Labelled(64, 128, 8));
+        return mod;
+    }
+
+    private static void CheckGear()
+    {
+        var mod = GearMod();
+        var result = mod.Plan("gear/norm.tex");
+        Require(result.Refusals.Count == 0 && result.Plans.SingleOrDefault() is { Hair: false } plan && plan.Window == new UvWindow(1, 2, 0, 0) &&
+                plan.Materials.SequenceEqual(["gear/top_a.mtrl"]) && plan.Models["gear/top.mdl"].SetEquals([0]),
+            "gear refit: a character.shpk top is planned from its first UV set alone, wherever the crest's second set lies");
+
+        var model = RefitModel.Read(mod.Files["gear/top.mdl"]);
+        var moved = RefitModel.Read(model.WithWindow(new HashSet<int> { 0 }, new UvWindow(1, 2, 0, 0), hair: false));
+        Require(moved.Meshes[0].Uvs[1] == new Vector4(0.98f, 0.96f, 0.95f, 0.97f) && moved.Meshes[0].Uvs[2] == new Vector4(0.5f, 0.5f, 0.5f, 0.5f),
+            "gear refit: the first UV set moves into the window and the crest's second set stays");
+
+        foreach (var (flags, rows, rowSize, matrix) in new[] { (DtTable, 32, 64, 28), (LegacyTable, 16, 32, 12) })
+        {
+            var before = GearMaterial(Gear + "texture/c0201e9001_top_", flags, rows, rowSize);
+            var after = RefitMaterial.WithWindow(before, new UvWindow(1, 2, 0, 0));
+            var at = 16 + 4 * before[12] + BinaryPrimitives.ReadUInt16LittleEndian(before.AsSpan(8)) + 4;
+            float Tile(byte[] bytes, int row, int half) => (float)BinaryPrimitives.ReadHalfLittleEndian(bytes.AsSpan(at + row * rowSize + half * 2));
+            var scaled = Enumerable.Range(0, rows).All(row =>
+                Tile(after, row, matrix) == Tile(before, row, matrix) / 2 && Tile(after, row, matrix + 1) == Tile(before, row, matrix + 1) / 4 &&
+                Tile(after, row, matrix + 2) == Tile(before, row, matrix + 2) / 2 && Tile(after, row, matrix + 3) == Tile(before, row, matrix + 3) / 4);
+            var changedBytes = before.Zip(after).Count(pair => pair.First != pair.Second);
+            Require(scaled && changedBytes <= rows * 8 && after.Length == before.Length && RefitMaterial.Problem(before) is null,
+                $"gear refit: every row's tile matrix ({rows}-row table) is divided by the window's scale, U column by U, V column by V, and nothing else changes");
+        }
+        Require(RefitMaterial.Problem(HairMaterial(Gear + "texture/c0201e9001_top_", "character.shpk")) is { } none && none.Contains("no colour table") &&
+                RefitMaterial.Problem(GearMaterial(Gear + "texture/c0201e9001_top_", OpaqueTable, 4, 16)) is not null &&
+                GearMod(HairMaterial(Gear + "texture/c0201e9001_top_", "character.shpk")).Plan("gear/norm.tex").Refusals.Single().Reason.Contains("no colour table"),
+            "gear refit: a gear material without a colour table it can scale is left alone");
+
+        var skin = GearMod(GearMaterial(Gear + "texture/c0201e9001_top_", shader: "skin.shpk"));
+        var mixed = GearMod();
+        mixed.Map(Gear + "material/v0001/mt_c0201e9001_top_b.mtrl", "gear/top_b.mtrl", HairMaterial(Gear + "texture/c0201e9001_top_"));
+        Require(skin.Plan("gear/norm.tex").Refusals.Single().Reason.Contains("skin.shpk") &&
+                mixed.Plan("gear/norm.tex").Refusals.Single().Reason.Contains("hair.shpk"),
+            "gear refit: other shaders are left alone, and so are textures hair and gear both read");
+
+        // The item's second variant draws the same model with the game's own material, which reads uncut textures.
+        var variant = GearMod();
+        variant.Game.Add(Gear + "material/v0002/mt_c0201e9001_top_a.mtrl");
+        var bothVariants = GearMod();
+        bothVariants.Map(Gear + "material/v0002/mt_c0201e9001_top_a.mtrl", "gear/top_a2.mtrl", GearMaterial(Gear + "texture/c0201e9001_top_"));
+        Require(variant.Plan("gear/norm.tex").Refusals.Single().Reason.Contains("v0002") &&
+                bothVariants.Plan("gear/norm.tex").Plans.Single().Materials.SequenceEqual(["gear/top_a.mtrl", "gear/top_a2.mtrl"]),
+            "gear refit: a variant the mod doesn't replace keeps the item whole; one it does is scaled with the rest");
+
+        // Other races' game models name this material, and their materials read these textures, even with the mod's own top model.
+        var vanillaMaterial = GearMod();
+        vanillaMaterial.Game.Add(Gear + "material/v0001/mt_c0201e9001_top_a.mtrl");
+        var vanillaTexture = GearMod();
+        vanillaTexture.Game.Add(Gear + "texture/c0201e9001_top_norm.tex");
+        // The same files with UVs that fill the texture: nothing to cut, so nothing to report.
+        var filled = GearMod();
+        filled.Game.Add(Gear + "material/v0001/mt_c0201e9001_top_a.mtrl");
+        filled.Map(Gear + "model/c0201e9001_top.mdl", "gear/top.mdl",
+            Model(["/mt_c0201e9001_top_a.mtrl"], [new MeshSpec(0, Uvs((0.02f, 0.01f), (0.98f, 0.97f)))], [(0, 1)]));
+        Require(vanillaMaterial.Plan("gear/norm.tex").Refusals.Single().Reason.Contains("game's own models") &&
+                vanillaTexture.Plan("gear/norm.tex").Refusals.Single().Reason.Contains("game's own materials") &&
+                filled.Plan("gear/norm.tex") is { Plans.Count: 0, Refusals.Count: 0 },
+            "gear refit: gear materials and textures at game paths are left alone, quietly when there is nothing to cut");
+
+        // The hair's model also worn by Hyur men, whose hair 101-200 loads the male root's material, which only the game has:
+        // the moved meshes would read uncut textures there.
+        var hairGameMaterial = HairMod();
+        hairGameMaterial.Map("chara/human/c0101/obj/hair/h0154/model/c0101h0154_hir.mdl", "hair/c0201.mdl", hairGameMaterial.Files["hair/c0201.mdl"], "group 0 option 1");
+        hairGameMaterial.Game.Add("chara/human/c0101/obj/hair/h0154/material/v0001/mt_c0101h0154_hir_a.mtrl");
+        Require(hairGameMaterial.Plan("hair/norm.tex").Refusals.SingleOrDefault()?.Reason.Contains("game's own") == true,
+            "hair refit: a moved model that also draws with a material only the game has is left alone");
     }
 
     /// <summary> The BGRA pixel a UV lands on (nearest, clamped), as an integer. </summary>
@@ -555,11 +661,11 @@ internal static class HairRefitScenarios
             ModDirectory = "M", Files = [new RefitFile { File = @"C:\a.tex", RelativePath = "a.tex", Backup = "b", OriginalSha256 = "A", OriginalLength = 4L << 20, NewSha256 = "B", NewLength = 1L << 20 }],
         };
         var run = new CompressionRun { Finished = DateTimeOffset.Now, Refit = 1, BytesBefore = 4L << 20, BytesAfter = 1L << 20, NotRefit = ["a.tex: r", "b.tex: s"] };
-        Require(TextureCompressionViews.Totals([], [group]) == "1 hairstyle refit so far, 3.00 MiB smaller in total." &&
-                TextureCompressionViews.LastRun(run).StartsWith("Last run: 1 hairstyle refit, 3.00 MiB smaller, ", StringComparison.Ordinal) &&
-                TextureCompressionViews.NotRefit(run).StartsWith("2 hair textures you wear use only part of their space but can't be refit safely.", StringComparison.Ordinal) &&
-                TextureCompressionViews.Restored(new CompressionRestore(2, [], [], [], 1)).StartsWith("Restored 2 textures and 1 hairstyle.", StringComparison.Ordinal),
-            "hair refit card: refit hairstyles count in the totals, the last run and restoring, and hair left as it is says so");
+        Require(TextureCompressionViews.Totals([], [group]) == "1 refit so far, 3.00 MiB smaller in total." &&
+                TextureCompressionViews.LastRun(run).StartsWith("Last run: 1 refit, 3.00 MiB smaller, ", StringComparison.Ordinal) &&
+                TextureCompressionViews.NotRefit(run).StartsWith("2 textures you wear use only part of their space but can't be refit safely.", StringComparison.Ordinal) &&
+                TextureCompressionViews.Restored(new CompressionRestore(2, [], [], [], 1)).StartsWith("Restored 2 textures and 1 refit.", StringComparison.Ordinal),
+            "hair refit card: refits count in the totals, the last run and restoring, and what is left as it is says so");
         Require(CompressionRun.After(run, new CompressionRun { NotRefit = ["c.tex: t"] }) is { Refit: 1, NotRefit: ["c.tex: t"] },
             "hair refit card: a quiet run keeps the last refit and brings the hair left as it is up to date");
     }

@@ -35,8 +35,8 @@ internal static class TextureCompressionViews
         _ => progress.Length > 0 ? progress : "Working",
     };
 
-    public static string Hairstyles(int count)
-        => count == 1 ? "1 hairstyle" : string.Create(CultureInfo.InvariantCulture, $"{count:N0} hairstyles");
+    public static string Refits(int count)
+        => count == 1 ? "1 refit" : string.Create(CultureInfo.InvariantCulture, $"{count:N0} refits");
 
     /// <summary> Everything optimized so far and how much smaller it made the files. </summary>
     public static string Totals(IReadOnlyList<CompressedTexture> entries, IReadOnlyList<RefitGroup> refits)
@@ -47,14 +47,14 @@ internal static class TextureCompressionViews
         return $"{What(entries.Count, entries.Count(entry => entry.Shrunk), refits.Count)} so far, {Bytes(saved)} smaller in total.";
     }
 
-    /// <summary> "2 textures optimized (1 of one color, shrunk to 16 × 16) and 1 hairstyle refit", leaving out what is none. </summary>
-    private static string What(int textures, int shrunk, int hairstyles)
+    /// <summary> "2 textures optimized (1 of one color, shrunk to 16 × 16) and 1 refit", leaving out what is none. </summary>
+    private static string What(int textures, int shrunk, int refits)
     {
         var parts = new List<string>();
         if (textures > 0)
             parts.Add($"{Textures(textures)} optimized{OneColor(shrunk)}");
-        if (hairstyles > 0)
-            parts.Add($"{Hairstyles(hairstyles)} refit");
+        if (refits > 0)
+            parts.Add(Refits(refits));
         return string.Join(" and ", parts);
     }
 
@@ -78,7 +78,7 @@ internal static class TextureCompressionViews
 
     /// <summary>
     /// The toast after a run that changed something: "Textures optimized: 3 textures were compressed, 1 was
-    /// resized, hair UV optimized and cropped.", leaving out what is none. Shrunk textures count as resized only.
+    /// resized, UVs optimized and cropped.", leaving out what is none. Shrunk textures count as resized only.
     /// </summary>
     public static string Toast(CompressionRun run)
     {
@@ -92,18 +92,18 @@ internal static class TextureCompressionViews
             parts.Add(string.Create(CultureInfo.InvariantCulture, $"{run.Shrunk:N0}{noun} {(run.Shrunk == 1 ? "was" : "were")} resized"));
         }
         if (run.Refit > 0)
-            parts.Add("hair UV optimized and cropped");
+            parts.Add("UVs optimized and cropped");
         return $"Textures optimized: {string.Join(", ", parts)}.";
     }
 
-    /// <summary> How many worn hair textures use only part of their space but can't be refit safely. </summary>
+    /// <summary> How many worn hair and gear textures use only part of their space but can't be refit safely. </summary>
     public static string NotRefit(CompressionRun run)
         => run.NotRefit.Count switch
         {
             0 => string.Empty,
-            1 => "1 hair texture you wear uses only part of its space but can't be refit safely. Hover for why.",
+            1 => "1 texture you wear uses only part of its space but can't be refit safely. Hover for why.",
             var count => string.Create(CultureInfo.InvariantCulture,
-                $"{count:N0} hair textures you wear use only part of their space but can't be refit safely. Hover for why."),
+                $"{count:N0} textures you wear use only part of their space but can't be refit safely. Hover for why."),
         };
 
     /// <summary> How many of the textures the character wears the check keeps as they are. </summary>
@@ -130,7 +130,7 @@ internal static class TextureCompressionViews
         if (result.Restored > 0)
             restored.Add(Textures(result.Restored));
         if (result.Hairstyles > 0)
-            restored.Add(Hairstyles(result.Hairstyles));
+            restored.Add(Refits(result.Hairstyles));
         var parts = new List<string>
         {
             restored.Count == 0 ? "Nothing to restore on your character." : $"Restored {string.Join(" and ", restored)}.",

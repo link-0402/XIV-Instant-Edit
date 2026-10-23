@@ -154,7 +154,7 @@ public sealed class Configuration : IPluginConfiguration
     public bool AutoCompressTextures { get; set; }
 
     /// <summary>
-    /// Optimize textures also refits hair whose UVs use only part of its textures: the mod's models
+    /// Optimize textures also refits hair and gear whose UVs use only part of their textures: the mod's models
     /// are moved onto the part used and the textures cut down to it. Off by default: it changes models.
     /// </summary>
     public bool RefitHairUvs { get; set; }

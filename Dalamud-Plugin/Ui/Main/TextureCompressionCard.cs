@@ -89,13 +89,14 @@ internal sealed class TextureCompressionCard
         using (ImRaii.Disabled(service.Phase == CompressionPhase.Restoring))
         {
             var refit = service.RefitHair;
-            if (ImGui.Checkbox("Also refit hair that uses only part of its textures##quick-compression-refit", ref refit))
+            if (ImGui.Checkbox("Also refit hair and gear that use only part of their textures##quick-compression-refit", ref refit))
                 service.SetRefitHair(refit);
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip("Hair ported from other games often keeps its strands in one corner of a texture several times their size.\n" +
-                                 "This moves the UVs of every model in the hair's mod that uses those textures onto that part, in every option\n" +
-                                 "and for every race, and cuts the textures down to the active area. This never has a visual impact.\n" +
-                                 "It covers everything drawn with the hair shader, which also includes eyebrows, lashes, ears and tails.");
+                                 "This moves the UVs of every model in the mod that uses those textures onto that part, in every option\n" +
+                                 "and for every race, and cuts the textures down to the active area.\n" +
+                                 "It covers the hair shader (also eyebrows, lashes, ears and tails) and gear's character shaders.\n" +
+                                 "Gear's detail patterns keep their size but can shift slightly.");
         }
         Widgets.HintWrapped(TextureCompressionViews.Status(service.Phase, service.Progress));
         if (service.Backups.LoadError.Length > 0)

@@ -46,7 +46,7 @@ internal sealed record KeptTexture
     public int CheckVersion { get; init; }
 }
 
-/// <summary> One file of a hair refit, and where its original is kept. </summary>
+/// <summary> One file of a hair or gear refit, and where its original is kept. </summary>
 internal sealed record RefitFile
 {
     /// <summary> The mod file, as a full path. </summary>
@@ -61,7 +61,7 @@ internal sealed record RefitFile
     public long NewLength { get; init; }
 }
 
-/// <summary> Hair whose models and textures were refit together, to be put back together. </summary>
+/// <summary> Hair or gear whose models, materials and textures were refit together, to be put back together. </summary>
 internal sealed record RefitGroup
 {
     public required string ModDirectory { get; init; }
@@ -154,13 +154,13 @@ internal sealed partial class TextureBackupStore
     /// Copies an original into the cache folder's backup folder under its hash and returns the copy's
     /// path. A copy that is already there with the same content is reused.
     /// </summary>
-    /// <param name="extension">".tex", or ".mdl" for a refit model.</param>
+    /// <param name="extension">".tex", or ".mdl" or ".mtrl" for a refit model or material.</param>
     public static string StoreBackup(string cacheRoot, byte[] original, string sha256, string extension = ".tex")
     {
         if (!Sha256Regex().IsMatch(sha256))
             throw new ArgumentException("The backup's hash is invalid.", nameof(sha256));
-        if (extension is not (".tex" or ".mdl"))
-            throw new ArgumentException("Only textures and models are backed up.", nameof(extension));
+        if (extension is not (".tex" or ".mdl" or ".mtrl"))
+            throw new ArgumentException("Only textures, models and materials are backed up.", nameof(extension));
         var folder = Path.Combine(cacheRoot, FolderName);
         TextureFiles.EnsureLocalPath(folder);
         Directory.CreateDirectory(folder);
@@ -446,7 +446,7 @@ internal sealed partial class TextureBackupStore
                 continue;
             try
             {
-                // Only a file this store named: <sha256>.tex or .mdl inside a texture-backups folder.
+                // Only a file this store named: <sha256>.tex, .mdl or .mtrl inside a texture-backups folder.
                 if (Sha256FileRegex().IsMatch(Path.GetFileName(backup)) &&
                     string.Equals(Path.GetFileName(Path.GetDirectoryName(backup)), FolderName, StringComparison.OrdinalIgnoreCase) &&
                     File.Exists(backup) && (File.GetAttributes(backup) & FileAttributes.ReparsePoint) == 0)
@@ -488,10 +488,10 @@ internal sealed partial class TextureBackupStore
     [GeneratedRegex("^[0-9A-Fa-f]{64}$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256Regex();
 
-    [GeneratedRegex("^[0-9A-F]{64}\\.(tex|mdl)$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[0-9A-F]{64}\\.(tex|mdl|mtrl)$", RegexOptions.CultureInvariant)]
     private static partial Regex Sha256FileRegex();
 
     /// <summary> What <see cref="StoreBackup"/> writes before moving a copy into place. </summary>
-    [GeneratedRegex("^[0-9A-F]{64}\\.(tex|mdl)\\.[0-9a-f]{32}\\.tmp$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[0-9A-F]{64}\\.(tex|mdl|mtrl)\\.[0-9a-f]{32}\\.tmp$", RegexOptions.CultureInvariant)]
     private static partial Regex TemporaryFileRegex();
 }

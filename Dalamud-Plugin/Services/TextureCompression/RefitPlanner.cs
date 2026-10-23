@@ -5,36 +5,46 @@ using InstantEdit.Services.NeckSeam;
 namespace InstantEdit.Services.TextureCompression;
 
 /// <summary>
-/// Hair whose UVs use only part of its textures, as in hair ported from The Sims 4, whose strands
-/// sit in one corner of a texture several times their size: what can be cut, and every file that
-/// changes with it. Files are paths inside the mod folder.
+/// Hair or gear whose UVs use only part of its textures, as in hair ported from The Sims 4, whose
+/// strands sit in one corner of a texture several times their size: what can be cut, and every file
+/// that changes with it. Files are paths inside the mod folder.
 /// </summary>
 /// <param name="Models">Each model and the material slots whose meshes (in every LOD) move into the window.</param>
+/// <param name="Hair">Hair moves both UV sets; gear moves the first only (the second places the FC crest) and scales its materials' tile matrices.</param>
 internal sealed record RefitPlan(UvWindow Window, IReadOnlyList<string> Textures, IReadOnlyList<string> Materials,
-    IReadOnlyDictionary<string, IReadOnlySet<int>> Models);
+    IReadOnlyDictionary<string, IReadOnlySet<int>> Models, bool Hair = true);
 
-/// <summary> Hair that uses part of its texture but can't be refit, and why, in words for the card. </summary>
+/// <summary> Hair or gear that uses part of its texture but can't be refit, and why, in words for the card. </summary>
 internal sealed record RefitRefusal(string Texture, string Reason);
 
 internal sealed record RefitResult(IReadOnlyList<RefitPlan> Plans, IReadOnlyList<RefitRefusal> Refusals);
 
 /// <summary>
-/// Plans hair UV refits inside one mod. A texture is cut only together with everything that reads
+/// Plans UV refits inside one mod. A texture is cut only together with everything that reads
 /// it: starting from a texture the character wears, every material of the mod that reads one of its
 /// game paths, every mesh of the mod's models (any option, any race, every LOD) that uses one of
 /// those materials, and those materials' other textures, until nothing more joins. All of them must
-/// be hair (hair.shpk reads both UV sets, which move together), the UVs must stay inside the texture,
+/// be hair (hair.shpk reads both UV sets, which move together) or all gear (<see cref="GearShaders"/>,
+/// which read the first set; their tile matrices are scaled to match), the UVs must stay inside the texture,
 /// and every member must be the mod's own: a texture no material of the mod reads, a material no
 /// model of the mod uses, or a texture a material reads from the game, at a path where the game has
 /// a file of its own, means the game's files would pair with the changed ones, so the group is left
-/// alone, unless the mod brings its own models for that material's folder. Option combinations that
+/// alone, unless the mod brings its own models for that material's folder (hair only: gear materials
+/// and textures at game paths are always left alone). Option combinations that
 /// pair the mod's files with the game's (a material on without the model it was made for) aren't
 /// looked at either: they show the mod's textures on the game's UVs before any refit.
 /// Other mods aren't looked at. Dalamud-free.
 /// </summary>
-internal sealed class HairRefitPlanner
+internal sealed class RefitPlanner
 {
     public const string HairShader = "hair.shpk";
+
+    /// <summary> Gear shaders that read their textures at the first UV set, tile patterns at it times the colour table's tile matrix. </summary>
+    public static readonly string[] GearShaders = ["character.shpk", "characterlegacy.shpk", "characterglass.shpk"];
+
+    public static bool IsHair(string shader) => string.Equals(shader, HairShader, StringComparison.OrdinalIgnoreCase);
+
+    public static bool CanRefit(string shader) => IsHair(shader) || GearShaders.Contains(shader, StringComparer.OrdinalIgnoreCase);
 
     private readonly ModFileMap _map;
     private readonly Func<string, byte[]?> _readFile;
@@ -48,7 +58,7 @@ internal sealed class HairRefitPlanner
     /// <param name="readFile">A file of the mod by its path inside the mod folder; null when it is missing.</param>
     /// <param name="readMaterialNames">A model's material names, from its headers; null when it can't be read.</param>
     /// <param name="gameFileExists">Whether the game's own data has a file at a game path.</param>
-    public HairRefitPlanner(ModFileMap map, Func<string, byte[]?> readFile, Func<string, IReadOnlyList<string>?> readMaterialNames,
+    public RefitPlanner(ModFileMap map, Func<string, byte[]?> readFile, Func<string, IReadOnlyList<string>?> readMaterialNames,
         Func<string, bool> gameFileExists)
     {
         _map = map;
@@ -107,13 +117,18 @@ internal sealed class HairRefitPlanner
                 return (null, $"{Name(file)} has a part without UVs");
             foreach (var mesh in model.Meshes.Where(mesh => slots.Contains(mesh.MaterialIndex)))
             {
-                if (!mesh.FourComponents)
+                if (group.Hair && !mesh.FourComponents)
                     return (null, $"{Name(file)} has a part with one UV set, where the hair shader reads two");
-                // Both sets move the same way, so the window must hold both; usually they are the same.
+                // Hair moves both sets the same way, so the window must hold both; usually they are the same.
                 foreach (var uv in mesh.Uvs)
                 {
-                    min = Vector2.Min(min, Vector2.Min(new Vector2(uv.X, uv.Y), new Vector2(uv.Z, uv.W)));
-                    max = Vector2.Max(max, Vector2.Max(new Vector2(uv.X, uv.Y), new Vector2(uv.Z, uv.W)));
+                    min = Vector2.Min(min, new Vector2(uv.X, uv.Y));
+                    max = Vector2.Max(max, new Vector2(uv.X, uv.Y));
+                    if (group.Hair)
+                    {
+                        min = Vector2.Min(min, new Vector2(uv.Z, uv.W));
+                        max = Vector2.Max(max, new Vector2(uv.Z, uv.W));
+                    }
                 }
             }
         }
@@ -130,15 +145,22 @@ internal sealed class HairRefitPlanner
             shiftU = Math.Min(shiftU, TextureCrop.MaxShift(info.Width, blocks));
             shiftV = Math.Min(shiftV, TextureCrop.MaxShift(info.Height, blocks));
         }
-        // Hair spread over more than half the texture each way has nothing to cut, wherever its UVs lie.
+        // UVs spread over more than half the texture each way have nothing to cut, wherever they lie.
         if (max.X - min.X > 0.5f && max.Y - min.Y > 0.5f)
             return (null, null);
         if (TextureCrop.Fit(min, max, shiftU, shiftV) is not { } window)
             return (null, "its UVs reach outside the texture, where they wrap around");
         if (window.Fraction > 0.5)
             return (null, null);
+        // Checked only now, so the many mods sharing files with the game that have nothing to cut stay quiet.
+        if (group.Shared is { } reason)
+            return (null, reason);
+        // The game's other-race gear materials often read the same textures (93 of 599 in the 2026
+        // game data), so a gear texture at a game path may be drawn on the game's own UVs.
+        if (!group.Hair && group.Textures.SelectMany(_map.ForFile).FirstOrDefault(m => _gameFileExists(m.GamePath)) is { } shared)
+            return (null, $"the game's own materials can read it as {shared.GamePath}");
         return (new RefitPlan(window, group.Textures.ToList(), group.Materials.ToList(),
-            group.Meshes.ToDictionary(pair => pair.Key, pair => (IReadOnlySet<int>)pair.Value, StringComparer.OrdinalIgnoreCase)), null);
+            group.Meshes.ToDictionary(pair => pair.Key, pair => (IReadOnlySet<int>)pair.Value, StringComparer.OrdinalIgnoreCase), group.Hair), null);
     }
 
     private SkinMaterial? Material(string file)
@@ -218,18 +240,25 @@ internal sealed class HairRefitPlanner
     private static string Name(string file) => Path.GetFileName(file);
 
     /// <summary> Everything that has to change together with one texture. </summary>
-    private sealed class Group(HairRefitPlanner planner)
+    private sealed class Group(RefitPlanner planner)
     {
         private readonly Queue<Action> _work = new();
         public SortedSet<string> Textures { get; } = new(StringComparer.OrdinalIgnoreCase);
         public SortedSet<string> Materials { get; } = new(StringComparer.OrdinalIgnoreCase);
         public SortedDictionary<string, HashSet<int>> Meshes { get; } = new(StringComparer.OrdinalIgnoreCase);
         public string? Refusal { get; private set; }
+        /// <summary> Why the game's own files would pair with the changed ones; refuses the group only when it has something to cut. </summary>
+        public string? Shared { get; private set; }
+        /// <summary> Whether the group is hair; set by its first material. </summary>
+        public bool Hair { get; private set; }
+        private string? _firstShader;
 
         private ModFileMap Map => planner._map;
         private bool Game(string gamePath) => planner._gameFileExists(gamePath);
 
         private void Refuse(string reason) => Refusal ??= reason;
+
+        private void Share(string reason) => Shared ??= reason;
 
         public void Grow()
         {
@@ -277,9 +306,24 @@ internal sealed class HairRefitPlanner
                 Refuse($"{Name(file)}, which reads it, can't be read");
                 return;
             }
-            if (!string.Equals(material.ShaderPackage, HairShader, StringComparison.OrdinalIgnoreCase))
+            if (!CanRefit(material.ShaderPackage))
             {
-                Refuse($"{Name(file)}, which reads it too, uses {material.ShaderPackage}, not the hair shader");
+                Refuse($"{Name(file)}, which reads it too, uses {material.ShaderPackage}, which can't be refit");
+                return;
+            }
+            if (_firstShader is null)
+            {
+                _firstShader = material.ShaderPackage;
+                Hair = IsHair(material.ShaderPackage);
+            }
+            else if (Hair != IsHair(material.ShaderPackage))
+            {
+                Refuse($"{Name(file)}, which reads it too, uses {material.ShaderPackage}, where another reader uses {_firstShader}");
+                return;
+            }
+            if (!Hair && planner._readFile(file) is { } bytes && RefitMaterial.Problem(bytes) is { } problem)
+            {
+                Refuse($"{Name(file)}: {problem}");
                 return;
             }
             var paths = TexturePaths(material).Select(ModFileMap.GamePathKey).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -296,12 +340,17 @@ internal sealed class HairRefitPlanner
             var users = planner.MaterialUsers();
             foreach (var mapping in Map.ForFile(file))
             {
-                var slots = users.GetValueOrDefault(mapping.GamePath) ?? [];
+                // Models name a gear material without its variant folder; their users are keyed by v0001.
+                var slots = users.GetValueOrDefault(Variants(mapping.GamePath).First()) ?? [];
                 foreach (var (model, slot) in slots)
                     AddSlot(model, slot);
                 // Even with the mod's models using it, the game's model of its own folder can too, as
                 // the Midlander model does with the shared root other races' hair 101-200 loads from.
-                if (Game(mapping.GamePath) && !ReplacesModels(mapping.GamePath))
+                // Gear models of every race name each other's materials (17,127 of 21,599 in the 2026
+                // game data), so a gear material at a game path is never the mod's alone.
+                if (Game(mapping.GamePath) && !Hair)
+                    Share($"the game's own models can use {Name(file)} as {mapping.GamePath}");
+                else if (Game(mapping.GamePath) && !ReplacesModels(mapping.GamePath))
                     Refuse($"the game's own models can use {Name(file)} as {mapping.GamePath}");
             }
         }
@@ -320,6 +369,25 @@ internal sealed class HairRefitPlanner
             return Map.Mappings.Any(m => m.GamePath.StartsWith(models, StringComparison.OrdinalIgnoreCase) && m.GamePath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>
+        /// Every material variant folder a gear or weapon material path can sit in (v0001 first): the
+        /// item's IMC variants pick one each, all drawn by the same model. Other paths as they are.
+        /// </summary>
+        private static IEnumerable<string> Variants(string materialPath)
+        {
+            const string marker = "/material/v";
+            var at = materialPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (at < 0 || materialPath.Length < at + marker.Length + 5 || materialPath.StartsWith("chara/human/", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return materialPath;
+                yield break;
+            }
+            string head = materialPath[..(at + marker.Length)], tail = materialPath[(at + marker.Length + 4)..];
+            // shortcut: probes v0001-v0099; an item with more material variants would need its IMC file read.
+            for (var variant = 1; variant < 100; variant++)
+                yield return $"{head}{variant:D4}{tail}";
+        }
+
         private void VisitSlot(string model, int slot)
         {
             if (planner.ModelMaterials(model) is not { } names || slot >= names.Count)
@@ -334,8 +402,16 @@ internal sealed class HairRefitPlanner
                     Refuse($"{Name(model)} names a material the game can't find");
                     continue;
                 }
-                foreach (var material in Map.ForGamePath(ModFileMap.GamePathKey(resolved)))
-                    AddMaterial(material.File);
+                // The moved meshes draw with whichever variant the item picks, so every variant's
+                // material must be the mod's; a game material there would read uncut textures.
+                foreach (var path in Variants(ModFileMap.GamePathKey(resolved)))
+                {
+                    var materials = Map.ForGamePath(path).ToList();
+                    foreach (var material in materials)
+                        AddMaterial(material.File);
+                    if (materials.Count == 0 && Game(path))
+                        Share($"{Name(model)} also draws with the game's own {path}, which wouldn't change with it");
+                }
             }
         }
     }
