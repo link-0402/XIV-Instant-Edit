@@ -431,6 +431,44 @@ internal static class HairRefitScenarios
         broken.Map("chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl", "hair/broken.mdl", [1, 2, 3, 4]);
         Require(broken.Plan("hair/norm.tex").Refusals.Single().Reason.Contains("broken.mdl"),
             "hair refit: when one of the mod's models can't be read, nothing in the mod is refit, since it could use any material");
+
+        CheckSharedRoot();
+    }
+
+    /// <summary>
+    /// Doux Mar swapped onto Miqo'te female hair 132: the model names /mt_c0801h0132_…, and the game,
+    /// for hair 101-200, loads it from the Midlander female root as c0201/…/mt_c0201h0132_…, where the
+    /// mod keeps it. The strands use the top-left eighth of their textures; the scalp spreads over its
+    /// own; the scrunchie is drawn with another shader.
+    /// </summary>
+    private static void CheckSharedRoot()
+    {
+        const string model = "chara/human/c0801/obj/hair/h0132/";
+        const string root = "chara/human/c0201/obj/hair/h0132/material/v0001/";
+        var mod = new FakeMod();
+        mod.Map(model + "model/c0801h0132_hir.mdl", "doux/hir.mdl", Model(
+            ["/mt_c0801h0132_c0801_hir_scalp_c0801.mtrl", "/mt_c0801h0132_c0801_hir_mar_c0801.mtrl", "/mt_c0801h0132_c0801_hir_scunchie_c0801.mtrl"],
+            [
+                new MeshSpec(0, Uvs((0.0192f, 0.0054f), (0.8831f, 0.9717f), (0.5f, 0.5f))),
+                new MeshSpec(1, Uvs((0.0043f, 0.0001f), (0.4993f, 0.2494f), (0.25f, 0.125f))),
+                new MeshSpec(2, Uvs((0.0001f, 0.0001f), (0.9999f, 0.9999f), (0.5f, 0.5f))),
+            ], [(0, 3)]));
+        foreach (var part in new[] { "scalp", "mar", "scunchie" })
+        {
+            var textures = model + $"texture/c0801h0132_hir_{part}_";
+            mod.Map(root + $"mt_c0201h0132_c0801_hir_{part}_c0801.mtrl", $"doux/{part}.mtrl",
+                HairMaterial(textures, part == "scunchie" ? "character.shpk" : HairRefitPlanner.HairShader));
+            mod.Map(textures + "norm.tex", $"doux/{part}_norm.tex", part == "mar" ? Labelled(64, 128, 8) : Labelled(64, 64, 7));
+            mod.Map(textures + "mask.tex", $"doux/{part}_mask.tex", part == "mar" ? Labelled(64, 128, 8) : Labelled(64, 64, 7));
+        }
+
+        var strands = mod.Plan("doux/mar_norm.tex", "doux/mar_mask.tex");
+        Require(strands.Refusals.Count == 0 && strands.Plans.SingleOrDefault() is { } plan && plan.Window == new UvWindow(1, 2, 0, 0) &&
+                plan.Textures.SequenceEqual(["doux/mar_mask.tex", "doux/mar_norm.tex"]) && plan.Materials.SequenceEqual(["doux/mar.mtrl"]) &&
+                plan.Models.Single() is { Key: "doux/hir.mdl" } slots && slots.Value.SetEquals([1]),
+            "hair refit: hair 101-200 on another race finds its material in the Midlander root, as the game loads it, and its strands are cut");
+        Require(mod.Plan("doux/scalp_norm.tex") is { Plans.Count: 0, Refusals.Count: 0 },
+            "hair refit: the scalp, spread over its texture, has nothing to cut");
     }
 
     /// <summary> The BGRA pixel a UV lands on (nearest, clamped), as an integer. </summary>

@@ -264,6 +264,17 @@ internal static class GameFileScenarios
                 VanillaMaterialPaths.Resolve("chara/human/c0701/obj/tail/t0008/model/c0701t0008_til.mdl", "/mt_c0701t0004_a.mtrl") ==
                 "chara/human/c0701/obj/tail/t0004/material/v0001/mt_c0701t0004_a.mtrl",
             "character-part materials live in the folder their name encodes, whichever style uses them");
+        Require(VanillaMaterialPaths.Resolve("chara/human/c0801/obj/hair/h0132/model/c0801h0132_hir.mdl", "/mt_c0801h0132_c0801_hir_mar_c0801.mtrl") ==
+                "chara/human/c0201/obj/hair/h0132/material/v0001/mt_c0201h0132_c0801_hir_mar_c0801.mtrl" &&
+                VanillaMaterialPaths.Resolve("chara/human/c1701/obj/hair/h0111/model/c1701h0111_hir.mdl", "/mt_c1701h0111_hir_a.mtrl") ==
+                "chara/human/c0101/obj/hair/h0111/material/v0001/mt_c0101h0111_hir_a.mtrl" &&
+                VanillaMaterialPaths.Resolve("chara/human/c1501/obj/hair/h0132/model/c1501h0132_hir.mdl", "/mt_c1501h0132_hir_a.mtrl") ==
+                "chara/human/c1501/obj/hair/h0132/material/v0001/mt_c1501h0132_hir_a.mtrl" &&
+                VanillaMaterialPaths.Resolve("chara/human/c0801/obj/hair/h0110/model/c0801h0110_hir.mdl", "/mt_c0801h0110_hir_a.mtrl") ==
+                "chara/human/c0801/obj/hair/h0110/material/v0001/mt_c0801h0110_hir_a.mtrl" &&
+                VanillaMaterialPaths.Resolve("chara/human/c0801/obj/hair/h0201/model/c0801h0201_hir.mdl", "/mt_c0801h0201_hir_a.mtrl") ==
+                "chara/human/c0801/obj/hair/h0201/material/v0001/mt_c0801h0201_hir_a.mtrl",
+            "hair 101-200 loads its materials from the Midlander root of its gender, the game writing that race over the name's, except for Hrothgar and Miqo'te below 116");
         Require(VanillaMaterialPaths.Resolve("chara/human/c0101/obj/face/f0001/model/c0101f0001_fac.mdl", "/mt_c0101f0001_iri_a.mtrl") ==
                 "chara/human/c0101/obj/face/f0001/material/mt_c0101f0001_iri_a.mtrl" &&
                 VanillaMaterialPaths.Resolve("chara/human/c1701/obj/zear/z0001/model/c1701z0001_zer.mdl", "/mt_c1701z0001_fac_a.mtrl") ==

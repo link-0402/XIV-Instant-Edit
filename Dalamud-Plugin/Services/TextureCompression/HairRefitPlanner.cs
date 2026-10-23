@@ -299,7 +299,9 @@ internal sealed class HairRefitPlanner
                 var slots = users.GetValueOrDefault(mapping.GamePath) ?? [];
                 foreach (var (model, slot) in slots)
                     AddSlot(model, slot);
-                if (slots.Count == 0 && Game(mapping.GamePath) && !ReplacesModels(mapping.GamePath))
+                // Even with the mod's models using it, the game's model of its own folder can too, as
+                // the Midlander model does with the shared root other races' hair 101-200 loads from.
+                if (Game(mapping.GamePath) && !ReplacesModels(mapping.GamePath))
                     Refuse($"the game's own models can use {Name(file)} as {mapping.GamePath}");
             }
         }
