@@ -143,11 +143,8 @@ internal static class MotionEditsFixture
               whole.NextMotionKey == 2,
             "a layer over the whole clip has no fades, so a loop stays seamless");
         var section = MotionEdits.Add(whole, MotionLayerKind.Offset, 40, 70, out var second, out _);
-        check(MotionEdits.Find(section, second) is { Name: "Offset 2", FadeIn: 7, FadeOut: 7 } && section.Motion.Length == 2 && section.Motion[^1].Key == second,
-            "a section eases over a quarter of itself, is numbered per kind and applies after the others");
-        var longer = MotionEdits.Add(Empty(1000), MotionLayerKind.Offset, 100, 400, out var third, out _);
-        check(MotionEdits.Find(longer, third) is { FadeIn: MotionEdits.SectionFade, FadeOut: MotionEdits.SectionFade },
-            "a long section's fades stop at a third of a second");
+        check(MotionEdits.Find(section, second) is { Name: "Offset 2", FadeIn: 0, FadeOut: 0 } && section.Motion.Length == 2 && section.Motion[^1].Key == second,
+            "a section has no fades either, is numbered per kind and applies after the others");
         var amplitude = MotionEdits.Add(Empty(), MotionLayerKind.Amplitude, 0, 100, out var amp, out _);
         var pose = MotionEdits.Add(Empty(), MotionLayerKind.Pose, 0, 100, out var posed, out _);
         check(MotionEdits.Find(amplitude, amp) is { Amount: 1.5f, Components: PoseComponents.Rotation | PoseComponents.Position } &&
@@ -271,6 +268,7 @@ internal static class MotionEditsFixture
     private static void Rows(Action<bool, string> check)
     {
         var editor = Editor();
+        editor.SetUnfolded("m1", false);
         var layout = editor.Layout;
         check(layout.MotionFirstRow == 6 && layout.MotionRows == 2 && layout.LayerIndexAt(6) == 0 && layout.LayerIndexAt(7) == 1 && layout.RowCount == 8,
             "each bone layer gets a row below the event lanes, in the order they apply");
@@ -331,7 +329,10 @@ internal static class MotionEditsFixture
         editor.SetWidth(440);
         var geometry = Geometry with { Unfold = 16 };
         var legendY = (int row) => 24 + row * 20 + 10f;
-        check(!editor.IsUnfolded("m1") && editor.Layout.RowCount == 8, "layers start folded");
+        check(editor.IsUnfolded("m1") && editor.Layout.RowCount == 10, "layers start with their bone rows shown");
+        editor.Press(editor.HitTest(geometry, new Vector2(92, legendY(6))));
+        editor.Release();
+        check(!editor.IsUnfolded("m1") && editor.Layout.RowCount == 8, "the arrow folds them away");
         check(editor.HitTest(geometry, new Vector2(92, legendY(6))) is { Part: TimelinePart.LayerUnfold, Layer: "m1" } &&
               editor.HitTest(geometry, new Vector2(92, legendY(7))) is { Part: TimelinePart.Legend, Layer: "m2" } &&
               editor.HitTest(Geometry, new Vector2(92, legendY(6))) is { Part: TimelinePart.Legend },

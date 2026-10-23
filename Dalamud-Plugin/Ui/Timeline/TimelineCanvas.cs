@@ -202,10 +202,10 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             pickers.Request(kind, hit.Part == TimelinePart.Legend ? current.Playhead : current.SnappedFrame(hit.Frame, io.KeyAlt), null);
             return;
         }
-        // A double click on the empty bone row adds an offset section there.
+        // A double click on the empty bone row adds an offset layer.
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly && hit.Part == TimelinePart.MotionLane && hit.Layer == null)
         {
-            AddLayerAt(current, MotionLayerKind.Offset, current.SnappedFrame(hit.Frame, io.KeyAlt));
+            AddLayer(current, MotionLayerKind.Offset);
             return;
         }
         // A bone's row picks that bone for the panel and the Bones window; Ctrl adds it.
@@ -235,18 +235,10 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     }
 
     /// <summary>
-    /// Adds a bone layer section starting at <paramref name="frame"/>: a second long, or to the end of the
-    /// clip, moved back when the clip ends sooner.
+    /// Adds a bone layer over the whole clip.
     /// </summary>
-    private static void AddLayerAt(TimelineEditor current, MotionLayerKind kind, int frame)
-    {
-        var length = Math.Max(TimelineDocument.MinLength, current.Document.Length);
-        var start = Math.Clamp(frame, 0, length - 1);
-        var end = Math.Min(length, start + MotionEdits.SectionLength);
-        if (end - start < MotionEdits.SectionLength)
-            start = Math.Max(0, end - MotionEdits.SectionLength);
-        current.AddLayer(kind, start, end);
-    }
+    private static void AddLayer(TimelineEditor current, MotionLayerKind kind) =>
+        current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
 
     private void RefreshGroups(TimelineDocument doc, TimelineLayout layout)
     {
@@ -687,8 +679,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         {
             foreach (var kind in TimelineWindowViews.LayerKinds)
             {
-                if (ImGui.MenuItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer here", "", false, !readOnly))
-                    AddLayerAt(current, kind, menuFrame);
+                if (ImGui.MenuItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer", "", false, !readOnly))
+                    AddLayer(current, kind);
                 if (ImGui.IsItemHovered())
                     ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
             }
@@ -859,21 +851,6 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Key(TimelineKey.End);
         else if (!ctrl && keys.Pressed(ImGuiKey.F, VirtualKey.F))
             current.Key(TimelineKey.Fit);
-        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.C, VirtualKey.C))
-        {
-            if (!readOnly)
-                current.Key(TimelineKey.Cut);
-        }
-        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.Q, VirtualKey.Q))
-        {
-            if (!readOnly)
-                current.Key(TimelineKey.RemoveBefore);
-        }
-        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.W, VirtualKey.W))
-        {
-            if (!readOnly)
-                current.Key(TimelineKey.RemoveAfter);
-        }
         else if (!ctrl && !alt && keys.Pressed(ImGuiKey.B, VirtualKey.B))
         {
             if (!readOnly)

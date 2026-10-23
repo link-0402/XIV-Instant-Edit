@@ -421,7 +421,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         {
             editor.Reset(doc);
             if (!sameClip)
-                editor.FoldAll();
+                editor.UnfoldAll();
         }
         // After an undo the layers stay as unsaved edits: one undo step away from the file.
         if (carried is { Unsaved: true } unsaved)

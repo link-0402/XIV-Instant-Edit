@@ -14,12 +14,6 @@ namespace InstantEdit.Ui.Timeline;
 /// </summary>
 internal static class MotionEdits
 {
-    /// <summary>How long a layer added at a frame lasts: one second, or to the end of the clip.</summary>
-    public const int SectionLength = TimelineDocument.Fps;
-
-    /// <summary>The longest fade a new section gets on each side.</summary>
-    public const int SectionFade = 10;
-
     /// <summary>The longest name a layer keeps.</summary>
     public const int MaxName = 48;
 
@@ -49,9 +43,8 @@ internal static class MotionEdits
 
     /// <summary>
     /// Adds a layer of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/> after
-    /// the others, so it applies last, named "Offset 2" and so on. A layer over the whole clip gets no
-    /// fades, so a loop stays seamless; a section eases in and out over a quarter of itself, at most
-    /// <see cref="SectionFade"/> frames. An amplitude starts at 150%, every other kind at full strength.
+    /// the others, so it applies last, named "Offset 2" and so on, with no fades, so a loop
+    /// stays seamless. An amplitude starts at 150%, every other kind at full strength.
     /// </summary>
     public static TimelineDocument Add(TimelineDocument doc, MotionLayerKind kind, int start, int end, out string key, out string? error)
     {
@@ -64,15 +57,13 @@ internal static class MotionEdits
         }
         start = Math.Clamp(start, 0, TimelineDocument.MaxFrames - 1);
         end = Math.Clamp(end, start + 1, TimelineDocument.MaxFrames);
-        var whole = start == 0 && end >= doc.Length;
-        var fade = whole ? 0 : Math.Min(SectionFade, (end - start) / 4);
         var keys = doc.Motion.Select(layer => layer.Key).ToHashSet(StringComparer.Ordinal);
         var next = Math.Max(1, doc.NextMotionKey);
         do key = "m" + (next++).ToString(CultureInfo.InvariantCulture);
         while (!keys.Add(key));
         var number = doc.Motion.Count(layer => layer.Kind == kind) + 1;
         var added = new MotionLayer(key, kind, kind == MotionLayerKind.Symmetry ? MotionSymmetry.DefaultName(MotionSide.Left) : $"{KindName(kind)} {number}",
-            start, end, fade, fade,
+            start, end, 0, 0,
             kind == MotionLayerKind.Amplitude ? 1.5f : 1,
             kind switch
             {

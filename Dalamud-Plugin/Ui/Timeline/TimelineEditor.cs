@@ -10,11 +10,11 @@ namespace InstantEdit.Ui.Timeline;
 internal enum TimelineKey : byte
 {
     Undo, Redo, Delete, Duplicate, Copy, Paste, SelectAll, Left, Right, Home, End, Escape, Fit, PlayPause,
-    /// <summary>Cuts the motion at the playhead (C).</summary>
+    /// <summary>Cuts the motion at the playhead.</summary>
     Cut,
-    /// <summary>Removes from the start of the part under the playhead to the playhead (Q).</summary>
+    /// <summary>Removes from the start of the part under the playhead to the playhead.</summary>
     RemoveBefore,
-    /// <summary>Removes from the playhead to the end of the part under it (W).</summary>
+    /// <summary>Removes from the playhead to the end of the part under it.</summary>
     RemoveAfter,
     /// <summary>Turns the selected part into a blend, or back into its own motion (B).</summary>
     Blend,
@@ -100,8 +100,9 @@ internal sealed class TimelineEditor
     // A trim's part or a blend drag's join (-1: the seam), and which way a blend edge lengthens it.
     private int gesturePart;
     private int gestureSide;
-    // Layers showing a row per bone, and the skeleton's bone order for those rows; either changing rebuilds the layout.
-    private readonly HashSet<string> unfolded = new(StringComparer.Ordinal);
+    // Layers whose bone rows the user hid (every other layer shows them), and the skeleton's bone order for
+    // those rows; either changing rebuilds the layout.
+    private readonly HashSet<string> folded = new(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, int>? boneOrder;
     private int layoutStamp;
     private int builtStamp = -1;
@@ -219,26 +220,27 @@ internal sealed class TimelineEditor
             if (layout is { } current && ReferenceEquals(current.Document, Document) && builtStamp == layoutStamp)
                 return current;
             builtStamp = layoutStamp;
+            var unfolded = Document.Motion.Select(layer => layer.Key).Where(key => !folded.Contains(key)).ToHashSet(StringComparer.Ordinal);
             return layout = TimelineLayout.Build(Document, visibleLength, motionFrames, unfolded, boneOrder);
         }
     }
 
     /// <summary>Whether the layer with <paramref name="key"/> shows a row per bone under it.</summary>
-    public bool IsUnfolded(string key) => unfolded.Contains(key);
+    public bool IsUnfolded(string key) => !folded.Contains(key) && MotionEdits.Find(Document, key) != null;
 
-    /// <summary>Folds every layer's bone rows, for another clip whose layers only share the keys.</summary>
-    public void FoldAll()
+    /// <summary>Shows every layer's bone rows again, for another clip whose layers only share the keys.</summary>
+    public void UnfoldAll()
     {
-        if (unfolded.Count == 0)
+        if (folded.Count == 0)
             return;
-        unfolded.Clear();
+        folded.Clear();
         layoutStamp++;
     }
 
     /// <summary>Shows or hides a layer's bone rows. A view setting: never an undo step.</summary>
     public void SetUnfolded(string key, bool show)
     {
-        if (show ? unfolded.Add(key) : unfolded.Remove(key))
+        if (show ? folded.Remove(key) : folded.Add(key))
             layoutStamp++;
     }
 
@@ -1523,7 +1525,7 @@ internal sealed class TimelineEditor
         if (SelectedCut is { Target: not TimelineCutTarget.Seam, Index: var cut } selectedCut &&
             cut >= (selectedCut.Target == TimelineCutTarget.Part ? CutEdits.CutsOf(doc).Parts.Length : CutEdits.CutsOf(doc).Joins.Length))
             SelectedCut = null;
-        if (unfolded.RemoveWhere(key => MotionEdits.Find(doc, key) == null) > 0)
+        if (folded.RemoveWhere(key => MotionEdits.Find(doc, key) == null) > 0)
             layoutStamp++;
         if (selected.Count > 0)
         {

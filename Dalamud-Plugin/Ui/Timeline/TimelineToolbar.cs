@@ -17,7 +17,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         "Click or drag the ruler to move the playhead.\n" +
         "Wheel scrolls. Ctrl+wheel zooms. Shift+wheel scrolls the lanes.\n" +
         "Hold Alt while dragging to place freely.\n" +
-        "C cuts the motion at the playhead. Q and W remove the part before or after it.\n" +
+        "Right-click the clip row to cut the motion or remove the part before or after a frame.\n" +
         "Drag a part's edges on the clip row to trim it. B plays a blend in the selected part's place.\n" +
         "Shift+drag a part's end to play it slower or faster.\n" +
         "Right-click for more. Double-click a lane to add to it.";

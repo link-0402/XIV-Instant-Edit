@@ -302,7 +302,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
             TimelinePart.EaseEdge when !readOnly => "Drag to change how long the start eases in.",
             TimelinePart.Join => "The blend where two parts meet. Click to set it, again for the part under it.",
             TimelinePart.Seam => "Where the loop's end runs back into its start. Click to set it, again for the part under it.",
-            _ => "C cuts at the playhead. Q and W remove before or after it. B blends over the selected part. Right-click to cut here.",
+            _ => "Right-click to cut here or remove before or after. B blends over the selected part.",
         });
         return true;
     }
@@ -311,7 +311,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     public void DrawMenu(TimelineEditor current, bool readOnly, int frame)
     {
         var menu = TimelineWindowViews.ClipMenu;
-        if (ImGui.MenuItem(menu[0], "C", false, !readOnly))
+        if (ImGui.MenuItem(menu[0], "", false, !readOnly))
             current.CutAt(frame);
         if (ImGui.MenuItem(menu[1], "", false, !readOnly))
             current.RemoveAfter(frame);
