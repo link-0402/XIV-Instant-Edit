@@ -172,6 +172,27 @@ The "My physics mod" starting point is gone; "Loaded now" opens whichever saved 
   (XIV Bridge tests/instant-edit/physics/20, 2026-10-15: both saved mods off; "XIVBridgeTest IE
   Physics is off. Your other physics mods apply again." names only the one that was on.)
 
+## Skirt fit to Customize+ (2026-10-23, pending)
+
+Physics runs before Customize+, so the fit now places skirt shapes where Customize+ draws the body.
+Use a profile that moves the thighs (yours: j_asi_a 3 cm, j_asi_b about 1.4 cm) and a skirt mod
+that uses the game's j_sk bones.
+
+- [ ] "Fit to my body": "Left thigh (...)" and "Right thigh (...)" read "..., moved N cm" in Fits,
+  and the tooltip ends "Moves it N cm to where Customize+ puts your body".
+- [ ] "Left/Right butt cheek, for the skirt" are listed unticked, Now "none". Tick both and Apply.
+- [ ] Under the list, "Waistband: set in Customize+" names the skirt bones with X/Y/Z moves.
+  Enter them in your Customize+ profile's Position and check the waistband in game.
+- [ ] Preview, standing in GPose: the skirt hangs off the thighs and butt instead of through them.
+  Walk and run: the back of the skirt slides over the butt. Wrong would look like the skirt held
+  further off one side of a thigh than before while sinking into the other side: that would mean
+  physics sees Customize+ after all (Customize+ applies in a render hook, so it shouldn't).
+  On your IE Physics file both thigh capsules sit on j_asi_a, which your profile moves mostly
+  along the leg, so expect them to move about 3 cm down the leg and only about 0.5 cm sideways.
+- [ ] Fit again: the butt cheeks are no longer unticked extras and nothing else changes.
+- [ ] Known: the overlay draws shapes on the pose after Customize+, so moved skirt shapes show
+  off the leg by the Customize+ move there. Judge by the skirt, not the overlay.
+
 ## Adding areas back
 
 - [ ] Untick the skirt (or delete it), save, and reopen with Loaded now: "+ Skirt" is listed under

@@ -28,9 +28,11 @@ internal sealed record PhysicsTarget(PhysicsCharacter Character, Guid Collection
 
 /// <summary>
 /// Your body as the game draws it, standing in the measuring pose, to fit physics to; what to know
-/// about the measuring; and a line saying what shaped it.
+/// about the measuring; and a line saying what shaped it. <see cref="Unshaped"/> is the same body in the
+/// rest pose without Customize+, where physics places its shapes; null without a Customize+ profile.
 /// </summary>
-internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings, string Note = "");
+internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings, string Note = "",
+    PhysicsBody? Unshaped = null);
 
 /// <summary>
 /// The physics builder's game side: finds your character, its skeleton and the body physics its
@@ -385,9 +387,11 @@ internal sealed class PhysicsBuilderService : IDisposable
         var measured = await Task.Run(() => PhysicsBody.Measure(models, rest, pose), token).ConfigureAwait(false);
         if (measured.MissingBones > 0)
             warnings.Add($"Your skeleton lacks {measured.MissingBones} bones your body models use; their skin was measured unposed.");
+        // Physics runs before Customize+, so skirt shapes and skirt bone moves need the body without it too.
+        var unshaped = plus is null ? null : await Task.Run(() => PhysicsBody.Measure(models, rest, rest), token).ConfigureAwait(false);
         var shaped = plus is null ? "your body mod" : "your body mod and Customize+ profile";
         var note = look.Female ? $"Measured standing still with {shaped}, bust size {look.BustSize}." : $"Measured standing still with {shaped}.";
-        return new PhysicsBodyMeasure(measured, skeleton, warnings, note);
+        return new PhysicsBodyMeasure(measured, skeleton, warnings, note, unshaped);
     }
 
     private byte[]? ReadModel(string actual)

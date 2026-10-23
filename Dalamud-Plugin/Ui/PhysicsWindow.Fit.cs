@@ -38,7 +38,7 @@ internal sealed partial class PhysicsWindow
                 StartFit(current);
         }
         Tip("Measures your body standing still, with your body mod, Customize+ and bust size. Sizes the collision and keeps " +
-            "swings from sinking into your body. Take your gear off first. You see every change first.\n\n" +
+            "swings from sinking into your body. Fits the skirt to your Customize+ shape. Take your gear off first. You see every change first.\n\n" +
             BustScalingNote);
     }
 
@@ -61,7 +61,7 @@ internal sealed partial class PhysicsWindow
         fitting = Task.Run(async () =>
         {
             var measured = await service.MeasureBodyAsync(life.Token).ConfigureAwait(false);
-            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt), measured.Warnings, measured.Note, measured, file);
+            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt, measured.Unshaped), measured.Warnings, measured.Note, measured, file);
         });
     }
 
@@ -76,13 +76,13 @@ internal sealed partial class PhysicsWindow
                 Say(FeedbackSeverity.Error, Unwrap(refitted.Exception));
             else if (fit is { } before && ReferenceEquals(refitFile, fitFile))
             {
-                // Settings you unticked stay unticked; the new tip places start ticked.
-                var unticked = Enumerable.Range(0, before.Items.Count).Where(i => before.Items[i].Changes && !fitChosen.Contains(i))
-                    .Select(i => FitKey(before.Items[i])).ToHashSet();
+                // Settings keep their ticks; new ones, like the new tip places, start as a first fit's do.
+                var ticked = Enumerable.Range(0, before.Items.Count).Where(i => before.Items[i].Changes)
+                    .ToDictionary(i => FitKey(before.Items[i]), fitChosen.Contains);
                 fit = refitted.Result;
                 fitChosen.Clear();
                 for (var i = 0; i < fit.Items.Count; i++)
-                    if (fit.Items[i].Changes && !unticked.Contains(FitKey(fit.Items[i])))
+                    if (fit.Items[i].Changes && ticked.GetValueOrDefault(FitKey(fit.Items[i]), !fit.Items[i].Optional))
                         fitChosen.Add(i);
             }
         }
@@ -97,10 +97,10 @@ internal sealed partial class PhysicsWindow
         (fit, fitWarnings, fitNote, fitMeasure, fitFile) = done.Result;
         fitChosen.Clear();
         for (var i = 0; i < fit.Items.Count; i++)
-            if (fit.Items[i].Changes)
+            if (fit.Items[i].Changes && !fit.Items[i].Optional)
                 fitChosen.Add(i);
         // With breast tips, the review also offers where they go, even when everything fits already.
-        if (fitChosen.Count == 0 && fit.Notes.Count == 0 && fitWarnings.Count == 0 && !fit.BreastTips)
+        if (fit.Items.All(item => !item.Changes) && fit.Notes.Count == 0 && fitWarnings.Count == 0 && !fit.BreastTips && fit.Waist.Count == 0)
         {
             Say(FeedbackSeverity.Success, fit.Items.Count == 0
                 ? "Nothing in this file fits to a body, so there is nothing to change."
@@ -161,14 +161,17 @@ internal sealed partial class PhysicsWindow
                     }
                     Tip(item.Detail);
                     ImGui.TableNextColumn();
-                    ImGui.TextColored(Theme.Muted, FitValue(item, item.Current));
+                    ImGui.TextColored(Theme.Muted, item.Shape is { NewOn: not null } && item.Current <= 0 ? "none" : FitValue(item, item.Current));
                     ImGui.TableNextColumn();
                     // A tip's size follows its tip place while that's ticked.
                     var fitted = item.FittedWith(PhysicsFit.MovesPlace(fitChosen.Select(chosen => result.Items[chosen]), item));
-                    ImGui.TextColored(fitted > item.Current ? Theme.Accent : Theme.Info, FitValue(item, fitted));
+                    var moved = item.Shape is { Distance: >= 0.005f } shape ? $", moved {shape.Distance * 100:0.0} cm" : "";
+                    ImGui.TextColored(fitted > item.Current ? Theme.Accent : Theme.Info, FitValue(item, fitted) + moved);
                 }
             }
         }
+        if (result.Waist.Count > 0)
+            DrawWaist(result.Waist);
         var same = result.Items.Count - changing.Count;
         if (same > 0)
             Widgets.Hint($"{same} setting{(same == 1 ? " already fits" : "s already fit")}.");
@@ -196,6 +199,20 @@ internal sealed partial class PhysicsWindow
             fitMeasure = null;
             fitFile = null;
             ImGui.CloseCurrentPopup();
+        }
+    }
+
+    /// <summary> The skirt bones to move in Customize+, which physics can't move. </summary>
+    private static void DrawWaist(IReadOnlyList<PhysicsWaistMove> waist)
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(Theme.Label, "Waistband: set in Customize+");
+        Widgets.MutedWrapped("Physics can't move where a skirt starts. Add these to the bones' Position in your Customize+ profile:");
+        foreach (var move in waist)
+        {
+            var t = move.Translation;
+            ImGui.TextUnformatted(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"{move.Bone}: X {t.X:+0.000;-0.000}, Y {t.Y:+0.000;-0.000}, Z {t.Z:+0.000;-0.000} ({move.Distance * 100:0.0} cm out)"));
         }
     }
 
@@ -233,7 +250,7 @@ internal sealed partial class PhysicsWindow
         saveConfig();
         var tipAt = TipAt;
         refitFile = file;
-        refitting = Task.Run(() => PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt));
+        refitting = Task.Run(() => PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt, measured.Unshaped));
     }
 
     private static (PhysicsFitTarget, int, int, string) FitKey(PhysicsFitItem item) => (item.Target, item.Simulator, item.Chain, item.Name);

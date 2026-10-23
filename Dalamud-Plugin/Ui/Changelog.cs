@@ -84,6 +84,7 @@ internal static class ChangelogCatalog
             Entry("Save under a name of your choice, above your other mods. Each name is its own mod, so you can keep several and switch in Penumbra. 'Loaded now' opens whichever is on.", 1),
             Entry("A spring that doesn't pull a part back to where it rests is named for what it does, like Lift or Pull down, instead of Firmness.", 1),
             Entry("'Fit to my body' measures your body standing still, with your body mod, Customize+ and bust size, and sizes the arms, legs and collision tips that bump into each other to match your character's shape. It also places breast tips: on the nipple, or in the middle of the breast so your arms bump into all of it.", 1),
+            Entry("Skirts fit your Customize+ shape: 'Fit to my body' moves the skirt's leg collision to where Customize+ puts your legs, can add collision for your butt, and lists the Customize+ moves that take the waistband out with your hips.", 1),
             Entry("The Physics editor works best in gpose: Make it walk or run in place with one click to watch the physics move, then send it back to idle.", 1),
             Entry("See the area on your character: its tip, swing cone, spring and the shapes it bumps into. Hover a slider to light what it changes. The eye button picks what to show.", 1),
             Entry("Plainer sliders: Settle, Swing limit, Follow pose, Tip length and Tip size. The settings you rarely see are under Advanced.", 1),

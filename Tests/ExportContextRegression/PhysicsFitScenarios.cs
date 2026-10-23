@@ -21,6 +21,151 @@ internal static class PhysicsFitScenarios
         CheckFitApply();
         CheckTipPlace();
         CheckMirror();
+        CheckSkirtShapes();
+        CheckSkirtButtAndWaist();
+    }
+
+    /// <summary> The same skin and weights standing in another pose, like the body without Customize+. </summary>
+    private static PhysicsBody InPose(PhysicsBody body, IReadOnlyDictionary<string, PhysicsFrame> pose)
+        => PhysicsBody.Of(body.Bones, body.Points, body.PointBones, body.PointWeights, body.Areas, pose);
+
+    private static void CheckSkirtShapes()
+    {
+        var (body, skeleton) = SyntheticBody();
+        // At rest the thigh bones sit 3 cm further in; Customize+ moves them out to the middle of the thigh's skin.
+        var rest = body.Pose.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        foreach (var bone in new[] { "j_asi_a_l", "j_asi_b_l" })
+            rest[bone] = rest[bone] with { Position = rest[bone].Position - new Vector3(0.03f, 0, 0) };
+        var unshaped = InPose(body, rest);
+        var file = SyntheticFile(0.12f);
+        var thigh = PhysicsFit.Measure(file, body, skeleton, unshaped: unshaped).Items.First(item => item.Name == "thigh_l");
+        Require(thigh.Shape is { NewOn: null } move && Vector3.Distance(move.Start, new Vector3(0.03f, 0, 0)) < 1e-4f &&
+                Vector3.Distance(move.End, new Vector3(0.03f, 0, 0)) < 1e-4f && MathF.Abs(move.Distance - 0.03f) < 1e-4f &&
+                MathF.Abs(thigh.Fitted - 0.03f) <= 0.0015f && thigh.Changes && !thigh.Optional,
+            "physics fit: a skirt shape moves to where Customize+ puts its bones, as offsets from where they rest, and keeps the size it has there");
+        PhysicsFit.Apply(file, [thigh]);
+        var capsule = file.Collision.Capsules[0];
+        var middle = (rest["j_asi_a_l"].Place(capsule.StartOffset) + rest["j_asi_b_l"].Place(capsule.EndOffset)) / 2;
+        Require(Vector3.Distance(middle, new Vector3(0.1f, 0.7f, 0)) < 1e-4f && MathF.Abs(capsule.Radius - thigh.Fitted) < 1e-6f,
+            "physics fit: physics then places the skirt's thigh shape in the middle of the thigh's skin, where Customize+ draws it");
+        Require(PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton).Items.First(item => item.Name == "thigh_l").Shape is null,
+            "physics fit: measured without the body at rest, skirt shapes stay where they are");
+
+        var shared = SyntheticFile(0.12f);
+        shared.Simulators[1].Collisions.Add(new PhybCollisionRef { Name = PhybName.From("thigh_l"), Type = PhybCollisionType.Outside });
+        shared.Simulators[1].Chains[0].Nodes[1].CollisionFlags |= 4;
+        var sharedFit = PhysicsFit.Measure(shared, body, skeleton, unshaped: unshaped);
+        Require(sharedFit.Items.First(item => item.Name == "thigh_l").Shape is null &&
+                sharedFit.Notes.Any(note => note.StartsWith("thigh_l: Customize+ moves its bones 3.0 cm", StringComparison.Ordinal)),
+            "physics fit: a shape body areas bump into too stays on its bones, and the fit says why");
+    }
+
+    /// <summary>
+    /// Hips with skin 9 cm around at rest and <paramref name="hips"/> with Customize+, a butt cheek on each side
+    /// (a half ball 6 cm wide, behind its bone, a third carried by it), and a skirt bone starting 10 cm out.
+    /// </summary>
+    private static (PhysicsBody Body, PhysicsSkeleton Skeleton) HipsBody(float hips, Vector3 skirtStart)
+    {
+        var skeleton = new PhysicsSkeleton(
+        [
+            new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_kosi", "n_root", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("iv_shiri_l", "j_kosi", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("iv_shiri_r", "j_kosi", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_sk_f_a_l", "j_kosi", Vector3.Zero, Quaternion.Identity),
+        ]);
+        var pose = new Dictionary<string, PhysicsFrame>(StringComparer.Ordinal)
+        {
+            ["n_root"] = PhysicsFrame.Rest(Vector3.Zero, Quaternion.Identity),
+            ["j_kosi"] = PhysicsFrame.Rest(new Vector3(0, 1, 0), Quaternion.Identity),
+            ["iv_shiri_l"] = PhysicsFrame.Rest(new Vector3(0.07f, 0.95f, 0), Quaternion.Identity),
+            ["iv_shiri_r"] = PhysicsFrame.Rest(new Vector3(-0.07f, 0.95f, 0), Quaternion.Identity),
+            ["j_sk_f_a_l"] = PhysicsFrame.Rest(skirtStart, Quaternion.Identity),
+        };
+        string[] bones = ["j_kosi", "iv_shiri_l", "iv_shiri_r"];
+        var points = new List<Vector3>();
+        var pointBones = new List<int>();
+        var pointWeights = new List<float>();
+        void Add(Vector3 point, params (int Bone, float Weight)[] weights)
+        {
+            points.Add(point);
+            for (var i = 0; i < PhysicsBody.Influences; i++)
+            {
+                pointBones.Add(i < weights.Length ? weights[i].Bone : -1);
+                pointWeights.Add(i < weights.Length ? weights[i].Weight : 0);
+            }
+        }
+        for (var y = 0.98f; y <= 1.021f; y += 0.01f)
+            for (var a = 0; a < 36; a++)
+                Add(new Vector3(hips * MathF.Cos(a * MathF.Tau / 36), y, hips * MathF.Sin(a * MathF.Tau / 36)), (0, 1f));
+        foreach (var (x, bone) in new[] { (0.07f, 1), (-0.07f, 2) })
+            for (var ring = 0; ring <= 12; ring++)
+            {
+                var polar = ring * (MathF.PI / 2) / 12;
+                var count = ring == 0 ? 1 : 24;
+                for (var a = 0; a < count; a++)
+                {
+                    var angle = a * MathF.Tau / count;
+                    Add(new Vector3(x + 0.06f * MathF.Sin(polar) * MathF.Cos(angle), 0.95f + 0.06f * MathF.Sin(polar) * MathF.Sin(angle),
+                        -0.08f - 0.06f * MathF.Cos(polar)), (0, 0.7f), (bone, 0.3f));
+                }
+            }
+        return (PhysicsBody.Of(bones, points.ToArray(), pointBones.ToArray(), pointWeights.ToArray(), Enumerable.Repeat(1e-4f, points.Count).ToArray(), pose),
+            skeleton);
+    }
+
+    private static PhybFile SkirtFile()
+    {
+        var file = new PhybFile();
+        var simulator = new PhybSimulator { Group = 2 };
+        simulator.Chains.Add(new PhybChain
+        {
+            LastBoneOffset = new Vector3(0.3f, 0, 0),
+            Nodes = [new PhybNode { Bone = PhybName.From("j_sk_f_a_l") }, new PhybNode { Radius = 0.04f }],
+        });
+        file.Simulators.Add(simulator);
+        return file;
+    }
+
+    private static void CheckSkirtButtAndWaist()
+    {
+        var start = new Vector3(0.1f, 1, 0);
+        var (body, skeleton) = HipsBody(0.12f, start);
+        var (unshaped, _) = HipsBody(0.09f, start);
+        var file = SkirtFile();
+        var fit = PhysicsFit.Measure(file, body, skeleton, unshaped: unshaped);
+        var butts = fit.Items.Where(item => item.Name.StartsWith(PhysicsFit.SkirtButtPrefix, StringComparison.Ordinal)).ToList();
+        Require(butts.Count == 2 && butts.All(item => item is { Target: PhysicsFitTarget.Sphere, Optional: true, Current: 0, Changes: true, Shape.NewOn: "j_kosi" } &&
+                                                      MathF.Abs(item.Fitted - 0.02f) <= 0.003f) &&
+                butts.First(item => item.Name.EndsWith("_l", StringComparison.Ordinal)).Shape is { } left &&
+                Vector3.Distance(left.Start, new Vector3(0.07f, -0.05f, -0.08f)) < 0.005f,
+            "physics fit: a skirt without butt collision is offered an unticked ball in each butt cheek, on the hips, as big as the cheek less the skirt's size");
+        Require(fit.Waist is [{ Bone: "j_sk_f_a_l" } waist] && Vector3.Distance(waist.Translation, new Vector3(0.03f, 0, 0)) < 0.002f,
+            "physics fit: the bone a skirt starts from gets a Customize+ move out as far as the hips there grew");
+
+        PhysicsFit.Apply(file, butts);
+        Require(file.Collision.Spheres.Count == 2 && file.Collision.Spheres.All(sphere => sphere.Bone.Text == "j_kosi") &&
+                PhysicsCollisions.State(file, [(0, 0)], PhysicsFit.SkirtButtPrefix + "l") == PhysicsBumps.All &&
+                PhysicsCollisions.State(file, [(0, 0)], PhysicsFit.SkirtButtPrefix + "r") == PhysicsBumps.All,
+            "physics fit: applying adds the balls and the skirt bumps into them");
+        var bytes = file.ToBytes();
+        Require(PhybFile.Parse(bytes).ToBytes().AsSpan().SequenceEqual(bytes), "physics fit: a file with the skirt's butt balls writes and reads back the same");
+        var again = PhysicsFit.Measure(file, body, skeleton, unshaped: unshaped);
+        Require(again.Items.Count(item => item.Name.StartsWith(PhysicsFit.SkirtButtPrefix, StringComparison.Ordinal)) == 2 &&
+                again.Items.All(item => !item.Changes && !item.Optional),
+            "physics fit: fitting again measures the balls it added, which already fit");
+
+        var own = SkirtFile();
+        own.Collision.Spheres.Add(new PhybSphere { Name = PhybName.From("butt_l"), Bone = PhybName.From("iv_shiri_l"), Thickness = 0.05f });
+        own.Simulators[0].Collisions.Add(new PhybCollisionRef { Name = PhybName.From("butt_l"), Type = PhybCollisionType.Outside });
+        own.Simulators[0].Chains[0].Nodes[1].CollisionFlags = 1;
+        Require(PhysicsFit.Measure(own, body, skeleton, unshaped: unshaped).Items.All(item => !item.Name.StartsWith(PhysicsFit.SkirtButtPrefix, StringComparison.Ordinal)),
+            "physics fit: a skirt that already bumps into the butt gets no balls of the fit's");
+
+        var (moved, _) = HipsBody(0.12f, start + new Vector3(0.03f, 0, 0));
+        Require(PhysicsFit.Measure(SkirtFile(), moved, skeleton, unshaped: unshaped).Waist.Count == 0 &&
+                PhysicsFit.Measure(SkirtFile(), body, skeleton).Waist.Count == 0,
+            "physics fit: no Customize+ move for a skirt bone Customize+ already moves out, or without the body at rest");
     }
 
     private static void CheckDrawnModels()
