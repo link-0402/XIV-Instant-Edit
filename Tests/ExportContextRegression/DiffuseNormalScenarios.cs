@@ -38,9 +38,10 @@ internal static class DiffuseNormalScenarios
         using (var n = Image.Load<Rgba32>(made!))
         {
             Require(n.Width == 256 && n.Height == 256, "diffuse normal: the normal keeps the diffuse's size");
-            Require(n[160, 106].G > 140, $"diffuse normal: the top edge of a bright bump points up, green over 128 ({n[160, 106].G})");
-            Require(n[182, 128].R > 140, $"diffuse normal: the right edge of a bright bump points right, red over 128 ({n[182, 128].R})");
-            Require(n[160, 150].G < 116 && n[138, 128].R < 116, "diffuse normal: the bottom and left edges point the other way");
+            // A 20-pixel disk on a 256 texture is a broad bump (160 pixels at 2048), so its edges lean only a little.
+            Require(n[160, 106].G > 130, $"diffuse normal: the top edge of a bright bump points up, green over 128 ({n[160, 106].G})");
+            Require(n[182, 128].R > 130, $"diffuse normal: the right edge of a bright bump points right, red over 128 ({n[182, 128].R})");
+            Require(n[160, 150].G < 126 && n[138, 128].R < 126, $"diffuse normal: the bottom and left edges point the other way ({n[160, 150].G},{n[138, 128].R})");
             Require(n[20, 20].B == 0 && n[200, 20].B == 255, "diffuse normal: blue is the diffuse's alpha, the opacity");
             Require(n[20, 20].R == 128 && n[20, 20].G == 128, "diffuse normal: transparent pixels are flat");
             Require(Math.Abs(n[64, 40].R - 128) <= 3 && Math.Abs(n[64, 40].G - 128) <= 3,
@@ -75,6 +76,30 @@ internal static class DiffuseNormalScenarios
         using (var a = Image.Load<Rgba32>(made!))
         using (var b = Image.Load<Rgba32>(stronger!))
             Require(b[182, 128].R > a[182, 128].R, "diffuse normal: a higher strength makes deeper bumps");
+
+        // The same diffuse at 1024 and at 2048 makes the same bumps: the game reads a normal's directions, not its pixels.
+        float Relief(int size)
+        {
+            var path = Path.Combine(root, $"waves{size}.png");
+            using (var waves = new Image<Rgba32>(size, size))
+            {
+                for (int y = 0; y < size; y++)
+                    for (int x = 0; x < size; x++)
+                    {
+                        var v = (byte)(128 + 60 * Math.Sin(2 * Math.PI * 8 * x / size) * Math.Sin(2 * Math.PI * 8 * y / size));
+                        waves[x, y] = new Rgba32(v, v, v, 255);
+                    }
+                waves.SaveAsPng(path);
+            }
+            using var normal = DiffuseNormal.Make(path, 1f);
+            double sum = 0;
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                    sum += Math.Abs(normal[x, y].R - 128) + Math.Abs(normal[x, y].G - 128);
+            return (float)(sum / (size * size));
+        }
+        float small = Relief(1024), large = Relief(2048);
+        Require(Math.Abs(small / large - 1) < 0.15f, $"diffuse normal: the relief doesn't change with the texture's size ({small:0.0} at 1024, {large:0.0} at 2048)");
 
         tex.SourcePath = Path.Combine(root, "missing.png");
         Require(AlphaNormal.SourceOf(tex, cache, out var missing) == null && missing.Contains("diffuse not found"),

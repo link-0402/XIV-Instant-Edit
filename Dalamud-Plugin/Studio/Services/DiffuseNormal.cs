@@ -19,7 +19,7 @@ namespace InstantEdit.Studio.Services;
 /// </summary>
 internal static class DiffuseNormal
 {
-    private const string Version = "1";
+    private const string Version = "2";
 
     /// <summary>The made normal for a slot (made if needed), or null with why.</summary>
     public static string? SourceOf(TextureSlot tex, string? cacheDirectory, out string error)
@@ -128,7 +128,8 @@ internal static class DiffuseNormal
             }
         }
 
-        float scale = strength * 0.75f / (k * spread);
+        // A bump spans k times the pixels of a 2048's, so its slope per pixel is 1/k as steep: times k, the same relief at any size.
+        float scale = strength * 0.75f * k / spread;
         var image = new Image<Rgba32>(w, h);
         image.ProcessPixelRows(rows =>
         {
