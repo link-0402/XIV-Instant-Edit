@@ -75,6 +75,13 @@ internal static class UiViewModelScenarios
                 Role("g_SamplerSpecular", "chara/x_m.tex") == TextureRole.Other &&
                 Role("g_SamplerCatchlight", "chara/common/texture/sphere_d_array.tex") == TextureRole.Other,
             "Penumbra's sampler names decide the role over the file name");
+        string Shown(string name) => ResourceViews.FromNode(Node("Tex", name, "chara/x.tex", @"C:\mods\Mod\x.tex")).DisplayName;
+        Require(Shown("g_SamplerNormal") == "Normal" && Shown("g_SamplerDiffuse") == "Diffuse" &&
+                Shown("g_SamplerMask") == "Mask" && Shown("g_SamplerIndex") == "Index" &&
+                Shown("g_SamplerNormal2") == "Second normal" && Shown("g_SamplerWrinklesMask") == "Wrinkles mask" &&
+                Shown("g_SamplerTileNormal") == "Tile normal" && Shown("g_SamplerNormal3") == "Normal 3" &&
+                Shown("Texture #2") == "Texture #2" && Shown("") == "x.tex",
+            "sampler names show as plain names; other names are kept");
         Require(Role("Texture #2", "chara/equipment/e0001/texture/v01_c0101e0001_top_norm.tex") == TextureRole.Normal &&
                 Role("Texture 0x1A2B3C4D", "chara/x_mask.tex") == TextureRole.Mask &&
                 Role("x_id.tex", "chara/x_id.tex") == TextureRole.Index &&

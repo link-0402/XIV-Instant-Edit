@@ -99,7 +99,7 @@ internal sealed record ResourceView(
     /// <summary> This view followed by all of its descendants, depth first. </summary>
     public IReadOnlyList<ResourceView> Flattened => _flattened ??= ResourceViews.Flatten(this).ToArray();
 
-    /// <summary> The name shown in the browser: the resource name or, failing that, its file name. </summary>
+    /// <summary> The name shown in the browser: the resource name (plain for a sampler name) or, failing that, its file name. </summary>
     public string DisplayName => _displayName ??= ResourceViews.DisplayName(Name, ActualPath);
 
     private string? _labelId;
@@ -320,7 +320,8 @@ internal static class ResourceViews
 
     public static string DisplayName(string name, string actualPath)
     {
-        if (!string.IsNullOrWhiteSpace(name)) return name;
+        // Penumbra names a material's textures after their shader samplers (g_SamplerNormal); shown as "Normal".
+        if (!string.IsNullOrWhiteSpace(name)) return TextureRoleClassifier.SamplerLabel(name) ?? name;
         return UiText.Safe(Path.GetFileName(actualPath), "Unnamed resource");
     }
 

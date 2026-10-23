@@ -82,6 +82,7 @@ internal sealed class ResourceSearch
 
         var filter = _text;
         matches = node.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || node.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase)
             || node.Type.Contains(filter, StringComparison.OrdinalIgnoreCase)
             || node.SourceLabel.Contains(filter, StringComparison.OrdinalIgnoreCase)
             || node.SourceModName.Contains(filter, StringComparison.OrdinalIgnoreCase)

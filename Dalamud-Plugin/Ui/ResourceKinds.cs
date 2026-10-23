@@ -81,6 +81,43 @@ internal static class TextureRoleClassifier
         bool Has(string part) => sampler.Contains(part, StringComparison.OrdinalIgnoreCase);
     }
 
+    // Worded as the material editor's sampler labels (ShaderLabels).
+    private static readonly Dictionary<string, string> SamplerLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Normal2"] = "Second normal",
+        ["SphereMap"] = "Sphere map",
+        ["WrinklesMask"] = "Wrinkles mask",
+        ["ReflectionArray"] = "Reflection array",
+    };
+
+    /// <summary>
+    /// A plain name for a shader sampler name: g_SamplerNormal is "Normal", g_SamplerTileNormal "Tile normal".
+    /// Null when the name is not a sampler name.
+    /// </summary>
+    public static string? SamplerLabel(string? name)
+    {
+        if (name is null || !name.StartsWith(SamplerPrefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var sampler = name[SamplerPrefix.Length..].Trim();
+        if (sampler.Length == 0)
+            return null;
+        if (SamplerLabels.TryGetValue(sampler, out var known))
+            return known;
+
+        // Splits the camel case into words, sentence case: TileNormal is "Tile normal", Normal3 "Normal 3".
+        var words = new System.Text.StringBuilder(sampler.Length + 4);
+        for (var i = 0; i < sampler.Length; i++)
+        {
+            var c = sampler[i];
+            var startsWord = i > 0 && (char.IsUpper(c) && !char.IsUpper(sampler[i - 1])
+                                       || char.IsDigit(c) && !char.IsDigit(sampler[i - 1]));
+            if (startsWord && sampler[i - 1] != ' ')
+                words.Append(' ');
+            words.Append(i == 0 ? char.ToUpperInvariant(c) : startsWord ? char.ToLowerInvariant(c) : c);
+        }
+        return words.ToString();
+    }
+
     /// <summary> The role the game's texture naming implies: _n/_norm, _m/_mask, _id and _d/_base. </summary>
     public static TextureRole FromFileName(string? path)
     {
