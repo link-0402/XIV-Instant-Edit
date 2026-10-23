@@ -209,10 +209,15 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 swapSides = !swapSides;
             ImGui.SameLine(0, Theme.Scaled(2));
         }
-        if (TimelineUi.Toggle("##bones-overlay", FontAwesomeIcon.Crosshairs, overlay.OnCharacter, overlay.OnCharacter
-                ? "In GPose the bones show on the character, to select them there and pose them with the gizmo. Click to hide them."
-                : "Show the bones on the character in GPose, to select them there and pose them with the gizmo."))
-            overlay.OnCharacter = !overlay.OnCharacter;
+        var shown = overlay.OnCharacter;
+        if (TimelineUi.Toggle("##bones-overlay", shown == BoneOverlayMode.Selected ? FontAwesomeIcon.DotCircle : FontAwesomeIcon.Crosshairs,
+                shown != BoneOverlayMode.Off, shown switch
+                {
+                    BoneOverlayMode.All => "In GPose all bones show on the character, to select them there and pose them with the gizmo. Click to hide them.",
+                    BoneOverlayMode.Selected => "In GPose only the selected bones show on the character, with the gizmo. Click to show all bones.",
+                    _ => "Show the selected bones on the character in GPose, to pose them with the gizmo. Click again for all bones.",
+                }))
+            overlay.OnCharacter = BoneOverlayModes.Next(shown);
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", posing.Selection.Count > 0))
             posing.Selection.Clear();

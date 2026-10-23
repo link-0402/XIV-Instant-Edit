@@ -31,7 +31,7 @@ public sealed partial class TimelineWindow
 
     private readonly BonesOverlay overlayWindow;
     private readonly ActorPose actorPose = new();
-    private bool showOnCharacter = true;
+    private BoneOverlayMode showOnCharacter = BoneOverlayMode.All;
     private bool gizmoMove;
     // The editor a gizmo drag runs in as one undo step.
     private TimelineEditor? gizmoEditor;
@@ -46,7 +46,7 @@ public sealed partial class TimelineWindow
     internal BonesOverlay Overlay => overlayWindow;
 
     /// <summary>Whether the bones show on the character now: the Bones window is open on a body clip, in GPose.</summary>
-    internal bool OverlayWanted => showOnCharacter && IsOpen && bonesWindow.IsOpen && animations != null &&
+    internal bool OverlayWanted => showOnCharacter != BoneOverlayMode.Off && IsOpen && bonesWindow.IsOpen && animations != null &&
                                    source is { Document: not null, Standalone: false } && editor != null && OverlayActor() != null;
 
     /// <summary>A gizmo drag is running: the overlay takes the mouse.</summary>
@@ -106,7 +106,8 @@ public sealed partial class TimelineWindow
         for (var b = 0; b < count; b++)
         {
             var name = skeleton.Bones[b].Name;
-            dotShown[b] = (PoseMap.Placed.Contains(name) || selection.Contains(name) || layer != null && PoseEdits.Changes(layer, name, targets)) &&
+            dotShown[b] = BoneOverlayModes.Dot(showOnCharacter, selection.Contains(name), PoseMap.Placed.Contains(name),
+                              showOnCharacter == BoneOverlayMode.All && layer != null && PoseEdits.Changes(layer, name, targets)) &&
                           actorPose.Index.TryGetValue(name, out var at) &&
                           PoseGizmo.Project(actorPose.Positions[at], toClip, viewport.Pos, viewport.Size, out dotAt[b]);
         }

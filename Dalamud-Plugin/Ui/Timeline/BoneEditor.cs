@@ -19,8 +19,8 @@ internal interface IBonesOverlay
     /// <summary>Whether the bones show on the character now.</summary>
     bool Shown { get; }
 
-    /// <summary>The Bones window's switch: show the bones on the character in GPose.</summary>
-    bool OnCharacter { get; set; }
+    /// <summary>The Bones window's switch: which bones show on the character in GPose, if any.</summary>
+    BoneOverlayMode OnCharacter { get; set; }
 
     /// <summary>Whether the gizmo moves the bones rather than turns them, for a layer that does both.</summary>
     bool GizmoMoves { get; set; }

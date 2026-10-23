@@ -21,6 +21,7 @@ internal static class PoseEditorFixture
         Layout(check);
         Groups(check);
         Selection(check);
+        Overlay(check);
         Values(check);
         Edits(check);
         Turns(check);
@@ -177,6 +178,19 @@ internal static class PoseEditorFixture
         selection.Click("z", false);
         check(selection.Bones.SequenceEqual(["z"]) && selection.Primary == "z" && selection.Contains("z") && !selection.Contains("q"),
             "a plain click selects only that bone");
+    }
+
+    private static void Overlay(Action<bool, string> check)
+    {
+        check(BoneOverlayModes.Next(BoneOverlayMode.Off) == BoneOverlayMode.Selected && BoneOverlayModes.Next(BoneOverlayMode.Selected) == BoneOverlayMode.All &&
+              BoneOverlayModes.Next(BoneOverlayMode.All) == BoneOverlayMode.Off,
+            "the overlay's switch goes off, selected, all and round again");
+        check(!BoneOverlayModes.Dot(BoneOverlayMode.Off, true, true, true), "an overlay that is off shows no dot");
+        check(BoneOverlayModes.Dot(BoneOverlayMode.Selected, true, false, false) && !BoneOverlayModes.Dot(BoneOverlayMode.Selected, false, true, true),
+            "the selected overlay shows only the selected bones, not the map's or the layer's");
+        check(BoneOverlayModes.Dot(BoneOverlayMode.All, false, true, false) && BoneOverlayModes.Dot(BoneOverlayMode.All, false, false, true) &&
+              BoneOverlayModes.Dot(BoneOverlayMode.All, true, false, false) && !BoneOverlayModes.Dot(BoneOverlayMode.All, false, false, false),
+            "the full overlay shows the map's bones, the selected ones and the ones the layer changes");
     }
 
     private static void Values(Action<bool, string> check)

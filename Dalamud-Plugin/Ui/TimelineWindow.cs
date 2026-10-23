@@ -195,7 +195,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
     // The overlay's state as the bone editor and the Bones window see it.
     bool IBonesOverlay.Shown => OverlayWanted;
-    bool IBonesOverlay.OnCharacter { get => showOnCharacter; set => showOnCharacter = value; }
+    BoneOverlayMode IBonesOverlay.OnCharacter { get => showOnCharacter; set => showOnCharacter = value; }
     bool IBonesOverlay.GizmoMoves { get => gizmoMove; set => gizmoMove = value; }
     string? IBonesOverlay.GizmoWaits(MotionLayer layer, int frame) => GizmoOperation(layer, frame, out var reason) == null ? reason : null;
 
