@@ -40,6 +40,9 @@ internal sealed class MotionDecode(TimelineSession session)
     public static string KeyOf(AnimationTimelineSource loaded) =>
         $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|{loaded.BaseHash}";
 
+    /// <summary>A <see cref="KeyOf"/> without the motion layers apply to (its last part): the same clip on the same skeleton.</summary>
+    public static string ClipPart(string key) => key[..key.LastIndexOf('|')];
+
     /// <summary>Whether the last read failed for <paramref name="loaded"/> as it is now.</summary>
     public bool FailedFor(AnimationTimelineSource loaded) => Error != null && failedKey == KeyOf(session.Fresh(loaded));
 

@@ -407,6 +407,11 @@ def run_conversion_cases(animation):
         require(any(curve.data_path.endswith(".scale") for curve in _fcurves(rig.animation_data.action)),
                 "scale is keyed when the take asks for it")
         scene.render.fps = 30
+        # The plugin's times are single floats: 70 frames of 2.3333333 s fall a hair short of frame 70.
+        times, frames = moving_frames(71)
+        result = animation.apply_take(animation.parse_take(take_body(times=[float(np.float32(t)) for t in times], frames=frames)))
+        require(result["frames"] == 71 and result["frameEnd"] == scene.frame_start + 70,
+                "a take whose single-float length falls just short of a frame keeps its last frame")
 
 
 # Uneven scaling like a Customize+ body template: (translation, scaling) per bone.

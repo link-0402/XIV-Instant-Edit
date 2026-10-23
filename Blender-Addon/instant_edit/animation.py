@@ -403,7 +403,8 @@ def resample(times: np.ndarray, samples: np.ndarray, fps: float):
         raise AnimationApplyError(
             "invalid_scene_frame_rate", "The scene frame rate is not a positive number.",
             "Set a valid frame rate under Output Properties > Format and send the animation again.")
-    count = int(math.floor((times[-1] - times[0]) * fps + 1e-6)) + 1
+    # The plugin's times are single floats: 71 samples at 30 fps end at 2.3333333 s, 69.9999976 frames, still 71 frames.
+    count = int(math.floor((times[-1] - times[0]) * fps + 1e-3)) + 1
     if count > MAX_OUTPUT_FRAMES:
         raise AnimationApplyError(
             "animation_too_long", f"The animation would need {count} frames at the scene frame rate.",

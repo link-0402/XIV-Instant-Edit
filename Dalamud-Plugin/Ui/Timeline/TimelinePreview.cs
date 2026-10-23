@@ -5,6 +5,7 @@ using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 
@@ -47,6 +48,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     private bool liveWanted;
     private bool liveStarted;
+    // The decoded motion the display was started on; a motion from Blender put in or taken out decodes another.
+    private MotionClip? liveDecoded;
     private string? liveError;
     // Until when Live waits for the GPose character to be drawn again, as after the redraw that ends a preview.
     private DateTime? liveDrawWait;
@@ -578,6 +581,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             return;
         liveWanted = false;
         liveStarted = false;
+        liveDecoded = null;
         liveDrawWait = null;
         StopLiveLooks();
         try
@@ -613,11 +617,17 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             liveError = blocked;
             return;
         }
-        if (decode.DecodedKey != null && decode.DecodedKey != MotionDecode.KeyOf(fresh))
+        if (decode.DecodedKey is { } decodedKey && decodedKey != MotionDecode.KeyOf(fresh))
         {
-            StopLive();
-            liveError = "The clip changed. Turn Live on again.";
-            return;
+            // Only the motion changed (a motion from Blender put in or taken out): it is read, and the display starts again on it.
+            if (MotionDecode.ClipPart(decodedKey) == MotionDecode.ClipPart(MotionDecode.KeyOf(fresh)))
+                decode.Ensure(fresh);
+            else
+            {
+                StopLive();
+                liveError = "The clip changed. Turn Live on again.";
+                return;
+            }
         }
         if (decode.Decoded is not { } decoded)
             return;
@@ -653,20 +663,21 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 previewFace = false;
                 previewDocument = null;
                 lastSeekFrame = -1;
-                // After a save the game plays either file until it reloads the clip: the one saved or the one before.
-                if (!session.MotionDisplay.Start(actor, clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
-                        decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
-                        // Edited again, the game plays the saved file, as long as the edit made it.
-                        fresh.BaseMotion != null ? fresh.Clip.Duration : null,
-                        // The game plays the clip's own file; a motion from Blender shows only in a copy.
-                        baseDiffers: current.Document.Replacement != null))
-                {
-                    var error = session.MotionDisplay.Error;
-                    StopLive();
-                    liveError = error;
+                if (!StartDisplay(current, fresh, decoded, actor))
                     return;
-                }
                 liveStarted = true;
+                return;
+            }
+            if (!ReferenceEquals(decoded, liveDecoded))
+            {
+                // The display keeps the motion it started on: it starts again on the new one, the clip playing on.
+                if (fresh.Clip.BindingFingerprint != previewFingerprint || previewActor is not { } shown)
+                {
+                    StopLive();
+                    liveError = "The clip changed. Turn Live on again.";
+                }
+                else
+                    StartDisplay(current, fresh, decoded, shown);
                 return;
             }
             session.MotionDisplay.Show(current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document));
@@ -676,6 +687,26 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             StopLive();
             liveError = e.Message;
         }
+    }
+
+    /// <summary>Starts the display of <paramref name="decoded"/> with the document's edits on the actor; false, with Live off and its error, when it can't.</summary>
+    private bool StartDisplay(TimelineEditor current, AnimationTimelineSource fresh, MotionClip decoded, ushort actor)
+    {
+        // After a save the game plays either file until it reloads the clip: the one saved or the one before.
+        if (session.MotionDisplay!.Start(actor, fresh.Clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
+                decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
+                // Edited again, the game plays the saved file, as long as the edit made it.
+                fresh.BaseMotion != null ? fresh.Clip.Duration : null,
+                // The game plays the clip's own file; a motion from Blender shows only in a copy.
+                baseDiffers: current.Document.Replacement != null))
+        {
+            liveDecoded = decoded;
+            return true;
+        }
+        var error = session.MotionDisplay.Error;
+        StopLive();
+        liveError = error;
+        return false;
     }
 
     /// <summary>
