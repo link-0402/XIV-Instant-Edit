@@ -465,7 +465,7 @@ public sealed class MainWindow : Window, IDisposable
         var rightWidth = Widgets.StatusDotWidth("Penumbra", penumbraValue) + Theme.Scaled(10)
                          + Widgets.StatusDotWidth("Blender", blenderValue) + Theme.Scaled(10)
                          + (_painter.Enabled ? Widgets.StatusDotWidth("Painter", painterDot.Value) + Theme.Scaled(10) : 0)
-                         + frame + style.ItemSpacing.X + frame;
+                         + frame + style.ItemSpacing.X + frame + style.ItemSpacing.X + frame;
         ImGui.SameLine();
         var rightStart = ImGui.GetWindowContentRegionMax().X - rightWidth;
         if (rightStart > ImGui.GetCursorPosX())
@@ -490,6 +490,9 @@ public sealed class MainWindow : Window, IDisposable
         if (Widgets.IconButton("##options", FontAwesomeIcon.SlidersH, "Model import, texture and animation export options"))
             _options.Open();
         _options.Draw();
+        ImGui.SameLine();
+        if (Widgets.IconButton("##settings", FontAwesomeIcon.Cog, "Plugin settings"))
+            _openSettings();
         ImGui.Separator();
         return active;
     }
