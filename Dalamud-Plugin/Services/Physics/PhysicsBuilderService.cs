@@ -81,6 +81,7 @@ internal sealed class PhysicsBuilderService : IDisposable
         this.config = config;
         this.saveConfig = saveConfig;
         Preview = new PhysicsPreviewService(penumbra, previewMods, framework, log, configDirectory, cacheRoot);
+        FitRecords = new PhysicsFitStore(configDirectory);
         if (config.PhysicsModDirectory.Length > 0 && config.PhysicsModIdentifier != Guid.Empty)
         {
             // The one mod from before saves were named.
@@ -93,6 +94,9 @@ internal sealed class PhysicsBuilderService : IDisposable
     }
 
     public PhysicsPreviewService Preview { get; }
+
+    /// <summary> The skirt shape offsets "Fit to my body" wrote, and the ones they replaced. </summary>
+    public PhysicsFitStore FitRecords { get; }
 
     /// <summary> A physics mod was saved before (it may since have been deleted in Penumbra). </summary>
     public bool HasMod => config.PhysicsMods.Count > 0;

@@ -1,6 +1,8 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Physics;
+using FitOriginals = System.Collections.Generic.IReadOnlyDictionary<(InstantEdit.Services.Physics.PhysicsFitTarget Target, string Name),
+    (System.Numerics.Vector3 Start, System.Numerics.Vector3 End)>;
 
 namespace InstantEdit.Ui;
 
@@ -11,7 +13,7 @@ internal sealed partial class PhysicsWindow
     /// <summary> The fit scales breasts by the game's own racial ranges, read from its data, which a mod changing them doesn't reach. </summary>
     private const string BustScalingNote = "The fit uses the game's own racial bust scaling, so remove any mod that changes it.";
 
-    private Task<(PhysicsFitResult Fit, IReadOnlyList<string> Warnings, string Note, PhysicsBodyMeasure Measure, PhybFile File)>? fitting;
+    private Task<(PhysicsFitResult Fit, IReadOnlyList<string> Warnings, string Note, PhysicsBodyMeasure Measure, PhybFile File, FitOriginals Originals)>? fitting;
     private Task<PhysicsFitResult>? refitting;
     // The file the running refit measures: a result for another fit's file is dropped.
     private PhybFile? refitFile;
@@ -19,6 +21,8 @@ internal sealed partial class PhysicsWindow
     // The body and file the fit measured, kept so a new tip place is measured on the same ones.
     private PhysicsBodyMeasure? fitMeasure;
     private PhybFile? fitFile;
+    // What earlier fits moved the file's skirt shapes from, which the fit measured from and applying records again.
+    private FitOriginals? fitOriginals;
     private IReadOnlyList<string> fitWarnings = [];
     private string fitNote = string.Empty;
     private readonly HashSet<int> fitChosen = [];
@@ -54,6 +58,7 @@ internal sealed partial class PhysicsWindow
         if (Busy)
             return;
         var file = current.File.Clone();
+        var race = current.Race;
         var tipAt = TipAt;
         fitDocument = current;
         fitRevision = current.Revision;
@@ -61,7 +66,9 @@ internal sealed partial class PhysicsWindow
         fitting = Task.Run(async () =>
         {
             var measured = await service.MeasureBodyAsync(life.Token).ConfigureAwait(false);
-            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt, measured.Unshaped), measured.Warnings, measured.Note, measured, file);
+            var originals = service.FitRecords.Originals(file, race);
+            return (PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt, measured.Unshaped, originals), measured.Warnings, measured.Note, measured,
+                file, (FitOriginals)originals);
         });
     }
 
@@ -95,7 +102,7 @@ internal sealed partial class PhysicsWindow
             Say(FeedbackSeverity.Error, Unwrap(done.Exception));
             return;
         }
-        (fit, fitWarnings, fitNote, fitMeasure, fitFile) = done.Result;
+        (fit, fitWarnings, fitNote, fitMeasure, fitFile, fitOriginals) = done.Result;
         fitChosen.Clear();
         for (var i = 0; i < fit.Items.Count; i++)
             if (fit.Items[i].Changes && !fit.Items[i].Optional)
@@ -199,6 +206,7 @@ internal sealed partial class PhysicsWindow
             fit = null;
             fitMeasure = null;
             fitFile = null;
+            fitOriginals = null;
             ImGui.CloseCurrentPopup();
         }
     }
@@ -250,25 +258,34 @@ internal sealed partial class PhysicsWindow
         config.PhysicsFitTipMiddle = middle;
         saveConfig();
         var tipAt = TipAt;
+        var originals = fitOriginals;
         refitFile = file;
-        refitting = Task.Run(() => PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt, measured.Unshaped));
+        refitting = Task.Run(() => PhysicsFit.Measure(file, measured.Body, measured.Skeleton, tipAt, measured.Unshaped, originals));
     }
 
     private static (PhysicsFitTarget, int, int, string) FitKey(PhysicsFitItem item) => (item.Target, item.Simulator, item.Chain, item.Name);
 
     private void ApplyFit(PhysicsDocument current, PhysicsFitResult result)
     {
+        var (measuredFile, originals) = (fitFile, fitOriginals);
         fit = null;
         fitMeasure = null;
         fitFile = null;
+        fitOriginals = null;
         // The sizes name shapes by name and chains by place, measured on the file as it was.
-        if (!ReferenceEquals(current, fitDocument) || current.Revision != fitRevision)
+        if (!ReferenceEquals(current, fitDocument) || current.Revision != fitRevision || measuredFile is null)
         {
             Say(FeedbackSeverity.Warning, "Your physics changed while your body was measured. Fit again.");
             return;
         }
         var chosen = fitChosen.Order().Select(i => result.Items[i]).ToList();
         Change(current, () => PhysicsFit.Apply(current.File, chosen), FitLabel);
+        // Remembered as soon as it's in the file: a later fit uses a record only while the shape is still exactly where this one put it.
+        try { service.FitRecords.Record(measuredFile, current.Race, chosen, originals); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log.Warning(e, "Could not remember the skirt shapes the fit moved; fitting this file again may move them twice.");
+        }
         Say(FeedbackSeverity.Success, $"Fitted {chosen.Count} setting{(chosen.Count == 1 ? "" : "s")} to your body. Preview to see them.");
     }
 }

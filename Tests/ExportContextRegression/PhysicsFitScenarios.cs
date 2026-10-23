@@ -43,22 +43,72 @@ internal static class PhysicsFitScenarios
                 Vector3.Distance(move.End, new Vector3(0.03f, 0, 0)) < 1e-4f && MathF.Abs(move.Distance - 0.03f) < 1e-4f &&
                 MathF.Abs(thigh.Fitted - 0.03f) <= 0.0015f && thigh.Changes && !thigh.Optional,
             "physics fit: a skirt shape moves to where Customize+ puts its bones, as offsets from where they rest, and keeps the size it has there");
+        var before = file.Clone();
         PhysicsFit.Apply(file, [thigh]);
         var capsule = file.Collision.Capsules[0];
         var middle = (rest["j_asi_a_l"].Place(capsule.StartOffset) + rest["j_asi_b_l"].Place(capsule.EndOffset)) / 2;
         Require(Vector3.Distance(middle, new Vector3(0.1f, 0.7f, 0)) < 1e-4f && MathF.Abs(capsule.Radius - thigh.Fitted) < 1e-6f,
             "physics fit: physics then places the skirt's thigh shape in the middle of the thigh's skin, where Customize+ draws it");
-        var refit = PhysicsFit.Measure(file, body, skeleton, unshaped: unshaped).Items.First(item => item.Name == "thigh_l");
-        Require(refit.Shape is null && !refit.Changes && refit.Fitted == refit.Current,
-            "physics fit: fitting a fitted file again leaves its skirt shape where it is, without adding the Customize+ move twice");
         // At rest the thigh bones sit 3 cm higher instead: Customize+ moves them only along the thigh.
         var higher = body.Pose.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
         foreach (var bone in new[] { "j_asi_a_l", "j_asi_b_l" })
             higher[bone] = higher[bone] with { Position = higher[bone].Position + new Vector3(0, 0.03f, 0) };
-        Require(PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton, unshaped: InPose(body, higher)).Items.First(item => item.Name == "thigh_l").Shape is null,
-            "physics fit: a move only along the shape can't be told from one already made, so the shape stays");
+        Require(PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton, unshaped: InPose(body, higher)).Items.First(item => item.Name == "thigh_l").Shape is { } along &&
+                Vector3.Distance(along.Start, new Vector3(0, -0.03f, 0)) < 1e-4f && MathF.Abs(along.Distance - 0.03f) < 1e-4f,
+            "physics fit: a Customize+ move only along the shape, like a lowered knee, moves it too");
         Require(PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton).Items.First(item => item.Name == "thigh_l").Shape is null,
             "physics fit: measured without the body at rest, skirt shapes stay where they are");
+
+        var root = Path.Combine(Path.GetTempPath(), "ie-physics-fit-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            const ushort race = 201;
+            new PhysicsFitStore(Path.Combine(root, "config")).Record(before, race, [thigh], null);
+            // A new store reads what the first one saved.
+            var store = new PhysicsFitStore(Path.Combine(root, "config"));
+            var originals = store.Originals(file, race);
+            Require(originals.TryGetValue((PhysicsFitTarget.Capsule, "thigh_l"), out var original) && original == (Vector3.Zero, Vector3.Zero) &&
+                    store.Originals(file, 101).Count == 0 && store.Originals(before, race).Count == 0,
+                "physics fit: applying remembers the skirt shape's offsets before the fit, for that race's file while it holds what the fit wrote");
+            var refit = PhysicsFit.Measure(file, body, skeleton, unshaped: unshaped, originals: originals).Items.First(item => item.Name == "thigh_l");
+            Require(refit.Shape is null && !refit.Changes && refit.Fitted == refit.Current,
+                "physics fit: fitting a fitted file again with the same body changes nothing, without adding the Customize+ move twice");
+            Require(PhysicsFit.Measure(file, body, skeleton, originals: originals).Items.First(item => item.Name == "thigh_l").Shape is null,
+                "physics fit: without the body at rest, a fitted skirt shape stays where it is");
+
+            // Customize+ now moves the thigh bones 5 cm out instead of 3: the shape goes where a first fit with that shape puts it.
+            var further = body.Pose.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+            foreach (var bone in new[] { "j_asi_a_l", "j_asi_b_l" })
+                further[bone] = further[bone] with { Position = further[bone].Position - new Vector3(0.05f, 0, 0) };
+            var first = PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton, unshaped: InPose(body, further)).Items.First(item => item.Name == "thigh_l");
+            var changed = PhysicsFit.Measure(file, body, skeleton, unshaped: InPose(body, further), originals: originals).Items.First(item => item.Name == "thigh_l");
+            Require(changed.Shape is { } moved && first.Shape is { } fresh && Vector3.Distance(moved.Start, fresh.Start) < 1e-4f &&
+                    Vector3.Distance(moved.End, fresh.End) < 1e-4f && MathF.Abs(moved.Distance - 0.02f) < 1e-4f && changed.Changes,
+                "physics fit: a changed Customize+ shape moves a fitted skirt shape from where it was before the first fit, not from the moved place");
+            var refitted = file.Clone();
+            PhysicsFit.Apply(refitted, [changed]);
+            store.Record(file, race, [changed], originals);
+            Require(store.Originals(refitted, race).TryGetValue((PhysicsFitTarget.Capsule, "thigh_l"), out var kept) && kept == (Vector3.Zero, Vector3.Zero) &&
+                    store.Originals(file, race).Count == 1,
+                "physics fit: a fit from a remembered original remembers that original again, and the earlier record stays for undo");
+
+            // Moved by hand since the fit: it fits as new, from where it is now.
+            var edited = file.Clone();
+            edited.Collision.Capsules[0].StartOffset += new Vector3(0.001f, 0, 0);
+            var editedOriginals = store.Originals(edited, race);
+            Require(editedOriginals.Count == 0 &&
+                    PhysicsFit.Measure(edited, body, skeleton, unshaped: unshaped, originals: editedOriginals).Items.First(item => item.Name == "thigh_l").Shape is { } anew &&
+                    Vector3.Distance(anew.Start, edited.Collision.Capsules[0].StartOffset + new Vector3(0.03f, 0, 0)) < 1e-4f,
+                "physics fit: a skirt shape changed since the fit wrote it fits as a first fit, from where it is");
+
+            File.WriteAllText(Path.Combine(root, "config", "physics-fit.json"), "{ not json");
+            Require(store.Originals(file, race).Count == 0, "physics fit: an unreadable record file counts as no records");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
 
         var shared = SyntheticFile(0.12f);
         shared.Simulators[1].Collisions.Add(new PhybCollisionRef { Name = PhybName.From("thigh_l"), Type = PhybCollisionType.Outside });
