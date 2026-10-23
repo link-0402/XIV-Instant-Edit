@@ -138,6 +138,7 @@ internal static class TimelineToolsFixture
             new(13, "normal/walk", 2), new(22, "normal/run", 2),
             new(703, "emote/doze", 2), new(657, "emote/j_doze", 2), new(646, "emote/s_doze", 2), new(679, "emote/u_doze", 2),
             new(605, "facial/pose/smile", 0), new(919, "event_base/event_base_idle_celeb", 2), new(5, "", 2),
+            new(164, "normal/telepo", 2), new(163, "normal/dejon", 2),
         ];
         static AnimationLibrary.EmoteRow Emote(uint id, string name, string command, string category, params ushort[] lines) =>
             new(id, name, command, category, [.. lines.Concat(Enumerable.Repeat((ushort)0, 7 - lines.Length))]);
@@ -175,6 +176,9 @@ internal static class TimelineToolsFixture
         check(other.Any(i => i.Timeline == 783) && other.Any(i => i.Timeline == 919 && i.Name == "Idle celeb") &&
               other.All(i => i.Timeline is not (3 or 703 or 605 or 5 or 3123 or 642 or 3770)),
             "every other timeline is listed once by a name from its key, rows without a key are not");
+        check(other.Take(2).Select(i => ((int)i.Timeline, i.Name)).SequenceEqual([(163, "Return"), (164, "Teleport")]) &&
+              AnimationLibrary.Matches(other[0], "dejon") && AnimationLibrary.Matches(other[1], "teleport"),
+            "Teleport and Return come first in Other by their names, still found by their keys");
         var withEmpty = AnimationLibrary.Build([.. timelines, new(3188, "emote/dance01_loop", 2), new(3187, "emote/dance01_start", 2)],
             [.. emotes, Emote(102, "Bomb Dance", "/bombdance", "General", 3188, 3187)], new HashSet<ushort> { 3187, 3123, 584 });
         check(withEmpty.Any(i => i.Name == "Bomb Dance") && withEmpty.All(i => i.Timeline is not (3187 or 3123 or 584)) &&

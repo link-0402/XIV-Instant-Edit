@@ -108,7 +108,7 @@ internal sealed class AnimationCatalog
             if (row.RowId is > 0 and <= ushort.MaxValue && !timelines.ContainsKey((ushort)row.RowId) && !row.Key.IsEmpty)
             {
                 var key = row.Key.ExtractText();
-                others[(ushort)row.RowId] = new Timeline((ushort)row.RowId, key, AnimationLibrary.KeyName(key), row.LoadType, row.IsLoop,
+                others[(ushort)row.RowId] = new Timeline((ushort)row.RowId, key, AnimationLibrary.TimelineName(key), row.LoadType, row.IsLoop,
                     [(ushort)row.RowId], []);
             }
         this.others = others;

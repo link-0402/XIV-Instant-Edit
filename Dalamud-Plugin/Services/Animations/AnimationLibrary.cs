@@ -21,7 +21,7 @@ internal sealed record AnimationLibraryItem(AnimationLibraryGroup Group, ushort 
 /// Everything the loader offers, from the Emote and ActionTimeline sheets: emotes with their sitting
 /// and upper-body versions, the standing idles and the ground, chair and bed poses numbered as
 /// /changepose cycles them (each with the start that plays before it), every movement track, the expressions, and every other timeline by its
-/// key. The poses come from the hidden emotes /changepose plays, so a new pose appears by itself.
+/// key (a few by name, such as Teleport and Return). The poses come from the hidden emotes /changepose plays, so a new pose appears by itself.
 /// </summary>
 internal static class AnimationLibrary
 {
@@ -42,6 +42,18 @@ internal static class AnimationLibrary
         (AnimationLibraryGroup.ChairSits, "Chair sit", "Chair sit pose", "emote/sit", new Regex(@"^emote/s_pose(\d+)_loop$", RegexOptions.CultureInvariant)),
         (AnimationLibraryGroup.Lying, "Lying in bed", "Lying pose", "emote/bed_liedown_loop", new Regex(@"^emote/l_pose(\d+)_loop$", RegexOptions.CultureInvariant)),
     ];
+
+    // Other timelines whose keys say little, by the name people know them by. Teleport and Return play the
+    // common cast start and loop, then their own finish (Action 5 and 6).
+    private static readonly Dictionary<string, string> KnownNames = new(StringComparer.Ordinal)
+    {
+        ["normal/magic_cmn_start"] = "Teleport / Return cast start",
+        ["normal/magic_cmn_loop"] = "Teleport / Return cast loop",
+        ["normal/telepo"] = "Teleport",
+        ["normal/telepo_sp1"] = "Teleport (wedding ring)",
+        ["normal/dejon"] = "Return",
+        ["event/event_telepo_depop"] = "Teleport (cutscene)",
+    };
 
     // An emote's timelines after its own: its start, then its versions in these places.
     private static readonly string?[] Versions = [null, "start", "on the ground", "in a chair", "upper body", "lying down", null];
@@ -173,14 +185,18 @@ internal static class AnimationLibrary
         foreach (var (id, name) in AnimationCatalog.Movement.OrderBy(pair => pair.Key))
             Add(AnimationLibraryGroup.Movement, id, name, timelines.TryGetValue(id, out var row) ? row.Key : string.Empty);
 
-        // Every other timeline, by its key.
-        foreach (var row in timelines.Values.OrderBy(row => row.Key, StringComparer.Ordinal).ThenBy(row => row.Id))
+        // Every other timeline: the known ones by name first (Teleport, Return), then the rest by key.
+        foreach (var row in timelines.Values.OrderBy(row => !KnownNames.ContainsKey(row.Key)).ThenBy(row => row.Key, StringComparer.Ordinal)
+                     .ThenBy(row => row.Id))
             if (!listed.Contains(row.Id) && empty?.Contains(row.Id) != true)
-                items.Add(new AnimationLibraryItem(AnimationLibraryGroup.Other, row.Id, KeyName(row.Key),
+                items.Add(new AnimationLibraryItem(AnimationLibraryGroup.Other, row.Id, TimelineName(row.Key),
                     $"#{row.Id.ToString(CultureInfo.InvariantCulture)} · {row.Key}", row.Key,
                     AnimationCatalog.IsExpressionKey(row.LoadType, row.Key)));
         return [.. items.OrderBy(item => item.Group)];
     }
+
+    /// <summary>An other timeline's name: the one people know it by ("normal/telepo" as "Teleport"), or <see cref="KeyName"/>.</summary>
+    internal static string TimelineName(string key) => KnownNames.GetValueOrDefault(key) ?? KeyName(key);
 
     /// <summary>A timeline key as a name: its last part with spaces, "event_base/event_base_chair_talk" as "Chair talk".</summary>
     internal static string KeyName(string key)
