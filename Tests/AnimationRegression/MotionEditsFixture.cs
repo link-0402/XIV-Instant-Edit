@@ -214,6 +214,15 @@ internal static class MotionEditsFixture
         check(copy == "m3" && copied.Motion.Select(l => l.Key).SequenceEqual(["m1", "m3", "m2"]) &&
               MotionEdits.Find(copied, copy) is { Name: "Offset 1 copy", Start: 20, End: 60 } dup && dup.Keys.Length == 2 && copied.NextMotionKey == 4,
             "a copy goes right after its layer, keys and all, with a new key");
+        var whole = doc.Motion[0] with { Start = 0, End = 100, FadeIn = 30, FadeOut = 30 };
+        var pasted = MotionEdits.Paste(Empty(50), [whole, doc.Motion[0] with { Start = 40, End = 90 }], 100, out var pastedKeys, out var pasteError);
+        check(pasteError == null && pastedKeys.SequenceEqual(["m1", "m2"]) &&
+              MotionEdits.Find(pasted, "m1") is { Start: 0, End: 50, FadeIn: 30, FadeOut: 20 } p && p.Keys.Length == 2 &&
+              MotionEdits.Find(pasted, "m2") is { Start: 40, End: 50 },
+            "pasted layers get new keys; a whole-clip layer covers the new clip, others are cut to it");
+        MotionEdits.Paste(doc with { Motion = [.. Enumerable.Range(0, MotionEvaluator.MaxLayers).Select(i => doc.Motion[0] with { Key = $"m{i + 1}" })] },
+            [whole], 100, out _, out var full);
+        check(full != null, "pasting past the layer limit is refused");
         check(MotionEdits.Find(MotionEdits.SetEnabled(doc, "m1", false), "m1") is { Enabled: false } &&
               MotionEdits.Find(MotionEdits.SetBones(doc, "m2", [Hand, Hand, ""]), "m2")!.Bones.SequenceEqual([Hand]),
             "layers turn off, and a bone limit keeps each named bone once");

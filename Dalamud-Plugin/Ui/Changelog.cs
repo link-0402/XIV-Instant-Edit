@@ -67,6 +67,7 @@ internal static class ChangelogCatalog
             Entry("Pick bones on a body map or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),
             Entry("Key a whole pose from a .pose file (Anamnesis, Ktisis or Brio), your posed character or a frame of another animation.", 1),
             Entry("Saved layers stay editable: Edit again brings them back.", 1),
+            Entry("Copy one layer or all of them and paste them into another animation, such as a variant of the same one.", 1),
             Entry("Each key can set how bones get to the next key: smooth, slow start, slow end, hold, or a curve you shape.", 1),
             Entry("Unfold a layer to see a row per bone, and drag one bone's key on its own.", 1),
             Highlight("Animations: the tab is now the listener and the timeline. Every other animation tool is in the Timeline window."),

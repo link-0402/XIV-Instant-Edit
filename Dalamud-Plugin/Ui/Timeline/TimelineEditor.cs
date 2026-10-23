@@ -1272,6 +1272,33 @@ internal sealed class TimelineEditor
         return true;
     }
 
+    // Static so a layer setup carries to the next animation the window (or another one) opens.
+    private static (ImmutableArray<MotionLayer> Layers, int Length) layerClipboard = ([], 0);
+
+    public static bool CanPasteLayers => !layerClipboard.Layers.IsEmpty;
+
+    /// <summary>Keeps the layer <paramref name="key"/>, or every layer when null, for <see cref="PasteLayers"/>.</summary>
+    public bool CopyLayers(string? key = null)
+    {
+        ImmutableArray<MotionLayer> layers = key == null ? Document.Motion : MotionEdits.Find(Document, key) is { } layer ? [layer] : [];
+        if (layers.IsEmpty)
+            return false;
+        layerClipboard = (layers, Document.Length);
+        return true;
+    }
+
+    /// <summary>Adds the copied layers after this animation's own and selects the first.</summary>
+    public bool PasteLayers()
+    {
+        LastError = null;
+        var next = MotionEdits.Paste(Document, layerClipboard.Layers, layerClipboard.Length, out var created, out var error);
+        LastError = error;
+        if (!Commit(next))
+            return false;
+        SelectLayer(created[0]);
+        return true;
+    }
+
     /// <summary>Moves the selection so the primary event starts at <paramref name="frame"/>.</summary>
     public bool MoveSelectionTo(int frame) =>
         PrimaryEvent is { } primary && Commit(TimelineEdits.Move(Document, selected, frame - primary.Start));

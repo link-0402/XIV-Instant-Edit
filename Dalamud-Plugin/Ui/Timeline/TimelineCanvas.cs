@@ -691,6 +691,12 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
             ImGui.Separator();
+            if (ImGui.MenuItem("Copy all layers", "", false, !current.Document.Motion.IsEmpty))
+                current.CopyLayers();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Copy every bone layer, to paste into another animation, such as a variant of this one.");
+            DrawPasteLayers(current, readOnly);
+            ImGui.Separator();
             if (ImGui.MenuItem("Fit", "F"))
                 current.Fit();
             return;
@@ -745,6 +751,11 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Commit(MotionEdits.SetEnabled(doc, layer.Key, !layer.Enabled));
         if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, !readOnly))
             current.DuplicateLayer();
+        if (ImGui.MenuItem("Copy layer"))
+            current.CopyLayers(layer.Key);
+        if (ImGui.MenuItem("Copy all layers"))
+            current.CopyLayers();
+        DrawPasteLayers(current, readOnly);
         if (ImGui.MenuItem("Apply earlier", "", false, !readOnly && index > 0))
             current.Commit(MotionEdits.Reorder(doc, layer.Key, -1));
         if (ImGui.IsItemHovered())
@@ -753,6 +764,14 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Commit(MotionEdits.Reorder(doc, layer.Key, 1));
         if (ImGui.MenuItem("Delete layer", "", false, !readOnly))
             current.Commit(MotionEdits.Remove(doc, layer.Key));
+    }
+
+    private static void DrawPasteLayers(TimelineEditor current, bool readOnly)
+    {
+        if (ImGui.MenuItem("Paste layers", "", false, !readOnly && TimelineEditor.CanPasteLayers))
+            current.PasteLayers();
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Add the copied bone layers after this animation's own. Layers that covered the whole animation cover this one.");
     }
 
     /// <summary> The key's ease to the next key: the layer's way or one of the presets. Its own curve is made in the panel. </summary>

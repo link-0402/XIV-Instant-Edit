@@ -529,6 +529,41 @@ internal static class MotionEdits
         return doc with { Motion = doc.Motion.Insert(index + 1, copy), NextMotionKey = next };
     }
 
+    /// <summary>
+    /// Adds copies of <paramref name="layers"/>, copied from a clip <paramref name="sourceLength"/> frames long,
+    /// after the others with new keys. A layer that covered that whole clip covers this one; the rest keep
+    /// their frames, cut to this clip's length. Unchanged with an error when they would pass the layer limit.
+    /// </summary>
+    public static TimelineDocument Paste(TimelineDocument doc, IReadOnlyList<MotionLayer> layers, int sourceLength, out ImmutableArray<string> created, out string? error)
+    {
+        created = [];
+        error = null;
+        if (layers.Count == 0)
+            return doc;
+        if (doc.Motion.Length + layers.Count > MotionEvaluator.MaxLayers)
+        {
+            error = $"An animation can have at most {MotionEvaluator.MaxLayers} bone layers.";
+            return doc;
+        }
+        var length = Math.Max(TimelineDocument.MinLength, doc.Length);
+        var keys = doc.Motion.Select(layer => layer.Key).ToHashSet(StringComparer.Ordinal);
+        var next = Math.Max(1, doc.NextMotionKey);
+        var added = ImmutableArray.CreateBuilder<string>(layers.Count);
+        var motion = doc.Motion.ToBuilder();
+        foreach (var layer in layers)
+        {
+            string key;
+            do key = "m" + (next++).ToString(CultureInfo.InvariantCulture);
+            while (!keys.Add(key));
+            var start = Math.Clamp(layer.Start, 0, length - 1);
+            var end = layer.Start <= 0 && layer.End >= sourceLength ? length : Math.Clamp(layer.End, start + 1, length);
+            motion.Add(Normalize(layer with { Key = key, Start = start, End = end }));
+            added.Add(key);
+        }
+        created = added.ToImmutable();
+        return doc with { Motion = motion.ToImmutable(), NextMotionKey = next };
+    }
+
     /// <summary>The frames layer drags stick to: every layer's start, end and keys, except <paramref name="except"/>'s.</summary>
     public static IEnumerable<int> SnapFrames(TimelineDocument doc, string? except)
     {
