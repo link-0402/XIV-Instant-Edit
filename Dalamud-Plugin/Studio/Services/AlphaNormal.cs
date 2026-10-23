@@ -19,7 +19,7 @@ namespace InstantEdit.Studio.Services;
 /// </summary>
 internal static class AlphaNormal
 {
-    /// <summary>How many made normals are kept; older ones are deleted when a new one is made.</summary>
+    /// <summary>How many made normals are kept; the least recently used are deleted when a new one is made.</summary>
     private const int Keep = 24;
 
     /// <summary>Bumped when the way they are made changes, so old results are not reused.</summary>
@@ -49,15 +49,13 @@ internal static class AlphaNormal
         var key = TextureCache.KeyForGenerated(TextureCache.KeyFor(tex.SourcePath), TextureCache.KeyFor(tex.AlphaSourcePath), Version);
         var path = Path.Combine(folder, $"{key}.png");
         if (File.Exists(path))
-            return path;
+            return Reused(path);
 
         try
         {
             Directory.CreateDirectory(folder);
             using var image = Combine(tex.SourcePath, tex.AlphaSourcePath);
-            var temp = path + ".part";
-            image.SaveAsPng(temp);
-            File.Move(temp, path, overwrite: true);
+            Save(image, path);
             Prune(folder);
             return path;
         }
@@ -133,11 +131,47 @@ internal static class AlphaNormal
         }
     }
 
+    /// <summary>Saves a made image at its path through a temp file of its own, so two callers making it at once do not collide.</summary>
+    internal static void Save(Image<Rgba32> image, string path)
+    {
+        var temp = $"{path}.{Guid.NewGuid():N}.part";
+        try
+        {
+            image.SaveAsPng(temp);
+            File.Move(temp, path);
+        }
+        catch (IOException) when (File.Exists(path))
+        {
+            // Made by the other caller first, from the same sources.
+        }
+        finally
+        {
+            File.Delete(temp);
+        }
+    }
+
+    /// <summary>
+    /// A made image used again, marked by its access time for <see cref="Prune"/>. Its write time is
+    /// left alone: converted textures and mod updates are keyed on it.
+    /// </summary>
+    internal static string Reused(string path)
+    {
+        try
+        {
+            File.SetLastAccessTimeUtc(path, DateTime.UtcNow);
+        }
+        catch (Exception)
+        {
+            // Pruned a little early, at worst.
+        }
+        return path;
+    }
+
     internal static void Prune(string folder)
     {
         try
         {
-            foreach (var old in new DirectoryInfo(folder).GetFiles("*.png").OrderByDescending(f => f.LastWriteTimeUtc).Skip(Keep))
+            foreach (var old in new DirectoryInfo(folder).GetFiles("*.png").OrderByDescending(f => f.LastAccessTimeUtc).Skip(Keep))
                 old.Delete();
         }
         catch (Exception)

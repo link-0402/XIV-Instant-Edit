@@ -50,8 +50,9 @@ public static class ModelMaterialRewriter
     private const int FileHeaderMaterialCount = 14;
     private const int ModelHeaderMaterialCount = 10;
 
-    // Byte position inside one mesh struct of the material slot it uses.
+    // Byte positions inside one mesh struct of the material slot it uses and of its submesh count.
     private const int MeshMaterialIndex = 8;
+    private const int MeshSubmeshCount = 12;
 
     /// <summary>The material each mesh part references, in the file's own slot order.</summary>
     /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
@@ -113,8 +114,8 @@ public static class ModelMaterialRewriter
     /// mesh on its own material. A material slot whose meshes all end up on one name is renamed in
     /// place; when they end up on different names, the first mesh's name takes the slot and the others
     /// get slots of their own, appended (or an existing slot already carrying that name). A later LOD
-    /// with as many meshes as the first mirrors it mesh by mesh, so its meshes follow theirs onto a new
-    /// slot; other LODs' meshes stay on their slot. Returns the input unchanged when nothing needs rewriting.
+    /// with as many meshes as the first, each with the same submesh count, mirrors it mesh by mesh, so its
+    /// meshes follow theirs onto a new slot; other LODs' meshes stay on their slot. Returns the input unchanged when nothing needs rewriting.
     /// </summary>
     /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
     public static byte[] RewriteMeshes(byte[] data, IReadOnlyList<string?> newNames)
@@ -159,9 +160,12 @@ public static class ModelMaterialRewriter
         }
 
         // Later LODs: a mesh on the same slot as the first LOD's mesh it mirrors goes where that one went.
+        // A LOD whose meshes differ in submesh count from the first's is in another order, so it is left alone.
+        int Submeshes(int mesh) => BitConverter.ToUInt16(data, (int)(mdl.MeshesPos + mesh * MeshStructSize + MeshSubmeshCount));
         foreach (var (index, count) in mdl.LowerLods)
         {
-            if (count == 0 || count != meshes.Length || index < 0 || index + count > meshMaterials.Length || index == meshes[0])
+            if (count == 0 || count != meshes.Length || index < 0 || index + count > meshMaterials.Length || index == meshes[0] ||
+                Enumerable.Range(0, count).Any(i => Submeshes(index + i) != Submeshes(meshes[i])))
                 continue;
             for (int i = 0; i < count; i++)
                 if (mdl.MeshMaterials[index + i] == mdl.MeshMaterials[meshes[i]])

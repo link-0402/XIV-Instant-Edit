@@ -92,7 +92,7 @@ internal static class NormalGreen
         var folder = Path.Combine(string.IsNullOrWhiteSpace(cacheDirectory) ? Path.GetTempPath() : cacheDirectory, "flipped-normals");
         var path = Path.Combine(folder, $"{TextureCache.KeyForGenerated(TextureCache.KeyFor(tex.SourcePath), Version)}.png");
         if (File.Exists(path))
-            return path;
+            return AlphaNormal.Reused(path);
         try
         {
             Directory.CreateDirectory(folder);
@@ -105,9 +105,7 @@ internal static class NormalGreen
             });
             image.Metadata.GetPngMetadata().ColorType = SixLabors.ImageSharp.Formats.Png.PngColorType.RgbWithAlpha;
             image.Metadata.GetPngMetadata().BitDepth  = SixLabors.ImageSharp.Formats.Png.PngBitDepth.Bit8;
-            var temp = path + ".part";
-            image.SaveAsPng(temp);
-            File.Move(temp, path, overwrite: true);
+            AlphaNormal.Save(image, path);
             AlphaNormal.Prune(folder);
             return path;
         }

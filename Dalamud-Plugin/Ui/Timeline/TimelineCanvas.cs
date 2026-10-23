@@ -825,31 +825,31 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         var ctrl = keys.Ctrl;
         var shift = keys.Shift;
         var alt = keys.Alt;
-        if (ctrl && keys.Pressed(ImGuiKey.Z, VirtualKey.Z))
+        if (ctrl && keys.Pressed(ImGuiKey.Z, VirtualKey.Z, ctrl: true))
         {
             if (!readOnly)
                 current.Key(shift ? TimelineKey.Redo : TimelineKey.Undo);
         }
-        else if (ctrl && keys.Pressed(ImGuiKey.Y, VirtualKey.Y))
+        else if (ctrl && keys.Pressed(ImGuiKey.Y, VirtualKey.Y, ctrl: true))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Redo);
         }
-        else if (ctrl && keys.Pressed(ImGuiKey.D, VirtualKey.D))
+        else if (ctrl && keys.Pressed(ImGuiKey.D, VirtualKey.D, ctrl: true))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Duplicate);
         }
-        else if (ctrl && keys.Pressed(ImGuiKey.C, VirtualKey.C))
+        else if (ctrl && keys.Pressed(ImGuiKey.C, VirtualKey.C, ctrl: true))
             current.Key(TimelineKey.Copy);
-        else if (ctrl && keys.Pressed(ImGuiKey.V, VirtualKey.V))
+        else if (ctrl && keys.Pressed(ImGuiKey.V, VirtualKey.V, ctrl: true))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Paste);
         }
-        else if (ctrl && keys.Pressed(ImGuiKey.A, VirtualKey.A))
+        else if (ctrl && keys.Pressed(ImGuiKey.A, VirtualKey.A, ctrl: true))
             current.Key(TimelineKey.SelectAll);
-        else if (!ctrl && (keys.Pressed(ImGuiKey.Delete, VirtualKey.DELETE) || keys.Pressed(ImGuiKey.Backspace, VirtualKey.BACK)))
+        else if (!ctrl && (keys.Pressed(ImGuiKey.Delete, VirtualKey.DELETE, ctrl: false) || keys.Pressed(ImGuiKey.Backspace, VirtualKey.BACK, ctrl: false)))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Delete);
@@ -868,9 +868,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Key(TimelineKey.Home);
         else if (keys.Pressed(ImGuiKey.End, VirtualKey.END))
             current.Key(TimelineKey.End);
-        else if (!ctrl && keys.Pressed(ImGuiKey.F, VirtualKey.F))
+        else if (!ctrl && keys.Pressed(ImGuiKey.F, VirtualKey.F, ctrl: false))
             current.Key(TimelineKey.Fit);
-        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.B, VirtualKey.B))
+        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.B, VirtualKey.B, ctrl: false))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Blend);

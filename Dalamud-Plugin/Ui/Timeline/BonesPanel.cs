@@ -538,12 +538,12 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
         var readOnly = session.ReadOnly;
-        if (keys.Ctrl && keys.Pressed(ImGuiKey.Z, VirtualKey.Z))
+        if (keys.Ctrl && keys.Pressed(ImGuiKey.Z, VirtualKey.Z, ctrl: true))
         {
             if (!readOnly)
                 current.Key(keys.Shift ? TimelineKey.Redo : TimelineKey.Undo);
         }
-        else if (keys.Ctrl && keys.Pressed(ImGuiKey.Y, VirtualKey.Y))
+        else if (keys.Ctrl && keys.Pressed(ImGuiKey.Y, VirtualKey.Y, ctrl: true))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Redo);

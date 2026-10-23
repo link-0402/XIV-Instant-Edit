@@ -442,6 +442,11 @@ internal static class PinLayerFixture
         check(PinPlanting.Find(turning, 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty &&
               !PinPlanting.Find(turning, 60, 0, 119, false, PinSensitivity.Loose, 6, 8, 8).Stretches.IsEmpty, "a turning bone isn't planted unless loose allows its turn");
         check(PinPlanting.Find(Step(), 60, 70, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches is [{ First: 70, Last: 119 }], "only the layer's samples count");
+        // A pin attached to a bone gives its heights in model space, as its own space's Y isn't up.
+        float[] raised = [.. Enumerable.Range(0, 120).Select(i => i < 60 ? 0f : .1f)];
+        check(PinPlanting.Find(Still(), 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches is [{ First: 0, Last: 119 }] &&
+              PinPlanting.Find(Still(), 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8, raised).Stretches is [{ First: 0, Last: 59 }],
+            "the height test reads the heights given rather than the path's Y");
         check(PinPlanting.SamplesOf(4, new MotionClip(Body(), 3.97f, 239)) == 8 && PinPlanting.SamplesOf(1, new MotionClip(Body(), 1, 31)) == 1,
             "frames convert at the clip's rate");
         // Facts are timeline frames: sample 90 of 120 over 2 s is frame 45.4, sample 29 is frame 14.6.
@@ -607,6 +612,20 @@ internal static class PinLayerFixture
         var backKnee = wm[KneeL].Position;
         PinSolver.Reach(body, wl, wm, chain, wm[FootL].Position, normal, 0);
         check(Vector3.Distance(wm[KneeL].Position, backKnee) < 1e-5f, "a pin with no pull leaves a backward knee where the motion has it");
+        // As the pull eases in, that knee swings round to the front rather than flipping over in one step.
+        Vector3? lastSwing = null;
+        var swings = true;
+        MotionTransform[] gm = [];
+        for (var step = 0; step <= 20; step++)
+        {
+            var (gl, _) = Pose();
+            gl[KneeL] = gl[KneeL] with { Rotation = Q(Vector3.UnitX, -10) };
+            gm = MotionEvaluator.ModelSpace(body, gl);
+            PinSolver.Reach(body, gl, gm, chain, gm[FootL].Position + new Vector3(0, .1f, 0), normal, step / 20f);
+            swings &= lastSwing == null || Vector3.Distance(gm[KneeL].Position, lastSwing.Value) < .05f;
+            lastSwing = gm[KneeL].Position;
+        }
+        check(swings && Vector3.Dot(KneeSide(gm, chain), restSide) > .9f, "a backward knee swings round to the front as the pull eases in");
         // A leg the motion has nearly straight sits inside the soft zone; pinned where it is, it doesn't move.
         var (nl, _) = Pose();
         nl[KneeL] = nl[KneeL] with { Rotation = Q(Vector3.UnitX, 5) };

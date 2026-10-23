@@ -37,7 +37,9 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     // The selected pin layer's pinned and bent bones on the skeleton they were found on.
     private (MotionLayer Layer, SkeletonDescription Skeleton, LayerBoneSets Bones)? pinBones;
     // A pin layer's planted facts by bone, for what they depend on: the layers before it, its pins and range, and the decoded motion.
-    private (MotionLayer[] Before, ImmutableArray<MotionPin> Pins, int Start, int End, MotionClip Clip, IReadOnlyDictionary<string, string> Facts)? plantedFacts;
+    private (string Layer, MotionLayer[] Before, ImmutableArray<MotionPin> Pins, int Start, int End, MotionClip Clip, IReadOnlyDictionary<string, string> Facts)? plantedFacts;
+    // The motion with some layers baked over the whole clip, or why it can't be, for those layers and the clip.
+    private (MotionLayer[] Before, MotionClip Clip, MotionClip? Baked, string? Problem)? bakedBefore;
     // The clip's own pose at one frame, local and in model space, while the decode and the frame stay.
     private (MotionClip Clip, int Frame, MotionTransform[] Local, MotionTransform[] Model)? motionPose;
     // The bones' frames for one document, layer, frame and decode.
@@ -307,7 +309,13 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         {
             var loop = LoopFrames(loaded, doc);
             var end = MotionEnd(loaded, doc);
-            before = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at).ToArray(), frame, loop, end, clip.SourceTracks);
+            var earlier = doc.Motion.Take(at).ToArray();
+            // One pose leaves out amplitudes and planted pins, which take the whole clip: a pin's spots then come
+            // from the bake, so Pin here and the gizmo key the bone where Live has it.
+            before = layer.Kind == MotionLayerKind.Pin && OutputClip(loaded) is { } output && earlier.Any(other => MotionEvaluator.Active(other) &&
+                         (other.Kind == MotionLayerKind.Amplitude || other.Kind == MotionLayerKind.Pin && other.Pins.Any(pin => pin.Planted)))
+                ? BakedBefore(output, earlier).Pose(frame)
+                : MotionEvaluator.ApplyAt(skeleton, own.Local, earlier, frame, loop, end, clip.SourceTracks);
             after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end, clip.SourceTracks);
         }
         catch (InvalidDataException)
@@ -329,31 +337,60 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// Where each planted pin of <paramref name="layer"/> holds, as a fact line by pinned bone ("Held 0-40,
     /// 72-119"), on the motion as the layers before it leave it; a key "" holds why there are none. Null
     /// while the motion is read, which this starts. Worked out again only when the layers before it, its
-    /// pins, its range or the decode change, not while its pull, fades or name are edited.
+    /// pins, its range or the decode change, not while its pull, fades or name are edited, nor during a drag.
     /// </summary>
     public IReadOnlyDictionary<string, string>? PlantedFacts(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer)
     {
         if (OutputClip(loaded) is not { } clip)
             return null;
         var before = doc.Motion.Take(Math.Max(0, MotionEdits.IndexOf(doc, layer.Key))).ToArray();
-        if (plantedFacts is { } cached && ReferenceEquals(cached.Clip, clip) && cached.Start == layer.Start && cached.End == layer.End &&
-            cached.Pins.SequenceEqual(layer.Pins) && cached.Before.SequenceEqual(before, ReferenceEqualityComparer.Instance))
+        if (plantedFacts is { } cached && cached.Layer == layer.Key && ReferenceEquals(cached.Clip, clip) &&
+            // Through a drag the last facts stand, so dragging the layer's edges doesn't work them out again every frame.
+            (session.Editor is { Gesture: not TimelineGesture.None } ||
+             cached.Start == layer.Start && cached.End == layer.End && cached.Pins.SequenceEqual(layer.Pins) &&
+             cached.Before.SequenceEqual(before, ReferenceEqualityComparer.Instance)))
             return cached.Facts;
         var facts = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {
-            var copy = new MotionClip(clip.Skeleton, clip.Duration, clip.Samples) { Loops = clip.Loops, SourceTracks = clip.SourceTracks };
-            copy.CopyFrom(clip);
-            MotionEvaluator.Apply(copy, before);
-            foreach (var (bone, path) in MotionEvaluator.Planted(copy, layer))
-                facts[bone] = PinPlanting.Facts(path, copy);
+            var baked = BakedBefore(clip, before);
+            foreach (var (bone, path) in MotionEvaluator.Planted(baked, layer))
+                facts[bone] = PinPlanting.Facts(path, baked);
         }
         catch (InvalidDataException e)
         {
             facts[string.Empty] = e.Message;
         }
-        plantedFacts = (before, layer.Pins, layer.Start, layer.End, clip, facts);
+        plantedFacts = (layer.Key, before, layer.Pins, layer.Start, layer.End, clip, facts);
         return facts;
+    }
+
+    /// <summary>
+    /// <paramref name="clip"/> with <paramref name="before"/> baked over it, as Live and the save bake them; kept
+    /// while those layers and the clip stay. Read only. Throws for a layer naming a bone the skeleton lacks.
+    /// </summary>
+    private MotionClip BakedBefore(MotionClip clip, MotionLayer[] before)
+    {
+        if (bakedBefore is not { } cached || !ReferenceEquals(cached.Clip, clip) || !cached.Before.SequenceEqual(before, ReferenceEqualityComparer.Instance))
+        {
+            MotionClip? baked = null;
+            string? problem = null;
+            try
+            {
+                baked = new MotionClip(clip.Skeleton, clip.Duration, clip.Samples) { Loops = clip.Loops, SourceTracks = clip.SourceTracks };
+                baked.CopyFrom(clip);
+                MotionEvaluator.Apply(baked, before);
+            }
+            catch (InvalidDataException e)
+            {
+                // Kept too, so a broken layer isn't baked again every frame.
+                baked = null;
+                problem = e.Message;
+            }
+            cached = (before, clip, baked, problem);
+            bakedBefore = cached;
+        }
+        return cached.Baked ?? throw new InvalidDataException(cached.Problem);
     }
 
     /// <summary>The decoded motion as the document cuts or stretches it; null while it is read, which this starts.</summary>

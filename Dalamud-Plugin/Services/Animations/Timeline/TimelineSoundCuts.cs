@@ -33,6 +33,12 @@ internal static class TimelineSoundCuts
         {
             var at = cuts.PartEnd(i, doc.Length);
             var frames = cuts.Parts[i + 1].From - cuts.Parts[i].To;
+            if (cuts.Parts[i + 1].Blend)
+            {
+                // A blend's frames are only a count: with both its joins it takes out the frames between its neighbours it doesn't play.
+                frames = cuts.Parts[i + 2].From - cuts.Parts[i].To - cuts.Parts[i + 1].Frames;
+                i++;
+            }
             if (at <= eventStart || frames <= 0)
                 continue;
             var start = (at - eventStart) / TimelineDocument.Fps;

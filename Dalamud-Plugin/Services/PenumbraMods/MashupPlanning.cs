@@ -229,9 +229,11 @@ internal static class MashupPlanning
                     string.Equals(NormalizeModelMaterial(material.ModelMaterial), normalized,
                         StringComparison.OrdinalIgnoreCase));
                 // A shared body material (bibo, pubes, piercings) the game didn't load at import comes
-                // from the wearer's body mod; the model keeps naming it and nothing is copied.
+                // from the wearer's body mod; the model keeps naming it and nothing is copied. Only a b0001
+                // name resolves to the body folder: a gear material named "piercing" is the item's own.
                 if (dependency is null && IsSafeModelMaterialAlias(normalized) &&
-                    MaterialPreviewBundleBuilder.IsBodyOrGeneralMaterial(normalized))
+                    Regex.IsMatch(normalized, @"^/mt_c\d{4}b0001(?:_[a-z0-9_]+)?\.mtrl$",
+                        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
                 {
                     passThrough.Add((contributor, normalized));
                     continue;

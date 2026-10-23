@@ -228,6 +228,11 @@ internal static partial class HairSkeletonFiles
         var previousIds = (plan.PreviousIds ?? []).Where(moved => moved != plan.SkeletonId).Distinct().ToList();
         var stored = store.Load();
         var records = stored.Where(record => !Owns(record, modKey, model, modFolder)).ToList();
+        // A record from before the folder was kept, whose ID this export leaves because another folder uses it:
+        // when that is the one other folder with the mod's identifier, this is its copy, and the record is that folder's.
+        if (Record(stored, modKey, model, modFolder) is { Folder: null or "" } legacy && previousIds.Contains(legacy.SkeletonId) &&
+            CopiedFrom(modFolder, modKey) is { } original)
+            records.Add(legacy with { Folder = original });
         records.Add(new ManagedHairSkeleton(modKey, model, plan.SkeletonId, previousIds.Count > 0 ? previousIds : null,
             Record(stored, modKey, model, modFolder)?.ChainKinds, folder));
         store.Save(records);
@@ -529,6 +534,24 @@ internal static partial class HairSkeletonFiles
     }
 
     private static string FolderName(string modFolder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(modFolder)));
+
+    /// <summary>The one other folder beside this one with the same mod identifier, or null when there is none or several.</summary>
+    private static string? CopiedFrom(string modFolder, string modKey)
+    {
+        var library = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(modFolder)));
+        // A key from the folder name is never another folder's.
+        if (library is null || !modKey.StartsWith("id:", StringComparison.Ordinal))
+            return null;
+        string[] folders;
+        try { folders = Directory.EnumerateDirectories(library).Select(Path.GetFileName).OfType<string>().ToArray(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        var copies = folders
+            .Where(name => !string.Equals(name, FolderName(modFolder), StringComparison.OrdinalIgnoreCase) &&
+                           EstEntryService.EstModKey(Path.Combine(library, name), name) == modKey)
+            .Take(2)
+            .ToList();
+        return copies.Count == 1 ? copies[0] : null;
+    }
 
     private static ManagedHairSkeleton? Record(IEnumerable<ManagedHairSkeleton> records, string modKey, string model, string modFolder)
         => records.LastOrDefault(record => Owns(record, modKey, model, modFolder));

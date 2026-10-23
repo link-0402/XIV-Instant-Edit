@@ -289,7 +289,33 @@ def shared_armature_merge_keeps_children(addon):
         assert [modifier.object for modifier in part.modifiers if modifier.type == "ARMATURE"] == [base]
         require_matrix(part.matrix_world, part_before, "the merged part moved")
         require_matrix(empty.matrix_world, empty_before, "the merged armature's other child moved")
-    print("[PASS] shared armatures keep every child of the merged armature in place")
+
+    def refuse_remove(*_args, **_kwargs):
+        raise RuntimeError("injected remove failure")
+
+    with temporary_scene_data():
+        base = rig("Failed Base")
+        additional = rig("Failed Extra")
+        part = mesh("Failed Part", modifier_rigs=(additional,))
+        part_before = _scaled_child(part, additional, "ARMATURE")
+        empty = bpy.data.objects.new("Failed Empty", None)
+        bpy.context.scene.collection.objects.link(empty)
+        empty_before = _scaled_child(empty, additional)
+        failure = patch.object(armatures, "bpy", SimpleNamespace(
+            data=SimpleNamespace(objects=SimpleNamespace(remove=refuse_remove))))
+        try:
+            with failure:
+                armatures.merge_into(bpy.context, base, additional, [part])
+        except RuntimeError as error:
+            assert "injected remove failure" in str(error), error
+        else:
+            raise AssertionError("the remove failure was not injected")
+        bpy.context.view_layer.update()
+        assert part.parent == additional and empty.parent == additional, (part.parent, empty.parent)
+        assert [modifier.object for modifier in part.modifiers if modifier.type == "ARMATURE"] == [additional]
+        require_matrix(part.matrix_world, part_before, "a failed merge moved the part")
+        require_matrix(empty.matrix_world, empty_before, "a failed merge moved the other child")
+    print("[PASS] shared armatures keep every child of the merged armature in place, and a failed merge puts them back")
 
 
 def inline_runs_clear_a_stopped_wait(addon):

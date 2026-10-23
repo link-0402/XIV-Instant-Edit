@@ -236,8 +236,7 @@ internal sealed class PreviewModWriter
             }
 
             // New files first, so a material written below never names a texture its mod lacks.
-            foreach (var plan in plans)
-                CommitFileAdditions(plan, _backups);
+            CommitFileAdditions(plans, _backups);
             foreach (var (file, source, bytes) in targets)
             {
                 _backups.Create(file, source.ModDirectory, source.RelativePath);
@@ -347,6 +346,23 @@ internal sealed class PreviewModWriter
                 plan = PlanFileAdditions(plan.ModRoot, plan.ModDirectory, plan.MaterialFile, plan.MaterialGamePath,
                     plan.Files.Select(file => (file.GamePath, file.Bytes)).ToList(), plan.Recheck);
             CommitPlanned(plan, backups);
+        }
+    }
+
+    /// <summary>
+    /// Writes several plans: under the gate, each is planned again before any is written, so a conflict found
+    /// since leaves every mod as it was. Each is then committed as above, from meta.json as the one before left it.
+    /// </summary>
+    internal static void CommitFileAdditions(IReadOnlyList<FileAdditionPlan> plans, ModelBackupStore? backups)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            foreach (var plan in plans)
+                if (plan.MaterialFile.Length > 0)
+                    PlanFileAdditions(plan.ModRoot, plan.ModDirectory, plan.MaterialFile, plan.MaterialGamePath,
+                        plan.Files.Select(file => (file.GamePath, file.Bytes)).ToList(), plan.Recheck);
+            foreach (var plan in plans)
+                CommitFileAdditions(plan, backups);
         }
     }
 

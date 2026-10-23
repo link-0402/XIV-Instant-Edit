@@ -42,6 +42,8 @@ internal sealed record PlantedPath(ImmutableArray<PlantedStretch> Stretches, int
     public MotionTransform? Target(int sample)
     {
         var total = 0f;
+        var holding = 0;
+        PlantedStretch? last = null;
         var position = Vector3.Zero;
         var sum = Vector4.Zero;
         Quaternion? reference = null;
@@ -50,8 +52,8 @@ internal sealed record PlantedPath(ImmutableArray<PlantedStretch> Stretches, int
             var hold = HoldOf(stretch, sample);
             if (hold <= 0)
                 continue;
-            if (hold >= 1 && total == 0 && Stretches.Count(other => HoldOf(other, sample) > 0) == 1)
-                return stretch.Held;
+            holding++;
+            last = stretch;
             total += hold;
             position += stretch.Held.Position * hold;
             reference ??= stretch.Held.Rotation;
@@ -60,6 +62,9 @@ internal sealed record PlantedPath(ImmutableArray<PlantedStretch> Stretches, int
         }
         if (total <= 0)
             return null;
+        // One stretch holding fully is its spot exactly, not an average of one.
+        if (holding == 1 && total >= 1)
+            return last!.Held;
         var rotation = sum.LengthSquared() < 1e-12f ? reference!.Value : Quaternion.Normalize(new Quaternion(sum.X, sum.Y, sum.Z, sum.W));
         return new MotionTransform(position / total, rotation, Vector3.One);
     }
@@ -182,10 +187,11 @@ internal static class PinPlanting
     /// space, the whole clip at <paramref name="sampleRate"/> samples a second) is down, looking only at
     /// samples <paramref name="first"/> to <paramref name="last"/>. Gaps of up to <paramref name="gapSamples"/>
     /// close, stretches shorter than <paramref name="minSamples"/> drop, and with <paramref name="wraps"/> a
-    /// stretch running off the end joins one starting at the beginning.
+    /// stretch running off the end joins one starting at the beginning. <paramref name="heights"/> are the bone's
+    /// heights in model space, for a pin attached to a bone, whose space's Y isn't up; none reads the path's Y.
     /// </summary>
     public static PlantedPath Find(ReadOnlySpan<MotionTransform> path, float sampleRate, int first, int last, bool wraps, PinSensitivity sensitivity,
-        int gapSamples, int minSamples, int easeSamples)
+        int gapSamples, int minSamples, int easeSamples, ReadOnlySpan<float> heights = default)
     {
         var count = path.Length;
         first = Math.Max(first, 0);
@@ -197,7 +203,7 @@ internal static class PinPlanting
         var (speedLimit, turnLimit, heightLimit) = Limits(sensitivity);
         var lowest = float.MaxValue;
         for (var i = first; i <= last; i++)
-            lowest = Math.Min(lowest, path[i].Position.Y);
+            lowest = Math.Min(lowest, heights.IsEmpty ? path[i].Position.Y : heights[i]);
 
         // Speeds over SpeedWindowFrames before and after each sample, the stiller side counting: a sample's noise
         // averages out but a slide doesn't, and a bone that has just landed or is about to lift is still down.
@@ -218,7 +224,7 @@ internal static class PinPlanting
             var still = backSpeed < speedLimit && backTurn < turnLimit || aheadSpeed < speedLimit && aheadTurn < turnLimit;
             // A jolt to the next sample (the last: from the one before, or round the loop to sample 1) that the window would average away.
             var (jolt, joltTurn) = Side(path, i, i < last || wraps ? i + 1 : i - 1, first, last, wraps, sampleRate);
-            down[i] = still && jolt < JoltFactor * speedLimit && joltTurn < JoltFactor * turnLimit && path[i].Position.Y - lowest < heightLimit;
+            down[i] = still && jolt < JoltFactor * speedLimit && joltTurn < JoltFactor * turnLimit && (heights.IsEmpty ? path[i].Position.Y : heights[i]) - lowest < heightLimit;
             if (down[i] && start < 0)
                 start = i;
             if (!down[i] && start >= 0)

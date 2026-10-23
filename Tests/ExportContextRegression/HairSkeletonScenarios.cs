@@ -53,6 +53,7 @@ internal static class HairSkeletonScenarios
         OldRecordsLoad(Path.Combine(testRoot, "HairOldRecords"));
         UnreadableRecords(Path.Combine(testRoot, "HairUnreadableRecords"));
         CopiedFolderKeepsItsOwnRecord(Path.Combine(testRoot, "HairCopiedFolder"));
+        CopiedFolderKeepsAnOldRecord(Path.Combine(testRoot, "HairCopiedOldRecord"));
         RenamedFolderKeepsItsRecord(Path.Combine(testRoot, "HairRenamedFolder"));
     }
 
@@ -1094,6 +1095,27 @@ internal static class HairSkeletonScenarios
         var again = PrepareAndApply(mod, Sources(9));
         Require(again.SkeletonId == id && again.PreviousIds is null && HasBytes(mod, Sklb(801, id), "sklb 3"),
             "Hair records: the mod keeps its ID after its copy was exported");
+    }
+
+    private static void CopiedFolderKeepsAnOldRecord(string root)
+    {
+        const string CopyDirectory = "Hair mod copy";
+        var mod = HairMod(root, [MiqoteHair], []);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        // A record written before records kept their folder.
+        mod.Store.Save(mod.Store.Load().Select(record => record with { Folder = null }));
+        var copyFolder = Path.Combine(root, CopyDirectory);
+        CopyFolder(mod.ModFolder, copyFolder);
+        var plan = HairSkeletonFiles.Prepare(Rig(), copyFolder, CopyDirectory, HairModel,
+            Sources(8, taken: () => new HashSet<int> { id }), mod.Store);
+        HairSkeletonFiles.Apply(plan, copyFolder, CopyDirectory, HairModel, mod.Store, mod.EstStore);
+        Require(plan.SkeletonId != id && mod.Store.Load() is { Count: 2 } records &&
+                records.Any(record => record.SkeletonId == id && record.Folder == ModDirectory) &&
+                records.Any(record => record.SkeletonId == plan.SkeletonId && record.Folder == CopyDirectory),
+            "Hair records: a copy that moves off an old record's ID leaves that record to the folder it was copied from");
+        var again = PrepareAndApply(mod, Sources(9));
+        Require(again.SkeletonId == id && again.PreviousIds is null && HasBytes(mod, Sklb(801, id), "sklb 3"),
+            "Hair records: the mod keeps its old record's ID after its copy was exported");
     }
 
     private static void RenamedFolderKeepsItsRecord(string root)

@@ -19,8 +19,9 @@ internal sealed partial class ShortcutKeys : IDisposable
 {
     private readonly IKeyState keys;
     private readonly IFramework framework;
-    // Keys a shortcut has asked about: the ones taken from the game while a window has the keyboard.
-    private readonly HashSet<VirtualKey> watched = [];
+    // Keys a shortcut has asked about: the ones taken from the game while a window has the keyboard,
+    // each only while Ctrl is down (true), up (false) or either way (null), as its shortcut needs.
+    private readonly Dictionary<VirtualKey, bool?> watched = [];
     // Keys taken from the game's state at the start of this game frame, for this frame's draw.
     private readonly HashSet<VirtualKey> taken = [];
     // Keys taken from the game's state and still held down: their key repeats aren't new presses.
@@ -57,11 +58,16 @@ internal sealed partial class ShortcutKeys : IDisposable
         held.RemoveWhere(key => !Down(key));
     }
 
-    /// <summary> Whether the key went down this frame (with <paramref name="repeat"/>, also its key repeats). </summary>
-    public bool Pressed(ImGuiKey key, VirtualKey virtualKey, bool repeat = false)
+    /// <summary>
+    /// Whether the key went down this frame (with <paramref name="repeat"/>, also its key repeats).
+    /// <paramref name="ctrl"/> is whether its shortcut needs Ctrl down or up; null takes it either way.
+    /// </summary>
+    public bool Pressed(ImGuiKey key, VirtualKey virtualKey, bool repeat = false, bool? ctrl = null)
     {
         Refresh();
-        watched.Add(virtualKey);
+        // A caller that names the Ctrl it needs wins over one that doesn't.
+        if (!watched.TryGetValue(virtualKey, out var need) || need == null)
+            watched[virtualKey] = ctrl;
         if (ImGui.IsKeyPressed(key, repeat))
             return true;
         if (!taken.Remove(virtualKey))
@@ -84,9 +90,11 @@ internal sealed partial class ShortcutKeys : IDisposable
         claimed = false;
         if (GameTyping())
             return;
-        foreach (var key in watched)
+        var ctrl = Down(VirtualKey.CONTROL);
+        foreach (var (key, need) in watched)
         {
-            if (!keys.IsVirtualKeyValid(key) || !keys[key])
+            // A key whose shortcut won't fire with this Ctrl is the game's (a plain C or Z in GPose).
+            if (need is { } wanted && wanted != ctrl || !keys.IsVirtualKeyValid(key) || !keys[key])
                 continue;
             keys[key] = false;
             taken.Add(key);

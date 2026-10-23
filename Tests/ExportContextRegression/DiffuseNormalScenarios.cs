@@ -51,6 +51,24 @@ internal static class DiffuseNormalScenarios
         Require(AlphaNormal.SourceOf(tex, cache, out _) == made && File.GetLastWriteTimeUtc(made!) == stamp,
             "diffuse normal: the same diffuse and strength reuse the normal made before");
 
+        // Reuse marks the normal as used by its access time, so pruning keeps it although 30 others
+        // were written after it, and its write time (which builds key on) stays.
+        var folder = Path.GetDirectoryName(made!)!;
+        var longAgo = DateTime.UtcNow.AddDays(-2);
+        for (int i = 0; i < 30; i++)
+        {
+            var other = Path.Combine(folder, $"other{i}.png");
+            File.WriteAllBytes(other, new byte[] { 1 });
+            File.SetLastAccessTimeUtc(other, longAgo);
+        }
+        File.SetLastAccessTimeUtc(made!, longAgo.AddDays(-1));
+        Require(AlphaNormal.SourceOf(tex, cache, out _) == made && File.GetLastAccessTimeUtc(made!) > longAgo,
+            "diffuse normal: a reused normal is marked as used");
+        AlphaNormal.Prune(folder);
+        Require(File.Exists(made!) && File.GetLastWriteTimeUtc(made!) == stamp && Directory.GetFiles(folder, "*.png").Length == 24,
+            "diffuse normal: pruning keeps the normal in use, with its write time");
+        Require(Directory.GetFiles(folder, "*.part").Length == 0, "diffuse normal: no temp files are left behind");
+
         tex.DiffuseNormalStrength = 2f;
         var stronger = AlphaNormal.SourceOf(tex, cache, out _);
         Require(stronger != null && stronger != made, "diffuse normal: another strength makes a new normal");

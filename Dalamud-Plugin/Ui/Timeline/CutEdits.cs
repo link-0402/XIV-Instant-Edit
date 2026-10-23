@@ -132,6 +132,12 @@ internal static class CutEdits
             }
         }
         var p = cuts.Parts[part];
+        // A blend's frames are only a count: back as motion they must lie between its neighbours' source frames.
+        if (!blend)
+        {
+            var from = Math.Clamp(p.From, cuts.Parts[part - 1].To, cuts.Parts[part + 1].From - p.Frames);
+            p = p with { From = from, To = from + p.Frames };
+        }
         // A blend plays at normal speed: it takes as many frames as the stretched part played, so the length stays.
         if (blend && p.Stretch != 1)
             p = p with { To = p.From + Math.Clamp((int)Math.Round(p.Frames * p.Stretch, MidpointRounding.AwayFromZero), 1, TimelineDocument.MaxLength), Stretch = 1 };
@@ -540,6 +546,9 @@ internal static class CutEdits
             var end = start + part.Frames;
             if (end <= from || start >= to)
                 pieces.Add((part, i));
+            // A blend plays one blend from end to end: frames taken from its middle leave it one part, shorter.
+            else if (part.Blend && from > start && to < end)
+                pieces.Add((part with { To = part.To - (to - from) }, i));
             else
             {
                 if (from > start)

@@ -346,7 +346,8 @@ internal sealed class ModBuilder
             var target = new Target(TargetKind.Item, first.Subject.Key);
             // Variants written for this model point at v0001, which the group's entry has to say too.
             bool forcesMaterial = items.Any(i => i.Materials.Count > 0 && i.ImcOverrides != null);
-            bool inOption = items.Any(i => Known(i.Option).Length != 0);
+            // Only an item whose materials force v0001 matters: the group would show them with its option off.
+            bool inOption = items.Any(i => i.Materials.Count > 0 && i.ImcOverrides != null && Known(i.Option).Length != 0);
             var name = $"{first.Subject.DisplayName} Parts";
             for (int n = 2; names.Contains(name); n++)
                 name = $"{first.Subject.DisplayName} Parts ({n})";

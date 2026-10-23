@@ -259,6 +259,7 @@ internal static class SkinToneScenarios
         PreviewModWriter.CommitFileAdditions(again, null);
         Require(File.ReadAllBytes(Path.Combine(mod, "ears a", copy.Replace('/', '\\'))).SequenceEqual(new byte[] { 4, 5 }),
             "skin tone: applying again replaces the mod's own copy");
+        var stale = PreviewModWriter.PlanFileAdditions(mod, "Ears Mod", material, EarMaterialPath, [(copy, [6])], "Measure again");
 
         options[0]!["Files"]![copy] = "somewhere\\else.tex";
         File.WriteAllText(Path.Combine(mod, "meta.json"), written.ToJsonString());
@@ -277,6 +278,15 @@ internal static class SkinToneScenarios
             new JsonObject { ["Files"] = new JsonObject { [EarMaterialPath] = "Files\\" + EarMaterialPath.Replace('/', '\\') } }).ToJsonString());
         Require(PreviewModWriter.PlanFileAdditions(files, "Files Mod", filesMaterial, EarMaterialPath, [(copy, [1])], "Measure again").Files.Single().RelativePath == "Files/" + copy,
             "skin tone: a mod that keeps its files under Files gets the new texture there too");
+
+        // The Ears Mod plan was made before its option mapped the game path elsewhere.
+        var filesPlan = PreviewModWriter.PlanFileAdditions(files, "Files Mod", filesMaterial, EarMaterialPath, [(copy, [7])], "Measure again");
+        conflict = false;
+        try { PreviewModWriter.CommitFileAdditions([filesPlan, stale], null); }
+        catch (TextureConflictException) { conflict = true; }
+        Require(conflict && !File.Exists(Path.Combine(files, "Files", copy.Replace('/', '\\'))) &&
+                JsonNode.Parse(File.ReadAllText(Path.Combine(files, "meta.json")))!["DefaultData"]!["Files"]![copy] is null,
+            "skin tone: a conflict in a later mod's new files stops every mod's before any is written");
     }
 
     private static void CheckViews(SkinToneReport report)

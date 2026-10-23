@@ -257,6 +257,14 @@ internal static class CutEditsFixture
         leftLast.Cuts!.Validate();
         check(leftLast.Cuts!.Parts is [_, { From: 40, To: 70, Blend: false }], "a long blend part left last plays its own motion from where it started");
         check(CutEdits.RemovePart(blended, 2, out _).Cuts!.Parts is [_, { Blend: false }], "a blend part left last plays its own motion again");
+        var gapped = CutEdits.SetBlend(CutEdits.RemoveRange(three, 40, 50, out _), 1, true);    // 0-40, 50-60 blend, 60-100, Length 90
+        var longer = CutEdits.SetBlendLength(gapped, 1, 20, out _);                              // the blend 50-70, past the next part's 60
+        check(CutEdits.SetBlend(longer, 1, false) is { Length: 100, Cuts.Parts: [{ To: 40 }, { From: 40, To: 60, Blend: false }, { From: 60 }] } motion &&
+              Validates(motion.Cuts!), "a blend that plays its motion again moves between its neighbours' source frames");
+        check(CutEdits.RemoveRange(blended, 45, 50, out _) is { Length: 95, Cuts.Parts: [{ To: 40 }, { Frames: 15, Blend: true }, { From: 60 }] },
+            "frames removed from a blend's middle leave one shorter blend");
+        check(TimelineSoundCuts.Spans(longer, 0, 10).IsEmpty && TimelineSoundCuts.Spans(gapped, 0, 10).SequenceEqual([new TimelineAudioSpan(40 / 30.0, 10 / 30.0)]),
+            "a sound across a blend loses the frames between its neighbours the blend doesn't play");
         check(MotionCutter.Window(blended.Cuts!, 0, 100) == (0, 0) && MotionCutter.Window(blended.Cuts!, 1, 100) == (0, 0) &&
               MotionCutter.Window(three.Cuts!, 0, 100) != (0, 0), "the joins at a blend part's edges blend nothing");
         var editor = new TimelineEditor(three) { Loops = false };

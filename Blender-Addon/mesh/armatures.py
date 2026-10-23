@@ -160,7 +160,8 @@ def matching_layout(base, additional):
 
 def merge_into(context, base, additional, meshes):
     """Move meshes from additional onto base, adding the bones base lacks, then delete
-    additional. Only for armatures that pass matching_layout."""
+    additional. Only for armatures that pass matching_layout. A failure puts every moved
+    child back on additional; bones already added to base stay, unused."""
     if any(bone.name not in base.data.bones for bone in additional.data.bones):
         active = context.view_layer.objects.active
         context.view_layer.objects.active = base
@@ -171,16 +172,28 @@ def merge_into(context, base, additional, meshes):
     # Every child moves, not only the meshes: deleting additional would drop the rest to the
     # world origin. Both armatures share a world matrix, so each child's parent inverse still
     # holds, but setting the parent resets it.
-    for obj in [*additional.children, *(obj for obj in meshes if obj.parent != additional)]:
-        if obj.parent == additional:
-            parent_inverse = obj.matrix_parent_inverse.copy()
-            obj.parent = base
+    moved = []
+    retargeted = []
+    try:
+        for obj in [*additional.children, *(obj for obj in meshes if obj.parent != additional)]:
+            if obj.parent == additional:
+                parent_inverse = obj.matrix_parent_inverse.copy()
+                moved.append((obj, parent_inverse))
+                obj.parent = base
+                obj.matrix_parent_inverse = parent_inverse
+            for modifier in obj.modifiers:
+                if modifier.type == "ARMATURE" and modifier.object == additional:
+                    retargeted.append(modifier)
+                    modifier.object = base
+        data = additional.data
+        bpy.data.objects.remove(additional, do_unlink=True)
+    except Exception:
+        for obj, parent_inverse in moved:
+            obj.parent = additional
             obj.matrix_parent_inverse = parent_inverse
-        for modifier in obj.modifiers:
-            if modifier.type == "ARMATURE" and modifier.object == additional:
-                modifier.object = base
-    data = additional.data
-    bpy.data.objects.remove(additional, do_unlink=True)
+        for modifier in retargeted:
+            modifier.object = additional
+        raise
     if data.users == 0:
         bpy.data.armatures.remove(data)
 

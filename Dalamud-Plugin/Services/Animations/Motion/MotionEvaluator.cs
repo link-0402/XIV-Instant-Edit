@@ -776,6 +776,8 @@ internal static class MotionEvaluator
         if (first < 0)
             return;
         var paths = new Dictionary<int, MotionTransform[]>();
+        // Heights in model space: a bone's space has its own Y, which isn't up.
+        var heights = new Dictionary<int, float[]>();
         // A limb that only bends itself can't reach past its soft reach: where its upper bone is and how far that goes, per sample.
         // Read before the layer runs, so an earlier pin of this layer that bends the same limb (a chain through the thigh) isn't seen.
         var reaches = new Dictionary<int, (Vector3[] Roots, float[] Limits)>();
@@ -783,6 +785,7 @@ internal static class MotionEvaluator
             if (pins[p].Pin.Planted && pins[p].Chain.Shape != PinChainShape.None)
             {
                 paths[p] = new MotionTransform[clip.Samples];
+                heights[p] = new float[clip.Samples];
                 if (pins[p].Chain is { Shape: PinChainShape.Limb } limb && limb.Bones[0] == limb.Root)
                     reaches[p] = (new Vector3[clip.Samples], new float[clip.Samples]);
             }
@@ -795,7 +798,10 @@ internal static class MotionEvaluator
                 local[b] = clip.Get(i, b);
             var model = ModelSpace(clip.Skeleton, local);
             foreach (var (p, path) in paths)
+            {
                 path[i] = PinSolver.PinSpace(model, pins[p].Chain.End, pins[p].RelativeTo);
+                heights[p][i] = model[pins[p].Chain.End].Position.Y;
+            }
             foreach (var (p, (roots, limits)) in reaches)
             {
                 roots[i] = PinSolver.PinSpace(model, pins[p].Chain.Root, pins[p].RelativeTo).Position;
@@ -808,7 +814,7 @@ internal static class MotionEvaluator
         var ease = PinPlanting.SamplesOf(PinPlanting.EaseFrames, clip);
         foreach (var (p, path) in paths)
         {
-            var found = PinPlanting.Find(path, rate, first, last, wraps, pins[p].Pin.Sensitivity, gap, shortest, ease);
+            var found = PinPlanting.Find(path, rate, first, last, wraps, pins[p].Pin.Sensitivity, gap, shortest, ease, heights[p]);
             planted[p] = reaches.TryGetValue(p, out var reach) ? PinPlanting.Reachable(found, reach.Roots, reach.Limits) : found;
         }
     }

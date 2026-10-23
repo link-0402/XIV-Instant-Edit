@@ -35,15 +35,13 @@ internal static class DiffuseNormal
         var strength = tex.DiffuseNormalStrength.ToString("0.00", CultureInfo.InvariantCulture);
         var path = Path.Combine(folder, $"{TextureCache.KeyForGenerated(TextureCache.KeyFor(tex.SourcePath), strength, Version)}.png");
         if (File.Exists(path))
-            return path;
+            return AlphaNormal.Reused(path);
 
         try
         {
             Directory.CreateDirectory(folder);
             using var image = Make(tex.SourcePath, tex.DiffuseNormalStrength);
-            var temp = path + ".part";
-            image.SaveAsPng(temp);
-            File.Move(temp, path, overwrite: true);
+            AlphaNormal.Save(image, path);
             AlphaNormal.Prune(folder);
             return path;
         }

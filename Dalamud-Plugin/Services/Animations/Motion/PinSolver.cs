@@ -220,8 +220,13 @@ internal static class PinSolver
             goal = own;
         if (own == Vector3.Zero)
             return goal;
-        var normal = Vector3.Lerp(own, goal, Math.Clamp(weight, 0, 1));
-        return normal.Length() > 1e-3f ? Vector3.Normalize(normal) : goal;
+        // Turned toward the goal rather than blended: a goal about opposite (a knee bent backwards) would blend
+        // through nothing and flip the knee in one sample. Opposite planes turn about the limb, which both lie across.
+        var axis = Vector3.Cross(own, goal);
+        var angle = MathF.Atan2(axis.Length(), Vector3.Dot(own, goal));
+        if (axis.Length() < 1e-4f)
+            axis = whole;
+        return Vector3.Normalize(Vector3.Transform(own, Quaternion.CreateFromAxisAngle(Vector3.Normalize(axis), Math.Clamp(weight, 0, 1) * angle)));
     }
 
     /// <summary>

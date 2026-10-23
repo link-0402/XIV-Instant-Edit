@@ -77,8 +77,9 @@ internal sealed partial class PhysicsWindow
             else if (fit is { } before && ReferenceEquals(refitFile, fitFile))
             {
                 // Settings keep their ticks; new ones, like the new tip places, start as a first fit's do.
+                // A modded file can name two shapes the same; either one ticked keeps the name ticked.
                 var ticked = Enumerable.Range(0, before.Items.Count).Where(i => before.Items[i].Changes)
-                    .ToDictionary(i => FitKey(before.Items[i]), fitChosen.Contains);
+                    .GroupBy(i => FitKey(before.Items[i])).ToDictionary(group => group.Key, group => group.Any(fitChosen.Contains));
                 fit = refitted.Result;
                 fitChosen.Clear();
                 for (var i = 0; i < fit.Items.Count; i++)

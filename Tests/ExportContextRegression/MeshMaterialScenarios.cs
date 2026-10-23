@@ -131,6 +131,12 @@ internal static class MeshMaterialScenarios
         Require(MeshSlotsOfEveryLod(lods).SequenceEqual(new[] { 0, 1, 0, 1 }) &&
                 ModelMaterialRewriter.ReadMaterialsStrict(lods).SequenceEqual(new[] { "/b.mtrl", "/old.mtrl" }),
             "a later LOD's meshes follow the first LOD's onto their new slots, so a kept mesh keeps its material at a distance too");
+
+        // The second LOD's first mesh gets two submeshes: its meshes are in another order than the first LOD's.
+        var reordered = TwoMeshModel(lodCount: 2);
+        BitConverter.TryWriteBytes(reordered.AsSpan((int)(LodPos(reordered) + 3 * 60 + 2 * 36 + 12), 2), (ushort)2);
+        Require(MeshSlotsOfEveryLod(ModelMaterialRewriter.RewriteMeshes(reordered, new string?[] { "/b.mtrl", null })).SequenceEqual(new[] { 0, 1, 0, 0 }),
+            "a later LOD whose meshes differ in submesh count from the first's keeps its slots");
     }
 
     /// <summary>The material slot of every mesh of the file, all LODs, from the mesh table.</summary>

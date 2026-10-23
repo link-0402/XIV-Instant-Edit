@@ -66,11 +66,11 @@ public class MaterialSetup
     }
 }
 
-/// <summary>One texture assignment inside a material.</summary>
-[Serializable]
 /// <summary>How a normal file's green is taken: read from it, kept as it is (OpenGL), or flipped (DirectX).</summary>
 public enum NormalGreenMode { Auto, OpenGl, DirectX }
 
+/// <summary>One texture assignment inside a material.</summary>
+[Serializable]
 public class TextureSlot
 {
     /// <summary>What the texture is used for (diffuse, normal, …).</summary>
@@ -160,6 +160,12 @@ public class TextureSlot
     public float DiffuseNormalStrength { get; set; } = 1f;
 
     /// <summary>
+    /// The slot's own file, kept aside while <see cref="UseDiffuseNormal"/> has a diffuse in
+    /// <see cref="SourcePath"/>, and put back when that is switched off.
+    /// </summary>
+    public string NormalSourcePath { get; set; } = string.Empty;
+
+    /// <summary>
     /// Which way the green of a normal file points. Auto reads it from the image (and its name when
     /// the image does not say); a DirectX normal has its green flipped, as the game's point up.
     /// See <see cref="Services.NormalGreen"/>.
@@ -207,6 +213,7 @@ public class TextureSlot
         AlphaSourcePath = AlphaSourcePath,
         UseDiffuseNormal      = UseDiffuseNormal,
         DiffuseNormalStrength = DiffuseNormalStrength,
+        NormalSourcePath      = NormalSourcePath,
         GreenDirection        = GreenDirection,
     };
 }

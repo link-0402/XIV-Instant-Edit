@@ -39,6 +39,12 @@ internal sealed class TextureSlotEditor
 
     private static void SetMode(TextureSlot tex, SourceMode mode)
     {
+        // From diffuse puts a diffuse in SourcePath: the slot's own file waits aside until it is left.
+        if (mode == SourceMode.Diffuse && !tex.UseDiffuseNormal)
+            (tex.NormalSourcePath, tex.SourcePath) = (tex.SourcePath, string.Empty);
+        else if (mode != SourceMode.Diffuse && tex.UseDiffuseNormal)
+            (tex.SourcePath, tex.NormalSourcePath) = (tex.NormalSourcePath, string.Empty);
+
         tex.UseVariants      = mode == SourceMode.Variants;
         tex.UseWhiteDummy    = mode == SourceMode.Dummy;
         tex.UseAlphaOverlay  = mode == SourceMode.Alpha;
@@ -56,7 +62,7 @@ internal sealed class TextureSlotEditor
         _                  => true,
     };
 
-    /// <summary>Switching to From diffuse starts from the material's own diffuse (its first variant), when it has one.</summary>
+    /// <summary>Switching to From diffuse starts from the material's own diffuse (its first variant), when it has one; else none is set.</summary>
     private static void StartFromDiffuse(MaterialSetup mat, TextureSlot tex)
     {
         var diffuse = mat.Textures.FirstOrDefault(t => t.Type == TextureType.Diffuse && !t.UseWhiteDummy);
@@ -273,6 +279,9 @@ internal sealed class TextureSlotEditor
             if (tex.Postfix == MaterialNaming.DefaultPostfix(tex.Type))
                 tex.Postfix = MaterialNaming.DefaultPostfix(newType);
             tex.Type = newType;
+            // These make a normal; any other role takes the file as it is.
+            if (newType != TextureType.Normal)
+                tex.UseDiffuseNormal = tex.UseAlphaOverlay = false;
             edited = true;
         }
 

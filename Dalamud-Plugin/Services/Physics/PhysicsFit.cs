@@ -149,16 +149,26 @@ internal static class PhysicsFit
             }
             var a = start.Place(capsule.StartOffset);
             var b = end.Place(capsule.EndOffset);
-            var thickness = Vector3.Distance(a, b) < 0.01f
-                ? AroundPlace(body, skeleton, capsule.StartBone.Text, (a + b) / 2)
-                : AroundSegment(body, Region(body, skeleton, PathBones(capsule.StartBone.Text, capsule.EndBone.Text, skeleton)), a, b, 0.1f, 0.9f)
-                  ?? AroundLimb(body, skeleton, capsule.StartBone.Text, (a + b) / 2);
-            if (thickness is not { } measured)
+            var region = Region(body, skeleton, PathBones(capsule.StartBone.Text, capsule.EndBone.Text, skeleton));
+            float? Thickness(Vector3 from, Vector3 to) => Vector3.Distance(from, to) < 0.01f
+                ? AroundPlace(body, skeleton, capsule.StartBone.Text, (from + to) / 2)
+                : AroundSegment(body, region, from, to, 0.1f, 0.9f) ?? AroundLimb(body, skeleton, capsule.StartBone.Text, (from + to) / 2);
+            if (Thickness(a, b) is not { } measured)
             {
                 notes.Add($"{capsule.Name.Text}: none of your skin moves with {capsule.StartBone.Text}.");
                 continue;
             }
             var move = ShapeMove(rest, use, notes, capsule.Name.Text, (capsule.StartBone.Text, capsule.StartOffset, a), (capsule.EndBone.Text, capsule.EndOffset, b));
+            if (move != null)
+            {
+                var (p, q) = (rest[capsule.StartBone.Text].Place(capsule.StartOffset), rest[capsule.EndBone.Text].Place(capsule.EndOffset));
+                if (Stays(body, region, Vector3.Distance(a, b) < 0.01f ? null : Vector3.Normalize(b - a), (p, a), (q, b)))
+                {
+                    // Already fitted: it stays, and its size is measured where physics puts it.
+                    move = null;
+                    measured = Thickness(p, q) ?? measured;
+                }
+            }
             items.Add(Shape(PhysicsFitTarget.Capsule, capsule.Name.Text, label, capsule.Radius, measured, use, move));
         }
 
@@ -179,6 +189,14 @@ internal static class PhysicsFit
                 continue;
             }
             var move = ShapeMove(rest, use, notes, sphere.Name.Text, (sphere.Bone.Text, sphere.Offset, centre));
+            // shortcut: a ball has no axis, so it's compared to the middle of all its bone's skin; one the game placed off that
+            // middle could creep along the limb a step per fit. Compare across the Limb() axis if a real file shows it.
+            if (move != null && rest[sphere.Bone.Text].Place(sphere.Offset) is var placed &&
+                Stays(body, Region(body, skeleton, [sphere.Bone.Text]), null, (placed, centre)))
+            {
+                move = null;
+                measured = AroundPlace(body, skeleton, sphere.Bone.Text, placed) ?? measured;
+            }
             items.Add(Shape(PhysicsFitTarget.Sphere, sphere.Name.Text, PhysicsShapeNames.Label(file.Collision, sphere.Name.Text, skeleton),
                 sphere.Thickness, measured, use, move));
         }
@@ -278,7 +296,7 @@ internal static class PhysicsFit
     /// <summary>
     /// Where a shape only the skirt bumps into goes: each end where Customize+ puts it (<c>Shaped</c>),
     /// as an offset from its bone at rest, where physics runs. Null for shapes body areas use too, which
-    /// stay on their bones, and when nothing moves.
+    /// stay on their bones, and when nothing moves. A shape fitted before is told apart by <see cref="Stays"/>.
     /// </summary>
     private static PhysicsShapeMove? ShapeMove(IReadOnlyDictionary<string, PhysicsFrame> rest, ShapeUse use, List<string> notes, string name,
         params (string Bone, Vector3 Offset, Vector3 Shaped)[] ends)
@@ -299,6 +317,44 @@ internal static class PhysicsFit
 
     /// <summary> A model-space point as an offset from a bone, the way physics files give them: turned with the bone, never scaled. </summary>
     private static Vector3 Local(PhysicsFrame frame, Vector3 point) => Vector3.Transform(point - frame.Position, Quaternion.Conjugate(frame.Rotation));
+
+    /// <summary>
+    /// Whether a skirt shape already sits where Customize+ puts the body, as a fit left it: its points where
+    /// physics puts them (<c>Placed</c>) are at least as near the middle of the skin as the moved ones, across
+    /// <paramref name="axis"/>. The file doesn't say whether its offsets hold the move already, and moving again
+    /// would add it twice. Along the shape it can't be told, so a move only along it stays. Stays without skin.
+    /// </summary>
+    private static bool Stays(PhysicsBody body, IReadOnlySet<int> bones, Vector3? axis, params (Vector3 Placed, Vector3 Moved)[] ends)
+    {
+        float stay = 0, moved = 0;
+        foreach (var (at, to) in ends)
+        {
+            if (SkinMiddle(body, bones, to, axis) is not { } middle)
+                return true;
+            stay += Across(at - middle, axis);
+            moved += Across(to - middle, axis);
+        }
+        // A tenth of a millimetre, so rounding never moves a shape again.
+        return stay <= moved + 1e-4f;
+    }
+
+    /// <summary> The middle of the skin the bones carry most, within three centimetres of <paramref name="near"/> along <paramref name="axis"/> when given. </summary>
+    private static Vector3? SkinMiddle(PhysicsBody body, IReadOnlySet<int> bones, Vector3 near, Vector3? axis)
+    {
+        var sum = Vector3.Zero;
+        var area = 0f;
+        for (var i = 0; i < body.Points.Length; i++)
+        {
+            if (body.WeightOn(i, bones) < LimbWeight || axis is { } line && MathF.Abs(Vector3.Dot(body.Points[i] - near, line)) > 0.03f)
+                continue;
+            sum += body.Points[i] * body.Areas[i];
+            area += body.Areas[i];
+        }
+        return area > 0 ? sum / area : null;
+    }
+
+    /// <summary> How long a vector is across <paramref name="axis"/>, or in all, without one. </summary>
+    private static float Across(Vector3 vector, Vector3? axis) => (axis is { } line ? vector - Vector3.Dot(vector, line) * line : vector).Length();
 
     /// <summary> Every skirt chain with moving points, by simulator and chain. </summary>
     private static List<(int Simulator, int Chain)> SkirtChains(PhybFile file)
@@ -330,6 +386,7 @@ internal static class PhysicsFit
         if (covered || !rest.TryGetValue(hips, out var hipsAtRest))
             return;
         var skirtSize = skirt.Max(target => file.Simulators[target.Simulator].Chains[target.Chain].Nodes.Skip(1).Max(node => node.Radius));
+        PhybFile? planned = null;
         foreach (var (side, label) in new[] { ("l", "Left"), ("r", "Right") })
         {
             var name = SkirtButtPrefix + side;
@@ -347,7 +404,8 @@ internal static class PhysicsFit
                 continue;
             }
             var existing = file.Collision.Spheres.FirstOrDefault(sphere => sphere.Name.Text == name);
-            if (existing is null && !PhysicsCollisions.CanAdd(file, skirt, name))
+            // Added to a copy, so the second ball counts the bit the first one takes.
+            if (existing is null && !PhysicsCollisions.Add(planned ??= file.Clone(), skirt, name))
             {
                 notes.Add($"{label} butt for the skirt: the skirt already bumps into {PhysicsCollisions.MaxShapes} shapes.");
                 continue;
@@ -376,7 +434,7 @@ internal static class PhysicsFit
     private static void Waist(PhybFile file, PhysicsBody body, PhysicsBody unshaped, PhysicsSkeleton skeleton, List<(int Simulator, int Chain)> skirt,
         List<PhysicsWaistMove> moves)
     {
-        if (!unshaped.Pose.TryGetValue("j_kosi", out var hips))
+        if (!unshaped.Pose.TryGetValue("j_kosi", out var hips) || !body.Pose.TryGetValue("j_kosi", out var shapedHips))
             return;
         string[] torso = ["j_kosi", "j_sebo_a", "j_asi_a_l", "j_asi_a_r"];
         foreach (var bone in skirt.Select(target => file.Simulators[target.Simulator].Chains[target.Chain].Nodes[0].Bone.Text).Distinct())
@@ -388,10 +446,12 @@ internal static class PhysicsFit
             if (direction.Length() < 0.01f)
                 continue;
             direction = Vector3.Normalize(direction);
-            if (Outer(body, skeleton, torso, hips.Position, atRest.Position.Y, direction) is not { } grown ||
+            // Each body is measured around its own hips, at the bone's own height, so a pelvis Customize+ raises is measured at the same slice.
+            if (Outer(body, skeleton, torso, shapedHips.Position, shaped.Position.Y, direction) is not { } grown ||
                 Outer(unshaped, skeleton, torso, hips.Position, atRest.Position.Y, direction) is not { } was || grown - was < 0.005f)
                 continue;
-            var extra = Vector3.Dot(atRest.Position + direction * (grown - was) - shaped.Position, direction);
+            // Out from where the hips are now, so a pelvis Customize+ moves takes the skirt bone with it.
+            var extra = Vector3.Dot(atRest.Position + shapedHips.Position - hips.Position + direction * (grown - was) - shaped.Position, direction);
             if (extra >= 0.005f)
                 moves.Add(new PhysicsWaistMove(bone, Vector3.Transform(direction * extra, Quaternion.Conjugate(shaped.Rotation)), extra));
         }
@@ -482,7 +542,12 @@ internal static class PhysicsFit
                     break;
                 case PhysicsFitTarget.Sphere:
                     if (item.Shape is { NewOn: { } bone } && file.Collision.Spheres.All(shape => shape.Name.Text != item.Name))
+                    {
+                        // Without a bit left in the skirt, nothing would bump into the ball.
+                        if (!PhysicsCollisions.CanAdd(file, SkirtChains(file), item.Name))
+                            break;
                         file.Collision.Spheres.Add(new PhybSphere { Name = PhybName.From(item.Name), Bone = PhybName.From(bone) });
+                    }
                     foreach (var sphere in file.Collision.Spheres.Where(shape => shape.Name.Text == item.Name))
                     {
                         sphere.Thickness = item.Fitted;

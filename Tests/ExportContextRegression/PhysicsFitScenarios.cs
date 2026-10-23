@@ -48,6 +48,15 @@ internal static class PhysicsFitScenarios
         var middle = (rest["j_asi_a_l"].Place(capsule.StartOffset) + rest["j_asi_b_l"].Place(capsule.EndOffset)) / 2;
         Require(Vector3.Distance(middle, new Vector3(0.1f, 0.7f, 0)) < 1e-4f && MathF.Abs(capsule.Radius - thigh.Fitted) < 1e-6f,
             "physics fit: physics then places the skirt's thigh shape in the middle of the thigh's skin, where Customize+ draws it");
+        var refit = PhysicsFit.Measure(file, body, skeleton, unshaped: unshaped).Items.First(item => item.Name == "thigh_l");
+        Require(refit.Shape is null && !refit.Changes && refit.Fitted == refit.Current,
+            "physics fit: fitting a fitted file again leaves its skirt shape where it is, without adding the Customize+ move twice");
+        // At rest the thigh bones sit 3 cm higher instead: Customize+ moves them only along the thigh.
+        var higher = body.Pose.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        foreach (var bone in new[] { "j_asi_a_l", "j_asi_b_l" })
+            higher[bone] = higher[bone] with { Position = higher[bone].Position + new Vector3(0, 0.03f, 0) };
+        Require(PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton, unshaped: InPose(body, higher)).Items.First(item => item.Name == "thigh_l").Shape is null,
+            "physics fit: a move only along the shape can't be told from one already made, so the shape stays");
         Require(PhysicsFit.Measure(SyntheticFile(0.12f), body, skeleton).Items.First(item => item.Name == "thigh_l").Shape is null,
             "physics fit: measured without the body at rest, skirt shapes stay where they are");
 
@@ -64,7 +73,7 @@ internal static class PhysicsFitScenarios
     /// Hips with skin 9 cm around at rest and <paramref name="hips"/> with Customize+, a butt cheek on each side
     /// (a half ball 6 cm wide, behind its bone, a third carried by it), and a skirt bone starting 10 cm out.
     /// </summary>
-    private static (PhysicsBody Body, PhysicsSkeleton Skeleton) HipsBody(float hips, Vector3 skirtStart)
+    private static (PhysicsBody Body, PhysicsSkeleton Skeleton) HipsBody(float hips, Vector3 skirtStart, float lift = 0)
     {
         var skeleton = new PhysicsSkeleton(
         [
@@ -82,13 +91,16 @@ internal static class PhysicsFitScenarios
             ["iv_shiri_r"] = PhysicsFrame.Rest(new Vector3(-0.07f, 0.95f, 0), Quaternion.Identity),
             ["j_sk_f_a_l"] = PhysicsFrame.Rest(skirtStart, Quaternion.Identity),
         };
+        // Customize+ raising the whole pelvis.
+        foreach (var bone in pose.Keys.ToList())
+            pose[bone] = pose[bone] with { Position = pose[bone].Position + new Vector3(0, lift, 0) };
         string[] bones = ["j_kosi", "iv_shiri_l", "iv_shiri_r"];
         var points = new List<Vector3>();
         var pointBones = new List<int>();
         var pointWeights = new List<float>();
         void Add(Vector3 point, params (int Bone, float Weight)[] weights)
         {
-            points.Add(point);
+            points.Add(point + new Vector3(0, lift, 0));
             for (var i = 0; i < PhysicsBody.Influences; i++)
             {
                 pointBones.Add(i < weights.Length ? weights[i].Bone : -1);
@@ -166,6 +178,22 @@ internal static class PhysicsFitScenarios
         Require(PhysicsFit.Measure(SkirtFile(), moved, skeleton, unshaped: unshaped).Waist.Count == 0 &&
                 PhysicsFit.Measure(SkirtFile(), body, skeleton).Waist.Count == 0,
             "physics fit: no Customize+ move for a skirt bone Customize+ already moves out, or without the body at rest");
+        var (raised, _) = HipsBody(0.12f, start, lift: 0.05f);
+        Require(PhysicsFit.Measure(SkirtFile(), raised, skeleton, unshaped: unshaped).Waist is [{ Bone: "j_sk_f_a_l" } up] &&
+                Vector3.Distance(up.Translation, new Vector3(0.03f, 0, 0)) < 0.002f,
+            "physics fit: with the pelvis raised by Customize+, the hips are measured at the skirt bone's new height");
+
+        // Room in the skirt for one more shape: only one ball is offered, and applying both adds only the one.
+        var crowded = SkirtFile();
+        for (var i = 0; i < PhysicsCollisions.MaxShapes - 1; i++)
+            crowded.Simulators[0].Collisions.Add(new PhybCollisionRef { Name = PhybName.From($"other_{i}"), Type = PhybCollisionType.Outside });
+        var room = PhysicsFit.Measure(crowded, body, skeleton, unshaped: unshaped);
+        Require(room.Items.Count(item => item.Name.StartsWith(PhysicsFit.SkirtButtPrefix, StringComparison.Ordinal)) == 1 &&
+                room.Notes.Any(note => note.StartsWith("Right butt for the skirt: the skirt already bumps into", StringComparison.Ordinal)),
+            "physics fit: with room for one more shape, the skirt is offered one butt ball and told why not the other");
+        PhysicsFit.Apply(crowded, butts);
+        Require(crowded.Collision.Spheres.Count == 1 && PhysicsCollisions.State(crowded, [(0, 0)], crowded.Collision.Spheres[0].Name.Text) == PhysicsBumps.All,
+            "physics fit: a ball the skirt has no bit left for isn't added");
     }
 
     private static void CheckDrawnModels()
