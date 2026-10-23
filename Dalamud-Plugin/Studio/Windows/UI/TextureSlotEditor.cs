@@ -17,14 +17,15 @@ namespace InstantEdit.Studio.Windows.UI;
 /// </summary>
 internal sealed class TextureSlotEditor
 {
-    private enum SourceMode { File, Variants, Dummy, Alpha }
+    private enum SourceMode { File, Variants, Dummy, Alpha, Diffuse }
 
-    private static readonly string[] SourceModeLabels = { "File", "Variants", "Dummy", "Add alpha" };
+    private static readonly string[] SourceModeLabels = { "File", "Variants", "Dummy", "Add alpha", "From diffuse" };
 
     private const string ImageFilter = "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}";
 
     private readonly ISetUpSession _session;
     private readonly TextureThumbnailCache _thumbnails;
+    private (TextureSlot? Slot, float Value) _strengthDrag;
 
     public TextureSlotEditor(ISetUpSession session, TextureThumbnailCache thumbnails)
     {
@@ -33,18 +34,38 @@ internal sealed class TextureSlotEditor
     }
 
     private static SourceMode ModeOf(TextureSlot tex)
-        => tex.UseWhiteDummy ? SourceMode.Dummy : tex.UseVariants ? SourceMode.Variants : tex.UseAlphaOverlay ? SourceMode.Alpha : SourceMode.File;
+        => tex.UseWhiteDummy ? SourceMode.Dummy : tex.UseVariants ? SourceMode.Variants : tex.UseAlphaOverlay ? SourceMode.Alpha
+         : tex.UseDiffuseNormal ? SourceMode.Diffuse : SourceMode.File;
 
     private static void SetMode(TextureSlot tex, SourceMode mode)
     {
-        tex.UseVariants     = mode == SourceMode.Variants;
-        tex.UseWhiteDummy   = mode == SourceMode.Dummy;
-        tex.UseAlphaOverlay = mode == SourceMode.Alpha;
+        tex.UseVariants      = mode == SourceMode.Variants;
+        tex.UseWhiteDummy    = mode == SourceMode.Dummy;
+        tex.UseAlphaOverlay  = mode == SourceMode.Alpha;
+        tex.UseDiffuseNormal = mode == SourceMode.Diffuse;
     }
 
-    /// <summary>Add alpha is offered on the normal slot of a hair material, and kept on a slot that already uses it.</summary>
-    private static bool Offers(MaterialSetup? mat, TextureSlot tex, SourceMode mode)
-        => mode != SourceMode.Alpha || tex.UseAlphaOverlay || tex.Type == TextureType.Normal && mat?.ShaderType == ShaderType.Hair;
+    /// <summary>
+    /// Add alpha is offered on the normal slot of a hair material, From diffuse on the normal slot of
+    /// a gear material; each is kept on a slot that already uses it.
+    /// </summary>
+    private static bool Offers(MaterialSetup? mat, TextureSlot tex, SourceMode mode) => mode switch
+    {
+        SourceMode.Alpha   => tex.UseAlphaOverlay || tex.Type == TextureType.Normal && mat?.ShaderType == ShaderType.Hair,
+        SourceMode.Diffuse => tex.UseDiffuseNormal || tex.Type == TextureType.Normal && mat?.ShaderType == ShaderType.Character,
+        _                  => true,
+    };
+
+    /// <summary>Switching to From diffuse starts from the material's own diffuse (its first variant), when it has one.</summary>
+    private static void StartFromDiffuse(MaterialSetup mat, TextureSlot tex)
+    {
+        var diffuse = mat.Textures.FirstOrDefault(t => t.Type == TextureType.Diffuse && !t.UseWhiteDummy);
+        var image = diffuse == null ? null
+                  : diffuse.UseVariants ? TextureSources.VariantImages(diffuse).FirstOrDefault()
+                  : diffuse.SourcePath;
+        if (!string.IsNullOrWhiteSpace(image) && System.IO.File.Exists(image))
+            tex.SourcePath = image;
+    }
 
     private static string ModeTooltip(TextureSlot tex, SourceMode mode)
     {
@@ -54,6 +75,8 @@ internal sealed class TextureSlotEditor
             SourceMode.File     => "One image file (png / jpeg / tga / dds), converted to .tex — or a .tex, used as it is.",
             SourceMode.Variants => "Several images — each becomes one option of a switch group in the mod.",
             SourceMode.Alpha    => "A base normal map with an alpha map put into its alpha: black where there is no hair, white where there is.",
+            SourceMode.Diffuse  => "A normal made from a diffuse texture's shading, for ports that come without a usable normal. "
+                                 + "The diffuse's alpha becomes the opacity.",
             _ => options.Count > 1
                 ? "A placeholder texture — pick which one. No source image needed."
                 : $"A placeholder texture ({DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).Label}). No source image needed.",
@@ -69,7 +92,7 @@ internal sealed class TextureSlotEditor
         if (paths.Files.Count == 1 && paths.Folders.Count == 0 && ModeOf(tex) != SourceMode.Variants)
         {
             tex.SourcePath = paths.Files[0];
-            SetMode(tex, ModeOf(tex) == SourceMode.Alpha ? SourceMode.Alpha : SourceMode.File);
+            SetMode(tex, ModeOf(tex) is SourceMode.Alpha or SourceMode.Diffuse ? ModeOf(tex) : SourceMode.File);
             _session.MarkDirty();
             _session.Notify($"{TextureTypeInfo.DisplayName(tex.Type)} ← {paths.Describe()}", Severity.Info);
             return;
@@ -161,12 +184,12 @@ internal sealed class TextureSlotEditor
         bool edited = false;
         var mode = ModeOf(tex);
 
-        int modeIdx = (int)mode;
+        var offered = Enum.GetValues<SourceMode>().Where(m => Offers(null, tex, m)).ToArray();
+        int modeIdx = Array.IndexOf(offered, mode);
         ImGui.SetNextItemWidth(Theme.S(86));
-        var labels = SourceModeLabels.Where((_, m) => Offers(null, tex, (SourceMode)m)).ToArray();   // Alpha is last, so indices still match
-        if (ComboWheel.Combo("##mode", ref modeIdx, labels))
+        if (ComboWheel.Combo("##mode", ref modeIdx, offered.Select(m => SourceModeLabels[(int)m]).ToArray()))
         {
-            mode = (SourceMode)modeIdx;
+            mode = offered[modeIdx];
             SetMode(tex, mode);
             edited = true;
         }
@@ -289,6 +312,8 @@ internal sealed class TextureSlotEditor
             {
                 mode = (SourceMode)m;
                 SetMode(tex, mode);
+                if (mode == SourceMode.Diffuse)
+                    StartFromDiffuse(mat, tex);
                 edited = true;
             }
             Gui.Tooltip(ModeTooltip(tex, (SourceMode)m));
@@ -306,8 +331,13 @@ internal sealed class TextureSlotEditor
         }
         else
         {
-            Gui.Label(mode == SourceMode.Alpha ? "Base normal" : "File",
-                mode == SourceMode.Alpha ? "The normal map the hair starts from. New hair materials take the one set in Settings." : null);
+            Gui.Label(mode switch { SourceMode.Alpha => "Base normal", SourceMode.Diffuse => "Diffuse", _ => "File" },
+                mode switch
+                {
+                    SourceMode.Alpha   => "The normal map the hair starts from. New hair materials take the one set in Settings.",
+                    SourceMode.Diffuse => "The diffuse whose shading becomes the bumps. Any colour variant works; they share their shading.",
+                    _                  => null,
+                });
             string src = tex.SourcePath;
             if (Gui.PathPicker("fullsrc", ref src, "png / jpeg / tga / dds / .tex file", PathKind.File, ImageFilter,
                     picked => { tex.SourcePath = picked; _session.MarkDirty(); }, drop: DropRule(tex)))
@@ -320,6 +350,24 @@ internal sealed class TextureSlotEditor
             {
                 Gui.Label("Alpha", "Black where there is no hair, white where there is. Written into the normal's alpha.");
                 edited |= DrawAlphaPicker(tex, "fullalpha", "png / jpeg / tga / dds / .tex file", 0);
+            }
+            else if (mode == SourceMode.File && tex.Type == TextureType.Normal && !TextureSources.IsTex(tex.SourcePath))   // a .tex is used as it is
+            {
+                edited |= DrawGreenDirection(tex);
+            }
+            else if (mode == SourceMode.Diffuse)
+            {
+                Gui.Label("Strength", "How deep the bumps are. 1 suits most Sims clothing.");
+                // Applied on release, so the normal is not remade on every step of a drag.
+                float strength = _strengthDrag.Slot == tex ? _strengthDrag.Value : tex.DiffuseNormalStrength;
+                ImGui.SetNextItemWidth(Theme.S(140));
+                ImGui.SliderFloat("##diffusestrength", ref strength, 0.1f, 3f, "%.2f");
+                _strengthDrag = ImGui.IsItemActive() ? (tex, strength) : (null, 0f);
+                if (ImGui.IsItemDeactivatedAfterEdit())
+                {
+                    tex.DiffuseNormalStrength = MathF.Round(Math.Clamp(strength, 0.1f, 3f), 2);
+                    edited = true;
+                }
             }
         }
 
@@ -369,6 +417,33 @@ internal sealed class TextureSlotEditor
             + "texture, whose blue and alpha channels go unused. About as quick to compress as BC3.\n"
             + "None — no compression. Instant to write, four times the size in game memory.\n\n"
             + "A texture is compressed once, and again only when the image itself changes.");
+        return edited;
+    }
+
+    private static readonly string[] GreenLabels = { "Auto", "OpenGL (keep)", "DirectX (flip)" };
+
+    /// <summary>Which way a normal file's green points: what Auto found, and the choice to set it by hand.</summary>
+    private static bool DrawGreenDirection(TextureSlot tex)
+    {
+        Gui.Label("Green", "The game's normals point green up (OpenGL). Unreal and some exporters point it down (DirectX); "
+                         + "those are flipped. Auto reads it from the image, and from the file name when the image is unclear.");
+        int index = (int)tex.GreenDirection;
+        bool edited = false;
+        ImGui.SetNextItemWidth(Theme.S(140));
+        if (ComboWheel.Combo("##green", ref index, GreenLabels))
+        {
+            tex.GreenDirection = (NormalGreenMode)index;
+            edited = true;
+        }
+
+        if (NormalGreen.Applies(tex) && System.IO.File.Exists(tex.SourcePath))
+        {
+            var reading = tex.GreenDirection == NormalGreenMode.Auto ? NormalGreen.Peek(tex.SourcePath) : null;
+            NormalGreen.Flips(tex, reading, out var why);
+            ImGui.SameLine();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, why);
+        }
         return edited;
     }
 

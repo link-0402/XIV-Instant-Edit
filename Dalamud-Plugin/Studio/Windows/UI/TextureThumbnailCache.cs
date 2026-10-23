@@ -120,7 +120,23 @@ internal sealed class TextureThumbnailCache : IDisposable
             return;
         }
 
+        if (tex.UseDiffuseNormal && File.Exists(tex.SourcePath))
+        {
+            var diffusePath = tex.SourcePath;
+            var strength = tex.DiffuseNormalStrength;
+            var key = $"{AlphaPrefix}diffuse|{TextureCache.KeyFor(diffusePath)}|{strength:0.00}";
+            DrawLoaded(Get(key, () => DiffuseNormalPng(diffusePath, strength), checkStamp: false), side,
+                $"Normal made from {Path.GetFileName(diffusePath)} (strength {strength:0.00})");
+            return;
+        }
+
         DrawFile(tex.SourcePath, side, null);
+    }
+
+    private static byte[] DiffuseNormalPng(string diffusePath, float strength)
+    {
+        using var image = DiffuseNormal.Make(diffusePath, strength);
+        return ToPng(image);
     }
 
     private static byte[] AlphaNormalPng(string basePath, string alphaPath)

@@ -29,8 +29,10 @@ internal static class AlphaNormal
     public static string? SourceOf(TextureSlot tex, string? cacheDirectory, out string error)
     {
         error = string.Empty;
+        if (tex.UseDiffuseNormal)
+            return DiffuseNormal.SourceOf(tex, cacheDirectory, out error);
         if (!tex.UseAlphaOverlay)
-            return tex.SourcePath;
+            return NormalGreen.SourceOf(tex, cacheDirectory, out error);
 
         if (string.IsNullOrWhiteSpace(tex.SourcePath) || !File.Exists(tex.SourcePath))
         {
@@ -113,7 +115,7 @@ internal static class AlphaNormal
     }
 
     /// <summary>Any image a slot takes, at full size: png, jpeg, tga, dds, or the game's .tex.</summary>
-    private static Image<Rgba32> Load(string path)
+    internal static Image<Rgba32> Load(string path)
     {
         switch (Path.GetExtension(path).ToLowerInvariant())
         {
@@ -131,7 +133,7 @@ internal static class AlphaNormal
         }
     }
 
-    private static void Prune(string folder)
+    internal static void Prune(string folder)
     {
         try
         {

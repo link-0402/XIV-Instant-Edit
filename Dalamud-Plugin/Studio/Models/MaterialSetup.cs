@@ -68,6 +68,9 @@ public class MaterialSetup
 
 /// <summary>One texture assignment inside a material.</summary>
 [Serializable]
+/// <summary>How a normal file's green is taken: read from it, kept as it is (OpenGL), or flipped (DirectX).</summary>
+public enum NormalGreenMode { Auto, OpenGl, DirectX }
+
 public class TextureSlot
 {
     /// <summary>What the texture is used for (diffuse, normal, …).</summary>
@@ -148,6 +151,22 @@ public class TextureSlot
     public string AlphaSourcePath { get; set; } = string.Empty;
 
     /// <summary>
+    /// When true (gear normal slots), <see cref="SourcePath"/> is a diffuse texture and the normal is
+    /// made from its shading, with its alpha as the opacity. See <see cref="Services.DiffuseNormal"/>.
+    /// </summary>
+    public bool UseDiffuseNormal { get; set; }
+
+    /// <summary>How strong the bumps of a normal made from a diffuse are; 1 is the default.</summary>
+    public float DiffuseNormalStrength { get; set; } = 1f;
+
+    /// <summary>
+    /// Which way the green of a normal file points. Auto reads it from the image (and its name when
+    /// the image does not say); a DirectX normal has its green flipped, as the game's point up.
+    /// See <see cref="Services.NormalGreen"/>.
+    /// </summary>
+    public NormalGreenMode GreenDirection { get; set; } = NormalGreenMode.Auto;
+
+    /// <summary>
     /// When set, this slot writes no texture of its own: the material points at this game path,
     /// which another material (usually on another model, e.g. the same hair for a second race)
     /// already writes. Set when a material is pasted with "keep texture paths". The source fields
@@ -186,5 +205,8 @@ public class TextureSlot
         DummyPreset    = DummyPreset,
         UseAlphaOverlay = UseAlphaOverlay,
         AlphaSourcePath = AlphaSourcePath,
+        UseDiffuseNormal      = UseDiffuseNormal,
+        DiffuseNormalStrength = DiffuseNormalStrength,
+        GreenDirection        = GreenDirection,
     };
 }

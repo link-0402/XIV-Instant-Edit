@@ -983,6 +983,10 @@ internal sealed class ModBuilder
         }
         if (tex.UseAlphaOverlay)
             detail = $"{Path.GetFileName(tex.SourcePath)} with the alpha of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
+        else if (tex.UseDiffuseNormal)
+            detail = $"normal made from {Path.GetFileName(tex.SourcePath)}: {detail}";
+        else if (sourcePath != tex.SourcePath)
+            detail = $"DirectX normal, green flipped: {detail}";
 
         File.WriteAllBytes(LocalPath(modPath, rel), texData);
         report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath, detail, source);

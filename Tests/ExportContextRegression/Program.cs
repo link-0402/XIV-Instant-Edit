@@ -189,6 +189,8 @@ try
     Scenarios.Run(() => ModLibraryScenarios.Run(testRoot));
     Scenarios.Run(() => ModBuildScenarios.Run(testRoot));
     Scenarios.Run(() => AlphaNormalScenarios.Run(testRoot));
+    Scenarios.Run(() => DiffuseNormalScenarios.Run(testRoot));
+    Scenarios.Run(() => NormalGreenScenarios.Run(testRoot));
     Scenarios.Run(MeshMaterialScenarios.Run);
     Scenarios.Run(MaterialEditorScenarios.RunRows);
     Scenarios.Run(MaterialEditorScenarios.RunPackages);

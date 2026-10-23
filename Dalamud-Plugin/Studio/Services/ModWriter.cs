@@ -811,6 +811,10 @@ internal sealed class ModWriter
                 return Fail(plan, error);
             if (tex.UseAlphaOverlay)
                 detail = $"{Path.GetFileName(tex.SourcePath)} with the alpha of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
+            else if (tex.UseDiffuseNormal)
+                detail = $"normal made from {Path.GetFileName(tex.SourcePath)}: {detail}";
+            else if (sourcePath != tex.SourcePath)
+                detail = $"DirectX normal, green flipped: {detail}";
         }
 
         Provide(plan, content, prefix + detail);

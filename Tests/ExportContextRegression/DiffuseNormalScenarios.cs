@@ -1,0 +1,65 @@
+using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Services;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using static InstantEdit.TestSupport.Assertions;
+
+/// <summary>
+/// The build window's From diffuse source for gear normals: a normal made from a diffuse's shading,
+/// green up, with the diffuse's alpha as the opacity in blue.
+/// </summary>
+internal static class DiffuseNormalScenarios
+{
+    public static void Run(string testRoot)
+    {
+        var root = Path.Combine(testRoot, "DiffuseNormals");
+        Directory.CreateDirectory(root);
+        var cache = Path.Combine(root, "cache");
+
+        // A 256×256 diffuse: transparent on the left quarter, a flat grey island elsewhere with a
+        // bright disk in it at (160,128).
+        var diffusePath = Path.Combine(root, "diffuse.png");
+        using (var diffuse = new Image<Rgba32>(256, 256))
+        {
+            for (int y = 0; y < 256; y++)
+                for (int x = 0; x < 256; x++)
+                {
+                    bool disk = (x - 160) * (x - 160) + (y - 128) * (y - 128) < 20 * 20;
+                    diffuse[x, y] = x < 64 ? new Rgba32(255, 255, 255, 0)
+                                  : disk   ? new Rgba32(230, 230, 230, 255)
+                                  :          new Rgba32(60, 60, 60, 255);
+                }
+            diffuse.SaveAsPng(diffusePath);
+        }
+
+        var tex = new TextureSlot { Type = TextureType.Normal, SourcePath = diffusePath, UseDiffuseNormal = true };
+        var made = AlphaNormal.SourceOf(tex, cache, out var error);
+        Require(made != null && made != diffusePath && File.Exists(made), $"diffuse normal: the normal is made ({error})");
+        using (var n = Image.Load<Rgba32>(made!))
+        {
+            Require(n.Width == 256 && n.Height == 256, "diffuse normal: the normal keeps the diffuse's size");
+            Require(n[160, 106].G > 140, $"diffuse normal: the top edge of a bright bump points up, green over 128 ({n[160, 106].G})");
+            Require(n[182, 128].R > 140, $"diffuse normal: the right edge of a bright bump points right, red over 128 ({n[182, 128].R})");
+            Require(n[160, 150].G < 116 && n[138, 128].R < 116, "diffuse normal: the bottom and left edges point the other way");
+            Require(n[20, 20].B == 0 && n[200, 20].B == 255, "diffuse normal: blue is the diffuse's alpha, the opacity");
+            Require(n[20, 20].R == 128 && n[20, 20].G == 128, "diffuse normal: transparent pixels are flat");
+            Require(Math.Abs(n[64, 40].R - 128) <= 3 && Math.Abs(n[64, 40].G - 128) <= 3,
+                $"diffuse normal: a flat island stays flat at its edge ({n[64, 40].R},{n[64, 40].G})");
+        }
+
+        var stamp = File.GetLastWriteTimeUtc(made!);
+        Require(AlphaNormal.SourceOf(tex, cache, out _) == made && File.GetLastWriteTimeUtc(made!) == stamp,
+            "diffuse normal: the same diffuse and strength reuse the normal made before");
+
+        tex.DiffuseNormalStrength = 2f;
+        var stronger = AlphaNormal.SourceOf(tex, cache, out _);
+        Require(stronger != null && stronger != made, "diffuse normal: another strength makes a new normal");
+        using (var a = Image.Load<Rgba32>(made!))
+        using (var b = Image.Load<Rgba32>(stronger!))
+            Require(b[182, 128].R > a[182, 128].R, "diffuse normal: a higher strength makes deeper bumps");
+
+        tex.SourcePath = Path.Combine(root, "missing.png");
+        Require(AlphaNormal.SourceOf(tex, cache, out var missing) == null && missing.Contains("diffuse not found"),
+            "diffuse normal: a missing diffuse fails with why");
+    }
+}
