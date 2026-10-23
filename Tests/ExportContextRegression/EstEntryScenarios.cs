@@ -23,6 +23,9 @@ internal static class EstEntryScenarios
         BackupsCarryTheEntries(Path.Combine(testRoot, "EstBackups"));
         NewVanillaModGetsTheEntry(Path.Combine(testRoot, "EstVanilla"));
         TwoRacesGetTheirOwnEntries(Path.Combine(testRoot, "EstTwoRaces"));
+        CopiedFolderKeepsTheOriginalsRecords(Path.Combine(testRoot, "EstCopiedFolder"));
+        OldRecordsLoadAndAreOwned(Path.Combine(testRoot, "EstOldRecords"));
+        RenamedFolderKeepsItsRecords(Path.Combine(testRoot, "EstRenamedFolder"));
     }
 
     private static EstEntryRequest Hair(int entry, string race = "c0801") => new() { Slot = "Hair", Entry = entry, Race = race };
@@ -254,6 +257,87 @@ internal static class EstEntryScenarios
             "EST: Default, which maps only Miqo'te, gets only Miqo'te's entry");
         Require(warnings.Count == 0, "EST: a request for every race the model is used for warns about none");
         Require(store.Load().Count == 3, "EST: the plugin records every entry it wrote for each race");
+    }
+
+    private static string ModKey(string modFolder) => $"id:{ReadMod(modFolder)["Identifier"]!.GetValue<string>()}";
+
+    private static void CopiedFolderKeepsTheOriginalsRecords(string root)
+    {
+        var store = new EstEntryStore(Path.Combine(root, "config"));
+        var original = Path.Combine(root, "Hair mod");
+        var copy = Path.Combine(root, "Hair mod copy");
+        WriteMod(original, HairMod(new JsonArray(Est("Female", "Miqote", 108, 150))));
+        EstEntryService.UpdateEstEntriesForRegression(original, "Hair mod", HairFile, [Hair(1050)], store);
+        // A copied folder keeps the mod's identifier, so it shares the original's EST key.
+        Directory.CreateDirectory(copy);
+        File.Copy(Path.Combine(original, "meta.json"), Path.Combine(copy, "meta.json"));
+        EstEntryService.UpdateEstEntriesForRegression(copy, "Hair mod copy", HairFile, [Hair(1051)], store);
+        var records = store.Load();
+        Require(records.Count == 4 &&
+                records.Where(record => record.Folder == "Hair mod").All(record => record.Entry == 1050) &&
+                records.Single(record => record is { Folder: "Hair mod", Container: not "default" }).Previous == 150 &&
+                records.Where(record => record.Folder == "Hair mod copy").All(record => record is { Entry: 1051, Previous: 1050 }),
+            "EST copies: a copied folder's export records its own entries and leaves the original's");
+        Require(Entries(ReadMod(original), OptionA).SequenceEqual(["Female Miqote 108 Hair=1050"]),
+            "EST copies: the copy's export leaves the original's meta.json alone");
+
+        var copyMeta = ReadMod(copy);
+        var copyRecords = store.Load().ToList();
+        Require(!EstEntryService.ReleaseEstEntries(copyMeta, copy, ModKey(copy), HairFile, 1050, [], copyRecords) &&
+                copyRecords.Count == 4,
+            "EST copies: the copy never releases the original's entries");
+
+        EstEntryService.UpdateEstEntriesForRegression(original, "Hair mod", HairFile, [], store);
+        var meta = ReadMod(original);
+        Require(Entries(meta, null).Length == 0 && Entries(meta, OptionA).SequenceEqual(["Female Miqote 108 Hair=150"]),
+            "EST copies: the original takes back its entries after the copy exported");
+        Require(store.Load().Count == 2 && store.Load().All(record => record.Folder == "Hair mod copy") &&
+                Entries(ReadMod(copy), OptionA).SequenceEqual(["Female Miqote 108 Hair=1051"]),
+            "EST copies: the original's take-back leaves the copy's records and entries");
+
+        copyRecords = store.Load().ToList();
+        Require(EstEntryService.ReleaseEstEntries(copyMeta, copy, ModKey(copy), HairFile, 1051, [], copyRecords) &&
+                copyRecords.Count == 0 && Entries(copyMeta, OptionA).SequenceEqual(["Female Miqote 108 Hair=1050"]),
+            "EST copies: the copy releases its own entries");
+    }
+
+    private static void OldRecordsLoadAndAreOwned(string root)
+    {
+        var store = new EstEntryStore(Path.Combine(root, "config"));
+        var modFolder = Path.Combine(root, "Hair mod");
+        var meta = HairMod();
+        Container(meta, null)["Manipulations"] = new JsonArray(Est("Female", "Miqote", 108, 1050));
+        WriteMod(modFolder, meta);
+        // A store file from before records kept their folder.
+        Directory.CreateDirectory(Path.Combine(root, "config"));
+        File.WriteAllText(Path.Combine(root, "config", "est-entries.json"), new JsonArray(new JsonObject
+        {
+            ["mod"] = ModKey(modFolder), ["container"] = "default", ["slot"] = "Hair", ["setId"] = 108,
+            ["genderRace"] = 801, ["entry"] = 1050, ["previous"] = 90,
+        }).ToJsonString());
+        Require(store.Load().Single() is { Folder: null, Entry: 1050, Previous: 90 }, "EST old records: a record without a folder loads");
+
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(1060)], store);
+        Require(store.Load().Single(record => record.Container == "default") is { Folder: "Hair mod", Entry: 1060, Previous: 90 },
+            "EST old records: the folder that rewrites an old record owns it and keeps the modder's value");
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [], store);
+        Require(Entries(ReadMod(modFolder), null).SequenceEqual(["Female Miqote 108 Hair=90"]) && store.Load().Count == 0,
+            "EST old records: taking back an old record's entry puts back the modder's value");
+    }
+
+    private static void RenamedFolderKeepsItsRecords(string root)
+    {
+        var store = new EstEntryStore(Path.Combine(root, "config"));
+        var modFolder = Path.Combine(root, "Hair mod");
+        var renamed = Path.Combine(root, "Hair mod renamed");
+        WriteMod(modFolder, HairMod(new JsonArray(Est("Female", "Miqote", 108, 150))));
+        EstEntryService.UpdateEstEntriesForRegression(modFolder, "Hair mod", HairFile, [Hair(1050)], store);
+        Directory.Move(modFolder, renamed);
+        EstEntryService.UpdateEstEntriesForRegression(renamed, "Hair mod renamed", HairFile, [], store);
+        var meta = ReadMod(renamed);
+        Require(Entries(meta, null).Length == 0 && Entries(meta, OptionA).SequenceEqual(["Female Miqote 108 Hair=150"]) &&
+                store.Load().Count == 0,
+            "EST renamed folder: a renamed mod folder still takes back its entries");
     }
 
     private static void BackupsCarryTheEntries(string root)

@@ -247,12 +247,12 @@ internal static partial class HairSkeletonFiles
         foreach (var previous in previousIds)
         {
             metaChanged |= Remap(meta, model, previous, new Dictionary<int, IReadOnlyList<string>>());
-            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modKey, model, previous, [], estRecords);
+            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, previous, [], estRecords);
         }
         var built = plan.Files.ToDictionary(file => file.GenderRace, IReadOnlyList<string> (file) => [file.GamePath, file.PhysicsPath]);
         metaChanged |= Remap(meta, model, plan.SkeletonId, built);
         // Races and options that dropped the model keep no EST entry naming the skeleton.
-        metaChanged |= EstEntryService.ReleaseEstEntries(meta, modKey, model, plan.SkeletonId, built.Keys, estRecords);
+        metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, plan.SkeletonId, built.Keys, estRecords);
         // meta.json goes first, so a failed write never leaves an option mapping a deleted file.
         if (metaChanged)
         {
@@ -301,7 +301,7 @@ internal static partial class HairSkeletonFiles
         foreach (var id in ids)
         {
             metaChanged |= Remap(meta, model, id, new Dictionary<int, IReadOnlyList<string>>());
-            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modKey, model, id, [], estRecords);
+            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, id, [], estRecords);
         }
         if (metaChanged)
         {
@@ -516,24 +516,13 @@ internal static partial class HairSkeletonFiles
         }
     }
 
-    /// <summary>
-    /// The record is this mod folder's for the model: same EST key and model, and made in this folder, or
-    /// in one that no longer exists (Penumbra renamed the mod). A folder copied with the mod's identifier
-    /// shares its EST key, but the mod it was copied from keeps its records. Records from before the folder
-    /// was kept belong to every folder with the key.
-    /// </summary>
+    /// <summary>The record is this mod folder's for the model: same EST key and model, and the folder's by <see cref="EstEntryService.OwnsFolder"/>.</summary>
     private static bool Owns(ManagedHairSkeleton record, string modKey, string model, string modFolder)
-    {
-        if (!string.Equals(record.Mod, modKey, StringComparison.Ordinal) ||
-            !string.Equals(record.Model, model, StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (record.Folder is not { Length: > 0 } folder || string.Equals(folder, FolderName(modFolder), StringComparison.OrdinalIgnoreCase))
-            return true;
-        var library = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(modFolder)));
-        return library is null || !Directory.Exists(Path.Combine(library, folder));
-    }
+        => string.Equals(record.Mod, modKey, StringComparison.Ordinal) &&
+           string.Equals(record.Model, model, StringComparison.OrdinalIgnoreCase) &&
+           EstEntryService.OwnsFolder(record.Folder, modFolder);
 
-    private static string FolderName(string modFolder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(modFolder)));
+    private static string FolderName(string modFolder) => EstEntryService.FolderName(modFolder);
 
     /// <summary>The one other folder beside this one with the same mod identifier, or null when there is none or several.</summary>
     private static string? CopiedFrom(string modFolder, string modKey)

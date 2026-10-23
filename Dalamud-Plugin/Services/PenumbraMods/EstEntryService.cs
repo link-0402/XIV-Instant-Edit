@@ -75,6 +75,22 @@ internal sealed partial class EstEntryService
             ? $"id:{identifier:D}"
             : $"dir:{modDirectory.Trim().ToLowerInvariant()}";
 
+    /// <summary>
+    /// A record made in <paramref name="recordFolder"/> is this mod folder's: made here, or in a folder that
+    /// no longer exists (Penumbra renamed the mod). A folder copied with the mod's identifier shares its EST
+    /// key, but the mod it was copied from keeps its records. Records from before the folder was kept belong
+    /// to every folder with the key.
+    /// </summary>
+    internal static bool OwnsFolder(string? recordFolder, string modFolder)
+    {
+        if (recordFolder is not { Length: > 0 } folder || string.Equals(folder, FolderName(modFolder), StringComparison.OrdinalIgnoreCase))
+            return true;
+        var library = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(modFolder)));
+        return library is null || !Directory.Exists(Path.Combine(library, folder));
+    }
+
+    internal static string FolderName(string modFolder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(modFolder)));
+
     internal static IEnumerable<EstContainer> EstContainers(JsonObject meta)
     {
         if (meta["DefaultData"] is JsonObject defaultData)
@@ -206,11 +222,12 @@ internal sealed partial class EstEntryService
             manipulations.Add(manipulation);
     }
 
-    private static bool SameEstRecord(ManagedEstEntry record, string mod, string container, EstIdentity identity)
+    private static bool SameEstRecord(ManagedEstEntry record, string mod, string modFolder, string container, EstIdentity identity)
         => string.Equals(record.Mod, mod, StringComparison.Ordinal) &&
            string.Equals(record.Container, container, StringComparison.Ordinal) &&
            string.Equals(record.Slot, EstIdentity.Slot, StringComparison.Ordinal) &&
-           record.SetId == identity.SetId && record.GenderRace == identity.GenderRace;
+           record.SetId == identity.SetId && record.GenderRace == identity.GenderRace &&
+           OwnsFolder(record.Folder, modFolder);
 
     /// <summary>
     /// Bring a mod's hair EST entries in line with the exported meshes. <paramref name="requests"/> null
@@ -284,12 +301,12 @@ internal sealed partial class EstEntryService
                 var current = CurrentEst(target.Container.Data, identity);
                 if (current == request.Entry)
                     continue;
-                var index = records.FindIndex(record => SameEstRecord(record, modKey, target.Container.Key, identity));
+                var index = records.FindIndex(record => SameEstRecord(record, modKey, modFolder, target.Container.Key, identity));
                 // Keep the modder's value from before the first export while the entry is still ours.
                 var previous = index >= 0 && current == records[index].Entry ? records[index].Previous : current;
                 SetEst(target.Container.Data, identity, request.Entry);
                 var updated = new ManagedEstEntry(modKey, target.Container.Key, EstIdentity.Slot,
-                    identity.SetId, identity.GenderRace, request.Entry, previous);
+                    identity.SetId, identity.GenderRace, request.Entry, previous, FolderName(modFolder));
                 if (index >= 0)
                     records[index] = updated;
                 else
@@ -302,7 +319,7 @@ internal sealed partial class EstEntryService
             foreach (var target in targets)
             foreach (var identity in target.Hair)
             {
-                var index = records.FindIndex(record => SameEstRecord(record, modKey, target.Container.Key, identity));
+                var index = records.FindIndex(record => SameEstRecord(record, modKey, modFolder, target.Container.Key, identity));
                 if (index < 0)
                     continue;
                 var record = records[index];
@@ -334,6 +351,7 @@ internal sealed partial class EstEntryService
     /// </summary>
     internal static bool ReleaseEstEntries(
         JsonObject meta,
+        string modFolder,
         string modKey,
         string modelRelativePath,
         int entry,
@@ -350,7 +368,7 @@ internal sealed partial class EstEntryService
         {
             var record = records[index];
             var identity = new EstIdentity(record.SetId, record.GenderRace);
-            if (!string.Equals(record.Mod, modKey, StringComparison.Ordinal) ||
+            if (!string.Equals(record.Mod, modKey, StringComparison.Ordinal) || !OwnsFolder(record.Folder, modFolder) ||
                 !string.Equals(record.Slot, EstIdentity.Slot, StringComparison.Ordinal) ||
                 record.Entry != entry || served.Contains((record.Container, identity)))
                 continue;
@@ -402,7 +420,7 @@ internal sealed partial class EstEntryService
         foreach (var target in EstTargets(meta, modelRelativePath))
         foreach (var identity in target.Hair)
         {
-            var record = records.FirstOrDefault(item => SameEstRecord(item, modKey, target.Container.Key, identity));
+            var record = records.FirstOrDefault(item => SameEstRecord(item, modKey, modFolder, target.Container.Key, identity));
             entries.Add(new JsonObject
             {
                 ["container"] = target.Container.Key,
@@ -460,13 +478,13 @@ internal sealed partial class EstEntryService
             }
             if (store is null)
                 continue;
-            var removed = records.RemoveAll(record => SameEstRecord(record, modKey, key, identity)) > 0;
+            var removed = records.RemoveAll(record => SameEstRecord(record, modKey, modFolder, key, identity)) > 0;
             if (item["managed"] is JsonObject managed && JsonIntFlexible(managed["entry"]) is var managedEntry and >= 1)
             {
                 int? previous = managed["previous"] is JsonValue previousValue &&
                                 previousValue.TryGetValue<int>(out var previousNumber) ? previousNumber : null;
                 records.Add(new ManagedEstEntry(modKey, key, EstIdentity.Slot, identity.SetId, identity.GenderRace,
-                    managedEntry, previous));
+                    managedEntry, previous, FolderName(modFolder)));
                 recordsChanged = true;
             }
             else

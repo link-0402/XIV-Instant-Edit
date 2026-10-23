@@ -6,7 +6,9 @@ namespace InstantEdit.Services;
 /// <summary>
 /// One EST entry XIV Instant Edit wrote into a Penumbra mod: where (mod, then <c>default</c>,
 /// <c>option:group:option</c> or <c>container:group:index</c>), for which skeleton lookup, the
-/// value it wrote, and the value it replaced (null: there was none).
+/// value it wrote, and the value it replaced (null: there was none). <paramref name="Folder"/> is the
+/// mod folder's name, which tells a copied folder (same identifier, so the same EST key) from the mod
+/// it was copied from. Records from before it load without it.
 /// </summary>
 public sealed record ManagedEstEntry(
     [property: JsonPropertyName("mod")] string Mod,
@@ -15,7 +17,9 @@ public sealed record ManagedEstEntry(
     [property: JsonPropertyName("setId")] int SetId,
     [property: JsonPropertyName("genderRace")] int GenderRace,
     [property: JsonPropertyName("entry")] int Entry,
-    [property: JsonPropertyName("previous")] int? Previous);
+    [property: JsonPropertyName("previous")] int? Previous,
+    [property: JsonPropertyName("folder"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Folder = null);
 
 /// <summary>
 /// The EST entries exports wrote, so a later export without a hair skeleton takes back
