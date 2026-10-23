@@ -286,6 +286,8 @@ internal sealed partial class MaterialWindow
             current.AddNewFile(texture.GamePath, texture.Bytes);
         List<string> changes = [.. result.Changes];
         List<string> warnings = [.. result.Warnings];
+        _ = current.Apply(_ => result.Doc, preset.Name);
+        // After the step, so the second UV map goes with the preset's own document and undoing the preset drops it.
         if (preset.Name == ScrollingPattern)
         {
             try
@@ -299,7 +301,6 @@ internal sealed partial class MaterialWindow
                 warnings.Add($"The second UV map couldn't be added: {e.Message}");
             }
         }
-        _ = current.Apply(_ => result.Doc, preset.Name);
         var text = $"{preset.Name}: " + string.Join(" ", changes);
         if (warnings.Count > 0)
             text += " " + string.Join(" ", warnings);

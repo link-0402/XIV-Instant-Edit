@@ -34,9 +34,13 @@ public static class PresetChecks
     public static bool NoPixelAlpha(string shaderPackage)
         => shaderPackage.Equals("characterreflection.shpk", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Whether the material has Dawntrail rows its shader reads.</summary>
+    /// <summary>
+    /// Whether the material has Dawntrail rows its shader reads as such. characterlegacy.shpk reads a
+    /// 32-row table its own way (no metalness or roughness, legacy dye fields), so it has none until converted.
+    /// </summary>
     public static bool HasRows(PresetContext context)
-        => context.Facts.SamplesColorTable && context.Doc.Table is { Kind: ColorTableKind.Dawntrail };
+        => context.Facts.SamplesColorTable && context.Doc.Table is { Kind: ColorTableKind.Dawntrail }
+           && !LegacyConversion.IsLegacyShader(context.Doc.ShaderPackage);
 
     /// <summary>Whether the shader reads the constant with the material's keys.</summary>
     public static bool Reads(PresetContext context, uint constant) => context.Facts.Reads(constant, context.Doc.Keys);

@@ -15,7 +15,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from blender_fixtures import addon_session, temporary_scene_data
-from armature_regression import assert_combination_failures, assert_linked_mesh_rejected, mesh, rig
+from mathutils import Matrix
+from armature_regression import (assert_combination_failures, assert_linked_mesh_rejected, mesh, require_matrix,
+                                 rig)
 
 
 def export_failure_restores_scene(addon, stage):
@@ -234,6 +236,81 @@ def export_copies_keep_their_rig(addon):
     print("[PASS] export copies keep the armature of modifier-rigged and non-armature-parented meshes")
 
 
+def _scaled_child(obj, parent, parent_type="OBJECT"):
+    """Parent obj as Ctrl+P does: its parent inverse cancels the parent's (scaled) transform."""
+    obj.parent = parent
+    obj.parent_type = parent_type
+    bpy.context.view_layer.update()
+    obj.matrix_parent_inverse = parent.matrix_world.inverted()
+    obj.matrix_basis = Matrix.Translation((0.3, -0.2, 1.1))
+    bpy.context.view_layer.update()
+    return obj.matrix_world.copy()
+
+
+def bake_to_copy_keeps_parent_inverse(addon):
+    objects = importlib.import_module(f"{addon.__name__}.mesh.objects")
+    with temporary_scene_data():
+        skeleton = rig("Bake Rig")
+        skeleton.matrix_world = Matrix.Scale(0.01, 4)
+        source = mesh("Bake Source", modifier_rigs=(skeleton,))
+        before = _scaled_child(source, skeleton, "ARMATURE")
+        copy = objects.baked_copy(source)
+        try:
+            bpy.context.view_layer.update()
+            require_matrix(source.matrix_world, before, "Bake to Copy moved the original")
+            require_matrix(copy.matrix_world, before, "the baked copy is not where the original is")
+            assert source.parent_type == "ARMATURE" and copy.parent_type == "ARMATURE", (
+                source.parent_type, copy.parent_type)
+        finally:
+            objects.safe_object_delete(copy)
+    print("[PASS] Bake to Copy keeps the parent inverse of an Armature Deform child")
+
+
+def shared_armature_merge_keeps_children(addon):
+    armatures = importlib.import_module(f"{addon.__name__}.mesh.armatures")
+    with temporary_scene_data():
+        base = rig("Shared Base")
+        additional = rig("Shared Extra", [
+            ("root", (0, 0, 0), (0, 0, 1), None, False),
+            ("extra", (0, 0, 1), (0, 0, 2), "root", True),
+        ])
+        for armature in (base, additional):
+            armature.matrix_world = Matrix.Scale(0.01, 4)
+        part = mesh("Shared Part", modifier_rigs=(additional,))
+        part_before = _scaled_child(part, additional, "ARMATURE")
+        empty = bpy.data.objects.new("Shared Empty", None)
+        bpy.context.scene.collection.objects.link(empty)
+        empty_before = _scaled_child(empty, additional)
+        assert armatures.matching_layout(base, additional)
+        armatures.merge_into(bpy.context, base, additional, [part])
+        bpy.context.view_layer.update()
+        assert "Shared Extra" not in bpy.data.objects, "the merged armature was kept"
+        assert part.parent == base and empty.parent == base, (part.parent, empty.parent)
+        assert [modifier.object for modifier in part.modifiers if modifier.type == "ARMATURE"] == [base]
+        require_matrix(part.matrix_world, part_before, "the merged part moved")
+        require_matrix(empty.matrix_world, empty_before, "the merged armature's other child moved")
+    print("[PASS] shared armatures keep every child of the merged armature in place")
+
+
+def inline_runs_clear_a_stopped_wait(addon):
+    steps = importlib.import_module(f"{addon.__name__}.instant_edit.steps")
+
+    def run_steps():
+        return steps.stop_waiting.is_set()
+        yield
+
+    results = []
+    steps.stop_waiting.set()
+    try:
+        steps.start(SimpleNamespace(window=None), run_steps(),
+                    lambda _report, result: results.append(result),
+                    lambda _report, error: results.append(error), lambda *_args: None)
+    finally:
+        steps.stop_waiting.clear()
+    assert results == [False], f"an earlier Esc still stopped this run's waits: {results}"
+    print("[PASS] an inline export run starts with its waits not stopped")
+
+
 def bounding_boxes_merge_to_their_union(addon):
     bbox = importlib.import_module(f"{addon.__name__}.xivpy.model.bbox")
 
@@ -401,6 +478,9 @@ def run():
             export_failure_restores_scene(addon, stage)
         vertex_group_cleanup_removes_every_matching_group(addon)
         export_copies_keep_their_rig(addon)
+        bake_to_copy_keeps_parent_inverse(addon)
+        shared_armature_merge_keeps_children(addon)
+        inline_runs_clear_a_stopped_wait(addon)
         bounding_boxes_merge_to_their_union(addon)
         import_accessors_leave_shared_streams_alone(addon)
         clear_quick_backups_uses_the_plugin_transport(addon)

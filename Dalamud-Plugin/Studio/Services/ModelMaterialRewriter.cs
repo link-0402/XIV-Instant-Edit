@@ -112,8 +112,9 @@ public static class ModelMaterialRewriter
     /// entry per mesh, as <see cref="ReadMeshMaterials"/> lists them), where a null entry leaves that
     /// mesh on its own material. A material slot whose meshes all end up on one name is renamed in
     /// place; when they end up on different names, the first mesh's name takes the slot and the others
-    /// get slots of their own, appended (or an existing slot already carrying that name). The other
-    /// LODs' meshes stay on their slot. Returns the input unchanged when nothing needs rewriting.
+    /// get slots of their own, appended (or an existing slot already carrying that name). A later LOD
+    /// with as many meshes as the first mirrors it mesh by mesh, so its meshes follow theirs onto a new
+    /// slot; other LODs' meshes stay on their slot. Returns the input unchanged when nothing needs rewriting.
     /// </summary>
     /// <exception cref="InvalidDataException">The file is not a model this can read.</exception>
     public static byte[] RewriteMeshes(byte[] data, IReadOnlyList<string?> newNames)
@@ -155,6 +156,16 @@ public static class ModelMaterialRewriter
                 materials.Add(wanted[i]!);
             }
             meshMaterials[meshes[i]] = checked((ushort)other);
+        }
+
+        // Later LODs: a mesh on the same slot as the first LOD's mesh it mirrors goes where that one went.
+        foreach (var (index, count) in mdl.LowerLods)
+        {
+            if (count == 0 || count != meshes.Length || index < 0 || index + count > meshMaterials.Length || index == meshes[0])
+                continue;
+            for (int i = 0; i < count; i++)
+                if (mdl.MeshMaterials[index + i] == mdl.MeshMaterials[meshes[i]])
+                    meshMaterials[index + i] = meshMaterials[meshes[i]];
         }
 
         bool changed = materials.Count != mdl.Materials.Length
@@ -321,6 +332,9 @@ public static class ModelMaterialRewriter
         public int Lod0MeshIndex;
         public int Lod0MeshCount;
 
+        /// <summary>The ranges of meshes of the LODs after the first that the file has (LodCount, at most 3).</summary>
+        public (int Index, int Count)[] LowerLods = Array.Empty<(int, int)>();
+
         /// <summary>The material slot each mesh uses, for every mesh of the file.</summary>
         public ushort[] MeshMaterials = Array.Empty<ushort>();
 
@@ -376,7 +390,7 @@ public static class ModelMaterialRewriter
             ushort shapeCount     = br.ReadUInt16();
             br.ReadUInt16();                    // ShapeMeshCount
             br.ReadUInt16();                    // ShapeValueCount
-            br.ReadByte();                      // LodCount
+            byte lodCount = br.ReadByte();
             br.ReadByte();                      // Flags1
             ushort elementIdCount = br.ReadUInt16();
             byte terrainShadowMeshCount = br.ReadByte();
@@ -394,6 +408,12 @@ public static class ModelMaterialRewriter
             long lodsPos = ms.Position;
             ushort lod0MeshIndex = br.ReadUInt16();
             ushort lod0MeshCount = br.ReadUInt16();
+            var lowerLods = new List<(int Index, int Count)>();
+            for (int lod = 1; lod < Math.Min((int)lodCount, 3); lod++)
+            {
+                ms.Position = lodsPos + lod * (long)LodStructSize;
+                lowerLods.Add((br.ReadUInt16(), br.ReadUInt16()));
+            }
             ms.Position = lodsPos + 3L * LodStructSize;
             if ((flags2 & 0x10) != 0)
                 ms.Position += 3L * ExtraLodStructSize;
@@ -454,6 +474,7 @@ public static class ModelMaterialRewriter
                 MeshesPos           = meshesPos,
                 Lod0MeshIndex       = lod0MeshIndex,
                 Lod0MeshCount       = lod0MeshCount,
+                LowerLods           = lowerLods.ToArray(),
                 MeshMaterials       = meshMaterials,
                 Attributes          = attributes,
                 Materials           = materials,

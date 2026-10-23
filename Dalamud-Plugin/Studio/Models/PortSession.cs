@@ -110,6 +110,10 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             cfg.MaterialLinkLayout = 1;
             cfg.Save();
         }
+        else if (ConvertPendingLinks(cfg.ModelsByItem.Values.SelectMany(models => models)))
+        {
+            cfg.Save();
+        }
 
         var folded = new List<string>();
         bool pruned = false;
@@ -158,6 +162,15 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     }
 
     /// <summary>The material slot each mesh of a local .mdl uses, or null when it cannot be read.</summary>
+    /// <summary>Converts the per-slot links of files that couldn't be read before (see <see cref="ModelMaterialLinks.ConvertPending"/>). True when any changed.</summary>
+    private static bool ConvertPendingLinks(IEnumerable<RaceModelEntry> models)
+    {
+        bool changed = false;
+        foreach (var model in models)
+            changed |= ModelMaterialLinks.ConvertPending(model, ReadMeshSlots);
+        return changed;
+    }
+
     private static IReadOnlyList<int>? ReadMeshSlots(string path)
     {
         try
@@ -822,6 +835,9 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         SyncVariantGroups();
         var cfg = _host.Configuration;
         var gameData = _host.GameData;
+        // A file that came back since loading has its old per-slot links converted before they are built.
+        if (ConvertPendingLinks(Items.SelectMany(item => item.Models)))
+            MarkDirty();
 
         var items = new List<ItemBuildRequest>();
         foreach (var source in Items)
@@ -858,7 +874,8 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             // this item's folder and going where the item goes, that points at the original's textures.
             var sharedCopies = MaterialCopy.AddShared(subject, materials, models,
                 (key, id) => FindShared(source, key, id) is { } found ? (found.Item.Subject, found.Material) : null,
-                PlaceOf(source));
+                PlaceOf(source),
+                (key, material, texture) => FindItem(key) is { } owner ? PlaceOf(owner, material, texture) : PackPlace.Default);
             var copiedFrom = sharedCopies.ToDictionary(c => c.Copy, c => (c.From, c.Source.Name));
 
             // Which races each material is written for, and so which names exist: gear follows the

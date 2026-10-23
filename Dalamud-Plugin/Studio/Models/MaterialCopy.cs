@@ -39,9 +39,13 @@ internal static class MaterialCopy
     /// and going into <paramref name="place"/>, with each link set to its copy's index. A link whose
     /// material is gone (its item left the pack, or it was removed) keeps the file's own name.
     /// <paramref name="models"/> and <paramref name="materials"/> are the build's own copies: both change.
+    /// A texture the original writes into an option other than <paramref name="place"/> (by
+    /// <paramref name="texturePlace"/>: item key, material, texture) isn't loaded while only the copy's
+    /// place is on, so the copy writes that texture again, into its own place.
     /// </summary>
     public static List<SharedCopy> AddShared(PortSubject subject, List<MaterialSetup> materials, IEnumerable<RaceModelEntry> models,
-        Func<uint, Guid, (PortSubject Subject, MaterialSetup Material)?> find, string? place)
+        Func<uint, Guid, (PortSubject Subject, MaterialSetup Material)?> find, string? place,
+        Func<uint, MaterialSetup, TextureSlot, string>? texturePlace = null)
     {
         var copies  = new List<SharedCopy>();
         var indexOf = new Dictionary<(uint Item, Guid Material), int>();
@@ -61,6 +65,14 @@ internal static class MaterialCopy
                     {
                         var copy = For(found.Material, found.Subject, subject, materials.Select(m => m.Name), shareTextures: true);
                         copy.Option = place;
+                        foreach (var (tex, original) in copy.Textures.Zip(found.Material.Textures))
+                        {
+                            if (original.IsShared || texturePlace?.Invoke(link.Item, found.Material, original) is not { Length: > 0 } where ||
+                                string.Equals(where, place, StringComparison.Ordinal))
+                                continue;
+                            tex.SharedGamePath = string.Empty;
+                            tex.Option = null;
+                        }
                         materials.Add(copy);
                         index = materials.Count - 1;
                         copies.Add(new SharedCopy(copy, found.Subject, found.Material));

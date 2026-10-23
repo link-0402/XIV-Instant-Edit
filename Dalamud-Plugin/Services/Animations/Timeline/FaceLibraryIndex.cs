@@ -44,8 +44,13 @@ internal sealed class FaceLibraryIndex(Func<Task<(string Directory, string Name,
     private sealed record CachedLibrary(FaceLibrary Library, long Length, DateTime Write);
     private sealed record CachedList(int Version, DateTime BuiltUtc, ImmutableArray<CachedLibrary> Libraries);
 
+    internal static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(1);
+
     private readonly object sync = new();
     private Task? work;
+    // The failed build Start last saw, and when it may be tried again.
+    private Task? seenFailure;
+    private DateTime retryUtc;
     private ImmutableArray<FaceLibrary> libraries = [];
     private int revision;
     private volatile FaceLibraryStatus status = new(FaceLibraryState.NotLoaded);
@@ -75,13 +80,21 @@ internal sealed class FaceLibraryIndex(Func<Task<(string Directory, string Name,
 
     /// <summary>
     /// Loads the saved list, or builds and saves it when none is saved or it can't be read. Cheap to
-    /// call again: a list loaded or being loaded is kept.
+    /// call again: a list loaded or being loaded is kept. The picker calls it every frame, so a build
+    /// that failed is tried again only after <see cref="RetryDelay"/> (Settings' Rebuild doesn't wait).
     /// </summary>
-    public void Start(CancellationToken token)
+    public void Start(CancellationToken token, DateTime? nowUtc = null)
     {
+        var now = nowUtc ?? DateTime.UtcNow;
         lock (sync)
         {
-            if (work is { IsCanceled: true } or { IsFaulted: true }) work = null;
+            if (work is { IsFaulted: true } failed)
+            {
+                if (!ReferenceEquals(failed, seenFailure)) (seenFailure, retryUtc) = (failed, now + RetryDelay);
+                if (now < retryUtc) return;
+                work = null;
+            }
+            if (work is { IsCanceled: true }) work = null;
             work ??= LoadOrBuildAsync(token);
         }
     }

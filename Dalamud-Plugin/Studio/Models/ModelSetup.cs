@@ -71,6 +71,12 @@ public class RaceModelEntry
     /// </summary>
     public List<SharedMaterialLink> SharedLinks { get; set; } = new();
 
+    /// <summary>
+    /// Files of this model whose links are still kept per material slot: they couldn't be read when the
+    /// links moved to one per mesh, and are converted once they can be (see <see cref="ModelMaterialLinks.ConvertPending"/>).
+    /// </summary>
+    public List<string>? SlotLinkFiles { get; set; }
+
     public RaceGender RaceGender => new(Race, Gender);
 
     /// <summary>A variant's material links, as stored — null when that variant has never been changed.</summary>
@@ -146,6 +152,7 @@ public class RaceModelEntry
         MaterialLinks        = MaterialLinks.ToList(),
         VariantMaterialLinks = VariantMaterialLinks.Select(l => l.ToList()).ToList(),
         SharedLinks          = SharedLinks.Select(l => l.Clone()).ToList(),
+        SlotLinkFiles        = SlotLinkFiles?.ToList(),
     };
 }
 

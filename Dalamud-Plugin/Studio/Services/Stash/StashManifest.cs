@@ -153,7 +153,8 @@ internal sealed class StashManifest
         }
 
         var unity = metas.Count > 0 ? UnityFolder.Read(files, metas) : null;
-        var byName = TexturePurposes.FromFileNames(files.Where(f => KindOf(f) == StashKind.Texture));
+        // Names are read from the folder down: the folders above it ("Downloads\Matcap test") say nothing about its files.
+        var byName = TexturePurposes.FromFileNames(files.Where(f => KindOf(f) == StashKind.Texture).Select(f => Relative(folder, f)));
         foreach (var file in files)
         {
             var entry = NewEntry(folder, file);
@@ -163,9 +164,10 @@ internal sealed class StashManifest
                     entry.Groups.Add(group);
             if (entry.Kind == StashKind.Texture)
             {
+                var named = byName[entry.Path];
                 entry.Purpose = unity != null
-                    ? TexturePurposes.Classify(null, TexturePurposes.MostCommon(used.Select(u => u.Purpose)), unity.TextureTypeOf(file), byName[file])
-                    : FromFolder(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(file)) ?? "") ?? byName[file];
+                    ? TexturePurposes.Classify(null, TexturePurposes.MostCommon(used.Select(u => u.Purpose)), unity.TextureTypeOf(file), named)
+                    : FromFolder(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(entry.Path)) ?? "") ?? named;
             }
             manifest.Entries.Add(entry);
         }
@@ -298,7 +300,7 @@ internal sealed class StashManifest
             }
 
         var assets = scan.Assets.ToDictionary(a => a.Guid, StringComparer.OrdinalIgnoreCase);
-        var byName = TexturePurposes.FromFileNames(extraction.FileByGuid.Values.Where(f => KindOf(f) == StashKind.Texture));
+        var byName = TexturePurposes.FromFileNames(extraction.FileByGuid.Values.Where(f => KindOf(f) == StashKind.Texture).Select(f => Relative(root, f)));
         foreach (var (guid, file) in extraction.FileByGuid.OrderBy(p => p.Value, StringComparer.OrdinalIgnoreCase))
         {
             var entry = NewEntry(root, file);
@@ -312,7 +314,7 @@ internal sealed class StashManifest
             if (entry.Kind == StashKind.Texture)
             {
                 entry.Purpose = TexturePurposes.Classify(null, TexturePurposes.MostCommon(used.Select(u => u.Purpose)),
-                    assets.GetValueOrDefault(guid)?.TextureType ?? -1, byName[file]);
+                    assets.GetValueOrDefault(guid)?.TextureType ?? -1, byName[entry.Path]);
             }
             manifest.Entries.Add(entry);
         }
@@ -346,7 +348,7 @@ internal sealed class StashManifest
             {
                 if (textures.TryGetValue(System.IO.Path.GetFullPath(file), out var texture))
                 {
-                    entry.Purpose = TexturePurposes.FromSimsRole(texture.Role) ?? TexturePurposes.FromFileName(file);
+                    entry.Purpose = TexturePurposes.FromSimsRole(texture.Role) ?? TexturePurposes.FromFileName(entry.Path);
                     if (texture.Part.Length > 0)
                     {
                         entry.Groups.Add(texture.Part);
@@ -357,7 +359,7 @@ internal sealed class StashManifest
                 }
                 else
                 {
-                    entry.Purpose = TexturePurposes.FromFileName(file);
+                    entry.Purpose = TexturePurposes.FromFileName(entry.Path);
                 }
             }
             manifest.Entries.Add(entry);

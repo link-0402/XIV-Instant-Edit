@@ -82,8 +82,8 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
         => InModPath(resource) is { Length: > 0 } path &&
            path.Replace('\\', '/').Split('/').SkipLast(1).Any(folder => string.Equals(folder.Trim(), "Posing", StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>The file's path inside its mod: its relative path, or its resolved path below the mod root and the mod's folder.</summary>
-    private static string? InModPath(AnimationResource resource)
+    /// <summary>The file's path inside its mod: its relative path, or its resolved path below the mod's folder (ModRoot).</summary>
+    internal static string? InModPath(AnimationResource resource)
     {
         if (!string.IsNullOrEmpty(resource.RelativePath))
             return resource.RelativePath;
@@ -92,11 +92,7 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
         {
             var root = resource.ModRoot.Replace('\\', '/').TrimEnd('/') + "/";
             if (resolved.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-            {
-                var below = resolved[root.Length..];
-                var slash = below.IndexOf('/');
-                return slash < 0 ? below : below[(slash + 1)..];
-            }
+                return resolved[root.Length..];
         }
         return resolved;
     }

@@ -47,8 +47,13 @@ internal static class HairSkeletonScenarios
         ClashMovesTheId(Path.Combine(testRoot, "HairClash"));
         OwnFolderIsNotAClash(Path.Combine(testRoot, "HairOwnFolder"));
         FailedMoveFinishesNextTime(Path.Combine(testRoot, "HairFailedMove"));
+        RemoveFinishesAFailedMove(Path.Combine(testRoot, "HairFailedMoveRemove"));
+        TakenMoveTargetIsTakenBackToo(Path.Combine(testRoot, "HairFailedMoveTaken"));
         KindChangeTakesThePreset(Path.Combine(testRoot, "HairKindChange"));
         OldRecordsLoad(Path.Combine(testRoot, "HairOldRecords"));
+        UnreadableRecords(Path.Combine(testRoot, "HairUnreadableRecords"));
+        CopiedFolderKeepsItsOwnRecord(Path.Combine(testRoot, "HairCopiedFolder"));
+        RenamedFolderKeepsItsRecord(Path.Combine(testRoot, "HairRenamedFolder"));
     }
 
     /// <summary>An EST table's bytes: a count, the (set, gender-race) pairs, then one entry per pair.</summary>
@@ -888,7 +893,7 @@ internal static class HairSkeletonScenarios
         // Another mod now uses the recorded ID.
         var plan = PrepareAndApply(mod, Sources(8, taken: () => new HashSet<int> { id }));
         var moved = plan.SkeletonId;
-        Require(moved != id && plan.PreviousId == id, "Hair ID clash: the export moves to a new ID and names the old one");
+        Require(moved != id && plan.PreviousIds is [var left] && left == id, "Hair ID clash: the export moves to a new ID and names the old one");
         var meta = mod.Meta();
         var containers = new[] { meta["DefaultData"]!.AsObject(), Option(meta, OptionA), Option(meta, OptionB) };
         Require(containers.All(container => !container["Files"]!.AsObject()
@@ -912,7 +917,7 @@ internal static class HairSkeletonScenarios
             "Hair ID clash: the moved physics keeps the tuned dampening");
 
         var again = PrepareAndApply(mod, Sources(9, taken: () => new HashSet<int> { id }));
-        Require(again.SkeletonId == moved && again.PreviousId is null && !again.Notes.Any(note => note.Contains("moved it")),
+        Require(again.SkeletonId == moved && again.PreviousIds is null && !again.Notes.Any(note => note.Contains("moved it")),
             "Hair ID clash: the next export keeps the new ID");
     }
 
@@ -924,7 +929,7 @@ internal static class HairSkeletonScenarios
         Func<IReadOnlySet<int>> library = () => HairSkeletonIds.Users(root, ModDirectory).Keys.ToHashSet();
         var id = PrepareAndApply(mod, Sources(7, taken: library)).SkeletonId;
         var plan = PrepareAndApply(mod, Sources(8, taken: library));
-        Require(HairSkeletonIds.Users(root, null).ContainsKey(id) && plan.SkeletonId == id && plan.PreviousId is null &&
+        Require(HairSkeletonIds.Users(root, null).ContainsKey(id) && plan.SkeletonId == id && plan.PreviousIds is null &&
                 !plan.Notes.Any(note => note.Contains("moved it")),
             "Hair ID clash: the mod's own folder is no clash, so the ID stays");
 
@@ -963,12 +968,12 @@ internal static class HairSkeletonScenarios
         try { HairSkeletonFiles.Apply(plan, mod.ModFolder, ModDirectory, HairModel, mod.Store, mod.EstStore); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { threw = true; }
         finally { File.SetAttributes(metaPath, File.GetAttributes(metaPath) & ~FileAttributes.ReadOnly); }
-        Require(threw && mod.Store.Load() is [{ SkeletonId: var stored, MovingFrom: var from }] && stored == moved && from == id,
+        Require(threw && mod.Store.Load() is [{ SkeletonId: var stored, MovingFrom: [var from] }] && stored == moved && from == id,
             "Hair ID move: a failed move leaves a record of the new ID that names the old one");
 
         // The next export no longer clashes with anything, but still finishes the move.
         var again = PrepareAndApply(mod, Sources(9, taken: taken));
-        Require(again.SkeletonId == moved && again.PreviousId == id, "Hair ID move: the next export moves from the recorded old ID");
+        Require(again.SkeletonId == moved && again.PreviousIds is [var old] && old == id, "Hair ID move: the next export moves from the recorded old ID");
         var meta = mod.Meta();
         var containers = new[] { meta["DefaultData"]!.AsObject(), Option(meta, OptionA), Option(meta, OptionB) };
         Require(containers.All(container => !container["Files"]!.AsObject()
@@ -982,6 +987,127 @@ internal static class HairSkeletonScenarios
             "Hair ID move: the record names only the new ID");
         Require(ReadPhyb(mod, Phyb(801, moved)).Simulators[0].Chains[0].Dampening == 0.3f,
             "Hair ID move: the finished move keeps the tuned dampening");
+    }
+
+    /// <summary>
+    /// A move that failed after the record and the new files were written (meta.json read-only), as
+    /// <see cref="FailedMoveFinishesNextTime"/> makes it: the record names the new ID and the old one.
+    /// </summary>
+    private static (HairModFixture Mod, int Id, int Moved) FailedMove(string root)
+    {
+        var mod = HairMod(root, [MiqoteHair, AuRaHair], [MiqoteHair]);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        var plan = HairSkeletonFiles.Prepare(Rig(), mod.ModFolder, ModDirectory, HairModel,
+            Sources(8, taken: () => new HashSet<int> { id }), mod.Store);
+        var metaPath = Path.Combine(mod.ModFolder, "meta.json");
+        File.SetAttributes(metaPath, File.GetAttributes(metaPath) | FileAttributes.ReadOnly);
+        try { HairSkeletonFiles.Apply(plan, mod.ModFolder, ModDirectory, HairModel, mod.Store, mod.EstStore); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        finally { File.SetAttributes(metaPath, File.GetAttributes(metaPath) & ~FileAttributes.ReadOnly); }
+        return (mod, id, plan.SkeletonId);
+    }
+
+    private static bool NoKeysOf(JsonObject meta, params int[] ids)
+        => new[] { meta["DefaultData"]!.AsObject(), Option(meta, OptionA), Option(meta, OptionB) }
+            .All(container => !container["Files"]!.AsObject()
+                .Any(pair => ids.Any(id => pair.Key.Contains($"/h{id:D4}/", StringComparison.Ordinal))));
+
+    private static bool NoFilesOf(HairModFixture mod, params int[] ids)
+        => ids.SelectMany(id => new[] { Sklb(801, id), Sklb(1401, id), Phyb(801, id), Phyb(1401, id) })
+            .All(path => !File.Exists(mod.FilePath(path)));
+
+    private static void RemoveFinishesAFailedMove(string root)
+    {
+        var (mod, id, moved) = FailedMove(root);
+        HairSkeletonFiles.Remove(mod.ModFolder, ModDirectory, HairModel, mod.Store, mod.EstStore);
+        var meta = mod.Meta();
+        Require(NoKeysOf(meta, id, moved) && EstEntry(Option(meta, OptionA), "Miqote") is null,
+            "Hair ID move: an export without a rig takes back the keys and EST entries of both IDs of a failed move");
+        Require(NoFilesOf(mod, id, moved) && mod.Store.Load() is [],
+            "Hair ID move: an export without a rig deletes both IDs' files and drops the record");
+    }
+
+    private static void TakenMoveTargetIsTakenBackToo(string root)
+    {
+        var (mod, id, moved) = FailedMove(root);
+        // Another mod now uses the failed move's new ID as well.
+        var plan = PrepareAndApply(mod, Sources(9, taken: () => new HashSet<int> { id, moved }));
+        var third = plan.SkeletonId;
+        Require(third != id && third != moved && plan.PreviousIds is { } previous && previous.ToHashSet().SetEquals([id, moved]),
+            "Hair ID move: a move off a taken ID also takes back the old ID of the move that failed");
+        var meta = mod.Meta();
+        Require(NoKeysOf(meta, id, moved) && SklbKeys(Option(meta, OptionA)).SetEquals([Sklb(801, third), Sklb(1401, third)]) &&
+                EstEntry(Option(meta, OptionA), "Miqote") == third,
+            "Hair ID move: no key or EST entry of either old ID remains");
+        Require(NoFilesOf(mod, id, moved) && mod.Store.Load() is [{ SkeletonId: var final, MovingFrom: null }] && final == third,
+            "Hair ID move: both old IDs' files are gone and the record names only the new ID");
+    }
+
+    private static void UnreadableRecords(string root)
+    {
+        var config = Path.Combine(root, "config");
+        WriteJson(config, "hair-skeletons.json", """[{"mod": "m", "model": "Files/a.mdl", "skeletonId": 4321, "movingFrom": 4400}]""");
+        var store = new HairSkeletonStore(config);
+        var path = Path.Combine(config, "hair-skeletons.json");
+        Require(store.Load() is [{ SkeletonId: 4321, MovingFrom: [4400] }],
+            "Hair skeleton store: an old record's single movingFrom number loads as a list of one");
+        var threw = false;
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            try { store.Load(); }
+            catch (IOException) { threw = true; }
+        }
+        Require(threw && store.Load() is [{ SkeletonId: 4321 }],
+            "Hair skeleton store: a file another program holds throws instead of reading as no records");
+        File.WriteAllText(path, "[{");
+        Require(store.Load() is [] && !File.Exists(path) && Directory.EnumerateFiles(config, "hair-skeletons.json.unreadable-*").Any(),
+            "Hair skeleton store: a damaged file reads as no records and is kept aside");
+    }
+
+    private static void CopyFolder(string from, string to)
+    {
+        foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(to, Path.GetRelativePath(from, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+
+    private static void CopiedFolderKeepsItsOwnRecord(string root)
+    {
+        const string CopyDirectory = "Hair mod copy";
+        var mod = HairMod(root, [MiqoteHair], []);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        // A copied folder keeps the mod's identifier, so it has the same EST key.
+        var copyFolder = Path.Combine(root, CopyDirectory);
+        CopyFolder(mod.ModFolder, copyFolder);
+        var plan = HairSkeletonFiles.Prepare(Rig(), copyFolder, CopyDirectory, HairModel,
+            Sources(8, taken: () => new HashSet<int> { id }), mod.Store);
+        HairSkeletonFiles.Apply(plan, copyFolder, CopyDirectory, HairModel, mod.Store, mod.EstStore);
+        Require(plan.SkeletonId != id && plan.PreviousIds is null,
+            "Hair records: a copied folder doesn't move off the ID of the mod it was copied from");
+        Require(mod.Store.Load() is { Count: 2 } records &&
+                records.Any(record => record.SkeletonId == id && record.Folder == ModDirectory) &&
+                records.Any(record => record.SkeletonId == plan.SkeletonId && record.Folder == CopyDirectory),
+            "Hair records: the mod and its copy keep a record each");
+        var again = PrepareAndApply(mod, Sources(9));
+        Require(again.SkeletonId == id && again.PreviousIds is null && HasBytes(mod, Sklb(801, id), "sklb 3"),
+            "Hair records: the mod keeps its ID after its copy was exported");
+    }
+
+    private static void RenamedFolderKeepsItsRecord(string root)
+    {
+        const string RenamedDirectory = "Hair mod renamed";
+        var mod = HairMod(root, [MiqoteHair], []);
+        var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
+        var renamed = Path.Combine(root, RenamedDirectory);
+        Directory.Move(mod.ModFolder, renamed);
+        var plan = HairSkeletonFiles.Prepare(Rig(), renamed, RenamedDirectory, HairModel, Sources(8), mod.Store);
+        HairSkeletonFiles.Apply(plan, renamed, RenamedDirectory, HairModel, mod.Store, mod.EstStore);
+        Require(plan.SkeletonId == id && plan.PreviousIds is null &&
+                mod.Store.Load() is [{ SkeletonId: var kept, Folder: RenamedDirectory }] && kept == id,
+            "Hair records: a renamed mod folder keeps its ID, and the record follows the new name");
     }
 
     private static void KindChangeTakesThePreset(string root)

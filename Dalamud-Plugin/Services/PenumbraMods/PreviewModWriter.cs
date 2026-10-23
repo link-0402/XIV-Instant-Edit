@@ -268,9 +268,13 @@ internal sealed class PreviewModWriter
         return warnings;
     }
 
-    /// <summary> New files for one mod, checked and placed: each file's relative path and full path, and the metadata entries that map the material. </summary>
+    /// <summary>
+    /// New files for one mod, checked and placed: each file's relative path and full path, and the metadata
+    /// entries that map the material; with what it was planned from, so the commit can plan it again.
+    /// </summary>
     internal sealed record FileAdditionPlan(string ModRoot, string ModDirectory, JsonObject Meta, IReadOnlyList<JsonObject> Entries,
-        IReadOnlyList<(string GamePath, string RelativePath, string File, byte[] Bytes)> Files);
+        IReadOnlyList<(string GamePath, string RelativePath, string File, byte[] Bytes)> Files,
+        string MaterialFile = "", string MaterialGamePath = "", string Recheck = "");
 
     /// <summary>
     /// Places new files beside a material in its mod: each goes where the mod keeps its game path (the
@@ -326,14 +330,27 @@ internal sealed class PreviewModWriter
                         throw new TextureConflictException($"{modDirectory} already maps {path} to another file, so the new texture can't be added. {recheck}.");
             planned.Add((path, relative, target, bytes));
         }
-        return new FileAdditionPlan(modRoot, modDirectory, meta, entries, planned);
+        return new FileAdditionPlan(modRoot, modDirectory, meta, entries, planned, materialFile, materialGamePath, recheck);
     }
 
     /// <summary>
     /// Writes a plan's files and maps them. A file already there (an earlier match's) is backed up and
-    /// replaced; files this call created are removed again when the metadata can't be written.
+    /// replaced; files this call created are removed again when the metadata can't be written. The plan is
+    /// made again from meta.json as it is now, under the gate every writer of a mod's meta.json takes, so a
+    /// change since (another material's new files, a variant saved meanwhile) is kept.
     /// </summary>
     internal static void CommitFileAdditions(FileAdditionPlan plan, ModelBackupStore? backups)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            if (plan.MaterialFile.Length > 0)
+                plan = PlanFileAdditions(plan.ModRoot, plan.ModDirectory, plan.MaterialFile, plan.MaterialGamePath,
+                    plan.Files.Select(file => (file.GamePath, file.Bytes)).ToList(), plan.Recheck);
+            CommitPlanned(plan, backups);
+        }
+    }
+
+    private static void CommitPlanned(FileAdditionPlan plan, ModelBackupStore? backups)
     {
         var created = new List<string>();
         try

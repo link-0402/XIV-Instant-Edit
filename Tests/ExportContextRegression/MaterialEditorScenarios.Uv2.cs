@@ -75,6 +75,29 @@ internal static partial class MaterialEditorScenarios
         Require(session.ModelChangesFor(session.Current).Count == 0 && session.ModelChangesFor(scroll).Single().Bytes == changed
                 && session.HasModelChange(modModel.GamePath),
             "the model change counts only while the material is on the scroll shader, so undoing the preset drops it");
+
+        // Scrolling pattern applied again on a material already on the scroll shader: the change goes with the preset's step.
+        var again = MaterialSession.CreateForRegression(mod, PresetDocument(MaskPreset).WithShaderPackage(MaterialSession.ScrollShader),
+            (_, _) => Task.CompletedTask);
+        _ = again.Apply(doc => doc.WithShaderPackage(MaterialSession.ScrollShader), "Scrolling pattern");
+        again.AddModelChange(modModel, changed);
+        Require(again.HasModelChange(modModel.GamePath) && again.ModelChangesFor(again.Current).Count == 1,
+            "a second UV map added with the preset waits for the save");
+        _ = again.Undo();
+        Require(!again.HasModelChange(modModel.GamePath) && again.ModelChangesFor(again.Current).Count == 0,
+            "undoing the preset drops it, though the material stays on the scroll shader");
+        _ = again.Apply(doc => doc.WithShaderPackage(MaterialSession.ScrollShader), "Another edit");
+        Require(!again.HasModelChange(modModel.GamePath), "a later edit, which drops the undone step, doesn't bring it back");
+
+        var saved = MaterialSession.CreateForRegression(mod, PresetDocument(MaskPreset).WithShaderPackage(MaterialSession.ScrollShader),
+            (_, _) => Task.CompletedTask);
+        _ = saved.Apply(doc => doc.WithShaderPackage(MaterialSession.ScrollShader), "Scrolling pattern");
+        saved.AddModelChange(modModel, changed);
+        saved.History.MarkSaved();
+        _ = saved.Undo();
+        _ = saved.Apply(doc => doc.WithShaderPackage(MaterialSession.ScrollShader), "Another edit");
+        _ = saved.Revert();
+        Require(saved.HasModelChange(modModel.GamePath), "Discard changes back to the document it went with brings it back");
     }
 
     private static int MeshTableOffset(byte[] model)

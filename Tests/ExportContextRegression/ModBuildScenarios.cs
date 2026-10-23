@@ -63,6 +63,9 @@ internal static class ModBuildScenarios
         var mixed = new List<ModImcOverride> { Variant(EquipSlot.Body, 1), Variant(EquipSlot.Body, 2, vfx: 3) };
         Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, mixed, true, 1) is { Group: null, Problem: not null },
             "variants with different effects get no group when the build points them at v0001: it would undo them");
+        Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, variants, true, 1, inOption: true) is { Group: null, Problem: not null } &&
+                PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, variants, false, 1, inOption: true).Group?.Imc?.OnlyAttributes == true,
+            "an item in an option gets no group when the build points the variants at v0001: the always-on group would do it with the option off; without materials it still gets one");
         Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, mixed, false, 1).Group?.Imc?.OnlyAttributes == true,
             "without materials of its own the group changes only the mask, and every variant keeps the game's entry");
         Require(PartToggleGroups.Plan("Top Parts", EquipSlot.Body, 6000, new[] { "atr_tv_a" }, null, false, 1) is { Group: null, Problem: not null },
@@ -371,6 +374,17 @@ internal static class ModBuildScenarios
             "parts set to the shared material point at its copy; the others stay");
         Require(model.VariantMaterialLinks[0][0] == ModelMaterialLinks.Keep, "a part set to a material that is gone keeps the file's own");
         Require(model.SharedLinks.Count == 0, "the build's copy of the model has no shared links left");
+
+        List<MaterialCopy.SharedCopy> CopyWith(string originalPlace)
+        {
+            var linked = new RaceModelEntry { MaterialLinks = new List<int> { ModelMaterialLinks.Shared } };
+            linked.SharedLinks.Add(new SharedMaterialLink { Slot = 0, Item = top.Key, Material = bikini.Id });
+            return MaterialCopy.AddShared(bottom, new List<MaterialSetup>(), new[] { linked }, Find, "place", (_, _, _) => originalPlace);
+        }
+        Require(CopyWith("other") is [{ Copy.Textures: [{ IsShared: false, Option: null }, { SharedGamePath: "chara/common/texture/shared_n.tex" }] }],
+            "a texture the original writes into another option is written again with the copy, which can be on without it");
+        Require(CopyWith("") is [{ Copy.Textures: [{ IsShared: true }, _] }] && CopyWith("place") is [{ Copy.Textures: [{ IsShared: true }, _] }],
+            "a texture in the default files or in the copy's own place stays shared");
 
         var setUp = new RaceModelEntry();
         setUp.SetSharedLink(-1, 1, top.Key, bikini.Id);

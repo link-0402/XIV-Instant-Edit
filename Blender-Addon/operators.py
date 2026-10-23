@@ -373,6 +373,8 @@ class XIVIE_OT_simple_import(Operator):
         default="AUTO",
         options={"HIDDEN", "SKIP_SAVE"},
     )  # type: ignore
+    # The bridge imports from the plugin's package folders, which aren't export folders.
+    keep_export_directory: BoolProperty(default=False, options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
 
     @classmethod
     def poll(cls, context: Context):
@@ -458,23 +460,29 @@ class XIVIE_OT_simple_import(Operator):
         return imported_objects, skeleton_note
 
     @staticmethod
-    def _share_armatures(context: Context, imported_objects: list, batch_armatures: list) -> tuple[list, int]:
+    def _share_armatures(context: Context, imported_objects: list, batch_armatures: list) -> tuple[list, int, list]:
         """Move this file's meshes onto an armature from an earlier file in the batch with the
         same layout (Sims parts exported one file each), deleting its own copy.
-        Returns (the file's remaining objects, how many armatures were merged)."""
+        Returns (the file's remaining objects, how many armatures were merged, errors). An
+        armature that fails to merge stays, with the file's objects already imported."""
         from .mesh.armatures import matching_layout, merge_into
 
         meshes = [obj for obj in imported_objects if obj.type == "MESH"]
         merged = []
+        errors = []
         for armature in [obj for obj in imported_objects if obj.type == "ARMATURE"]:
-            base = next((kept for kept in batch_armatures if matching_layout(kept, armature)), None)
-            if base is None:
-                batch_armatures.append(armature)
+            try:
+                base = next((kept for kept in batch_armatures if matching_layout(kept, armature)), None)
+                if base is None:
+                    batch_armatures.append(armature)
+                    continue
+                merge_into(context, base, armature, meshes)
+            except Exception as error:
+                errors.append(str(error))
                 continue
-            merge_into(context, base, armature, meshes)
             merged.append(armature)
         remaining = [obj for obj in imported_objects if not any(obj is gone for gone in merged)]
-        return remaining, len(merged)
+        return remaining, len(merged), errors
 
     # The last import's result, for the bridge: the plugin's Send to Blender shows it in game.
     last_report: tuple[str, str] = ("INFO", "")
@@ -525,8 +533,10 @@ class XIVIE_OT_simple_import(Operator):
                 problems.append(f"{file_path.name} failed: {error}")
                 continue
             if not use_existing_skeleton:
-                imported_objects, merged = self._share_armatures(context, imported_objects, batch_armatures)
+                imported_objects, merged, errors = self._share_armatures(
+                    context, imported_objects, batch_armatures)
                 merged_count += merged
+                problems.extend(f"{file_path.name} kept its own armature: {error}" for error in errors)
             all_objects.extend(imported_objects)
             imported_names.append(file_path.name)
             if skeleton_note:
@@ -539,7 +549,8 @@ class XIVIE_OT_simple_import(Operator):
             return {"CANCELLED"}
 
         _simple_import_select_objects(all_objects)
-        if settings.simple_import_set_export_directory and last_folder is not None:
+        if (settings.simple_import_set_export_directory and not self.keep_export_directory
+                and last_folder is not None):
             settings.export_directory = str(last_folder)
 
         from .instant_edit.ops import refresh_variant_targets_after_operation

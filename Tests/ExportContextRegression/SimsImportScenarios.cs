@@ -94,18 +94,20 @@ internal static class SimsImportScenarios
     private static void HairKeepsTheFullMeshOfEachShader()
     {
         const uint glass = 0x5EDA9CDE, skin = 0x548394B9;
-        // Buffy: hair cards and cap, each as the full mesh and two hat versions.
+        // Buffy: hair cards and cap, each as the full mesh and two hat versions, whose tops are cut off.
         var hat = SimsHairDefaults.HatVersions(new[]
         {
-            ("cards hat 1", glass, 16504), ("cards hat 2", glass, 16795), ("cards", glass, 21456),
-            ("cap hat 1", skin, 1768), ("cap hat 2", skin, 1610), ("cap", skin, 2882),
+            ("cards hat 1", glass, 16504, 1.817f), ("cards hat 2", glass, 16795, 1.848f), ("cards", glass, 21456, 1.893f),
+            ("cap hat 1", skin, 1768, 1.818f), ("cap hat 2", skin, 1610, 1.836f), ("cap", skin, 2882, 1.877f),
         });
         Require(hat.SetEquals(new[] { "cards hat 1", "cards hat 2", "cap hat 1", "cap hat 2" }),
-            "a hair keeps the mesh with the most vertices of each shader; the rest are hat versions");
-        Require(SimsHairDefaults.HatVersions(new[] { ("a", glass, 100), ("b", skin, 50) }).Count == 0,
+            "a hair keeps the mesh with the most vertices of each shader; the smaller ones cut below its top are hat versions");
+        Require(SimsHairDefaults.HatVersions(new[] { ("a", glass, 100, 1.9f), ("b", skin, 50, 1.8f) }).Count == 0,
             "meshes of different shaders are never hat versions of each other");
-        Require(SimsHairDefaults.HatVersions(new[] { ("a", glass, 100), ("b", glass, 100) }).SetEquals(new[] { "b" }),
-            "of two equal meshes the first stays");
+        Require(SimsHairDefaults.HatVersions(new[] { ("back", glass, 9000, 1.89f), ("bangs", glass, 4000, 1.885f) }).Count == 0,
+            "a smaller mesh of the shader that reaches the top is another part of the hair, not a hat version");
+        Require(SimsHairDefaults.HatVersions(new[] { ("a", glass, 100, 1.9f), ("b", glass, 100, 1.8f) }).SetEquals(new[] { "b" }),
+            "of two meshes with as many vertices the first is the full one");
     }
 
     private static void HairKeepsTheLightestGreyDiffuse()

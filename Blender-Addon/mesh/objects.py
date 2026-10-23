@@ -189,14 +189,17 @@ def baked_copy(source_obj: Object) -> Object:
     The copy keeps the Armature modifiers, with their settings, and an armature parent, so the
     pose moves it as it moves the original.
     """
-    armatures   = [modifier for modifier in source_obj.modifiers if modifier.type == "ARMATURE"]
-    shown       = [(modifier, modifier.show_viewport) for modifier in armatures]
-    parent_type = source_obj.parent_type
+    armatures      = [modifier for modifier in source_obj.modifiers if modifier.type == "ARMATURE"]
+    shown          = [(modifier, modifier.show_viewport) for modifier in armatures]
+    parent_type    = source_obj.parent_type
+    # Every change of parent_type resets the parent inverse, which would move the mesh.
+    parent_inverse = source_obj.matrix_parent_inverse.copy()
     for modifier in armatures:
         modifier.show_viewport = False
     # An armature parent deforms the mesh like a modifier; an object parent places it the same.
     if parent_type == "ARMATURE":
         source_obj.parent_type = "OBJECT"
+        source_obj.matrix_parent_inverse = parent_inverse
     try:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         depsgraph.update()
@@ -204,9 +207,13 @@ def baked_copy(source_obj: Object) -> Object:
     finally:
         for modifier, show in shown:
             modifier.show_viewport = show
-        source_obj.parent_type = parent_type
+        if source_obj.parent_type != parent_type:
+            source_obj.parent_type = parent_type
+            source_obj.matrix_parent_inverse = parent_inverse
 
-    new_obj.parent_type = parent_type
+    if new_obj.parent_type != parent_type:
+        new_obj.parent_type = parent_type
+    new_obj.matrix_parent_inverse = parent_inverse
     for source in armatures:
         modifier = new_obj.modifiers.new(name=source.name, type="ARMATURE")
         for prop in source.bl_rna.properties:

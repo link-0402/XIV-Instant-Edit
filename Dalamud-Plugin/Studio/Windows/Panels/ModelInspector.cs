@@ -167,10 +167,12 @@ internal sealed class ModelInspector
         bool on = !VanillaModels.IsOff(item, rg);
         using (Gui.Disabled(!VanillaModels.CanTurnOff(item, rg)))
         {
-            if (!on) ImGui.PushStyleColor(ImGuiCol.Text, Theme.Accent);
+            // The click changes on, so the pop follows what was pushed.
+            bool marked = !on;
+            if (marked) ImGui.PushStyleColor(ImGuiCol.Text, Theme.Accent);
             if (ImGui.Checkbox($"{rg.DisplayName}##vanilla{rg.RaceCode}", ref on))
                 _session.SetVanillaModel(item, rg, on);
-            if (!on) ImGui.PopStyleColor();
+            if (marked) ImGui.PopStyleColor();
         }
         Gui.Tooltip(writes
             ? "This mod writes this race's model."

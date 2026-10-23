@@ -31,7 +31,10 @@ public sealed record TextureCopyPlan
     public string SourceFile { get; init; } = "";
     public string MaterialGamePath { get; init; } = "";
     public string MaterialRelativePath { get; init; } = "";
-    /// <summary>The material file's hash when the session opened; the first save stops if something else changed it.</summary>
+    /// <summary>
+    /// The material file's hash when the session opened. Not checked any more: the first save only needs the
+    /// material to still name <see cref="MaterialTexture"/>, so a second copy from one material can be saved too.
+    /// </summary>
     public string MaterialHash { get; init; } = "";
     /// <summary>The texture path the material names, and the one it names after the copy.</summary>
     public string MaterialTexture { get; init; } = "";

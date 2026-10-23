@@ -12,8 +12,10 @@ namespace InstantEdit.Studio.Services.Sims;
 /// cards and the solid cap under them that hides bald spots. Each set holds the full mesh and
 /// cut-down copies the game swaps in under hats, with the top of the hair removed. The full
 /// mesh is the one with the most vertices, since a hat version is the full one minus the part
-/// a hat covers. (An overlap test is no good: a style's hat versions may be shared with
-/// another style and only half lie on its full mesh.)
+/// a hat covers, and a hat version stops short of the full mesh's top (by 2 to 8 cm in the
+/// packages checked). A smaller mesh of the shader that reaches the top is another part of the
+/// hair, such as bangs beside the back, not a hat version. (An overlap test is no good: a style's
+/// hat versions may be shared with another style and only half lie on its full mesh.)
 ///
 /// A hair also ships one diffuse per colour swatch, and a port wants one: the lightest grey,
 /// which is turned into the hair's normal texture. Not every creator includes a white or grey
@@ -25,18 +27,22 @@ public static class SimsHairDefaults
     /// <summary>Average colour spread (max minus min channel, 0-255) up to which a diffuse counts as grey.</summary>
     public const float GreySaturation = 15f;
 
+    /// <summary>How far below the full mesh's top (in metres, the game's up axis Y) a hat version's top lies at least.</summary>
+    public const float HatCut = 0.01f;
+
     /// <summary>
-    /// The hat versions among one detail level's meshes: within each shader, every mesh but
-    /// the one with the most vertices (the first of equals).
+    /// The hat versions among one detail level's meshes: within each shader, every mesh but the
+    /// one with the most vertices (the first of equals) whose <c>Top</c>, its highest point, lies
+    /// at least <see cref="HatCut"/> below that one's.
     /// </summary>
-    public static HashSet<T> HatVersions<T>(IEnumerable<(T Mesh, uint Shader, int Vertices)> meshes)
+    public static HashSet<T> HatVersions<T>(IEnumerable<(T Mesh, uint Shader, int Vertices, float Top)> meshes)
     {
         var hat = new HashSet<T>();
         foreach (var set in meshes.GroupBy(m => m.Shader))
         {
-            var full = set.First(m => m.Vertices == set.Max(x => x.Vertices)).Mesh;
-            foreach (var (mesh, _, _) in set)
-                if (!EqualityComparer<T>.Default.Equals(mesh, full))
+            var full = set.First(m => m.Vertices == set.Max(x => x.Vertices));
+            foreach (var (mesh, _, _, top) in set)
+                if (!EqualityComparer<T>.Default.Equals(mesh, full.Mesh) && top <= full.Top - HatCut)
                     hat.Add(mesh);
         }
         return hat;

@@ -19,8 +19,10 @@ internal sealed record PartTogglePlan(ModGroupOut? Group, string? Problem, IRead
 /// Penumbra writes the group's entry to every variant and picks it over the mod's own IMC entries,
 /// so it has to carry what those say. With materials of its own the build points every variant at
 /// v0001, and the group does too; that only works when the variants agree on their decal, effect,
-/// animation and sound, so where they differ no group is made. Without materials the group changes
-/// the mask alone and every variant keeps the game's entry.
+/// animation and sound, so where they differ no group is made. The group is always on, so with
+/// materials it would also point the game's own gear at v0001 while the item's option is off: an item
+/// in an option gets no group then. Without materials the group changes the mask alone and every
+/// variant keeps the game's entry.
 /// </summary>
 internal static class PartToggleGroups
 {
@@ -28,7 +30,7 @@ internal static class PartToggleGroups
     private static readonly Regex VariantTag = new("^atr_(?:mv|tv|gv|dv|sv|ev|nv|wv|rv)_([a-j])$", RegexOptions.CultureInvariant);
 
     public static PartTogglePlan Plan(string groupName, EquipSlot slot, ushort setId, IEnumerable<string> attributes,
-        IReadOnlyList<ModImcOverride>? variants, bool forcesMaterial, int priority)
+        IReadOnlyList<ModImcOverride>? variants, bool forcesMaterial, int priority, bool inOption = false)
     {
         var prefix = SlotInfo.VariantAttributePrefix(slot);
         var suffixes = new SortedSet<char>();
@@ -49,6 +51,10 @@ internal static class PartToggleGroups
         if (variants is not { Count: > 0 })
             return new PartTogglePlan(null, "the game has no IMC file for this item, so its parts can't be toggled", other.ToList());
 
+        if (forcesMaterial && inOption)
+            return new PartTogglePlan(null,
+                "the item is in an option, and an always-on toggle group would give the game's own gear its materials. Set up the part toggles in Penumbra instead",
+                other.ToList());
         var entry = variants[0];
         if (forcesMaterial && variants.Any(v => v.DecalId != entry.DecalId || v.VfxId != entry.VfxId
                 || v.MaterialAnimationId != entry.MaterialAnimationId || v.SoundId != entry.SoundId))

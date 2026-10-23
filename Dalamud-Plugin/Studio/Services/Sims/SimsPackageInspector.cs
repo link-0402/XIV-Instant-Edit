@@ -51,6 +51,15 @@ public sealed class SimsAsset
     /// <summary>A hair mesh the game uses under hats, with the top cut off; not ticked by default.</summary>
     public bool HatVersion;
 
+    /// <summary>
+    /// The hairstyle the asset belongs to (its hair CAS parts share meshes: one part per colour
+    /// swatch), or <see cref="NoHairStyle"/>. Only a hairstyle's textures are cut to its part of the
+    /// sheet and get an alpha map.
+    /// </summary>
+    public int HairStyle = NoHairStyle;
+
+    public const int NoHairStyle = -1;
+
     // Textures
     public int Width;
     public int Height;
@@ -117,9 +126,10 @@ public static class SimsPackageInspector
         var parts = ReadCasParts(package, result, progress, cancel);
         result.HasCasPartData = parts.Count > 0;
         result.IsHair = parts.Any(p => p.IsHair);
+        var styles = HairStyles(parts);
 
-        AddMeshes(package, parts, result, progress, cancel);
-        AddTextures(package, parts, result, progress, cancel);
+        AddMeshes(package, parts, styles, result, progress, cancel);
+        AddTextures(package, parts, styles, result, progress, cancel);
         SelectDefaults(result);
 
         if (result.Assets.Count == 0)
@@ -140,6 +150,70 @@ public static class SimsPackageInspector
         bool hasLod0 = result.AvailableLods.Contains(0);
         foreach (var asset in result.Meshes)
             asset.Selected = (!hasLod0 || asset.LodLevel == 0) && !asset.HatVersion;
+    }
+
+    /// <summary>
+    /// The hairstyle of each hair part: parts that share a mesh are one style, as a hair's colour
+    /// swatches are (one CAS part each, every one listing the same meshes).
+    /// </summary>
+    private static Dictionary<SimsCasPart, int> HairStyles(List<SimsCasPart> parts)
+    {
+        var styles = new Dictionary<SimsCasPart, int>();
+        var styleOfMesh = new Dictionary<SimsResourceKey, int>();
+        var merged = new List<int>();   // each style's representative, for styles joined by a later part
+        int Find(int style) { while (merged[style] != style) style = merged[style]; return style; }
+
+        foreach (var part in parts.Where(p => p.IsHair))
+        {
+            var keys = part.Meshes.Concat(part.Lods.SelectMany(l => l.Meshes)).Distinct().ToList();
+            var joined = keys.Where(styleOfMesh.ContainsKey).Select(k => Find(styleOfMesh[k])).Distinct().ToList();
+            int style;
+            if (joined.Count == 0)
+            {
+                style = merged.Count;
+                merged.Add(style);
+            }
+            else
+            {
+                style = joined.Min();
+                foreach (var other in joined)
+                    merged[other] = style;
+            }
+            styles[part] = style;
+            foreach (var key in keys)
+                styleOfMesh.TryAdd(key, style);
+        }
+
+        // Numbered 0, 1, ... in the order the styles first appear.
+        var numbers = new Dictionary<int, int>();
+        foreach (var part in styles.Keys.ToList())
+        {
+            var root = Find(styles[part]);
+            if (!numbers.TryGetValue(root, out var number))
+                numbers[root] = number = numbers.Count;
+            styles[part] = number;
+        }
+        return styles;
+    }
+
+    /// <summary>
+    /// The hairstyle of a mesh or texture: that of the first hair part listing it. One no part lists
+    /// belongs to the package's hairstyle when it has just one; one only another kind of part lists, to none.
+    /// </summary>
+    private static int StyleOf(SimsResourceKey key, List<SimsCasPart> parts, Dictionary<SimsCasPart, int> styles,
+        Func<SimsCasPart, IEnumerable<SimsResourceKey>> keysOf)
+    {
+        bool listed = false;
+        foreach (var part in parts)
+        {
+            if (!keysOf(part).Contains(key))
+                continue;
+            if (styles.TryGetValue(part, out var style))
+                return style;
+            listed = true;
+        }
+        var count = styles.Values.Distinct().Count();
+        return !listed && count == 1 ? styles.Values.First() : SimsAsset.NoHairStyle;
     }
 
     private static List<SimsCasPart> ReadCasParts(DbpfPackage package, SimsScanResult result, Action<string>? progress, CancellationToken cancel)
@@ -186,7 +260,7 @@ public static class SimsPackageInspector
         return parts;
     }
 
-    private static void AddMeshes(DbpfPackage package, List<SimsCasPart> parts,
+    private static void AddMeshes(DbpfPackage package, List<SimsCasPart> parts, Dictionary<SimsCasPart, int> styles,
         SimsScanResult result, Action<string>? progress, CancellationToken cancel)
     {
         var geomEntries = package.Entries.Where(e => e.Type == SimsResourceType.Geom).ToList();
@@ -215,7 +289,7 @@ public static class SimsPackageInspector
         }
 
         int unlevelled = 0;
-        var shapes = new Dictionary<SimsResourceKey, (uint Shader, int Vertices)>();
+        var shapes = new Dictionary<SimsResourceKey, (uint Shader, int Vertices, float Top)>();
         var meshAssets = new Dictionary<SimsResourceKey, SimsAsset>();
 
         foreach (var entry in geomEntries)
@@ -254,9 +328,10 @@ public static class SimsPackageInspector
                 VertexCount = mesh.VertexCount,
                 FaceCount   = mesh.FaceCount,
                 LodLevel    = level,
+                HairStyle   = StyleOf(key, parts, styles, p => p.Meshes.Concat(p.Lods.SelectMany(l => l.Meshes))),
             };
             result.Assets.Add(asset);
-            shapes[key] = (mesh.ShaderHash, mesh.VertexCount);
+            shapes[key] = (mesh.ShaderHash, mesh.VertexCount, mesh.VertexCount > 0 ? mesh.Positions.Max(p => p.Y) : 0f);
             meshAssets[key] = asset;
         }
 
@@ -281,7 +356,7 @@ public static class SimsPackageInspector
     /// Marks the hat versions of every hair part's detail levels (see <see cref="SimsHairDefaults"/>).
     /// A mesh one part uses in full stays unmarked even when another part has it as a hat version.
     /// </summary>
-    private static void MarkHatVersions(List<SimsCasPart> parts, Dictionary<SimsResourceKey, (uint Shader, int Vertices)> shapes,
+    private static void MarkHatVersions(List<SimsCasPart> parts, Dictionary<SimsResourceKey, (uint Shader, int Vertices, float Top)> shapes,
         Dictionary<SimsResourceKey, SimsAsset> meshAssets)
     {
         var hat = new HashSet<SimsResourceKey>();
@@ -289,7 +364,8 @@ public static class SimsPackageInspector
         foreach (var part in parts.Where(p => p.IsHair))
             foreach (var lod in part.Lods)
             {
-                var meshes = lod.Meshes.Distinct().Where(shapes.ContainsKey).Select(k => (k, shapes[k].Shader, shapes[k].Vertices)).ToList();
+                var meshes = lod.Meshes.Distinct().Where(shapes.ContainsKey)
+                    .Select(k => (k, shapes[k].Shader, shapes[k].Vertices, shapes[k].Top)).ToList();
                 var cut = SimsHairDefaults.HatVersions(meshes);
                 hat.UnionWith(cut);
                 full.UnionWith(meshes.Select(m => m.k).Where(k => !cut.Contains(k)));
@@ -298,7 +374,7 @@ public static class SimsPackageInspector
             meshAssets[key].HatVersion = true;
     }
 
-    private static void AddTextures(DbpfPackage package, List<SimsCasPart> parts,
+    private static void AddTextures(DbpfPackage package, List<SimsCasPart> parts, Dictionary<SimsCasPart, int> styles,
         SimsScanResult result, Action<string>? progress, CancellationToken cancel)
     {
         // Roles claimed by CAS parts win over the resource-type guess.
@@ -312,6 +388,7 @@ public static class SimsPackageInspector
                     hairDiffuses.Add(key);
             }
         var measured = new List<(SimsAsset Asset, float Lightness, float Saturation)>();
+        var textureKeys = parts.ToDictionary(part => part, part => part.TextureKeys().Select(t => t.Key).ToHashSet());
 
         var textureEntries = package.Entries.Where(e => SimsResourceType.IsTexture(e.Type)).ToList();
         if (textureEntries.Count == 0)
@@ -332,6 +409,7 @@ public static class SimsPackageInspector
                 Role            = known ? claimed.Role : RoleFromResourceType(entry.Type),
                 PartName        = known ? claimed.PartName : string.Empty,
                 RoleFromCasPart = known,
+                HairStyle       = StyleOf(key, parts, styles, part => textureKeys[part]),
             };
 
             // Region maps carry no visual detail, and the Sims specular does not map onto
@@ -371,10 +449,14 @@ public static class SimsPackageInspector
             result.Assets.Add(asset);
         }
 
-        // A hair port wants one diffuse of all the swatches, to turn into its normal texture.
-        int keep = SimsHairDefaults.PickDiffuse(measured.Select(m => (m.Lightness, m.Saturation)).ToList());
-        for (int i = 0; i < measured.Count; i++)
-            measured[i].Asset.Selected = i == keep;
+        // A hair port wants one diffuse of each hairstyle's swatches, to turn into its normal texture.
+        foreach (var style in measured.GroupBy(m => m.Asset.HairStyle))
+        {
+            var swatches = style.ToList();
+            int keep = SimsHairDefaults.PickDiffuse(swatches.Select(m => (m.Lightness, m.Saturation)).ToList());
+            for (int i = 0; i < swatches.Count; i++)
+                swatches[i].Asset.Selected = i == keep;
+        }
 
         // Diffuse first, then the other roles — the diffuse swatches are the long list.
         result.Assets.Sort((a, b) =>
@@ -523,18 +605,20 @@ public static class SimsPackageInspector
             int extracted = 0, failed = 0;
 
             var meshes = new Dictionary<SimsAsset, SimsGeomMesh>();
-            var region = scan.IsHair ? HairRegion(package, scan, meshes, report, cancel) : null;
+            var regions = HairRegions(package, scan, meshes, report, cancel);
 
             foreach (var asset in scan.Assets.Where(a => a.Selected))
             {
                 // Stops between files; the manifest (finally, below) still lists what was written.
                 cancel.ThrowIfCancellationRequested();
+                UvRegion? region = regions.TryGetValue(asset.HairStyle, out var cut) ? cut : null;
                 try
                 {
                     if (asset.Kind == SimsAssetKind.Mesh)
                         ExtractMesh(package, asset, result, packageName, usedNames, report, progress, meshes, region);
                     else
-                        ExtractTexture(package, asset, result, root, usedNames, report, progress, scan.IsHair, region);
+                        ExtractTexture(package, asset, result, root, usedNames, report, progress,
+                            asset.HairStyle != SimsAsset.NoHairStyle, region);
                     extracted++;
                 }
                 catch (Exception ex)
@@ -649,41 +733,52 @@ public static class SimsPackageInspector
     }
 
     /// <summary>
-    /// The part of the texture sheet a hair's meshes use (see <see cref="SimsHairDefaults.HairRegion"/>),
-    /// measured on the largest ticked texture, or on the usual 1024×2048 hair sheet without one. The
-    /// meshes read for it are kept for writing. Null leaves UVs and textures as they are.
+    /// The part of the texture sheet each hairstyle's meshes use (see <see cref="SimsHairDefaults.HairRegion"/>),
+    /// by style. Measured on the style's LOD 0 meshes (all of them, ticked or not; every mesh when it has
+    /// no LOD 0) and on its largest texture (or the usual 1024×2048 hair sheet without one), so every
+    /// extraction of the package cuts its models and textures the same way. The lower levels are left
+    /// out: their UVs often reach a little past the sheet's edge, which would leave nothing to cut. The
+    /// ticked meshes read for it are kept for writing. A style without an entry is left as it is.
     /// </summary>
-    private static UvRegion? HairRegion(DbpfPackage package, SimsScanResult scan, Dictionary<SimsAsset, SimsGeomMesh> meshes,
+    private static Dictionary<int, UvRegion> HairRegions(DbpfPackage package, SimsScanResult scan, Dictionary<SimsAsset, SimsGeomMesh> meshes,
         StringBuilder report, CancellationToken cancel)
     {
-        var uvs = new List<Vector2>();
-        foreach (var asset in scan.Assets.Where(a => a.Selected && a.Kind == SimsAssetKind.Mesh))
+        var regions = new Dictionary<int, UvRegion>();
+        var styles = scan.Assets.Where(a => a.HairStyle != SimsAsset.NoHairStyle).GroupBy(a => a.HairStyle).ToList();
+        foreach (var style in styles)
         {
-            cancel.ThrowIfCancellationRequested();
-            try
+            var uvs = new List<Vector2>();
+            var styleMeshes = style.Where(a => a.Kind == SimsAssetKind.Mesh).ToList();
+            var measuredMeshes = styleMeshes.Any(a => a.LodLevel == 0) ? styleMeshes.Where(a => a.LodLevel == 0) : styleMeshes;
+            foreach (var asset in measuredMeshes)
             {
-                var mesh = SimsGeom.Parse(package.Read(asset.Entry));
-                meshes[asset] = mesh;
-                uvs.AddRange(SimsMeshExporter.UsedUvs(mesh));
+                cancel.ThrowIfCancellationRequested();
+                try
+                {
+                    var mesh = SimsGeom.Parse(package.Read(asset.Entry));
+                    if (asset.Selected)
+                        meshes[asset] = mesh;
+                    uvs.AddRange(SimsMeshExporter.UsedUvs(mesh));
+                }
+                catch (Exception)
+                {
+                    // Fails again, and is reported, when the mesh itself is written.
+                }
             }
-            catch (Exception)
-            {
-                // Fails again, and is reported, when the mesh itself is written.
-            }
-        }
 
-        var sheet = scan.Assets.Where(a => a.Selected && a.Kind == SimsAssetKind.Texture && a.Width > 0 && a.Height > 0)
-            .OrderByDescending(a => (long)a.Width * a.Height).FirstOrDefault();
-        int width = sheet?.Width ?? 1024, height = sheet?.Height ?? 2048;
-        var region = SimsHairDefaults.HairRegion(uvs, width, height);
-        if (region is { } r)
-        {
-            var (x, y, w, h) = r.Pixels(width, height);
-            report.AppendLine($"Hair sheet:     only {w}x{h} at ({x}, {y}) of the {width}x{height} sheet is used, so textures are cut");
+            var sheet = style.Where(a => a.Kind == SimsAssetKind.Texture && a.Width > 0 && a.Height > 0)
+                .OrderByDescending(a => (long)a.Width * a.Height).FirstOrDefault();
+            int width = sheet?.Width ?? 1024, height = sheet?.Height ?? 2048;
+            if (SimsHairDefaults.HairRegion(uvs, width, height) is not { } region)
+                continue;
+            regions[style.Key] = region;
+            var (x, y, w, h) = region.Pixels(width, height);
+            var label = styles.Count > 1 ? $"Hair sheet {style.Key + 1}:" : "Hair sheet:";
+            report.AppendLine($"{label,-16}only {w}x{h} at ({x}, {y}) of the {width}x{height} sheet is used, so textures are cut");
             report.AppendLine("                down to it and the models' UVs stretched to fill it.");
             report.AppendLine();
         }
-        return region;
+        return regions;
     }
 
     private static void ExtractMesh(DbpfPackage package, SimsAsset asset, ExtractionResult result,

@@ -126,6 +126,21 @@ internal static class MeshMaterialScenarios
         var first = ModelMaterialRewriter.RewriteMeshes(TwoMeshModel(), new string?[] { "/b.mtrl", null });
         Require(ModelMaterialRewriter.ReadMeshMaterialsStrict(first).SequenceEqual(new[] { "/b.mtrl", "/old.mtrl" }),
             "the kept mesh keeps its name when it is not the first user of the slot");
+
+        var lods = ModelMaterialRewriter.RewriteMeshes(TwoMeshModel(lodCount: 2), new string?[] { "/b.mtrl", null });
+        Require(MeshSlotsOfEveryLod(lods).SequenceEqual(new[] { 0, 1, 0, 1 }) &&
+                ModelMaterialRewriter.ReadMaterialsStrict(lods).SequenceEqual(new[] { "/b.mtrl", "/old.mtrl" }),
+            "a later LOD's meshes follow the first LOD's onto their new slots, so a kept mesh keeps its material at a distance too");
+    }
+
+    /// <summary>The material slot of every mesh of the file, all LODs, from the mesh table.</summary>
+    private static int[] MeshSlotsOfEveryLod(byte[] model)
+    {
+        // The LOD table follows the 56-byte model header; three 60-byte LODs, then 36-byte meshes with the slot at 8.
+        long lods = LodPos(model);
+        int meshCount = BitConverter.ToUInt16(model, (int)(lods - 56 + 4));
+        long meshes = lods + 3 * 60;
+        return Enumerable.Range(0, meshCount).Select(m => (int)BitConverter.ToUInt16(model, (int)(meshes + m * 36 + 8))).ToArray();
     }
 
     private static void AutomaticMatchFollowsDistinctNames()
@@ -167,6 +182,14 @@ internal static class MeshMaterialScenarios
             "a shared pick follows every mesh of its slot");
         Require(model.VariantMaterialLinks[0].SequenceEqual(new[] { 1, 1 }), "variant files are converted too");
         Require(model.VariantMaterialLinks[1].SequenceEqual(new[] { 1, 0 }), "a file that cannot be read keeps its list");
+        Require(model.SlotLinkFiles is ["unreadable.mdl"], "a file that cannot be read is noted for later");
+
+        Require(!ModelMaterialLinks.ConvertPending(model, Slots) && model.SlotLinkFiles is ["unreadable.mdl"],
+            "a noted file that still cannot be read stays noted, and nothing changes");
+        IReadOnlyList<int>? Back(string path) => path == "unreadable.mdl" ? new[] { 1, 0, 1 } : Slots(path);
+        Require(ModelMaterialLinks.ConvertPending(model, Back) && model.VariantMaterialLinks[1].SequenceEqual(new[] { 0, 1, 0 }) &&
+                model.VariantMaterialLinks[0].SequenceEqual(new[] { 1, 1 }) && model.SlotLinkFiles == null,
+            "a noted file is converted once it can be read, and only that file");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -136,6 +136,15 @@ internal static class PackageImportScenarios
         var capped = StashManifest.Scan(folder, maxFiles: 3);
         Require(capped.Entries.Count == 3 && capped.Truncated, "a folder scan stops at its cap and says so");
         Require(!StashManifest.Scan(folder).Truncated, "a folder under the cap is listed whole");
+
+        // The folders above an opened folder say nothing about its files.
+        var above = Path.Combine(root, "Screenshots", "Matcap_Test");
+        Directory.CreateDirectory(above);
+        File.WriteAllBytes(Path.Combine(above, "Body.png"), PngBytes);
+        File.WriteAllBytes(Path.Combine(above, "Body_Normal.png"), PngBytes);
+        var opened = StashManifest.Scan(above);
+        Require(opened.Entries.FirstOrDefault(e => e.Path == "Body.png")?.Purpose == TexturePurpose.Diffuse,
+            "a texture is classified by the names from the opened folder down, not by the folders it sits under (\"Matcap_Test\", \"Screenshots\")");
     }
 
     private static void OpenedFoldersAreRememberedNotDeleted(string root)

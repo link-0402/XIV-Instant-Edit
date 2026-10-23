@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace InstantEdit.Services.Materials;
 
 /// <summary>
@@ -12,6 +14,9 @@ internal sealed class MaterialHistory
     private readonly LinkedList<(MaterialDocument Doc, string Label)> undo = new();
     private readonly Stack<(MaterialDocument Doc, string Label)> redo = new();
     private readonly int capacity;
+    // Undone documents a later edit took off the redo stack: no redo brings them back.
+    private readonly ConditionalWeakTable<MaterialDocument, object> dropped = new();
+    private static readonly object Dropped = new();
     private MaterialDocument? gestureStart;
     private string gestureLabel = string.Empty;
 
@@ -47,6 +52,8 @@ internal sealed class MaterialHistory
         else
             AddUndo(Current, label);
         Current = next;
+        // Discard changes can make a dropped document current again.
+        dropped.Remove(next);
     }
 
     public void BeginGesture()
@@ -91,8 +98,11 @@ internal sealed class MaterialHistory
 
     public void MarkSaved() => Saved = Current;
 
-    /// <summary>Whether <paramref name="doc"/> was undone: it waits on the redo stack, not before or at the current document.</summary>
-    public bool Undone(MaterialDocument doc) => redo.Any(step => ReferenceEquals(step.Doc, doc));
+    /// <summary>
+    /// Whether <paramref name="doc"/> was undone: it waits on the redo stack, or waited there until an
+    /// edit dropped it; not before or at the current document.
+    /// </summary>
+    public bool Undone(MaterialDocument doc) => redo.Any(step => ReferenceEquals(step.Doc, doc)) || dropped.TryGetValue(doc, out _);
 
     /// <summary>Starts over from <paramref name="doc"/>, saved, with no steps.</summary>
     public void Reset(MaterialDocument doc)
@@ -107,6 +117,8 @@ internal sealed class MaterialHistory
     {
         undo.AddLast((doc, label));
         Trim();
+        foreach (var step in redo)
+            dropped.AddOrUpdate(step.Doc, Dropped);
         redo.Clear();
     }
 

@@ -168,10 +168,14 @@ def merge_into(context, base, additional, meshes):
             _append_bones(base, additional, Matrix.Identity(4))
         finally:
             context.view_layer.objects.active = active
-    for obj in meshes:
+    # Every child moves, not only the meshes: deleting additional would drop the rest to the
+    # world origin. Both armatures share a world matrix, so each child's parent inverse still
+    # holds, but setting the parent resets it.
+    for obj in [*additional.children, *(obj for obj in meshes if obj.parent != additional)]:
         if obj.parent == additional:
-            # Both armatures share a world matrix, so the parent inverse still holds.
+            parent_inverse = obj.matrix_parent_inverse.copy()
             obj.parent = base
+            obj.matrix_parent_inverse = parent_inverse
         for modifier in obj.modifiers:
             if modifier.type == "ARMATURE" and modifier.object == additional:
                 modifier.object = base

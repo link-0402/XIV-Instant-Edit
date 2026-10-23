@@ -254,6 +254,8 @@ internal static partial class MaterialEditorScenarios
         var onLegacyShader = PresetDocument("characterlegacy/Default Equipment - Mask.mtrl");
         Require(onLegacyShader.Table is { Kind: ColorTableKind.Dawntrail } && !PresetNamed("Scrolling pattern").Applies(Context(onLegacyShader)),
             "32 rows on characterlegacy.shpk mean other things than on the Dawntrail shaders, so they need Convert to Dawntrail too");
+        Require(!PresetNamed("Metal").Applies(Context(onLegacyShader)) && !PresetNamed("Dyeable").Applies(Context(onLegacyShader)),
+            "the looks that write Dawntrail row fields (metalness, roughness, Dawntrail dyes) wait for Convert to Dawntrail on characterlegacy.shpk too");
     }
 
     private static void CheckCleanUp()

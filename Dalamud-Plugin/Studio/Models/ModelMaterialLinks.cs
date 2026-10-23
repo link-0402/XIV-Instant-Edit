@@ -82,23 +82,50 @@ internal static class ModelMaterialLinks
     /// <summary>
     /// Converts links saved when they were kept per material slot of the file into one per mesh:
     /// each mesh takes what its slot had, shared links included. <paramref name="meshSlots"/> gives
-    /// a file's slot per mesh, or null when it cannot be read — that file's list stays as it is.
+    /// a file's slot per mesh, or null when it cannot be read — that file's list stays as it is, and the
+    /// file is noted in <see cref="RaceModelEntry.SlotLinkFiles"/> for <see cref="ConvertPending"/>.
     /// </summary>
     public static void ConvertSlotsToMeshes(RaceModelEntry model, Func<string, IReadOnlyList<int>?> meshSlots)
     {
-        ConvertFile(model, -1, model.SourcePath, meshSlots);
+        var pending = new List<string>();
+        if (!ConvertFile(model, -1, model.SourcePath, meshSlots))
+            pending.Add(model.SourcePath);
         for (int v = 0; v < model.VariantPaths.Count; v++)
-            ConvertFile(model, v, model.VariantPaths[v], meshSlots);
+            if (!ConvertFile(model, v, model.VariantPaths[v], meshSlots))
+                pending.Add(model.VariantPaths[v]);
+        model.SlotLinkFiles = pending.Count > 0 ? pending : null;
     }
 
-    private static void ConvertFile(RaceModelEntry model, int variant, string path, Func<string, IReadOnlyList<int>?> meshSlots)
+    /// <summary>
+    /// Converts the files <see cref="ConvertSlotsToMeshes"/> couldn't read, now that they can be; a file
+    /// the model no longer uses is forgotten. True when the model changed.
+    /// </summary>
+    public static bool ConvertPending(RaceModelEntry model, Func<string, IReadOnlyList<int>?> meshSlots)
+    {
+        if (model.SlotLinkFiles is not { } pending)
+            return false;
+        var left = new List<string>();
+        foreach (var path in pending)
+        {
+            int? variant = string.Equals(model.SourcePath, path, StringComparison.OrdinalIgnoreCase) ? -1
+                : model.VariantPaths.FindIndex(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)) is >= 0 and var index ? index
+                : null;
+            if (variant is { } file && !ConvertFile(model, file, path, meshSlots))
+                left.Add(path);
+        }
+        model.SlotLinkFiles = left.Count > 0 ? left : null;
+        return left.Count != pending.Count;
+    }
+
+    /// <summary>One file's links, from per slot to per mesh. False when it has links and can't be read.</summary>
+    private static bool ConvertFile(RaceModelEntry model, int variant, string path, Func<string, IReadOnlyList<int>?> meshSlots)
     {
         var links = model.LinksOf(variant);
         var shared = model.SharedLinks.Where(l => l.Variant == variant).ToList();
         if ((links == null || links.Count == 0) && shared.Count == 0)
-            return;
+            return true;
         if (string.IsNullOrWhiteSpace(path) || meshSlots(path) is not { } slots)
-            return;
+            return false;
 
         var converted = slots.Select(s => Stored(links, s)).ToList();
         model.SharedLinks.RemoveAll(l => l.Variant == variant);
@@ -125,6 +152,7 @@ internal static class ModelMaterialLinks
             model.EditVariantLinks(variant);
             model.VariantMaterialLinks[variant] = converted;
         }
+        return true;
     }
 
     /// <summary>The material at <paramref name="index"/> was removed: picks of it keep the file's own name, later ones move up.</summary>

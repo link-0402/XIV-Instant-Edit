@@ -2811,6 +2811,11 @@ def perform_mashup_export(
     minimum_contexts = 1 if allow_single_context else 2
     export_objects, refs, materials, object_contexts = mashup_export_selection(
         context, ref, minimum_contexts=minimum_contexts)
+    # Parts take their mesh group's material, so two Contexts' parts can leave one
+    # contributor, which the plugin refuses for the active mod.
+    if destination == "ACTIVE_MOD" and len(refs) < 2:
+        raise ValueError(
+            "Every part uses the active Context's materials. Export it instead, or choose New Mod.")
     export_groups = group_mesh_objects(export_objects)
     recognized = {obj for group in export_groups for obj in group.objects}
     unrecognized = [obj.name for obj in export_objects if obj not in recognized]

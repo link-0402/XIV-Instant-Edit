@@ -57,7 +57,11 @@ internal static class TextureCopies
            IsSafeGameResourcePath(plan.CopyTexture, ".tex") && plan.CopyGamePaths.Count > 0 &&
            plan.CopyGamePaths.All(path => IsSafeGameResourcePath(path, ".tex"));
 
-    /// <summary>The material's file, with a conflict when it is gone or something else changed it since the session opened.</summary>
+    /// <summary>
+    /// The material's file, with a conflict when it is gone or no longer names the texture the copy replaces.
+    /// Other changes since the session opened (another texture's copy made first, say) are kept: the copy
+    /// rewrites only that one path.
+    /// </summary>
     internal static byte[] ReadMaterial(string modRoot, TextureCopyPlan plan)
     {
         var file = Path.Combine(modRoot, plan.MaterialRelativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -65,17 +69,27 @@ internal static class TextureCopies
         if (!File.Exists(file))
             throw new TextureConflictException("The texture's material is gone from its mod. Open the texture again.");
         var bytes = TextureFiles.Read(file);
-        if (TextureFiles.Hash(bytes) != plan.MaterialHash)
-            throw new TextureConflictException("Something else changed the texture's material. Discard this session and make the copy again.");
+        bool names;
+        try { names = MaterialPreviewBundleBuilder.ReadMaterialTextures(bytes).Any(texture => SameGamePath(texture.StoredPath, plan.MaterialTexture)); }
+        catch (InvalidDataException) { names = false; }
+        if (!names)
+            throw new TextureConflictException("Something else changed the texture's material, which no longer uses this texture. Discard this session and make the copy again.");
         return bytes;
     }
 
     /// <summary>
     /// Writes the copy: the TEX beside the material, its game paths in every option that maps the material, then
     /// the material naming it (after a backup). Something that fails puts the mod back as it was. Returns the
-    /// material's backup.
+    /// material's backup. Under the gate every writer of a mod's meta.json takes, so a variant saved meanwhile isn't lost.
     /// </summary>
     internal static string Write(string modRoot, string modDirectory, string relativePath, TextureCopyPlan plan, byte[] tex,
+        ModelBackupStore backups, Func<bool> stillCurrent)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+            return WriteLocked(modRoot, modDirectory, relativePath, plan, tex, backups, stillCurrent);
+    }
+
+    private static string WriteLocked(string modRoot, string modDirectory, string relativePath, TextureCopyPlan plan, byte[] tex,
         ModelBackupStore backups, Func<bool> stillCurrent)
     {
         _ = TextureFiles.ReadTex(tex);
@@ -109,7 +123,7 @@ internal static class TextureCopies
             metaWritten = true;
             File.WriteAllBytes(temp, rewritten);
             var backup = backups.Create(materialFile, modDirectory, plan.MaterialRelativePath);
-            if (TextureFiles.Hash(TextureFiles.Read(materialFile)) != plan.MaterialHash)
+            if (TextureFiles.Hash(TextureFiles.Read(materialFile)) != TextureFiles.Hash(material))
                 throw new TextureConflictException("Something else changed the texture's material during the save. Discard this session and make the copy again.");
             File.Replace(temp, materialFile, null);
             return backup;

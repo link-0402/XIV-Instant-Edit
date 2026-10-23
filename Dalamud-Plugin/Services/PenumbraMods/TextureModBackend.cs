@@ -172,7 +172,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
     }
 
     /// <summary>
-    /// Checks a copy's first save can go through: the material is still in its registered mod, unchanged.
+    /// Checks a copy's first save can go through: the material is still in its registered mod and names the texture.
     /// Nothing is checked against the actor, which shows the original texture until the copy exists.
     /// </summary>
     private async Task CheckCopyAsync(TextureEditSession session, TextureCopyPlan plan, CancellationToken token)

@@ -68,17 +68,22 @@ internal static class TextureCopyScenarios
         var backups = new ModelBackupStore(Path.Combine(root, "backups"));
         var tex = Tex();
 
-        // Something else changed the material after the session opened: nothing is written.
+        // Something else changed the material after the session opened, and it no longer names the texture: nothing is written.
         var metaBefore = File.ReadAllText(Path.Combine(mod, "meta.json"));
-        var stale = plan with { MaterialHash = TextureFiles.Hash(NeckSeamScenarios.Material([Diffuse], [], [])) };
+        var materialOnDisk = Path.Combine(mod, "top", "mt_c0101e0001_top_a.mtrl");
+        File.WriteAllBytes(materialOnDisk, NeckSeamScenarios.Material([Diffuse], [], []));
         try
         {
-            TextureCopies.Write(mod, "Top Mod", relative, stale, tex, backups, () => true);
-            Fail("texture copy: a changed material stops the copy");
+            TextureCopies.Write(mod, "Top Mod", relative, plan, tex, backups, () => true);
+            Fail("texture copy: a material that no longer names the texture stops the copy");
         }
         catch (IOException) { }
         Require(!File.Exists(Path.Combine(mod, "top", "ie_1a2b3c4d_white.tex")) && File.ReadAllText(Path.Combine(mod, "meta.json")) == metaBefore,
             "texture copy: a stopped copy leaves the mod as it was");
+        File.WriteAllBytes(materialOnDisk, material);
+        // A second copy, of the other texture, planned from the same material before the first one is saved.
+        var (second, _, secondRelative) = TextureCopies.Plan(material, MaterialPath, MaterialFile, Diffuse, Diffuse,
+            Guid.Parse("5e6f7a8b-0000-0000-0000-000000000000"));
 
         var backup = TextureCopies.Write(mod, "Top Mod", relative, plan, tex, backups, () => true);
         var written = ModMetadata.LoadV4ModMetadata(mod);
@@ -94,6 +99,12 @@ internal static class TextureCopyScenarios
             "texture copy: the material names the copy, keeps its other textures, and was backed up first");
         Require(TextureModBackend.TextureGamePaths(mod, relative).SetEquals([plan.CopyTexture]),
             "texture copy: the session's later saves find the copy's mapping");
+
+        TextureCopies.Write(mod, "Top Mod", secondRelative, second, tex, backups, () => true);
+        Require(MaterialPreviewBundleBuilder.ReadMaterialTextures(File.ReadAllBytes(materialOnDisk)).Select(t => t.StoredPath)
+                    .SequenceEqual([second.CopyTexture, plan.CopyTexture]) &&
+                ModMetadata.LoadV4ModMetadata(mod)["DefaultData"]!["Files"]![plan.CopyTexture]!.GetValue<string>() == relative,
+            "texture copy: a second copy from the same material saves too, keeping the first one's change and mapping");
 
         var session = new TextureEditSession
         {

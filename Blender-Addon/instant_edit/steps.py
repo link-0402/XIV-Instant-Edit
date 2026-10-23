@@ -115,6 +115,8 @@ def start(context, steps, done, failed, report, cancelled: str = "") -> set[str]
         steps.close()
         return {"CANCELLED"}
     if bpy.app.background or getattr(context, "window", None) is None:
+        # An Esc during an earlier modal run's wait must not stop this run's waits.
+        stop_waiting.clear()
         _inline = True
         try:
             result = run(steps)

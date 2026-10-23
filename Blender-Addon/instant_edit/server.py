@@ -1223,7 +1223,7 @@ def _process_import_files(job: dict) -> None:
             directory = Path(os.path.commonpath([str(path.parent) for path in paths]))
             XIVIE_OT_simple_import.last_report = ("INFO", "")
             result = bpy.ops.xiv_ie.simple_import(
-                "EXEC_DEFAULT", directory=str(directory),
+                "EXEC_DEFAULT", directory=str(directory), keep_export_directory=True,
                 files=[{"name": str(path.relative_to(directory))} for path in paths])
             level, message = XIVIE_OT_simple_import.last_report
             imported = imported or result == {"FINISHED"}

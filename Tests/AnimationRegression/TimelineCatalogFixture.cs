@@ -1,7 +1,9 @@
-﻿using System.Buffers.Binary;
+using System.Buffers.Binary;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using Dalamud.Plugin.Services;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
 
@@ -440,6 +442,20 @@ internal static class TimelineCatalogFixture
               faces[0].Label == TimelineCatalogBuilder.Readable("cfxf_mine_grin") && faces[0].Packs.SequenceEqual(["mine/faces"]) &&
               lips.Single().Path == "cfxl_mine_lip",
             "a set's faces and lip shapes are offered from it, named after its mod, without the always loaded ones");
+
+        // The picker starts the list every frame: a failed build waits before it is tried again.
+        var builds = 0;
+        var cache = Directory.CreateDirectory(Path.Combine(temp, "face-cache")).FullName;
+        var index = new FaceLibraryIndex(() => { builds++; throw new IOException("Penumbra is not ready."); }, _ => false, () => cache,
+            DispatchProxy.Create<IPluginLog, QuietLog>());
+        var start = new DateTime(2026, 10, 23, 12, 0, 0, DateTimeKind.Utc);
+        index.Start(CancellationToken.None, start);
+        for (var frame = 1; frame <= 100; frame++)
+            index.Start(CancellationToken.None, start.AddMilliseconds(frame * 16));
+        var waited = builds;
+        index.Start(CancellationToken.None, start + FaceLibraryIndex.RetryDelay + TimeSpan.FromSeconds(2));
+        check(waited == 1 && builds == 2 && index.Status.State == FaceLibraryState.Failed,
+            $"a failed expression set build is tried again after a delay, not every frame (builds {waited}, then {builds})");
     }
 
     /// <summary>A PAP holding one clip per entry, each with its own timeline, aligned as the game aligns them.</summary>
@@ -488,4 +504,11 @@ internal static class TimelineCatalogFixture
         if (sounds.Length > 0) body.AddRange(Chunk("Emit", sounds.SelectMany(s => Chunk("SdNm", Text(s))).ToArray()));
         return Chunk("AVFX", [.. body]);
     }
+}
+
+/// <summary>An <see cref="IPluginLog"/> that drops everything.</summary>
+public class QuietLog : DispatchProxy
+{
+    protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        => targetMethod?.ReturnType is { IsValueType: true } type && type != typeof(void) ? Activator.CreateInstance(type) : null;
 }

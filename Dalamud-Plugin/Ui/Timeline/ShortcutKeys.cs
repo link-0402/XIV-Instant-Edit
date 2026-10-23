@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Keys;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.UI;
 
 namespace InstantEdit.Ui.Timeline;
 
@@ -65,7 +66,8 @@ internal sealed partial class ShortcutKeys : IDisposable
             return true;
         if (!taken.Remove(virtualKey))
         {
-            if (!keys.IsVirtualKeyValid(virtualKey) || !keys[virtualKey])
+            // Keys typed into the game's chat are the game's, not shortcuts.
+            if (!keys.IsVirtualKeyValid(virtualKey) || !keys[virtualKey] || GameTyping())
                 return false;
             keys[virtualKey] = false;
         }
@@ -80,6 +82,8 @@ internal sealed partial class ShortcutKeys : IDisposable
         if (!claimed)
             return;
         claimed = false;
+        if (GameTyping())
+            return;
         foreach (var key in watched)
         {
             if (!keys.IsVirtualKeyValid(key) || !keys[key])
@@ -90,6 +94,13 @@ internal sealed partial class ShortcutKeys : IDisposable
     }
 
     private static bool Down(VirtualKey key) => (GetAsyncKeyState((int)key) & 0x8000) != 0;
+
+    // A game text field (chat, a search box) has the keyboard. Game thread only.
+    private static unsafe bool GameTyping()
+    {
+        var module = RaptureAtkModule.Instance();
+        return module != null && module->AtkModule.IsTextInputActive();
+    }
 
     [LibraryImport("user32.dll")]
     private static partial short GetAsyncKeyState(int key);
