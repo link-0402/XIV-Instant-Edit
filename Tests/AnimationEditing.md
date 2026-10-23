@@ -1533,7 +1533,7 @@ Fortitude on Idle 6, option default (pose06_loop).
 - [ ] 2 In GPose with Live on, camera down at the shoes: the feet no longer turn or slide, and the knees
   stay natural.
 - [ ] 3 Select the right hand in the Bones window and press Pin selected. In the new Pin layer set
-  Relative to Upper Spine and press Pin here once, then move the key with the gizmo on Move: the arm
+  Attached to Upper Spine and press Pin here once, then move the key with the gizmo on Move: the arm
   follows and the elbow keeps its side.
 - [ ] 4 Add a second key later in the clip at another spot: the hand travels between them with the ease.
 - [ ] 5 Save with Replace in-place: the file plays the same in game, and the loop does not pop where it starts over.

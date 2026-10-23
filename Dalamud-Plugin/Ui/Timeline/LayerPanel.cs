@@ -220,7 +220,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         }
     }
 
-    /// <summary> One pin's settings, as fact rows: Holds, Relative to, Bends up to, When, and Sensitivity when planted. </summary>
+    /// <summary> One pin's settings, as fact rows: Holds, Attached to, Bends up to, When, and Sensitivity when planted. </summary>
     private static void DrawPinSettings(TimelineEditor current, MotionLayer layer, MotionPin pin, SkeletonDescription skeleton, Dictionary<string, int> index,
         PinChain? chain)
     {
@@ -230,7 +230,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
 
         // A bone the pin's own solve moves would chase itself: everything from the chain's top down.
         var top = chain is null ? (index.TryGetValue(pin.Bone, out var own) ? own : -1) : chain.Bones.IsEmpty ? chain.End : chain.Bones[0];
-        PinChoice(current, layer, "Relative to", "##pin-relative", "What the pin rides with: the character, or a bone such as the chest. Changing it takes out the pin's keys.",
+        PinChoice(current, layer, "Attached to", "##pin-relative", "What the held spot moves with. Character keeps it still; a bone, such as a knee, carries it along. Changing it takes out the pin's keys.",
             pin.RelativeTo is { } riding ? AnimationPresentation.BoneName(riding) : "Character",
             () => [(null, "Character"), .. Enumerable.Range(0, skeleton.Bones.Length)
                 .Where(b => b != top && !BonePosing.IsBelow(skeleton, b, top))
@@ -258,8 +258,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             () => [.. offerDefault ? new[] { ((string?)null, fallback) } : Array.Empty<(string?, string)>(), .. choices.Select(name => ((string?)name, AnimationPresentation.BoneName(name)))],
             pin.Top, highest => pin with { Top = highest });
 
-        PinChoice(current, layer, "When", "##pin-when", "Keyed holds the spots you key. Planted only holds where the motion has the bone down.",
-            pin.Planted ? "Planted only" : "Keyed", () => [(false, "Keyed"), (true, "Planted only")], pin.Planted,
+        PinChoice(current, layer, "When", "##pin-when", "At keys holds the spots you key, such as a hand on a knee. When planted holds the bone wherever the motion rests it, such as feet on the floor.",
+            pin.Planted ? "When planted" : "At keys", () => [(false, "At keys"), (true, "When planted")], pin.Planted,
             planted => pin with { Planted = planted });
         if (pin.Planted)
             PinChoice(current, layer, "Sensitivity", "##pin-sensitivity", "How readily the bone counts as down. Strict holds less, Loose more.",
