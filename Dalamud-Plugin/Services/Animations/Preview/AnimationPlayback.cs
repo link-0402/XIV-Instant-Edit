@@ -31,6 +31,8 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     // ActionTimelineSequencer slots: base, upper body and facial.
     private static readonly uint[] SpeedSlots = [0, 1, 2];
     private static readonly TimeSpan DisposeWait = TimeSpan.FromSeconds(2);
+    // How close to its duration a clip's time counts as its end (well under one 30 fps frame).
+    private const float EndTolerance = .001f;
 
     private readonly IFramework _framework;
     private readonly IObjectTable _objects;
@@ -274,6 +276,32 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         else if (_objects.LocalPlayer is { Address: not 0 } player)
             chara = (Character*)player.Address;
         return chara == null ? null : ReadTime(chara, bindingFingerprint);
+    }
+
+    /// <summary>
+    /// Whether the clip has played to its end on the playback's actor: its control used up its cycles (Havok then holds
+    /// LocalTime at the end) or sits at its duration. Null when no live control holds the clip, as after its timeline ended.
+    /// </summary>
+    public bool? AtEnd(string bindingFingerprint)
+    {
+        RequireFrameworkThread();
+        if (string.IsNullOrEmpty(bindingFingerprint) || _session == null || !_clientState.IsGPosing)
+            return null;
+        var chara = SessionActor(_session);
+        if (chara == null)
+            return null;
+        hkaDefaultAnimationControl* best = null;
+        foreach (var address in Matching(chara, bindingFingerprint))
+        {
+            var control = (hkaDefaultAnimationControl*)address;
+            if (best == null || control->Weight > best->Weight)
+                best = control;
+        }
+        if (best == null)
+            return null;
+        var duration = best->Binding.ptr->Animation.ptr->Duration;
+        return best->MaxCycles >= 0 && best->OverflowCount >= best->MaxCycles ||
+               float.IsFinite(best->LocalTime) && best->LocalTime >= duration - EndTolerance;
     }
 
     /// <summary> The timeline the playback's character runs in its base slot now; null without a playback. </summary>

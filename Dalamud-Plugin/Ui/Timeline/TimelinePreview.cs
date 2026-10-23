@@ -28,6 +28,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private ushort previewTimeline;
     // The previewed timeline is an expression's: it plays on the face only.
     private bool previewFace;
+    // The previewed clip loops on its own; one that doesn't is played again at its end (RepeatAtEnd).
+    private bool previewLoop;
+    // The clip was seen playing before its end since it last started, so its end may start it again.
+    private bool repeatArmed;
     // The GPose actor whose collection got the preview; playing on another would show the unedited clip.
     private ushort? previewActor;
     private TimelineDocument? previewDocument;
@@ -331,6 +335,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 previewFingerprint = built.BindingFingerprint;
                 previewTimeline = clip.Timeline;
                 previewFace = target.Standalone;
+                previewLoop = clip.IsLoop;
+                repeatArmed = false;
                 if (!session.Playback.Play(clip.Timeline, built.BindingFingerprint, index, previewFace))
                     return false;
                 if (Math.Abs(speed - 1) > .001f)
@@ -358,7 +364,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         if (!session.Playback.Active)
         {
             if (previewFingerprint is { } fingerprint)
+            {
+                repeatArmed = false;
                 PlaybackCall(() => session.Playback.Play(previewTimeline, fingerprint, previewActor, previewFace));
+            }
         }
         else if (session.Playback.Paused)
             PlaybackCall(session.Playback.Resume);
@@ -381,6 +390,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     {
         if (previewFingerprint is not { } fingerprint)
             return;
+        repeatArmed = false;
         PlaybackCall(() => session.Playback.Play(previewTimeline, fingerprint, previewActor, previewFace));
         current.Playhead = 0;
         lastSeekFrame = 0;
@@ -478,11 +488,15 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                         lastSeekFrame = current.Playhead;
                     }
                 }
-                else if (session.Playback.CurrentTime(fingerprint) is { } seconds)
+                else
                 {
-                    current.Playhead = TimelineWindowViews.Frames(seconds);
-                    lastSeekFrame = current.Playhead;
-                    current.Reveal(current.Playhead);
+                    if (session.Playback.CurrentTime(fingerprint) is { } seconds)
+                    {
+                        current.Playhead = TimelineWindowViews.Frames(seconds);
+                        lastSeekFrame = current.Playhead;
+                        current.Reveal(current.Playhead);
+                    }
+                    RepeatAtEnd(current, fingerprint);
                 }
                 return;
             }
@@ -499,6 +513,27 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         catch (InvalidOperationException e)
         {
             previewError = e.Message;
+        }
+    }
+
+    /// <summary>
+    /// A clip that doesn't loop, such as a startup, plays again from the start once it ends, as GPose repeats it. The game
+    /// holds such a clip on its last frame or drops it; either counts only after the clip was seen playing before its end
+    /// since the last start, so a clip that isn't on the character yet, or a native GPose freeze, never restarts it every frame.
+    /// Live plays the clip's own file under swapped bone layers and is left alone.
+    /// </summary>
+    private void RepeatAtEnd(TimelineEditor current, string fingerprint)
+    {
+        if (previewLoop || liveWanted)
+            return;
+        switch (session.Playback.AtEnd(fingerprint))
+        {
+            case false:
+                repeatArmed = true;
+                break;
+            case true or null when repeatArmed:
+                Replay(current);
+                break;
         }
     }
 
