@@ -98,13 +98,23 @@ internal static class PinPlanting
     /// <summary>Clean-up and easing lengths, in timeline frames: gaps this short close, shorter stretches drop, holds ease over this.</summary>
     public const int CloseGapFrames = 3, MinStretchFrames = 4, EaseFrames = 4;
 
-    /// <summary>Below which a bone counts as down: speed in metres a second, turn speed in degrees a second, height above its lowest in metres.</summary>
+    /// <summary>
+    /// Below which a bone counts as down: speed in metres a second and turn speed in degrees a second, both
+    /// over <see cref="SpeedWindowFrames"/> each side, and height above its lowest in metres. Measured on real
+    /// clips: a planted idle foot moves under 1.1 cm/s, a dance's shuffling feet 4-20 cm/s.
+    /// </summary>
     public static (float Speed, float TurnSpeed, float Height) Limits(PinSensitivity sensitivity) => sensitivity switch
     {
-        PinSensitivity.Strict => (.05f, 20, .02f),
-        PinSensitivity.Loose => (.30f, 90, .08f),
-        _ => (.15f, 45, .04f),
+        PinSensitivity.Strict => (.02f, 10, .02f),
+        PinSensitivity.Loose => (.08f, 40, .08f),
+        _ => (.04f, 20, .04f),
     };
+
+    /// <summary>Timeline frames each side of a sample that its speed is read over.</summary>
+    public const int SpeedWindowFrames = 2;
+
+    /// <summary>How many times the limits a bone may move from one sample to the next and still be down: jitter a window averages away isn't.</summary>
+    private const float JoltFactor = 4;
 
     /// <summary>
     /// <paramref name="path"/> with each stretch's held spot brought in, near where it was, until it lies
@@ -189,17 +199,26 @@ internal static class PinPlanting
         for (var i = first; i <= last; i++)
             lowest = Math.Min(lowest, path[i].Position.Y);
 
+        // Speeds over SpeedWindowFrames before and after each sample, the stiller side counting: a sample's noise
+        // averages out but a slide doesn't, and a bone that has just landed or is about to lift is still down.
+        // At the range's ends a side is cut short; round a loop it goes on over the seam (the last sample is the first's moment).
+        var window = Math.Max(1, (int)Math.Round(SpeedWindowFrames * sampleRate / TimelineDocument.Fps, MidpointRounding.AwayFromZero));
+        // Round a very short loop the window never reaches back to its own sample.
+        if (wraps)
+            window = Math.Max(1, Math.Min(window, (count - 2) / 2));
+
         // Runs of samples that are down.
         var down = new bool[count];
         var runs = new List<(int First, int Last)>();
         var start = -1;
         for (var i = first; i <= last; i++)
         {
-            // Speeds from the next sample; the last from the one before, or round the loop from sample 1.
-            var next = i < last ? i + 1 : wraps ? 1 : i - 1;
-            var speed = Vector3.Distance(path[next].Position, path[i].Position) * sampleRate;
-            var turn = Degrees(path[next].Rotation, path[i].Rotation) * sampleRate;
-            down[i] = speed < speedLimit && turn < turnLimit && path[i].Position.Y - lowest < heightLimit;
+            var (backSpeed, backTurn) = Side(path, i, i - window, first, last, wraps, sampleRate);
+            var (aheadSpeed, aheadTurn) = Side(path, i, i + window, first, last, wraps, sampleRate);
+            var still = backSpeed < speedLimit && backTurn < turnLimit || aheadSpeed < speedLimit && aheadTurn < turnLimit;
+            // A jolt to the next sample (the last: from the one before, or round the loop to sample 1) that the window would average away.
+            var (jolt, joltTurn) = Side(path, i, i < last || wraps ? i + 1 : i - 1, first, last, wraps, sampleRate);
+            down[i] = still && jolt < JoltFactor * speedLimit && joltTurn < JoltFactor * turnLimit && path[i].Position.Y - lowest < heightLimit;
             if (down[i] && start < 0)
                 start = i;
             if (!down[i] && start >= 0)
@@ -284,6 +303,18 @@ internal static class PinPlanting
             }
         var rotation = sum.LengthSquared() < 1e-12f ? reference : Quaternion.Normalize(new Quaternion(sum.X, sum.Y, sum.Z, sum.W));
         return new MotionTransform(position / count, rotation, Vector3.One);
+    }
+
+    /// <summary>Speed and turn speed from sample <paramref name="i"/> to <paramref name="to"/>, cut at the range's ends or round the loop; none to read gives the most.</summary>
+    private static (float Speed, float Turn) Side(ReadOnlySpan<MotionTransform> path, int i, int to, int first, int last, bool wraps, float sampleRate)
+    {
+        var reach = wraps ? to : Math.Clamp(to, first, last);
+        var span = Math.Abs(reach - i);
+        if (span == 0)
+            return (float.MaxValue, float.MaxValue);
+        var period = path.Length - 1;
+        var other = wraps ? (reach % period + period) % period : reach;
+        return (Vector3.Distance(path[other].Position, path[i].Position) * sampleRate / span, Degrees(path[other].Rotation, path[i].Rotation) * sampleRate / span);
     }
 
     private static float Degrees(Quaternion a, Quaternion b) =>

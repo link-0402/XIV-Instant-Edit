@@ -1540,3 +1540,5 @@ Fortitude on Idle 6, option default (pose06_loop).
 - [ ] 6 Edit again: the Pin layers come back with their pins and settings.
 - [ ] 7 Click the Bones window's crosshairs switch three times: the selected bones only (dot icon), all
   bones, then none. Each tooltip matches what GPose shows.
+- [ ] 8 Open Side Step (Cute Groove) and Add, Pin feet: only a few short stretches are held. In GPose the
+  feet still shuffle as the dance has them, and nothing pops where a hold lets go.

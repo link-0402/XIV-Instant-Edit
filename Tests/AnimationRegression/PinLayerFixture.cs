@@ -420,12 +420,25 @@ internal static class PinLayerFixture
               PinPlanting.Find(Step(), 60, 50, 40, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty, "a one-sample or empty range finds nothing");
         check(PinPlanting.Find(Gap(3), 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches[0].Held.Position.Y < 1e-6f,
             "a closed gap's lifted samples don't lift the held spot");
-        var slow = Drift(.10f);
+        var slow = Drift(.03f);
         check(PinPlanting.Find(slow, 60, 0, 119, false, PinSensitivity.Strict, 6, 8, 8).Stretches.IsEmpty &&
               !PinPlanting.Find(slow, 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty &&
-              !PinPlanting.Find(Drift(.2f), 60, 0, 119, false, PinSensitivity.Loose, 6, 8, 8).Stretches.IsEmpty &&
-              PinPlanting.Find(Drift(.2f), 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty, "strict holds less than normal, loose more");
-        var turning = BonePath(_ => Vector3.Zero, i => Q(Vector3.UnitY, i));
+              !PinPlanting.Find(Drift(.06f), 60, 0, 119, false, PinSensitivity.Loose, 6, 8, 8).Stretches.IsEmpty &&
+              PinPlanting.Find(Drift(.06f), 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty, "strict holds less than normal, loose more");
+        // A dance's shuffle: 10 cm/s along the floor isn't down at any sensitivity.
+        check(PinPlanting.Find(Drift(.10f), 60, 0, 119, false, PinSensitivity.Loose, 6, 8, 8).Stretches.IsEmpty, "a foot gliding at a dance's pace isn't held");
+        // Jitter that cancels over the window (2 cm every other sample) reads still there: the jolt check is what keeps it from being held.
+        var shaking = BonePath(i => new Vector3(i % 2 == 0 ? .02f : 0, 0, 0));
+        check(PinPlanting.Find(shaking, 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty, "a foot shaking from sample to sample isn't held");
+        // The window is two frames whatever the clip's rate: at 30 samples a second the same speeds give the same answers.
+        check(!PinPlanting.Find(BonePath(i => new Vector3(.03f * i / 30, 0, 0)), 30, 0, 119, false, PinSensitivity.Normal, 3, 4, 4).Stretches.IsEmpty &&
+              PinPlanting.Find(BonePath(i => new Vector3(.06f * i / 30, 0, 0)), 30, 0, 119, false, PinSensitivity.Normal, 3, 4, 4).Stretches.IsEmpty,
+            "speeds read the same at 30 samples a second");
+        // A lift that eases off the floor from sample 40: the hold ends within a few samples of it.
+        var easedLift = BonePath(i => i < 40 ? Vector3.Zero : new Vector3(.1f * (1 - MathF.Cos(MathF.PI * Math.Min(i - 40, 40) / 40)), 0, 0));
+        check(PinPlanting.Find(easedLift, 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches is [{ First: 0, Last: >= 40 and <= 44 }, ..],
+            "a hold ends where an eased lift gets going");
+        var turning = BonePath(_ => Vector3.Zero, i => Q(Vector3.UnitY, i * .5f));
         check(PinPlanting.Find(turning, 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty &&
               !PinPlanting.Find(turning, 60, 0, 119, false, PinSensitivity.Loose, 6, 8, 8).Stretches.IsEmpty, "a turning bone isn't planted unless loose allows its turn");
         check(PinPlanting.Find(Step(), 60, 70, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches is [{ First: 70, Last: 119 }], "only the layer's samples count");
