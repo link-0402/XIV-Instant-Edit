@@ -7,7 +7,7 @@ using InstantEdit.Services.PenumbraMods;
 namespace InstantEdit.Services.Animations;
 
 internal sealed class AnimationCommitService(AnimationModService animationMods, AnimationResources resources,
-    ModelBackupStore backups, AnimationJournalStore store, ModelBackupStore? legacyBackups = null)
+    ModelBackupStore backups, AnimationJournalStore store, ModelBackupStore? legacyBackups = null, Func<string?>? author = null)
 {
     /// <summary>
     /// Stages the edited files, and the files the edit adds (<paramref name="added"/>, such as
@@ -263,7 +263,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                     var metadata = CreateNewModMetadata(journal.ModDirectory, journal.Files, manifest.ManipulationsJson,
                         journal.Request.Operation == AnimationOperation.EditTimeline
                             ? "Animation timeline edited by XIV Instant Edit."
-                            : "Animation offsets baked by XIV Instant Edit.");
+                            : "Animation offsets baked by XIV Instant Edit.", author?.Invoke());
                     AnimationJournalStore.WriteAtomic(
                         Path.Combine(journal.ModRoot, "meta.json"),
                         JsonSerializer.SerializeToUtf8Bytes(metadata));
@@ -312,7 +312,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
 
     internal static JsonObject CreateNewModMetadata(
         string modName, IEnumerable<AnimationFileChange> changes, string manipulationsJson,
-        string description = "Animation offsets baked by XIV Instant Edit.")
+        string description = "Animation offsets baked by XIV Instant Edit.", string? author = null)
     {
         var files = new JsonObject();
         foreach (var change in changes)
@@ -321,7 +321,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             ?? throw new InvalidDataException("Animation manipulations are not a JSON array.");
         return ModMetadata.CreateV4ModMetadata(
             modName,
-            "XIV Instant Edit",
+            ModMetadata.AuthorOrDefault(author),
             description,
             "1.0",
             new JsonObject

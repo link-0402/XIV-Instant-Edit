@@ -170,7 +170,8 @@ internal static class MashupPlanning
         string staging,
         string modName,
         string consumerGamePath,
-        byte[] modelBytes)
+        byte[] modelBytes,
+        string? author = null)
     {
         if (!Directory.Exists(staging) || !IsSafeNewModName(modName) ||
             !IsSafeGamePath(consumerGamePath) ||
@@ -186,7 +187,7 @@ internal static class MashupPlanning
         WriteBytesAtomic(staging, relativeModel, modelBytes);
         WriteJsonAtomic(Path.Combine(staging, "meta.json"), CreateV4ModMetadata(
             modName,
-            "XIV Instant Edit",
+            AuthorOrDefault(author),
             $"Vanilla model edit for {gamePath}",
             "",
             new JsonObject

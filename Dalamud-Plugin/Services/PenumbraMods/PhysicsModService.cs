@@ -29,9 +29,12 @@ internal sealed class PhysicsModService
     private readonly SemaphoreSlim _exportGate;
     private readonly ModActivation _activation;
     private readonly TrySetMod _trySetMod;
+    private readonly Func<string?> _author;
 
-    public PhysicsModService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate, ModActivation activation)
+    public PhysicsModService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate, ModActivation activation,
+        Func<string?>? author = null)
     {
+        _author = author ?? (() => null);
         _ipc = ipc;
         _framework = framework;
         _log = log;
@@ -100,7 +103,7 @@ internal sealed class PhysicsModService
                 try
                 {
                     Directory.CreateDirectory(staging);
-                    relative = CreatePhysicsModFiles(staging, modDirectory, description, gamePath, bytes);
+                    relative = CreatePhysicsModFiles(staging, modDirectory, description, gamePath, bytes, _author());
                     token.ThrowIfCancellationRequested();
                     Directory.Move(staging, target);
                 }
@@ -136,11 +139,12 @@ internal sealed class PhysicsModService
     }
 
     /// <summary> Writes a new physics mod's file and metadata into an empty folder; returns the file's relative path. </summary>
-    internal static string CreatePhysicsModFiles(string folder, string name, string description, string gamePath, byte[] bytes)
+    internal static string CreatePhysicsModFiles(string folder, string name, string description, string gamePath, byte[] bytes,
+        string? author = null)
     {
         var relative = PhysicsRelativePath(gamePath, 1);
         WritePhysicsFile(folder, relative, bytes);
-        WriteJsonAtomic(Path.Combine(folder, "meta.json"), CreateV4ModMetadata(name, "XIV Instant Edit", description, "",
+        WriteJsonAtomic(Path.Combine(folder, "meta.json"), CreateV4ModMetadata(name, AuthorOrDefault(author), description, "",
             new JsonObject
             {
                 ["Files"] = new JsonObject { [gamePath] = relative.Replace('/', '\\') },

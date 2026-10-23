@@ -29,10 +29,12 @@ internal sealed class MashupService
     private readonly ModActivation _activation;
     private readonly AttributeGroupService _attributes;
     private readonly EstEntryService _est;
+    private readonly Func<string?> _author;
 
     public MashupService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate, IDataManager data,
-        SourceMods sources, ModActivation activation, AttributeGroupService attributes, EstEntryService est)
+        SourceMods sources, ModActivation activation, AttributeGroupService attributes, EstEntryService est, Func<string?>? author = null)
     {
+        _author = author ?? (() => null);
         _ipc = ipc;
         _framework = framework;
         _log = log;
@@ -832,7 +834,7 @@ internal sealed class MashupService
                 WriteBytesAtomic(staging, file.Key, file.Value);
             WriteJsonAtomic(Path.Combine(staging, "meta.json"), CreateV4ModMetadata(
                 modName,
-                "XIV Instant Edit",
+                AuthorOrDefault(_author()),
                 description,
                 "",
                 CreateMashupDefaultData(

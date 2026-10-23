@@ -31,11 +31,14 @@ internal sealed class ModelExportService
     private readonly EstEntryService _est;
     private readonly RaceExportService _race;
     private readonly HairSkeletonService _hair;
+    private readonly Func<string?> _author;
 
     public ModelExportService(PenumbraIpc ipc, IFramework framework, IPluginLog log, SemaphoreSlim exportGate,
         ModelBackupStore backups, SourceMods sources, ModActivation activation, ModelFileWriter writer,
-        AttributeGroupService attributes, EstEntryService est, RaceExportService race, HairSkeletonService hair)
+        AttributeGroupService attributes, EstEntryService est, RaceExportService race, HairSkeletonService hair,
+        Func<string?>? author = null)
     {
+        _author = author ?? (() => null);
         _ipc = ipc;
         _framework = framework;
         _log = log;
@@ -388,7 +391,8 @@ internal sealed class ModelExportService
                     staging,
                     modName,
                     modelGamePath,
-                    await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false));
+                    await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false),
+                    _author());
                 if (race is not null)
                     _race.AddRaceModelEqdp(staging, modelGamePath, race.Value);
                 if (createAttributeGroups && attributeTags is { Count: > 0 })

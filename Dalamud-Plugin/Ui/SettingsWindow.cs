@@ -14,11 +14,12 @@ namespace InstantEdit.Ui;
 /// <summary>Dedicated Dalamud configuration surface; kept separate from model selection.</summary>
 public sealed class SettingsWindow : Window
 {
-    private enum SettingsTab { Editors, Cache, Interface, Advanced }
+    private enum SettingsTab { General, Editors, Cache, Interface, Advanced }
 
-    // Most important first: the editors files are handed to, where the files live, display toggles, then ports.
+    // Most important first: who new mods are by, the editors files are handed to, where the files live, display toggles, then ports.
     private static readonly (SettingsTab Tab, FontAwesomeIcon Icon, string Label)[] Tabs =
     [
+        (SettingsTab.General, FontAwesomeIcon.Cog, "General"),
         (SettingsTab.Editors, FontAwesomeIcon.Tools, "Editors"),
         (SettingsTab.Cache, FontAwesomeIcon.Hdd, "Cache"),
         (SettingsTab.Interface, FontAwesomeIcon.Desktop, "Interface"),
@@ -54,7 +55,7 @@ public sealed class SettingsWindow : Window
         _tools = tools;
         _cacheStartupError = cacheStartupError;
         // A cache that failed to open blocks most features, so Settings opens where it is fixed.
-        _tab = cacheStartupError.Length > 0 ? SettingsTab.Cache : SettingsTab.Editors;
+        _tab = cacheStartupError.Length > 0 ? SettingsTab.Cache : SettingsTab.General;
 
         Size = new Vector2(640, 520);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -102,8 +103,9 @@ public sealed class SettingsWindow : Window
         {
             case SettingsTab.Cache: DrawCacheTab(); break;
             case SettingsTab.Interface: DrawInterfaceTab(); break;
+            case SettingsTab.Editors: DrawEditorsTab(); break;
             case SettingsTab.Advanced: DrawAdvancedTab(); break;
-            default: DrawEditorsTab(); break;
+            default: DrawGeneralTab(); break;
         }
     }
 
@@ -131,6 +133,23 @@ public sealed class SettingsWindow : Window
         IsOpen = false;
         _openSetup();
         return true;
+    }
+
+    // ---- General ---------------------------------------------------------------------------
+
+    private void DrawGeneralTab()
+    {
+        Widgets.SectionHeader("New mods");
+        Widgets.MutedWrapped("Written into every new mod the plugin makes. Temporary preview mods are left out.");
+        ImGui.Spacing();
+        var author = _config.Studio.ModAuthor;
+        ImGui.SetNextItemWidth(Theme.Scaled(320));
+        if (ImGui.InputTextWithHint("Author##new-mod-author", "XIV Instant Edit", ref author, 128))
+        {
+            _config.Studio.ModAuthor = author;
+            Save();
+        }
+        Widgets.Hint("Also the author in the Mod Browser's build window.");
     }
 
     // ---- Editors ---------------------------------------------------------------------------

@@ -69,6 +69,12 @@ internal static class ModMetadata
     internal static Guid? ReadModStableIdentifierForRegression(string modRoot)
         => ReadModStableIdentifier(modRoot);
 
+    /// <summary>The author of new mods when Settings names none.</summary>
+    internal const string DefaultAuthor = "XIV Instant Edit";
+
+    /// <summary>The author written into a new mod: <paramref name="author"/> from Settings, else <see cref="DefaultAuthor"/>.</summary>
+    internal static string AuthorOrDefault(string? author) => string.IsNullOrWhiteSpace(author) ? DefaultAuthor : author.Trim();
+
     internal static JsonObject CreateV4ModMetadata(
         string name,
         string author,

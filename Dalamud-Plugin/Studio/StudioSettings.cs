@@ -80,7 +80,10 @@ public sealed class StudioSettings
 
     // ── Defaults for new mods ────────────────────────────────────────────────
 
-    /// <summary>Author written into mods built here.</summary>
+    /// <summary>
+    /// Author written into every new mod the plugin makes, set in Settings or the build window. Empty leaves
+    /// built mods without one and writes "XIV Instant Edit" into the others. Temporary preview mods keep that name.
+    /// </summary>
     public string ModAuthor { get; set; } = string.Empty;
 
     /// <summary>Version written into mods built here.</summary>

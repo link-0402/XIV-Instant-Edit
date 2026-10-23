@@ -31,10 +31,12 @@ internal sealed class TextureModBackend : ITextureEditBackend
     private readonly ModActivation _activation;
     private readonly TrySetModSetting _trySetModSetting;
     private readonly RedrawObject _redrawObject;
+    private readonly Func<string?> _author;
 
     public TextureModBackend(PenumbraIpc ipc, IFramework framework, IObjectTable objects, IDataManager data,
-        ModelBackupStore backups, SemaphoreSlim exportGate, SourceMods sources, ModActivation activation)
+        ModelBackupStore backups, SemaphoreSlim exportGate, SourceMods sources, ModActivation activation, Func<string?>? author = null)
     {
+        _author = author ?? (() => null);
         _ipc = ipc;
         _framework = framework;
         _objects = objects;
@@ -368,7 +370,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
                 Directory.CreateDirectory(staging);
                 try
                 {
-                    StageGameTextureMod(staging, session.ModDirectory, session.GamePath, tex, session.JobId);
+                    StageGameTextureMod(staging, session.ModDirectory, session.GamePath, tex, session.JobId, _author());
                     token.ThrowIfCancellationRequested();
                     if (!stillCurrent()) throw new OperationCanceledException("A newer save is pending.");
                     var mappingFingerprint = TextureMappingFingerprint(staging, session.RelativePath);
@@ -517,7 +519,8 @@ internal sealed class TextureModBackend : ITextureEditBackend
     }
 
     /// <param name="identifier">The mod's Penumbra identifier; a Painter project passes its job id so its later textures can find the mod.</param>
-    internal static void StageGameTextureMod(string staging, string name, string gamePath, byte[] bytes, Guid? identifier = null)
+    internal static void StageGameTextureMod(string staging, string name, string gamePath, byte[] bytes, Guid? identifier = null,
+        string? author = null)
     {
         if (!IsSafeNewModName(name) || !IsSafeGameResourcePath(gamePath, ".tex")) throw new IOException("Invalid vanilla texture destination.");
         _ = TextureFiles.ReadTex(bytes);
@@ -525,7 +528,7 @@ internal sealed class TextureModBackend : ITextureEditBackend
         WriteBytesAtomic(staging, relative, bytes);
         var meta = CreateV4ModMetadata(
             name,
-            "XIV Instant Edit",
+            AuthorOrDefault(author),
             $"Texture edit for {gamePath}",
             "",
             new JsonObject

@@ -128,7 +128,8 @@ public sealed class PenumbraService : IDisposable
         IDataManager data,
         ModelBackupStore backups,
         EstEntryStore estEntries,
-        HairSkeletonStore hairSkeletons)
+        HairSkeletonStore hairSkeletons,
+        Func<string?>? newModAuthor = null)
     {
         // The services no longer check for these on each call, as the old optional ones were: a
         // missing one fails here, not halfway through an export.
@@ -148,16 +149,16 @@ public sealed class PenumbraService : IDisposable
         SizesExports = new SizesExportService(framework, log, _exportGate, Sources, activation, writer, attributes, est,
             RaceExports);
         ModelExports = new ModelExportService(Ipc, framework, log, _exportGate, backups, Sources, activation, writer, attributes,
-            est, RaceExports, hair);
+            est, RaceExports, hair, newModAuthor);
         ModelBackups = new ModelBackupService(framework, log, _exportGate, backups, Sources, activation, writer, est, RaceExports,
             hair);
-        Mashups = new MashupService(Ipc, framework, log, _exportGate, data, Sources, activation, attributes, est);
+        Mashups = new MashupService(Ipc, framework, log, _exportGate, data, Sources, activation, attributes, est, newModAuthor);
         Scanner = new ModResourceScanner(framework, log, Sources);
-        Textures = new TextureModBackend(Ipc, framework, objects, data, backups, _exportGate, Sources, activation);
+        Textures = new TextureModBackend(Ipc, framework, objects, data, backups, _exportGate, Sources, activation, newModAuthor);
         ModFiles = new ModFileService(framework, _exportGate, Sources, activation);
         Previews = new PreviewModWriter(Ipc, framework, log, objects, backups, _exportGate, Sources, activation);
         Animations = new AnimationModService(Ipc, framework, objects, _exportGate, activation);
-        Physics = new PhysicsModService(Ipc, framework, log, _exportGate, activation);
+        Physics = new PhysicsModService(Ipc, framework, log, _exportGate, activation, newModAuthor);
     }
 
     internal PenumbraIpc Ipc { get; }

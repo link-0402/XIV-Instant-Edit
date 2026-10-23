@@ -64,7 +64,8 @@ internal sealed partial class AnimationEditService : IDisposable
         journals = new AnimationJournalStore(recoveryRoot, message => log.Warning("{Message}", message), () => configuration.CacheRetention);
         recovery = journals.Load().ToImmutableArray();
         offsetBackup = journals.LoadOffsetBackup();
-        commits = new AnimationCommitService(animationMods, resources, new ModelBackupStore(recoveryRoot, () => configuration.CacheRetention), journals, backups);
+        commits = new AnimationCommitService(animationMods, resources, new ModelBackupStore(recoveryRoot, () => configuration.CacheRetention), journals, backups,
+            () => configuration.Studio.ModAuthor);
         baker = new AnimationBakeService(native, framework);
         skeletons = new AnimationSkeletonIndex(animationMods, resources, framework, log, () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory));
         FaceLibraries = new FaceLibraryIndex(animationMods.FaceLibraryRootsAsync, path =>

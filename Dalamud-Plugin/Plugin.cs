@@ -134,7 +134,8 @@ public sealed class Plugin : IDalamudPlugin
         _backups   = new ModelBackupStore(storageRoot, () => _config.CacheRetention);
         var estEntries = new EstEntryStore(configDirectory);
         var hairSkeletons = new HairSkeletonStore(configDirectory);
-        _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups, estEntries, hairSkeletons);
+        _penumbra  = new PenumbraService(pi, framework, log, objects, data, _backups, estEntries, hairSkeletons,
+            () => _config.Studio.ModAuthor);
         // One attributor serves the On Screen snapshot and the Edit/material-preview flows,
         // so both share its mod index and cached stable identifiers.
         var resourceSources = new ResourceSourceAttributor(_penumbra.Ipc, log);
