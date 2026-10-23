@@ -230,8 +230,9 @@ internal static partial class HairSkeletonFiles
         var records = stored.Where(record => !Owns(record, modKey, model, modFolder)).ToList();
         // A record from before the folder was kept, whose ID this export leaves because another folder uses it:
         // when that is the one other folder with the mod's identifier, this is its copy, and the record is that folder's.
-        if (Record(stored, modKey, model, modFolder) is { Folder: null or "" } legacy && previousIds.Contains(legacy.SkeletonId) &&
-            CopiedFrom(modFolder, modKey) is { } original)
+        string? original = null;
+        var legacy = Record(stored, modKey, model, modFolder);
+        if (legacy is { Folder: null or "" } && previousIds.Contains(legacy.SkeletonId) && (original = CopiedFrom(modFolder, modKey)) != null)
             records.Add(legacy with { Folder = original });
         records.Add(new ManagedHairSkeleton(modKey, model, plan.SkeletonId, previousIds.Count > 0 ? previousIds : null,
             Record(stored, modKey, model, modFolder)?.ChainKinds, folder));
@@ -242,6 +243,15 @@ internal static partial class HairSkeletonFiles
         var meta = LoadV4ModMetadata(modFolder);
         var estRecords = estStore.Load().ToList();
         var estCount = estRecords.Count;
+        // The EST entries the original's skeleton ID got from before folders were kept are the original's too, so this copy
+        // neither releases nor overwrites them.
+        var estStamped = false;
+        for (var i = 0; original != null && i < estRecords.Count; i++)
+            if (estRecords[i] is { Folder: null or "" } est && est.Mod == modKey && est.Entry == legacy!.SkeletonId)
+            {
+                estRecords[i] = est with { Folder = original };
+                estStamped = true;
+            }
         var metaChanged = false;
         // The previous IDs belong to another mod now, or to a move that is being finished: none of their keys or EST entries stay.
         foreach (var previous in previousIds)
@@ -259,7 +269,7 @@ internal static partial class HairSkeletonFiles
             TouchV4ModMetadata(meta);
             WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
         }
-        if (estRecords.Count != estCount)
+        if (estRecords.Count != estCount || estStamped)
             estStore.Save(estRecords);
         foreach (var old in previousIds)
             DeleteUnmapped(meta, modFolder, old);

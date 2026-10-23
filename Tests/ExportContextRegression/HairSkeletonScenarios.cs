@@ -1104,6 +1104,8 @@ internal static class HairSkeletonScenarios
         var id = PrepareAndApply(mod, Sources(7)).SkeletonId;
         // A record written before records kept their folder.
         mod.Store.Save(mod.Store.Load().Select(record => record with { Folder = null }));
+        mod.EstStore.Save(mod.EstStore.Load().Select(record => record with { Folder = null }));
+        var estBefore = mod.EstStore.Load().Count(record => record.Entry == id);
         var copyFolder = Path.Combine(root, CopyDirectory);
         CopyFolder(mod.ModFolder, copyFolder);
         var plan = HairSkeletonFiles.Prepare(Rig(), copyFolder, CopyDirectory, HairModel,
@@ -1113,6 +1115,9 @@ internal static class HairSkeletonScenarios
                 records.Any(record => record.SkeletonId == id && record.Folder == ModDirectory) &&
                 records.Any(record => record.SkeletonId == plan.SkeletonId && record.Folder == CopyDirectory),
             "Hair records: a copy that moves off an old record's ID leaves that record to the folder it was copied from");
+        Require(estBefore > 0 && mod.EstStore.Load().Where(record => record.Entry == id).ToList() is { } kept &&
+                kept.Count == estBefore && kept.All(record => record.Folder == ModDirectory),
+            "Hair records: the old EST records of that ID stay too, the folder it was copied from's");
         var again = PrepareAndApply(mod, Sources(9));
         Require(again.SkeletonId == id && again.PreviousIds is null && HasBytes(mod, Sklb(801, id), "sklb 3"),
             "Hair records: the mod keeps its old record's ID after its copy was exported");

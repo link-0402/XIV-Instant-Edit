@@ -279,9 +279,9 @@ internal sealed class TextureSlotEditor
             if (tex.Postfix == MaterialNaming.DefaultPostfix(tex.Type))
                 tex.Postfix = MaterialNaming.DefaultPostfix(newType);
             tex.Type = newType;
-            // These make a normal; any other role takes the file as it is.
-            if (newType != TextureType.Normal)
-                tex.UseDiffuseNormal = tex.UseAlphaOverlay = false;
+            // These make a normal; any other role takes a file, From diffuse giving back the slot's own.
+            if (newType != TextureType.Normal && ModeOf(tex) is SourceMode.Diffuse or SourceMode.Alpha)
+                SetMode(tex, SourceMode.File);
             edited = true;
         }
 

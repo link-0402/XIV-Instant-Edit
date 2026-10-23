@@ -371,7 +371,9 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// </summary>
     private MotionClip BakedBefore(MotionClip clip, MotionLayer[] before)
     {
-        if (bakedBefore is not { } cached || !ReferenceEquals(cached.Clip, clip) || !cached.Before.SequenceEqual(before, ReferenceEqualityComparer.Instance))
+        // Through a drag the last bake of as many layers stands, so dragging an earlier layer doesn't bake the clip every frame.
+        if (bakedBefore is not { } cached || !ReferenceEquals(cached.Clip, clip) || !cached.Before.SequenceEqual(before, ReferenceEqualityComparer.Instance) &&
+            !(session.Editor is { Gesture: not TimelineGesture.None } && cached.Before.Length == before.Length))
         {
             MotionClip? baked = null;
             string? problem = null;

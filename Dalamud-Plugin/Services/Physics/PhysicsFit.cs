@@ -133,9 +133,10 @@ internal static class PhysicsFit
     public static PhysicsFitResult Measure(PhybFile file, PhysicsBody body, PhysicsSkeleton skeleton, PhysicsTipAt tipAt = PhysicsTipAt.Nipple,
         PhysicsBody? unshaped = null, IReadOnlyDictionary<(PhysicsFitTarget Target, string Name), (Vector3 Start, Vector3 End)>? originals = null)
     {
-        // Without the body at rest shapes stay where they are, so a fitted one isn't measured from its original.
-        (Vector3 Start, Vector3 End)? Original(PhysicsFitTarget target, string name)
-            => unshaped != null && originals != null && originals.TryGetValue((target, name), out var offsets) ? offsets : null;
+        // Without the body at rest shapes stay where they are, and so do shapes body areas bump into too (or the skirt no
+        // longer does): those are measured where the file puts them, not from an earlier fit's original.
+        (Vector3 Start, Vector3 End)? Original(PhysicsFitTarget target, string name, ShapeUse use)
+            => unshaped != null && originals != null && use.SkirtSize >= 0 && !use.Body && originals.TryGetValue((target, name), out var offsets) ? offsets : null;
         var items = new List<PhysicsFitItem>();
         var notes = new List<string>();
         var users = ShapeUsers(file);
@@ -152,7 +153,7 @@ internal static class PhysicsFit
                 notes.Add($"{capsule.Name.Text}: your skeleton lacks its bones.");
                 continue;
             }
-            var (startOffset, endOffset) = Original(PhysicsFitTarget.Capsule, capsule.Name.Text) ?? (capsule.StartOffset, capsule.EndOffset);
+            var (startOffset, endOffset) = Original(PhysicsFitTarget.Capsule, capsule.Name.Text, use) ?? (capsule.StartOffset, capsule.EndOffset);
             var a = start.Place(startOffset);
             var b = end.Place(endOffset);
             var thickness = Vector3.Distance(a, b) < 0.01f
@@ -179,7 +180,7 @@ internal static class PhysicsFit
                 notes.Add($"{sphere.Name.Text}: your skeleton lacks {sphere.Bone.Text}.");
                 continue;
             }
-            var centre = frame.Place(Original(PhysicsFitTarget.Sphere, sphere.Name.Text)?.Start ?? sphere.Offset);
+            var centre = frame.Place(Original(PhysicsFitTarget.Sphere, sphere.Name.Text, use)?.Start ?? sphere.Offset);
             if (AroundPlace(body, skeleton, sphere.Bone.Text, centre) is not { } measured)
             {
                 notes.Add($"{sphere.Name.Text}: none of your skin moves with {sphere.Bone.Text}.");
