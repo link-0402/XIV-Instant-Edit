@@ -19,11 +19,11 @@ internal static class PoseEdits
     /// <summary>
     /// A bone's value in <paramref name="layer"/> at <paramref name="frame"/>, as the panels show it: its
     /// keys' (between keys the layer's way, held outside them or round a <paramref name="loop"/> the layer
-    /// covers), else no change for an offset, else <paramref name="motion"/>, the clip's own transform, for
-    /// a pose. Null while that is unknown.
+    /// covers), else no change for an offset, else <paramref name="motion"/>: the clip's own transform for
+    /// a pose, the spot the bone is at in its pin's space for a pin. Null while that is unknown.
     /// </summary>
     public static MotionTransform? Value(MotionLayer layer, string bone, int frame, MotionTransform? motion, float loop = 0) =>
-        MotionEvaluator.KeyValue(layer, bone, frame, loop) ?? (layer.Kind == MotionLayerKind.Pose ? motion : MotionTransform.Identity);
+        MotionEvaluator.KeyValue(layer, bone, frame, loop) ?? (layer.Kind is MotionLayerKind.Pose or MotionLayerKind.Pin ? motion : MotionTransform.Identity);
 
     /// <summary>Whether the key at <paramref name="frame"/> sets <paramref name="bone"/>'s position: a pose key otherwise only turns it.</summary>
     public static bool Moved(MotionLayer layer, string bone, int frame) =>
@@ -33,12 +33,14 @@ internal static class PoseEdits
     public static bool Keyed(MotionLayer layer, string bone, int frame) =>
         MotionEdits.KeyIndex(layer, frame) is var at and >= 0 && layer.Keys[at].Bones.ContainsKey(bone);
 
-    /// <summary>Whether any key of the layer has <paramref name="bone"/>, or for an amplitude whether it is limited to it.</summary>
-    public static bool Changes(MotionLayer layer, string bone, IReadOnlySet<string>? symmetryTargets = null) => layer.Kind switch
+    /// <summary>
+    /// Whether any key of the layer has <paramref name="bone"/>, or for an amplitude whether it is limited to
+    /// it. A symmetry's or a pin's bones come from the skeleton (<paramref name="changed"/>, see BonePosing.BonesOf).
+    /// </summary>
+    public static bool Changes(MotionLayer layer, string bone, IReadOnlySet<string>? changed = null) => layer.Kind switch
     {
         MotionLayerKind.Amplitude => layer.Bones.Contains(bone),
-        // A symmetry layer's bones come from the skeleton (BonePosing.SymmetryTargets).
-        MotionLayerKind.Symmetry => symmetryTargets?.Contains(bone) == true,
+        MotionLayerKind.Symmetry or MotionLayerKind.Pin => changed?.Contains(bone) == true,
         _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),
     };
 
@@ -284,12 +286,13 @@ internal static class PoseEdits
     /// of the bone in the layer, each read against the motion at its frame, replaces the twin's keys in
     /// the layer. The middle turns with the body: it is the skeleton's at rest, carried along by the
     /// nearest bone above both sides. <paramref name="localAt"/> gives the clip's own pose at a frame;
-    /// null while it is unknown, which makes the result null too. Amplitude layers have no keys to mirror.
+    /// null while it is unknown, which makes the result null too. Only offset and pose keys mirror: an
+    /// amplitude has none, and a pin's hold spots, not turns.
     /// </summary>
     public static TimelineDocument? Mirror(TimelineDocument doc, string layerKey, IReadOnlyList<(string From, string To)> pairs,
         SkeletonDescription skeleton, Func<int, MotionTransform[]?> localAt)
     {
-        if (MotionEdits.Find(doc, layerKey) is not { Kind: not MotionLayerKind.Amplitude } layer)
+        if (MotionEdits.Find(doc, layerKey) is not { Kind: MotionLayerKind.Offset or MotionLayerKind.Pose } layer)
             return doc;
         var index = MotionEvaluator.Index(skeleton);
         var rest = MotionEvaluator.ModelSpace(skeleton, skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference)).ToArray());

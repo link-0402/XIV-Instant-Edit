@@ -62,6 +62,8 @@ internal static class ChangelogCatalog
             Entry("Amplitude layers make bones move more or less.", 1),
             Entry("Pose layers blend bones toward poses you key.", 1),
             Entry("Symmetry layers copy one side's motion onto the other, mirrored. Make symmetrical in the Bones window adds one.", 1),
+            Entry("Pin layers hold a bone at a spot, feet on the floor or a hand on the chest, and bend the limb to reach it. Pin feet finds where the feet are down and holds them there.", 1),
+            Entry("The Bones window's crosshairs switch shows no bones, the selected ones, or all of them on your character.", 1),
             Entry("Pick bones on a body map or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),
             Entry("Key a whole pose from a .pose file (Anamnesis, Ktisis or Brio), your posed character or a frame of another animation.", 1),
             Entry("Saved layers stay editable: Edit again brings them back.", 1),

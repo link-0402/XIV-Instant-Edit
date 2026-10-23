@@ -240,8 +240,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         var bones = skeleton.Bones.Select(bone => bone.Name).ToArray();
         if (layer != null)
         {
-            var targets = posing.SymmetryTargets(layer, skeleton);
-            string[] changed = [.. bones.Where(bone => PoseEdits.Changes(layer, bone, targets))];
+            var layerBones = posing.BonesOf(layer, skeleton);
+            string[] changed = [.. bones.Where(bone => layerBones?.Pinned.Contains(bone) == true || PoseEdits.Changes(layer, bone, layerBones?.Changed))];
             using (ImRaii.Disabled(changed.Length == 0))
             {
                 if (ImGui.MenuItem("Bones this layer changes"))
@@ -340,18 +340,29 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             Widgets.HintWrapped("This skeleton has none of the map's bones. Pick them under All bones.");
         }
 
-        var targets = posing.SymmetryTargets(layer, skeleton);
+        var layerBones = posing.BonesOf(layer, skeleton);
         foreach (var dot in dots)
         {
-            var state = BonePosing.StateOf(dot.Bone, layer, frame, animated, targets);
+            var state = BonePosing.StateOf(dot.Bone, layer, frame, animated, layerBones);
             var colour = ImGui.GetColorU32(BonePosing.StateColour(state, layer));
             var selected = posing.Selection.Contains(dot.Bone);
             var isPrimary = selected && string.Equals(posing.Selection.Primary, dot.Bone, StringComparison.Ordinal);
-            drawList.AddCircleFilled(dot.At, radius + Theme.Scaled(1.5f), 0xC0000000);
-            drawList.AddCircleFilled(dot.At, radius, ImGui.GetColorU32(Theme.PanelBg));
-            if (selected)
-                drawList.AddCircleFilled(dot.At, radius - Theme.Scaled(1.5f), ImGui.GetColorU32(Theme.WithAlpha(Theme.Accent, .85f)));
-            drawList.AddCircle(dot.At, radius, colour, 0, Theme.Scaled(state is BoneState.Changed or BoneState.Keyed ? 2.5f : 1.5f));
+            if (state == BoneState.Pinned)
+            {
+                // A pinned bone is a square.
+                var corner = new Vector2(radius);
+                drawList.AddRectFilled(dot.At - corner - new Vector2(Theme.Scaled(1.5f)), dot.At + corner + new Vector2(Theme.Scaled(1.5f)), 0xC0000000);
+                drawList.AddRectFilled(dot.At - corner, dot.At + corner, ImGui.GetColorU32(selected ? Theme.WithAlpha(Theme.Accent, .85f) : Theme.PanelBg));
+                drawList.AddRect(dot.At - corner, dot.At + corner, colour, 0, ImDrawFlags.None, Theme.Scaled(2.5f));
+            }
+            else
+            {
+                drawList.AddCircleFilled(dot.At, radius + Theme.Scaled(1.5f), 0xC0000000);
+                drawList.AddCircleFilled(dot.At, radius, ImGui.GetColorU32(Theme.PanelBg));
+                if (selected)
+                    drawList.AddCircleFilled(dot.At, radius - Theme.Scaled(1.5f), ImGui.GetColorU32(Theme.WithAlpha(Theme.Accent, .85f)));
+                drawList.AddCircle(dot.At, radius, colour, 0, Theme.Scaled(state is BoneState.Changed or BoneState.Keyed ? 2.5f : 1.5f));
+            }
             if (state == BoneState.Keyed)
                 drawList.AddCircleFilled(dot.At, radius * .45f, colour);
             if (isPrimary)
@@ -362,7 +373,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
 
         if (hover != null)
         {
-            ImGui.SetTooltip($"{AnimationPresentation.BoneName(hover)}\n{BonePosing.StateText(BonePosing.StateOf(hover, layer, frame, animated, targets), layer)}");
+            ImGui.SetTooltip($"{AnimationPresentation.BoneName(hover)}\n{BonePosing.StateText(BonePosing.StateOf(hover, layer, frame, animated, layerBones), layer)}");
             if (clicked)
                 posing.ClickBone(hover, skeleton);
         }
@@ -415,7 +426,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGuiTreeNodeFlags flags)
     {
         var name = skeleton.Bones[bone].Name;
-        var state = BonePosing.StateOf(name, layer, frame, animated, posing.SymmetryTargets(layer, skeleton));
+        var state = BonePosing.StateOf(name, layer, frame, animated, posing.BonesOf(layer, skeleton));
         if (posing.Selection.Contains(name))
             flags |= ImGuiTreeNodeFlags.Selected;
         bool open;
@@ -459,10 +470,13 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, false);
         else if (layer.Kind == MotionLayerKind.Symmetry)
         {
-            if (posing.Selection.Primary is { } primary && posing.SymmetryTargets(layer, skeleton)?.Contains(primary) == true)
+            if (posing.Selection.Primary is { } primary && posing.BonesOf(layer, skeleton)?.Changed.Contains(primary) == true)
                 Widgets.HintWrapped("Copied from the other side. Add an Offset layer above this one to adjust it.");
             boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, false);
         }
+        else if (layer.Kind == MotionLayerKind.Pin)
+            // Its own hint says what to select; with the bones on the character the gizmo choice says what the gizmo waits for.
+            boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
         else
             boneEditor.Draw(current, layer, skeleton, loaded, readOnly, true);
         if (layer.Kind == MotionLayerKind.Pose)
@@ -499,6 +513,14 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Add a layer that copies the selected side onto the other, mirrored. A bone in the middle copies its left side.");
+        ImGui.SameLine();
+        using (ImRaii.Disabled(readOnly || chosen.Length == 0))
+        {
+            if (ImGui.Button("Pin selected"))
+                current.PinSelected(chosen);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Pin the selected bones in the selected Pin layer, or in a new one.");
         ImGui.Spacing();
     }
 

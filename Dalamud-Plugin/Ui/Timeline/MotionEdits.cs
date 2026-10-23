@@ -40,11 +40,12 @@ internal static class MotionEdits
         MotionLayerKind.Offset => "Offset",
         MotionLayerKind.Amplitude => "Amplitude",
         MotionLayerKind.Symmetry => "Symmetry",
+        MotionLayerKind.Pin => "Pin",
         _ => "Pose",
     };
 
-    /// <summary>The largest amount a kind takes: a pose or a symmetry blends at most fully, the others go up to 400%.</summary>
-    public static float MaxAmount(MotionLayerKind kind) => kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry ? 1 : MotionEvaluator.MaxAmount;
+    /// <summary>The largest amount a kind takes: a pose, a symmetry or a pin blends at most fully, the others go up to 400%.</summary>
+    public static float MaxAmount(MotionLayerKind kind) => MotionEvaluator.BlendsAtMostFully(kind) ? 1 : MotionEvaluator.MaxAmount;
 
     /// <summary>
     /// Adds a layer of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/> after
@@ -103,6 +104,60 @@ internal static class MotionEdits
         var index = IndexOf(added, key);
         var layer = added.Motion[index] with { Bones = picked, From = from, Name = MotionSymmetry.DefaultName(from) };
         return added with { Motion = added.Motion.SetItem(index, layer) };
+    }
+
+    /// <summary>
+    /// Adds a pin layer over the whole clip named "Pin feet" that plants both feet, turn held: they stay
+    /// where the motion has them down. Unchanged with an error when the document has no room for another layer.
+    /// </summary>
+    public static TimelineDocument AddPinFeet(TimelineDocument doc, out string key, out string? error)
+    {
+        var added = Add(doc, MotionLayerKind.Pin, 0, Math.Max(TimelineDocument.MinLength, doc.Length), out key, out error);
+        if (error != null)
+            return doc;
+        var index = IndexOf(added, key);
+        var layer = added.Motion[index] with { Name = "Pin feet", Pins = [new(PinChains.FootL, Planted: true), new(PinChains.FootR, Planted: true)] };
+        return added with { Motion = added.Motion.SetItem(index, layer) };
+    }
+
+    /// <summary>Pins <paramref name="bones"/> in the pin layer <paramref name="key"/>, each once, keyed and holding its turn; bones already pinned stay as they are.</summary>
+    public static TimelineDocument PinBones(TimelineDocument doc, string key, IEnumerable<string> bones)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || doc.Motion[index] is not { Kind: MotionLayerKind.Pin } layer)
+            return doc;
+        var pins = layer.Pins.ToBuilder();
+        foreach (var bone in bones)
+            if (!string.IsNullOrEmpty(bone) && !pins.Any(pin => pin.Bone == bone))
+                pins.Add(new MotionPin(bone));
+        return pins.Count == layer.Pins.Length ? doc : doc with { Motion = doc.Motion.SetItem(index, layer with { Pins = pins.ToImmutable() }) };
+    }
+
+    /// <summary>Unpins <paramref name="bone"/> in the pin layer <paramref name="key"/>, taking its keys out too (keys left empty go).</summary>
+    public static TimelineDocument RemovePin(TimelineDocument doc, string key, string bone)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || PinIndex(doc.Motion[index], bone) is not (var at and >= 0))
+            return doc;
+        var cleared = ClearBone(doc, key, bone);
+        var layer = cleared.Motion[index];
+        return cleared with { Motion = cleared.Motion.SetItem(index, layer with { Pins = layer.Pins.RemoveAt(at) }) };
+    }
+
+    /// <summary>
+    /// Replaces the pin of <paramref name="pin"/>'s bone in the pin layer <paramref name="key"/> by
+    /// <paramref name="pin"/>. A pin turned planted holds where the motion is down and has no keys, and a
+    /// pin that rides with another bone would read its keyed spots in that bone's space, somewhere else:
+    /// either way its keys go in the same change.
+    /// </summary>
+    public static TimelineDocument SetPin(TimelineDocument doc, string key, MotionPin pin)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || PinIndex(doc.Motion[index], pin.Bone) is not (var at and >= 0) || doc.Motion[index].Pins[at] == pin)
+            return doc;
+        var next = pin.Planted || pin.RelativeTo != doc.Motion[index].Pins[at].RelativeTo ? ClearBone(doc, key, pin.Bone) : doc;
+        var layer = next.Motion[index];
+        return next with { Motion = next.Motion.SetItem(index, layer with { Pins = layer.Pins.SetItem(at, pin) }) };
     }
 
     /// <summary>
@@ -380,8 +435,9 @@ internal static class MotionEdits
     public static TimelineDocument SetKey(TimelineDocument doc, string key, int frame, string bone, BoneTransform? value, bool? moved = null)
     {
         var index = IndexOf(doc, key);
-        // A symmetry layer copies the other side and never holds keys.
-        if (index < 0 || string.IsNullOrEmpty(bone) || doc.Motion[index].Kind == MotionLayerKind.Symmetry)
+        // A symmetry layer copies the other side and never holds keys; a pin layer keys only its keyed pins.
+        if (index < 0 || string.IsNullOrEmpty(bone) || doc.Motion[index].Kind == MotionLayerKind.Symmetry ||
+            doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted))
             return doc;
         frame = Math.Clamp(frame, 0, TimelineDocument.MaxFrames);
         var layer = doc.Motion[index];
@@ -496,6 +552,15 @@ internal static class MotionEdits
         }
     }
 
+    /// <summary>The index of <paramref name="bone"/>'s pin in the layer, or -1.</summary>
+    public static int PinIndex(MotionLayer layer, string bone)
+    {
+        for (var index = 0; index < layer.Pins.Length; index++)
+            if (layer.Pins[index].Bone == bone)
+                return index;
+        return -1;
+    }
+
     /// <summary>The index of the layer's key at <paramref name="frame"/>, or -1.</summary>
     public static int KeyIndex(MotionLayer layer, int frame)
     {
@@ -526,12 +591,13 @@ internal static class MotionEdits
         };
     }
 
-    /// <summary>Field-by-field equality, keys and bones compared by content.</summary>
+    /// <summary>Field-by-field equality, keys, bones and pins compared by content.</summary>
     public static bool Same(MotionLayer a, MotionLayer b) =>
         ReferenceEquals(a, b) ||
         a.Key == b.Key && a.Kind == b.Kind && a.Name == b.Name && a.Start == b.Start && a.End == b.End && a.FadeIn == b.FadeIn &&
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
-        a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Keys.Length == b.Keys.Length &&
+        a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
+        a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) &&
             pair.First.Bones.Count == pair.Second.Bones.Count &&

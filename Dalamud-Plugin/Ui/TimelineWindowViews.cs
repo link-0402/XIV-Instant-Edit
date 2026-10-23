@@ -33,7 +33,42 @@ internal static partial class TimelineWindowViews
         [TimelineAddKind.Expression, TimelineAddKind.LipSync, TimelineAddKind.Sound, TimelineAddKind.Effect, TimelineAddKind.Prop];
 
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
-    public static readonly ImmutableArray<MotionLayerKind> LayerKinds = [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry];
+    public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
+        [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Pin];
+
+    /// <summary>The Add menus' item after the layer kinds: a pin layer that plants both feet.</summary>
+    public const string PinFeetName = "Pin feet";
+    public const string PinFeetHint = "Hold both feet where the motion has them down, so they stop sliding.";
+    public const string NoFeet = "This skeleton has no feet to pin.";
+
+    /// <summary>Whether Pin feet can pin both feet on <paramref name="skeleton"/>; false while it is unknown.</summary>
+    public static bool CanPinFeet(SkeletonDescription? skeleton) =>
+        skeleton != null && skeleton.Bones.Any(bone => bone.Name == PinChains.FootL) && skeleton.Bones.Any(bone => bone.Name == PinChains.FootR);
+
+    /// <summary>The Pin feet item's tooltip: what it does, or why it can't.</summary>
+    public static string PinFeetTip(SkeletonDescription? skeleton) =>
+        skeleton == null ? "Choose the skeleton this animation was made for under Source first." : CanPinFeet(skeleton) ? PinFeetHint : NoFeet;
+
+    /// <summary>
+    /// What the gizmo does to <paramref name="primary"/> in a pin layer: true moves its pin key, false turns it,
+    /// null shows none, with <paramref name="reason"/> saying why. Only keyed pins have keys to change; a pin
+    /// that doesn't hold its turn only moves.
+    /// </summary>
+    public static bool? PinGizmo(MotionLayer layer, string? primary, bool gizmoMove, out string? reason)
+    {
+        reason = null;
+        if (primary == null || MotionEdits.PinIndex(layer, primary) is not (var at and >= 0))
+        {
+            reason = "Pin the selected bone to move it with the gizmo.";
+            return null;
+        }
+        if (layer.Pins[at].Planted)
+        {
+            reason = "Planted pins hold where the motion is down.";
+            return null;
+        }
+        return gizmoMove || !layer.Pins[at].HoldTurn;
+    }
 
     /// <summary>The bone layer rows' legend when there is no layer yet.</summary>
     public const string BonesLaneName = "Bones";
@@ -63,6 +98,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Offset => Theme.Info,
         MotionLayerKind.Amplitude => Theme.Watching,
         MotionLayerKind.Symmetry => Theme.MaterialKind,
+        MotionLayerKind.Pin => Theme.ModelKind,
         _ => Theme.Important,
     };
 
@@ -72,6 +108,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Offset => "Turn, move or scale bones over a section, by keys you set.",
         MotionLayerKind.Amplitude => "Make bones move more or less around their average pose.",
         MotionLayerKind.Symmetry => "Copy one side's motion onto the other, mirrored.",
+        MotionLayerKind.Pin => "Hold bones at a spot while the limb bends to reach it.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -102,10 +139,15 @@ internal static partial class TimelineWindowViews
             // An amplitude only scales motion that is there, so it never adds a track.
             if (layer.Kind == MotionLayerKind.Amplitude)
                 continue;
-            // A symmetry gives tracks to the bones it copies onto, as the bake finds them.
+            // A symmetry gives tracks to the bones it copies onto, as the bake finds them; a pin to the bones it bends.
             if (layer.Kind == MotionLayerKind.Symmetry)
             {
                 moved.UnionWith(CopiedBones(doc, layer, clip));
+                continue;
+            }
+            if (layer.Kind == MotionLayerKind.Pin)
+            {
+                moved.UnionWith(PinnedBones(layer, clip));
                 continue;
             }
             foreach (var key in layer.Keys)
@@ -123,6 +165,18 @@ internal static partial class TimelineWindowViews
     /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude has no keys, only the bones it is limited to.</summary>
     public static string LayerContent(MotionLayer layer)
     {
+        if (layer.Kind == MotionLayerKind.Pin)
+        {
+            if (layer.Pins.IsEmpty)
+                return "No pins";
+            var pins = layer.Pins.Length == 1 ? "1 pin" : $"{Whole(layer.Pins.Length)} pins";
+            var planted = layer.Pins.Count(pin => pin.Planted);
+            if (planted == layer.Pins.Length)
+                return pins + " · planted";
+            var keyCount = layer.Keys.Length;
+            var keyText = keyCount == 0 ? "no keys" : keyCount == 1 ? "1 key" : $"{Whole(keyCount)} keys";
+            return planted == 0 ? $"{pins} · {keyText}" : $"{pins} · {Whole(planted)} planted · {keyText}";
+        }
         if (layer.Kind == MotionLayerKind.Symmetry)
             return (layer.From == MotionSide.Left ? "From the left · " : "From the right · ") +
                    (layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones");
@@ -375,6 +429,28 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
+    /// The bones a pin layer changes when saved: each pin's bone and the bones it bends, on the clip's
+    /// skeleton. None before the skeleton is known, or for a pin the skeleton can't resolve, which applying
+    /// the layer reports.
+    /// </summary>
+    public static IEnumerable<string> PinnedBones(MotionLayer layer, AnimationClip clip)
+    {
+        if (clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+            return [];
+        var names = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var pin in PinChains.Acting(layer))
+            try
+            {
+                names.UnionWith(PinChains.Changed(skeleton, pin).Select(bone => skeleton.Bones[bone].Name));
+            }
+            catch (InvalidDataException)
+            {
+                // Applying the layer reports the missing bone.
+            }
+        return names;
+    }
+
+    /// <summary>
     /// What stops saving with <paramref name="doc"/>'s bones left out and a repair onto <paramref name="repair"/>,
     /// as the old rebakes refused them; null when nothing does. Bone layers on a bone left out would be lost,
     /// and a repair onto the skeleton the clip was already made for changes nothing.
@@ -392,6 +468,7 @@ internal static partial class TimelineWindowViews
                 {
                     MotionLayerKind.Amplitude => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip),
+                    MotionLayerKind.Pin => PinnedBones(layer, clip),
                     _ => layer.Keys.SelectMany(key => key.Bones.Keys),
                 })
                 .Where(left.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();

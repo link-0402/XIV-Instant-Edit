@@ -136,6 +136,17 @@ internal static class MotionSymmetry
                         // Applying the layers reports the missing bone.
                     }
                     break;
+                case MotionLayerKind.Pin:
+                    foreach (var pin in PinChains.Acting(layer))
+                        try
+                        {
+                            animated.UnionWith(PinChains.Changed(skeleton, pin));
+                        }
+                        catch (InvalidDataException)
+                        {
+                            // Applying the layers reports the missing bone.
+                        }
+                    break;
             }
         }
         return animated;

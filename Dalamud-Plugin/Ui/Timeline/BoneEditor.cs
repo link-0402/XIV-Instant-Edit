@@ -189,6 +189,59 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ImGui.SetTooltip(several ? "Take the selected bones out of every key of this layer." : "Take the bone out of every key of this layer.");
     }
 
+    /// <summary>
+    /// A pin layer's buttons for the selected keyed pins: Pin here keys them where they are at the playhead,
+    /// as the layers before this one leave them; Delete key and Clear as for other layers; and with the bones
+    /// on the character, whether the gizmo turns or moves them. Unpinned and planted bones have no keys.
+    /// </summary>
+    public void DrawPinButtons(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded, bool readOnly)
+    {
+        var frame = current.Playhead;
+        var inside = frame >= layer.Start && frame <= layer.End;
+        var index = posing.BoneTree(skeleton).Index;
+        string[] bones = [.. posing.Selection.Bones.Where(bone =>
+            index.ContainsKey(bone) && MotionEdits.PinIndex(layer, bone) is var at and >= 0 && !layer.Pins[at].Planted)];
+        var several = bones.Length > 1;
+        if (bones.Length == 0)
+            Widgets.HintWrapped("Select a keyed pin's bone to key it here.");
+        else if (!inside)
+            Widgets.HintWrapped("The playhead is outside this layer. Move it into the layer to set values.");
+        var spots = bones.Length > 0 && inside ? posing.Targets(layer, frame, skeleton, loaded, current.Document, spots: true) : [];
+        if (spots == null)
+            decode.DrawWait();
+        using (ImRaii.Disabled(readOnly || spots is not { Count: > 0 }))
+        {
+            if (ImGui.Button("Pin here") && spots is { Count: > 0 })
+                current.Commit(PoseEdits.Key(current.Document, layer.Key, frame, spots, false));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Key the selected pinned bones where they are now, at the playhead.");
+
+        FlowLine("Delete key");
+        using (ImRaii.Disabled(readOnly || !bones.Any(bone => PoseEdits.Keyed(layer, bone, frame))))
+        {
+            if (ImGui.Button("Delete key"))
+                current.Commit(PoseEdits.Unkey(current.Document, layer.Key, frame, bones));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(several ? "Take the selected bones out of the key at the playhead." : "Take the bone out of the key at the playhead.");
+
+        FlowLine("Clear");
+        using (ImRaii.Disabled(readOnly || !bones.Any(bone => layer.Keys.Any(key => key.Bones.ContainsKey(bone)))))
+        {
+            if (ImGui.Button("Clear"))
+                current.Commit(PoseEdits.Clear(current.Document, layer.Key, bones));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(several ? "Take the selected bones out of every key of this layer." : "Take the bone out of every key of this layer.");
+
+        if (overlay.Shown)
+        {
+            DrawAxes(several);
+            DrawGizmoChoice(layer, frame);
+        }
+    }
+
     /// <summary> The next button on this line, or on a new one when it would not fit. </summary>
     private static void FlowLine(string label)
     {
@@ -466,9 +519,17 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         }
         if (frames == null)
             decode.DrawWait();
+        DrawAxes(several);
+        if (overlay.Shown)
+            DrawGizmoChoice(layer, frame);
+    }
+
+    /// <summary> Whether the ball and the gizmo use the bone's own axes or the character's; several bones always use the character's. </summary>
+    private void DrawAxes(bool several)
+    {
         using (ImRaii.Disabled(several))
         {
-            if (ImGui.RadioButton("Bone axes", !character))
+            if (ImGui.RadioButton("Bone axes", !(characterAxes || several)))
                 characterAxes = false;
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -476,19 +537,19 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
                 ? "Several bones turn about the character's axes: their own axes point different ways."
                 : "The ball and the gizmo use the bone's own axes.");
         ImGui.SameLine();
-        if (ImGui.RadioButton("Character axes", character))
+        if (ImGui.RadioButton("Character axes", characterAxes || several))
             characterAxes = true;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("The ball and the gizmo use the character's axes: up, forward and to the side.");
-        if (overlay.Shown)
-            DrawGizmoChoice(layer, frame);
     }
 
     /// <summary> Whether the gizmo on the character turns or moves, and what it waits for. </summary>
     private void DrawGizmoChoice(MotionLayer layer, int frame)
     {
-        var turns = layer.Components.HasFlag(PoseComponents.Rotation);
-        var moves = layer.Components.HasFlag(PoseComponents.Position);
+        // A pin moves its key, and turns it when it holds its turn.
+        var (turns, moves) = layer.Kind == MotionLayerKind.Pin
+            ? (posing.Selection.Primary is { } primary && MotionEdits.PinIndex(layer, primary) is var at and >= 0 && layer.Pins[at].HoldTurn, true)
+            : (layer.Components.HasFlag(PoseComponents.Rotation), layer.Components.HasFlag(PoseComponents.Position));
         var move = moves && (overlay.GizmoMoves || !turns);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Gizmo");
@@ -499,7 +560,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
                 overlay.GizmoMoves = false;
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(turns ? "The gizmo on the character turns the bones." : "This layer doesn't turn bones.");
+            ImGui.SetTooltip(turns ? "The gizmo on the character turns the bones."
+                : layer.Kind == MotionLayerKind.Pin ? "This pin holds only its position." : "This layer doesn't turn bones.");
         ImGui.SameLine();
         using (ImRaii.Disabled(!moves))
         {

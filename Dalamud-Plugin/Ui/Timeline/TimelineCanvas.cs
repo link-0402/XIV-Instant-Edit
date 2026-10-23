@@ -692,6 +692,12 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                 if (ImGui.IsItemHovered())
                     ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
             }
+            var skeleton = session.SourceSkeleton();
+            var feet = TimelineWindowViews.CanPinFeet(skeleton);
+            if (ImGui.MenuItem(TimelineWindowViews.PinFeetName, "", false, !readOnly && feet))
+                current.AddPinFeet(skeleton);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
             ImGui.Separator();
             if (ImGui.MenuItem("Fit", "F"))
                 current.Fit();

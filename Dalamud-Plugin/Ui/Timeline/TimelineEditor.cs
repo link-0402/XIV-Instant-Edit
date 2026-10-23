@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Numerics;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
@@ -1179,6 +1180,55 @@ internal sealed class TimelineEditor
         if (error != null || !Commit(next))
             return false;
         SelectLayer(key);
+        return true;
+    }
+
+    /// <summary>
+    /// Pin feet: adds a pin layer over the whole clip planting both feet, and selects it. Refused with a
+    /// reason on a <paramref name="skeleton"/> without both feet, which the layer couldn't apply to.
+    /// </summary>
+    public bool AddPinFeet(SkeletonDescription? skeleton = null)
+    {
+        LastError = null;
+        if (skeleton != null && !TimelineWindowViews.CanPinFeet(skeleton))
+        {
+            LastError = TimelineWindowViews.NoFeet;
+            return false;
+        }
+        var next = MotionEdits.AddPinFeet(Document, out var key, out var error);
+        LastError = error;
+        if (error != null || !Commit(next))
+            return false;
+        SelectLayer(key);
+        return true;
+    }
+
+    /// <summary>
+    /// Pin selected: pins <paramref name="bones"/> in the selected pin layer, or with none selected in a new
+    /// pin layer over the whole clip, in one undo step, and selects the layer.
+    /// </summary>
+    public bool PinSelected(IEnumerable<string> bones)
+    {
+        LastError = null;
+        var picked = bones.Where(bone => !string.IsNullOrEmpty(bone)).ToArray();
+        if (picked.Length == 0)
+        {
+            LastError = "Select a bone to pin.";
+            return false;
+        }
+        var next = Document;
+        var key = SelectedLayer;
+        if (MotionEdits.Find(next, key) is not { Kind: MotionLayerKind.Pin })
+        {
+            next = MotionEdits.Add(next, MotionLayerKind.Pin, 0, Math.Max(TimelineDocument.MinLength, next.Length), out var added, out var error);
+            LastError = error;
+            if (error != null)
+                return false;
+            key = added;
+        }
+        if (!Commit(MotionEdits.PinBones(next, key!, picked)))
+            return false;
+        SelectLayer(key!);
         return true;
     }
 

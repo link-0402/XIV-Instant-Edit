@@ -1521,3 +1521,22 @@ collection gives both from the same mod.
   "A2 on Idle 3"): no footer line, and the new mod has the loop only.
 - [ ] 5 Replace in-place: no footer line, and only the edited file changes.
 - [ ] 6 Undo the new-mod save from Recent edits: the new mod is gone with both files.
+
+## Pin layer (pending)
+
+A bone layer that holds bones at a spot, keyed or where the motion has them down, and bends the limb
+to reach it. Spec: docs/superpowers/specs/2026-10-23-pin-layer-ik-design.md. Test clip: Rough Sketch
+Fortitude on Idle 6, option default (pose06_loop).
+
+- [ ] 1 Open Standing idle 6 in the Timeline; Add, Pin feet. A "Pin feet" layer appears over the whole
+  clip and is selected; each foot shows where it is held, such as "Held 0-119 (the whole loop)".
+- [ ] 2 In GPose with Live on, camera down at the shoes: the feet no longer turn or slide, and the knees
+  stay natural.
+- [ ] 3 Select the right hand in the Bones window and press Pin selected. In the new Pin layer set
+  Relative to Upper Spine and press Pin here once, then move the key with the gizmo on Move: the arm
+  follows and the elbow keeps its side.
+- [ ] 4 Add a second key later in the clip at another spot: the hand travels between them with the ease.
+- [ ] 5 Save with Replace in-place: the file plays the same in game, and the loop does not pop where it starts over.
+- [ ] 6 Edit again: the Pin layers come back with their pins and settings.
+- [ ] 7 Click the Bones window's crosshairs switch three times: the selected bones only (dot icon), all
+  bones, then none. Each tooltip matches what GPose shows.

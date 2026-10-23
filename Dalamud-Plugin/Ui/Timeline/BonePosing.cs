@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using InstantEdit.Models;
@@ -8,8 +9,11 @@ using InstantEdit.Ui.Pose;
 
 namespace InstantEdit.Ui.Timeline;
 
+/// <summary>The bones a symmetry or pin layer marks: the ones it pins (none for a symmetry) and the ones it changes.</summary>
+internal sealed record LayerBoneSets(IReadOnlySet<string> Pinned, IReadOnlySet<string> Changed);
+
 /// <summary>How a bone shows on the map, in the list and on the character, for the selected layer at the playhead.</summary>
-internal enum BoneState : byte { Still, Animated, Changed, Keyed }
+internal enum BoneState : byte { Still, Animated, Changed, Keyed, Pinned }
 
 /// <summary>
 /// The bones the timeline poses: the selection the canvas, the properties panel, the Bones window and
@@ -30,6 +34,10 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     // The selected symmetry layer's targets on the skeleton they were found on.
     private (MotionLayer Layer, SkeletonDescription Skeleton, TimelineDocument? Doc, MotionClip? Decoded, SymmetryPlan Plan, string? Problem,
         HashSet<string> Bones)? symmetryTargets;
+    // The selected pin layer's pinned and bent bones on the skeleton they were found on.
+    private (MotionLayer Layer, SkeletonDescription Skeleton, LayerBoneSets Bones)? pinBones;
+    // A pin layer's planted facts by bone, for what they depend on: the layers before it, its pins and range, and the decoded motion.
+    private (MotionLayer[] Before, ImmutableArray<MotionPin> Pins, int Start, int End, MotionClip Clip, IReadOnlyDictionary<string, string> Facts)? plantedFacts;
     // The clip's own pose at one frame, local and in model space, while the decode and the frame stay.
     private (MotionClip Clip, int Frame, MotionTransform[] Local, MotionTransform[] Model)? motionPose;
     // The bones' frames for one document, layer, frame and decode.
@@ -94,9 +102,52 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         return bones.Count == 0 ? null : bones;
     }
 
-    /// <summary>The bones a symmetry layer copies onto, by name; null for any other layer.</summary>
-    public IReadOnlySet<string>? SymmetryTargets(MotionLayer? layer, SkeletonDescription skeleton) =>
-        layer is { Kind: MotionLayerKind.Symmetry } ? Symmetry(layer, skeleton).Bones : null;
+    /// <summary>
+    /// The bones a symmetry or pin layer marks on the map, the list and the character, by name: a pin's
+    /// pinned bones and the bones it bends; the bones a symmetry copies onto. Null for other layers, whose
+    /// keys say what they change. Kept while the layer stays.
+    /// </summary>
+    public LayerBoneSets? BonesOf(MotionLayer? layer, SkeletonDescription skeleton)
+    {
+        switch (layer?.Kind)
+        {
+            case MotionLayerKind.Symmetry:
+                return new LayerBoneSets(EmptySet, Symmetry(layer, skeleton).Bones);
+            case MotionLayerKind.Pin:
+                if (pinBones is { } cached && ReferenceEquals(cached.Layer, layer) && ReferenceEquals(cached.Skeleton, skeleton))
+                    return cached.Bones;
+                var bones = LayerBones(layer, skeleton);
+                pinBones = (layer, skeleton, bones);
+                return bones;
+            default:
+                return null;
+        }
+    }
+
+    private static readonly IReadOnlySet<string> EmptySet = new HashSet<string>();
+
+    /// <summary>
+    /// A pin layer's pinned bones and the bones its pins bend, by name, on <paramref name="skeleton"/>; empty
+    /// sets for other layers, and for pins the skeleton can't resolve (applying the layer reports them).
+    /// </summary>
+    public static LayerBoneSets LayerBones(MotionLayer? layer, SkeletonDescription skeleton)
+    {
+        var pinned = new HashSet<string>(StringComparer.Ordinal);
+        var changed = new HashSet<string>(StringComparer.Ordinal);
+        if (layer is { Kind: MotionLayerKind.Pin })
+            foreach (var pin in layer.Pins)
+                try
+                {
+                    var chain = PinChains.Chain(skeleton, pin);
+                    pinned.Add(pin.Bone);
+                    changed.UnionWith(chain.Bones.Select(bone => skeleton.Bones[bone].Name));
+                }
+                catch (InvalidDataException)
+                {
+                    // A pin on a bone this skeleton lacks marks nothing.
+                }
+        return new LayerBoneSets(pinned, changed);
+    }
 
     /// <summary>
     /// What a symmetry layer copies on <paramref name="skeleton"/>, as Live and the save do: pairs the clip
@@ -129,13 +180,20 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         return (plan, problem, bones);
     }
 
-    public static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated, IReadOnlySet<string>? symmetryTargets = null)
+    /// <summary>
+    /// How <paramref name="bone"/> shows for <paramref name="layer"/> at <paramref name="frame"/>: keyed there,
+    /// pinned by it, changed by it, else whether the clip moves it. <paramref name="layerBones"/> are the
+    /// layer's bones from the skeleton, for a symmetry or pin layer (<see cref="BonesOf"/>).
+    /// </summary>
+    public static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated, LayerBoneSets? layerBones = null)
     {
         if (layer != null)
         {
             if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry) && PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
-            if (PoseEdits.Changes(layer, bone, symmetryTargets))
+            if (layerBones?.Pinned.Contains(bone) == true)
+                return BoneState.Pinned;
+            if (PoseEdits.Changes(layer, bone, layerBones?.Changed))
                 return BoneState.Changed;
         }
         return animated == null || animated.Contains(bone) ? BoneState.Animated : BoneState.Still;
@@ -144,10 +202,12 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     public static string StateText(BoneState state, MotionLayer? layer) => state switch
     {
         BoneState.Keyed => "Keyed here in this layer.",
+        BoneState.Pinned => "Pinned by this layer.",
         BoneState.Changed => layer?.Kind switch
         {
             MotionLayerKind.Amplitude => "This layer scales its movement.",
             MotionLayerKind.Symmetry => "Copied from the other side.",
+            MotionLayerKind.Pin => "Bent to hold a pin.",
             _ => "This layer changes it.",
         },
         BoneState.Animated => "The clip moves it.",
@@ -156,7 +216,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
 
     public static Vector4 StateColour(BoneState state, MotionLayer? layer) => state switch
     {
-        BoneState.Keyed or BoneState.Changed when layer != null => TimelineWindowViews.LayerColour(layer.Kind),
+        BoneState.Keyed or BoneState.Changed or BoneState.Pinned when layer != null => TimelineWindowViews.LayerColour(layer.Kind),
         BoneState.Still => Theme.Inactive,
         _ => Theme.Label,
     };
@@ -204,15 +264,23 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// layers applied there: what edits made to several bones at once and the rotation ball turn in.
     /// </summary>
     public sealed class BoneFrames(SkeletonDescription skeleton, Dictionary<string, int> index, MotionTransform[] before,
-        MotionTransform[] model, bool offset)
+        MotionTransform[] beforeModel, MotionTransform[] model, bool offset, MotionLayer? pins = null)
     {
+        /// <summary>Every bone's model transform as the layers before this one leave it.</summary>
+        public MotionTransform[] BeforeModel => beforeModel;
+
         /// <summary>
         /// The rotation from character space to the space a bone's value turns in: for an offset the bone's
         /// own rotation as the layers before this one leave it, under its parent as all of them do; for a
-        /// pose its parent's.
+        /// pose its parent's; for a pin its relative bone's as the layers before leave it, or none for the character.
         /// </summary>
         public Quaternion Space(string bone)
         {
+            if (pins != null)
+                return MotionEdits.PinIndex(pins, bone) is var pin and >= 0 && pins.Pins[pin].RelativeTo is { } relative &&
+                       index.TryGetValue(relative, out var riding)
+                    ? Quaternion.Normalize(beforeModel[riding].Rotation)
+                    : Quaternion.Identity;
             if (!index.TryGetValue(bone, out var at))
                 return Quaternion.Identity;
             var parent = skeleton.Bones[at].Parent;
@@ -247,10 +315,57 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             // A layer names a bone this skeleton lacks: the clip's own pose still gives frames.
             before = after = own.Local;
         }
-        var frames = new BoneFrames(skeleton, BoneTree(skeleton).Index, before, MotionEvaluator.ModelSpace(skeleton, after),
-            layer.Kind == MotionLayerKind.Offset);
+        var frames = new BoneFrames(skeleton, BoneTree(skeleton).Index, before, MotionEvaluator.ModelSpace(skeleton, before),
+            MotionEvaluator.ModelSpace(skeleton, after), layer.Kind == MotionLayerKind.Offset, layer.Kind == MotionLayerKind.Pin ? layer : null);
         boneFrames = (doc, layer.Key, frame, clip, frames);
         return frames;
+    }
+
+    /// <summary>The bones the decoded clip has tracks for, when it was decoded on <paramref name="skeleton"/>; empty while unknown.</summary>
+    public IReadOnlyCollection<short> DecodedTracks(SkeletonDescription skeleton) =>
+        decode.Decoded is { } clip && clip.Skeleton.Fingerprint == skeleton.Fingerprint ? clip.SourceTracks : [];
+
+    /// <summary>
+    /// Where each planted pin of <paramref name="layer"/> holds, as a fact line by pinned bone ("Held 0-40,
+    /// 72-119"), on the motion as the layers before it leave it; a key "" holds why there are none. Null
+    /// while the motion is read, which this starts. Worked out again only when the layers before it, its
+    /// pins, its range or the decode change, not while its pull, fades or name are edited.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? PlantedFacts(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer)
+    {
+        if (OutputClip(loaded) is not { } clip)
+            return null;
+        var before = doc.Motion.Take(Math.Max(0, MotionEdits.IndexOf(doc, layer.Key))).ToArray();
+        if (plantedFacts is { } cached && ReferenceEquals(cached.Clip, clip) && cached.Start == layer.Start && cached.End == layer.End &&
+            cached.Pins.SequenceEqual(layer.Pins) && cached.Before.SequenceEqual(before, ReferenceEqualityComparer.Instance))
+            return cached.Facts;
+        var facts = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            var copy = new MotionClip(clip.Skeleton, clip.Duration, clip.Samples) { Loops = clip.Loops, SourceTracks = clip.SourceTracks };
+            copy.CopyFrom(clip);
+            MotionEvaluator.Apply(copy, before);
+            foreach (var (bone, path) in MotionEvaluator.Planted(copy, layer))
+                facts[bone] = PinPlanting.Facts(path, copy);
+        }
+        catch (InvalidDataException e)
+        {
+            facts[string.Empty] = e.Message;
+        }
+        plantedFacts = (before, layer.Pins, layer.Start, layer.End, clip, facts);
+        return facts;
+    }
+
+    /// <summary>The decoded motion as the document cuts or stretches it; null while it is read, which this starts.</summary>
+    private MotionClip? OutputClip(AnimationTimelineSource loaded)
+    {
+        var fresh = session.Fresh(loaded);
+        if (decode.Decoded is not { } decoded || decode.DecodedKey != MotionDecode.KeyOf(fresh))
+        {
+            decode.Ensure(fresh);
+            return null;
+        }
+        return session.Editor is { } current ? decode.OutputMotion(current, decoded) : decoded;
     }
 
     /// <summary>
@@ -259,13 +374,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// </summary>
     public (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame)
     {
-        var fresh = session.Fresh(loaded);
-        if (decode.Decoded is not { } decoded || decode.DecodedKey != MotionDecode.KeyOf(fresh))
-        {
-            decode.Ensure(fresh);
+        if (OutputClip(loaded) is not { } clip)
             return null;
-        }
-        var clip = session.Editor is { } current ? decode.OutputMotion(current, decoded) : decoded;
         if (motionPose is { } cached && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
             return (cached.Local, cached.Model);
         var local = clip.Pose(frame);
@@ -278,10 +388,19 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// The selected bones the skeleton has, primary first, each with its value in the layer at
     /// <paramref name="frame"/>; null while a pose layer waits for the clip's own motion.
     /// </summary>
-    public List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc)
+    public List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc,
+        bool spots = false)
     {
         var loop = LoopFrames(loaded, doc);
         var (index, _) = BoneTree(skeleton);
+        if (layer.Kind == MotionLayerKind.Pin)
+        {
+            // A pin's values are spots in its space, where the layers before it leave the bones.
+            if (FramesAt(loaded, doc, layer, frame) is not { } frames)
+                return null;
+            var selected = selection.Primary is { } first ? selection.Bones.Where(name => name != first).Prepend(first) : selection.Bones;
+            return PinTargets(layer, frame, selected, index, frames.BeforeModel, loop, spots);
+        }
         (MotionTransform[] Local, MotionTransform[] Model)? motion = null;
         if (layer.Kind == MotionLayerKind.Pose && (motion = MotionPose(loaded, frame)) == null)
             return null;
@@ -291,6 +410,28 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             if (!index.TryGetValue(bone, out var at) || PoseEdits.Value(layer, bone, frame, motion?.Local[at], loop) is not { } value)
                 continue;
             targets.Add(new PoseTarget(bone, value, PoseEdits.Moved(layer, bone, frame)));
+        }
+        return targets;
+    }
+
+    /// <summary>
+    /// The pin layer's targets among <paramref name="bones"/> (primary first): the keyed pins the skeleton has,
+    /// each at its key's value at <paramref name="frame"/>, else (and with <paramref name="spots"/> always) at the
+    /// spot it is at in its pin's space in <paramref name="beforeModel"/>. Unpinned and planted bones have no
+    /// keys to change and are left out.
+    /// </summary>
+    public static List<PoseTarget> PinTargets(MotionLayer layer, int frame, IEnumerable<string> bones, Dictionary<string, int> index,
+        MotionTransform[] beforeModel, float loop, bool spots)
+    {
+        var targets = new List<PoseTarget>();
+        foreach (var bone in bones)
+        {
+            if (MotionEdits.PinIndex(layer, bone) is not (var at and >= 0) || layer.Pins[at].Planted || !index.TryGetValue(bone, out var b))
+                continue;
+            var relative = layer.Pins[at].RelativeTo is { } name && index.TryGetValue(name, out var riding) ? riding : -1;
+            var spot = PinSolver.PinSpace(beforeModel, b, relative) with { Scale = Vector3.One };
+            var value = spots ? spot : PoseEdits.Value(layer, bone, frame, spot, loop) ?? spot;
+            targets.Add(new PoseTarget(bone, value, false));
         }
         return targets;
     }

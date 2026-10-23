@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
@@ -33,7 +34,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             if (selectionLayer != layer.Key)
             {
                 selectionLayer = layer.Key;
-                if (posing.Selection.Count == 0 && (layer.Keys.SelectMany(key => key.Bones.Keys).FirstOrDefault() ?? layer.Bones.FirstOrDefault()) is { } first &&
+                if (posing.Selection.Count == 0 && (layer.Keys.SelectMany(key => key.Bones.Keys).FirstOrDefault() ?? layer.Bones.FirstOrDefault() ?? layer.Pins.FirstOrDefault()?.Bone) is { } first &&
                     posing.BoneTree(skeleton).Index.ContainsKey(first))
                     posing.Selection.Only(first);
             }
@@ -73,7 +74,9 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                     FrameField(current, layer, "Fade in", "##layer-fade-in", layer.FadeIn, fade => layer with { FadeIn = fade });
                     FrameField(current, layer, "Fade out", "##layer-fade-out", layer.FadeOut, fade => layer with { FadeOut = fade });
                     DrawAmount(current, layer);
-                    DrawComponents(current, layer);
+                    // A pin holds a spot and a turn, whatever parts are set.
+                    if (layer.Kind != MotionLayerKind.Pin)
+                        DrawComponents(current, layer);
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry))
                         DrawInterpolation(current, layer);
                 }
@@ -89,6 +92,22 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
         else if (layer.Kind == MotionLayerKind.Symmetry)
             boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, true);
+        else if (layer.Kind == MotionLayerKind.Pin)
+        {
+            DrawPins(current, layer, skeleton, loaded, readOnly);
+            if (layer.Pins.Any(pin => !pin.Planted))
+            {
+                ImGui.Spacing();
+                boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
+                ImGui.Spacing();
+                DrawLayerKeys(current, layer);
+                if (current.SelectedKey is { } pinKeyFrame && MotionEdits.KeyIndex(layer, pinKeyFrame) is var pinKeyAt and >= 0)
+                {
+                    ImGui.Spacing();
+                    DrawKeyEase(current, layer, layer.Keys[pinKeyAt], readOnly);
+                }
+            }
+        }
         else
         {
             boneEditor.DrawPicker(skeleton, layer);
@@ -123,6 +142,154 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             ImGui.SetTooltip("Pick and pose bones on a body map.");
     }
 
+    /// <summary>
+    /// A pin layer's pins, one block each: the bone with a button to unpin it, what it holds, what it rides
+    /// with, how far up it bends and when it holds; for a planted pin how readily it counts as down and where
+    /// the motion has it down. Every change is one undo step. Then why a pin can't do what it should.
+    /// </summary>
+    private void DrawPins(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded, bool readOnly)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Pins");
+        if (layer.Pins.IsEmpty)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Hint, "None yet. Select bones and choose Pin selected in the Bones window.");
+            return;
+        }
+        var facts = layer.Pins.Any(pin => pin.Planted) ? posing.PlantedFacts(loaded, current.Document, layer) : null;
+        var index = posing.BoneTree(skeleton).Index;
+        foreach (var pin in layer.Pins)
+        {
+            using var id = ImRaii.PushId(pin.Bone);
+            ImGui.Spacing();
+            using (ImRaii.Disabled(readOnly))
+            {
+                if (Widgets.GhostIconButton("##unpin", Dalamud.Interface.FontAwesomeIcon.Times, "Unpin this bone"))
+                    current.Commit(MotionEdits.RemovePin(current.Document, layer.Key, pin.Bone));
+            }
+            ImGui.SameLine(0, Theme.Gap);
+            // A click selects the bone, for Pin here and the gizmo.
+            if (ImGui.Selectable(AnimationPresentation.BoneName(pin.Bone), posing.Selection.Contains(pin.Bone)) && index.ContainsKey(pin.Bone))
+                posing.Selection.Only(pin.Bone);
+            PinChain? chain = null;
+            string? problem = null;
+            try
+            {
+                chain = PinChains.Chain(skeleton, index, pin);
+                // What Live and the save would refuse, such as riding a bone the solve moves.
+                PinChains.Check(skeleton, layer with { Pins = [pin] });
+            }
+            catch (InvalidDataException e)
+            {
+                problem = e.Message;
+            }
+            using (ImRaii.Disabled(readOnly))
+            using (var table = ImRaii.Table("##pin-settings", 2, ImGuiTableFlags.SizingFixedFit))
+            {
+                if (table.Success)
+                {
+                    ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
+                    ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
+                    DrawPinSettings(current, layer, pin, skeleton, index, chain);
+                }
+            }
+            if (problem != null)
+                Widgets.HintWrapped(problem);
+            else if (chain is { Shape: PinChainShape.None })
+                Widgets.HintWrapped($"{AnimationPresentation.BoneName(pin.Bone)} sits right under the body, so nothing can bend to hold it.");
+            if (pin.Planted && problem == null && chain is not { Shape: PinChainShape.None })
+                Widgets.MutedWrapped(facts == null ? "Reading the motion"
+                    : facts.TryGetValue(pin.Bone, out var line) ? line
+                    : facts.GetValueOrDefault(string.Empty) ?? "Not held anywhere");
+        }
+        string[] untracked;
+        try
+        {
+            untracked = [.. PinChains.Untracked(skeleton, layer, posing.DecodedTracks(skeleton))];
+        }
+        catch (InvalidDataException)
+        {
+            untracked = [];
+        }
+        if (untracked.Length > 0)
+        {
+            var names = string.Join(", ", untracked.Take(3).Select(AnimationPresentation.BoneName)) + (untracked.Length > 3 ? $" and {untracked.Length - 3} more" : "");
+            Widgets.HintWrapped($"This layer bends {names}, which the clip doesn't move. Saving gives them tracks, so physics stops moving them.");
+        }
+    }
+
+    /// <summary> One pin's settings, as fact rows: Holds, Relative to, Bends up to, When, and Sensitivity when planted. </summary>
+    private static void DrawPinSettings(TimelineEditor current, MotionLayer layer, MotionPin pin, SkeletonDescription skeleton, Dictionary<string, int> index,
+        PinChain? chain)
+    {
+        PinChoice(current, layer, "Holds", "##pin-holds", "Hold the bone's position, or its turn as well.",
+            pin.HoldTurn ? "Position and turn" : "Position", () => [(false, "Position"), (true, "Position and turn")], pin.HoldTurn,
+            holds => pin with { HoldTurn = holds });
+
+        // A bone the pin's own solve moves would chase itself: everything from the chain's top down.
+        var top = chain is null ? (index.TryGetValue(pin.Bone, out var own) ? own : -1) : chain.Bones.IsEmpty ? chain.End : chain.Bones[0];
+        PinChoice(current, layer, "Relative to", "##pin-relative", "What the pin rides with: the character, or a bone such as the chest. Changing it takes out the pin's keys.",
+            pin.RelativeTo is { } riding ? AnimationPresentation.BoneName(riding) : "Character",
+            () => [(null, "Character"), .. Enumerable.Range(0, skeleton.Bones.Length)
+                .Where(b => b != top && !BonePosing.IsBelow(skeleton, b, top))
+                .Select(b => ((string?)skeleton.Bones[b].Name, AnimationPresentation.BoneName(skeleton.Bones[b].Name)))],
+            pin.RelativeTo, relative => pin with { RelativeTo = relative });
+
+        string fallback;
+        ImmutableArray<string> choices;
+        // Default is offered unless the pin rides a bone the default top would bend.
+        var offerDefault = true;
+        try
+        {
+            var usual = PinChains.DefaultTop(skeleton, pin.Bone);
+            fallback = usual != null ? $"Default ({AnimationPresentation.BoneName(usual)})" : "Default (nothing bends)";
+            choices = PinChains.TopChoices(skeleton, pin.Bone, pin.RelativeTo);
+            offerDefault = usual == null || pin.Top == null || choices.Contains(usual);
+        }
+        catch (InvalidDataException)
+        {
+            fallback = "Default";
+            choices = [];
+        }
+        PinChoice(current, layer, "Bends up to", "##pin-top", "The highest bone that may turn to hold the pin.",
+            pin.Top is { } highest ? AnimationPresentation.BoneName(highest) : fallback,
+            () => [.. offerDefault ? new[] { ((string?)null, fallback) } : Array.Empty<(string?, string)>(), .. choices.Select(name => ((string?)name, AnimationPresentation.BoneName(name)))],
+            pin.Top, highest => pin with { Top = highest });
+
+        PinChoice(current, layer, "When", "##pin-when", "Keyed holds the spots you key. Planted only holds where the motion has the bone down.",
+            pin.Planted ? "Planted only" : "Keyed", () => [(false, "Keyed"), (true, "Planted only")], pin.Planted,
+            planted => pin with { Planted = planted });
+        if (pin.Planted)
+            PinChoice(current, layer, "Sensitivity", "##pin-sensitivity", "How readily the bone counts as down. Strict holds less, Loose more.",
+                pin.Sensitivity.ToString(), () => [(PinSensitivity.Normal, "Normal"), (PinSensitivity.Strict, "Strict"), (PinSensitivity.Loose, "Loose")],
+                pin.Sensitivity, sensitivity => pin with { Sensitivity = sensitivity });
+    }
+
+    /// <summary> A fact row with a combo of <paramref name="options"/>, listed only while open; a pick commits the changed pin. </summary>
+    private static void PinChoice<T>(TimelineEditor current, MotionLayer layer, string label, string id, string tooltip, string preview,
+        Func<IEnumerable<(T Value, string Name)>> options, T value, Func<T, MotionPin> with)
+    {
+        TimelineUi.Fact(label);
+        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(140), ImGui.GetContentRegionAvail().X));
+        using (var combo = ImRaii.Combo(id, preview, ImGuiComboFlags.HeightLarge))
+        {
+            if (combo.Success)
+            {
+                var at = 0;
+                foreach (var (option, name) in options())
+                {
+                    var chosen = EqualityComparer<T>.Default.Equals(option, value);
+                    if (ImGui.Selectable($"{name}##{at++}", chosen) && !chosen)
+                        current.Commit(MotionEdits.SetPin(current.Document, layer.Key, with(option)));
+                }
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(tooltip);
+    }
+
     /// <summary> A frame number field with its time beside it. </summary>
     private static void FrameField(TimelineEditor current, MotionLayer layer, string label, string id, int value, Func<int, MotionLayer> with)
     {
@@ -137,7 +304,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
 
     private static void DrawAmount(TimelineEditor current, MotionLayer layer)
     {
-        TimelineUi.Fact(layer.Kind switch { MotionLayerKind.Offset => "Strength", MotionLayerKind.Amplitude => "Movement", _ => "Blend" });
+        TimelineUi.Fact(layer.Kind switch { MotionLayerKind.Offset => "Strength", MotionLayerKind.Amplitude => "Movement", MotionLayerKind.Pin => "Pull", _ => "Blend" });
         var percent = layer.Amount * 100;
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
         var changed = ImGui.SliderFloat("##layer-amount", ref percent, 0, MotionEdits.MaxAmount(layer.Kind) * 100, "%.0f%%");
@@ -148,6 +315,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 MotionLayerKind.Offset => "How much of the keyed offsets applies. Ctrl+click to type.",
                 MotionLayerKind.Amplitude => "100% keeps the motion. Less calms it toward the average pose, more exaggerates it. Ctrl+click to type.",
                 MotionLayerKind.Symmetry => "How far the bones blend toward the other side's motion. Ctrl+click to type.",
+                MotionLayerKind.Pin => "How far the bones go to their pins. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
     }
@@ -345,7 +513,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         {
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Hint, "None yet. Set a bone's value to add one.");
+            ImGui.TextColored(Theme.Hint, layer.Kind == MotionLayerKind.Pin ? "None yet. Pin here adds one." : "None yet. Set a bone's value to add one.");
             return;
         }
         foreach (var key in layer.Keys)

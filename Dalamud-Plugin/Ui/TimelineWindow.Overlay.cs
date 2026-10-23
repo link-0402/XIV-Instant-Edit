@@ -95,7 +95,7 @@ public sealed partial class TimelineWindow
         var toClip = modelView * camera.Projection;
         var (index, _) = BoneTree(skeleton);
         var animated = AnimatedBones(clip);
-        var targets = SymmetryTargets(layer, skeleton);
+        var layerBones = BonesOf(layer, skeleton);
 
         var count = skeleton.Bones.Length;
         if (dotAt.Length != count)
@@ -107,7 +107,8 @@ public sealed partial class TimelineWindow
         {
             var name = skeleton.Bones[b].Name;
             dotShown[b] = BoneOverlayModes.Dot(showOnCharacter, selection.Contains(name), PoseMap.Placed.Contains(name),
-                              showOnCharacter == BoneOverlayMode.All && layer != null && PoseEdits.Changes(layer, name, targets)) &&
+                              showOnCharacter == BoneOverlayMode.All && layer != null &&
+                              (layerBones?.Pinned.Contains(name) == true || PoseEdits.Changes(layer, name, layerBones?.Changed))) &&
                           actorPose.Index.TryGetValue(name, out var at) &&
                           PoseGizmo.Project(actorPose.Positions[at], toClip, viewport.Pos, viewport.Size, out dotAt[b]);
         }
@@ -143,7 +144,7 @@ public sealed partial class TimelineWindow
         // The game must not take the click as well.
         ImGui.SetNextFrameWantCaptureMouse(true);
         var bone = skeleton.Bones[hover].Name;
-        ImGui.SetTooltip($"{AnimationPresentation.BoneName(bone)}\n{StateText(StateOf(bone, layer, frame, animated, SymmetryTargets(layer, skeleton)), layer)}");
+        ImGui.SetTooltip($"{AnimationPresentation.BoneName(bone)}\n{StateText(StateOf(bone, layer, frame, animated, layerBones), layer)}");
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
             ClickBone(bone, skeleton);
     }
@@ -159,6 +160,7 @@ public sealed partial class TimelineWindow
         var shadow = ImGui.GetColorU32(new Vector4(0, 0, 0, .5f));
         var lineColour = ImGui.GetColorU32(Theme.WithAlpha(Theme.Label, .7f));
         var litColour = ImGui.GetColorU32(Theme.WithAlpha(Theme.Accent, .9f));
+        var layerBones = BonesOf(layer, skeleton);
         for (var b = 0; b < dotShown.Length; b++)
         {
             if (!dotShown[b])
@@ -183,13 +185,23 @@ public sealed partial class TimelineWindow
                 continue;
             var name = skeleton.Bones[b].Name;
             var at = dotAt[b];
-            var state = StateOf(name, layer, frame, animated, SymmetryTargets(layer, skeleton));
+            var state = StateOf(name, layer, frame, animated, layerBones);
             var colour = ImGui.GetColorU32(StateColour(state, layer));
-            drawList.AddCircleFilled(at, radius + Theme.Scaled(1.5f), shadow);
-            drawList.AddCircleFilled(at, radius, ImGui.GetColorU32(selection.Contains(name)
-                ? Theme.WithAlpha(Theme.Accent, .9f)
-                : Theme.WithAlpha(Theme.PanelBg, .75f)));
-            drawList.AddCircle(at, radius, colour, 0, Theme.Scaled(state is BoneState.Changed or BoneState.Keyed ? 2.5f : 1.5f));
+            var fill = ImGui.GetColorU32(selection.Contains(name) ? Theme.WithAlpha(Theme.Accent, .9f) : Theme.WithAlpha(Theme.PanelBg, .75f));
+            if (state == BoneState.Pinned)
+            {
+                // A pinned bone is a square.
+                var corner = new Vector2(radius);
+                drawList.AddRectFilled(at - corner - new Vector2(Theme.Scaled(1.5f)), at + corner + new Vector2(Theme.Scaled(1.5f)), shadow);
+                drawList.AddRectFilled(at - corner, at + corner, fill);
+                drawList.AddRect(at - corner, at + corner, colour, 0, ImDrawFlags.None, Theme.Scaled(2.5f));
+            }
+            else
+            {
+                drawList.AddCircleFilled(at, radius + Theme.Scaled(1.5f), shadow);
+                drawList.AddCircleFilled(at, radius, fill);
+                drawList.AddCircle(at, radius, colour, 0, Theme.Scaled(state is BoneState.Changed or BoneState.Keyed ? 2.5f : 1.5f));
+            }
             if (state == BoneState.Keyed)
                 drawList.AddCircleFilled(at, radius * .45f, colour);
             if (b == primary)
@@ -271,7 +283,8 @@ public sealed partial class TimelineWindow
             if (operation == ImGuizmoOperation.Translate)
             {
                 var offset = layer.Kind == MotionLayerKind.Offset;
-                var motion = offset ? null : MotionPose(loaded, frame);
+                // A pin key is a spot in the pin's space: it moves from where it is, never from the clip's own position.
+                var motion = offset || layer.Kind == MotionLayerKind.Pin ? null : MotionPose(loaded, frame);
                 var (index, _) = BoneTree(skeleton);
                 current.Change(PoseEdits.Move(current.Document, layer.Key, frame, turned, follow.Move, frames.Space, offset,
                     name => motion is { } own && index.TryGetValue(name, out var b) ? own.Local[b].Position : null));
@@ -286,7 +299,8 @@ public sealed partial class TimelineWindow
 
     /// <summary>
     /// What the gizmo does on the character now, or null when it can't show: it needs the selected offset
-    /// or pose layer on with the playhead inside it, and Live showing the layers on the paused clip.
+    /// or pose layer, or a keyed pin of a pin layer, on with the playhead inside it, and Live showing the
+    /// layers on the paused clip.
     /// <paramref name="reason"/> says what to do when that is up to the user.
     /// </summary>
     private ImGuizmoOperation? GizmoOperation(MotionLayer layer, int frame, out string? reason)
@@ -299,6 +313,10 @@ public sealed partial class TimelineWindow
             reason = "The layer is off. Tick it to pose with the gizmo.";
             return null;
         }
+        // A pin layer's gizmo changes keyed pins' keys only.
+        bool? pinMoves = null;
+        if (layer.Kind == MotionLayerKind.Pin && (pinMoves = TimelineWindowViews.PinGizmo(layer, selection.Primary, gizmoMove, out reason)) == null)
+            return null;
         if (!LiveShowing)
         {
             reason = "Turn on Live to pose the character with the gizmo.";
@@ -309,6 +327,8 @@ public sealed partial class TimelineWindow
             reason = "Pause to pose the character with the gizmo.";
             return null;
         }
+        if (pinMoves is { } moves)
+            return moves ? ImGuizmoOperation.Translate : ImGuizmoOperation.Rotate;
         var turn = layer.Components.HasFlag(PoseComponents.Rotation);
         var move = layer.Components.HasFlag(PoseComponents.Position);
         return move && (gizmoMove || !turn) ? ImGuizmoOperation.Translate : turn ? ImGuizmoOperation.Rotate : null;

@@ -62,6 +62,9 @@ internal sealed class TimelineSession
     public byte[]? ImportBytes(string gamePath) =>
         Imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes) ? bytes : null;
 
+    /// <summary>The skeleton the open clip was made for; null while it is unknown or nothing is open.</summary>
+    public SkeletonDescription? SourceSkeleton() => Source is { } source ? Fresh(source).Clip.Resolution?.Selected?.Skeleton : null;
+
     /// <summary>
     /// The source with the clip's latest skeleton match: choosing a skeleton under Source after
     /// opening the timeline must still allow a length change. Only a capture of the same file counts:

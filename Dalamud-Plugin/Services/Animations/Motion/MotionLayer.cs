@@ -14,7 +14,26 @@ internal enum MotionLayerKind : byte
     Pose,
     /// <summary>Makes bones copy their twins on the other side, mirrored.</summary>
     Symmetry,
+    /// <summary>Holds bones at a spot while the chain above them bends to reach it.</summary>
+    Pin,
 }
+
+/// <summary>How readily a planted pin counts its bone as down. Saved as numbers; Normal first, so a missing value reads as Normal.</summary>
+internal enum PinSensitivity : byte
+{
+    Normal,
+    Strict,
+    Loose,
+}
+
+/// <summary>
+/// One bone a pin layer holds. <paramref name="HoldTurn"/> holds its turn as well as its position.
+/// <paramref name="RelativeTo"/> is the bone it rides with, null for the character. <paramref name="Top"/>
+/// is the highest bone the solver may turn, null for the default chain. A <paramref name="Planted"/>
+/// pin has no keys: it holds the bone where the motion has it down, as readily as <paramref name="Sensitivity"/> says.
+/// </summary>
+internal sealed record MotionPin(string Bone, bool HoldTurn = true, string? RelativeTo = null, string? Top = null, bool Planted = false,
+    PinSensitivity Sensitivity = PinSensitivity.Normal);
 
 /// <summary>A side of the body, for the side a symmetry layer copies. Saved as numbers.</summary>
 internal enum MotionSide : byte
@@ -142,6 +161,8 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 /// Layers apply in their document's order, each to the motion the ones before it made.
 /// </summary>
 /// <param name="From">For a symmetry layer, the side whose motion is copied; other kinds ignore it.</param>
+/// <param name="Pins">For a pin layer, the bones it holds; its keys hold their spots in each pin's space
+/// and its amount is the pull toward them. Other kinds have none.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -157,8 +178,10 @@ internal sealed record MotionLayer(
     ImmutableArray<string> Bones = default,
     ImmutableArray<MotionKey> Keys = default,
     bool Enabled = true,
-    MotionSide From = MotionSide.Left)
+    MotionSide From = MotionSide.Left,
+    ImmutableArray<MotionPin> Pins = default)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;
+    public ImmutableArray<MotionPin> Pins { get; init; } = Pins.IsDefault ? [] : Pins;
 }

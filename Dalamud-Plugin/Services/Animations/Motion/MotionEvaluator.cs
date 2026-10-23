@@ -29,6 +29,7 @@ internal static class MotionEvaluator
         MotionLayerKind.Amplitude => Math.Abs(layer.Amount - 1) > 1e-6f &&
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         MotionLayerKind.Symmetry => layer.Amount > 0 && layer.Components != PoseComponents.None && !layer.Bones.IsEmpty,
+        MotionLayerKind.Pin => layer.Amount > 0 && layer.Pins.Any(pin => pin.Planted || layer.Keys.Any(key => key.Bones.ContainsKey(pin.Bone))),
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -68,13 +69,16 @@ internal static class MotionEvaluator
 
     /// <summary>
     /// How strongly an offset or pose layer applies its keys at <paramref name="frame"/>: an offset's strength
-    /// (its amount, up to <see cref="MaxAmount"/>), a pose's blend toward the keyed pose, both through its fades.
+    /// (its amount, up to <see cref="MaxAmount"/>), a pose's blend toward the keyed pose or a pin's pull, through its fades.
     /// </summary>
     public static float Weight(MotionLayer layer, float frame, float end = 0)
     {
         var weight = Fade(layer, frame, end) * layer.Amount;
-        return layer.Kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry ? Math.Min(1, weight) : weight;
+        return BlendsAtMostFully(layer.Kind) ? Math.Min(1, weight) : weight;
     }
+
+    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry or a pin's pull.</summary>
+    public static bool BlendsAtMostFully(MotionLayerKind kind) => kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin;
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
@@ -87,7 +91,7 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} has no frames on the timeline.");
         if (layer.FadeIn < 0 || layer.FadeOut < 0 || (long)layer.FadeIn + layer.FadeOut > layer.End - layer.Start)
             throw new InvalidDataException($"{name} fades for longer than it lasts.");
-        var most = layer.Kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry ? 1 : MaxAmount;
+        var most = BlendsAtMostFully(layer.Kind) ? 1 : MaxAmount;
         if (!float.IsFinite(layer.Amount) || layer.Amount < 0 || layer.Amount > most)
             throw new InvalidDataException($"{name} has an amount out of range.");
         if ((layer.Components & ~PoseComponents.All) != 0)
@@ -98,6 +102,16 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} has too many keys.");
         if (layer.Kind == MotionLayerKind.Symmetry && !layer.Keys.IsEmpty)
             throw new InvalidDataException($"{name} can't have keys.");
+        if (layer.Kind != MotionLayerKind.Pin && !layer.Pins.IsEmpty)
+            throw new InvalidDataException($"{name} can't have pins.");
+        var pinned = new Dictionary<string, MotionPin>(StringComparer.Ordinal);
+        foreach (var pin in layer.Pins)
+        {
+            if (string.IsNullOrEmpty(pin?.Bone) || !pinned.TryAdd(pin.Bone, pin))
+                throw new InvalidDataException($"{name} pins a bone twice or a bone without a name.");
+            if (!Enum.IsDefined(pin.Sensitivity))
+                throw new InvalidDataException($"{name} has a pin whose sensitivity can't be read.");
+        }
         var previous = -1;
         foreach (var key in layer.Keys)
         {
@@ -113,6 +127,8 @@ internal static class MotionEvaluator
                     throw new InvalidDataException($"{name} has a key with a value that is not a transform.");
                 if (value.Scale.X is < MinScale or > MaxScale || value.Scale.Y is < MinScale or > MaxScale || value.Scale.Z is < MinScale or > MaxScale)
                     throw new InvalidDataException($"{name} has a key whose scale is out of range.");
+                if (layer.Kind == MotionLayerKind.Pin && (!pinned.TryGetValue(bone, out var pin) || pin.Planted))
+                    throw new InvalidDataException($"{name} has a key for a bone it doesn't pin by keys.");
             }
             if (key.Moved.Any(bone => !key.Bones.ContainsKey(bone)))
                 throw new InvalidDataException($"{name} moves a bone its key has no value for.");
@@ -155,7 +171,8 @@ internal static class MotionEvaluator
             token.ThrowIfCancellationRequested();
             if (!Active(layer))
                 continue;
-            var mask = Mask(layer, index);
+            // A pin layer keeps a bone limit it never uses.
+            var mask = layer.Kind == MotionLayerKind.Pin ? null : Mask(layer, index);
             switch (layer.Kind)
             {
                 case MotionLayerKind.Offset:
@@ -169,6 +186,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Symmetry:
                     ApplySymmetry(clip, layers, at, end, token);
+                    break;
+                case MotionLayerKind.Pin:
+                    ApplyPin(clip, layer, index, WrapOf(layer, loop), end, token);
                     break;
             }
         }
@@ -188,6 +208,8 @@ internal static class MotionEvaluator
                 foreach (var name in key.Bones.Keys)
                     if (!index.ContainsKey(name))
                         throw Missing(name);
+            if (layer.Kind == MotionLayerKind.Pin)
+                PinChains.Check(skeleton, layer);
         }
     }
 
@@ -438,9 +460,10 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// One pose with the offset, pose and symmetry layers applied at <paramref name="frame"/>, in order, the way
+    /// One pose with the offset, pose, symmetry and keyed pin layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
-    /// around its average over their section, which one pose does not have. The Bones window turns
+    /// around its average over their section, which one pose does not have; planted pins too, as finding
+    /// where a bone is down takes the whole clip. The Bones window turns
     /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
     /// unknown. <paramref name="trackedBones"/> are the bones the clip has tracks for, as a decode gives them
@@ -470,6 +493,21 @@ internal static class MotionEvaluator
                     var plan = MotionSymmetry.Plan(skeleton, layer, MotionSymmetry.Animated(skeleton, trackedBones, layers, at));
                     MotionSymmetry.Mirror(skeleton, pose, plan, rest, copy, layer.Components);
                 }
+                continue;
+            }
+            if (layer.Kind == MotionLayerKind.Pin)
+            {
+                // Keyed pins only: planted ones need the whole clip to find where the bone is down, so the bake does them.
+                var pull = Weight(layer, frame, end);
+                if (pull <= 0)
+                    continue;
+                var keyed = Tracks(layer, index, null, false);
+                var space = ModelSpace(skeleton, pose);
+                var around = WrapOf(layer, loop);
+                foreach (var resolved in ResolvePins(skeleton, layer, index))
+                    if (!resolved.Pin.Planted && keyed.TryGetValue(resolved.Chain.End, out var pinTrack))
+                        PinSolver.Pin(skeleton, pose, space, resolved.Chain, resolved.Pin, resolved.RelativeTo,
+                            Sample(pinTrack.Frames, pinTrack.Values, pinTrack.Curves, frame, around), pull, resolved.RestNormal);
                 continue;
             }
             var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
@@ -619,6 +657,159 @@ internal static class MotionEvaluator
             MotionSymmetry.Mirror(clip.Skeleton, pose, plan, rest, weight, layer.Components, scratch);
             foreach (var pair in plan.Pairs)
                 clip.Set(i, pair.Target, pose[pair.Target]);
+        }
+    }
+
+    /// <summary>A pin of a layer resolved on the skeleton: the chain it bends, its relative bone (-1 for the character) and its limb's rest bend.</summary>
+    private sealed record ResolvedPin(MotionPin Pin, PinChain Chain, int RelativeTo, Vector3 RestNormal);
+
+    /// <summary>
+    /// <paramref name="layer"/>'s pins resolved on <paramref name="skeleton"/>, after the checks
+    /// <see cref="CheckBones"/> makes (<see cref="Apply"/> doesn't call it, so they run here).
+    /// </summary>
+    private static List<ResolvedPin> ResolvePins(SkeletonDescription skeleton, MotionLayer layer, Dictionary<string, int> index)
+    {
+        PinChains.Check(skeleton, layer);
+        var pins = new List<ResolvedPin>(layer.Pins.Length);
+        foreach (var pin in layer.Pins)
+        {
+            var chain = PinChains.Chain(skeleton, index, pin);
+            pins.Add(new(pin, chain, pin.RelativeTo == null ? -1 : index[pin.RelativeTo], PinSolver.RestNormal(skeleton, chain)));
+        }
+        return pins;
+    }
+
+    /// <summary>
+    /// A pin layer over the clip, sample by sample, its pins in list order, each seeing what the ones before
+    /// it did. Keyed pins aim at their keys; planted pins first find where their bone is down over the
+    /// layer's samples, on the clip as the layers before this one leave it, and hold it there. Only the
+    /// bones the pins change are written back, so the rest keep their values exactly.
+    /// </summary>
+    private static void ApplyPin(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, float wrap, float end, CancellationToken token)
+    {
+        var skeleton = clip.Skeleton;
+        var pins = ResolvePins(skeleton, layer, index);
+        var tracks = Tracks(layer, index, null, false);
+        var keyed = new Track?[pins.Count];
+        var planted = new PlantedPath?[pins.Count];
+        var changed = new SortedSet<int>();
+        for (var p = 0; p < pins.Count; p++)
+        {
+            if (pins[p].Chain.Shape == PinChainShape.None)
+                continue;
+            changed.UnionWith(pins[p].Chain.Bones);
+            changed.Add(pins[p].Chain.End);
+            if (!pins[p].Pin.Planted)
+                keyed[p] = tracks.GetValueOrDefault(pins[p].Chain.End);
+        }
+        if (pins.Any(pin => pin.Pin.Planted && pin.Chain.Shape != PinChainShape.None))
+            FindPlanted(clip, layer, pins, planted, wrap > 0, end, token);
+        if (changed.Count == 0)
+            return;
+
+        var local = new MotionTransform[clip.Bones];
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var frame = clip.Frame(i);
+            var weight = Weight(layer, frame, end);
+            if (weight <= 0)
+                continue;
+            for (var b = 0; b < local.Length; b++)
+                local[b] = clip.Get(i, b);
+            var model = ModelSpace(skeleton, local);
+            for (var p = 0; p < pins.Count; p++)
+            {
+                var pin = pins[p];
+                MotionTransform target;
+                var pull = weight;
+                if (planted[p] is { } path)
+                {
+                    if (path.Target(i) is not { } held)
+                        continue;
+                    target = held;
+                    pull *= path.Hold(i);
+                }
+                else if (keyed[p] is { } track)
+                    target = Sample(track.Frames, track.Values, track.Curves, frame, wrap);
+                else
+                    continue;
+                PinSolver.Pin(skeleton, local, model, pin.Chain, pin.Pin, pin.RelativeTo, target, pull, pin.RestNormal);
+            }
+            foreach (var b in changed)
+                clip.Set(i, b, local[b]);
+        }
+    }
+
+    /// <summary>
+    /// Where <paramref name="layer"/>'s planted pins hold their bones on <paramref name="clip"/> as it stands,
+    /// found as <see cref="Apply"/> finds them, by pinned bone; for the panel's facts. Pins with nothing to bend
+    /// are left out. Throws for a pin the skeleton can't resolve.
+    /// </summary>
+    public static Dictionary<string, PlantedPath> Planted(MotionClip clip, MotionLayer layer)
+    {
+        var pins = ResolvePins(clip.Skeleton, layer, Index(clip.Skeleton));
+        var planted = new PlantedPath?[pins.Count];
+        var end = clip.Frame(clip.Samples - 1);
+        FindPlanted(clip, layer, pins, planted, Wraps(layer, clip.Loops ? end : 0), end, CancellationToken.None);
+        var found = new Dictionary<string, PlantedPath>(StringComparer.Ordinal);
+        for (var p = 0; p < pins.Count; p++)
+            if (planted[p] is { } path)
+                found[pins[p].Pin.Bone] = path;
+        return found;
+    }
+
+    /// <summary>
+    /// Where each planted pin's bone is down: its path in the pin's space over the whole clip as it stands,
+    /// looked at over the samples inside the layer, wrapping when the layer covers a loop.
+    /// </summary>
+    private static void FindPlanted(MotionClip clip, MotionLayer layer, List<ResolvedPin> pins, PlantedPath?[] planted, bool wraps, float end, CancellationToken token)
+    {
+        int first = -1, last = -1;
+        for (var i = 0; i < clip.Samples; i++)
+            if (Inside(layer, clip.Frame(i), end))
+            {
+                if (first < 0) first = i;
+                last = i;
+            }
+        if (first < 0)
+            return;
+        var paths = new Dictionary<int, MotionTransform[]>();
+        // A limb that only bends itself can't reach past its soft reach: where its upper bone is and how far that goes, per sample.
+        // Read before the layer runs, so an earlier pin of this layer that bends the same limb (a chain through the thigh) isn't seen.
+        var reaches = new Dictionary<int, (Vector3[] Roots, float[] Limits)>();
+        for (var p = 0; p < pins.Count; p++)
+            if (pins[p].Pin.Planted && pins[p].Chain.Shape != PinChainShape.None)
+            {
+                paths[p] = new MotionTransform[clip.Samples];
+                if (pins[p].Chain is { Shape: PinChainShape.Limb } limb && limb.Bones[0] == limb.Root)
+                    reaches[p] = (new Vector3[clip.Samples], new float[clip.Samples]);
+            }
+        var local = new MotionTransform[clip.Bones];
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            for (var b = 0; b < local.Length; b++)
+                local[b] = clip.Get(i, b);
+            var model = ModelSpace(clip.Skeleton, local);
+            foreach (var (p, path) in paths)
+                path[i] = PinSolver.PinSpace(model, pins[p].Chain.End, pins[p].RelativeTo);
+            foreach (var (p, (roots, limits)) in reaches)
+            {
+                roots[i] = PinSolver.PinSpace(model, pins[p].Chain.Root, pins[p].RelativeTo).Position;
+                limits[i] = PinSolver.SoftReach(model, pins[p].Chain);
+            }
+        }
+        var rate = clip.Duration > 0 ? (clip.Samples - 1) / clip.Duration : TimelineDocument.Fps;
+        var gap = PinPlanting.SamplesOf(PinPlanting.CloseGapFrames, clip);
+        var shortest = PinPlanting.SamplesOf(PinPlanting.MinStretchFrames, clip);
+        var ease = PinPlanting.SamplesOf(PinPlanting.EaseFrames, clip);
+        foreach (var (p, path) in paths)
+        {
+            var found = PinPlanting.Find(path, rate, first, last, wraps, pins[p].Pin.Sensitivity, gap, shortest, ease);
+            planted[p] = reaches.TryGetValue(p, out var reach) ? PinPlanting.Reachable(found, reach.Roots, reach.Limits) : found;
         }
     }
 
