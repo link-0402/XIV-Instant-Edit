@@ -609,14 +609,28 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         MarkDirty();
     }
 
-    /// <summary>Re-applies a preset to a material, replacing its shader and textures.</summary>
+    /// <summary>
+    /// Re-applies a preset to a material: its shader, and its texture slots in preset order. Slots of a
+    /// role the preset also has are kept as they are (files and settings); the rest are dropped.
+    /// </summary>
     public void ApplyPreset(MaterialSetup mat, MaterialPreset preset)
     {
         mat.ShaderType = preset.Shader;
+        var old   = mat.Textures.ToList();
+        var added = new List<TextureSlot>();
         mat.Textures.Clear();
         foreach (var type in preset.Textures)
-            mat.Textures.Add(new TextureSlot { Type = type, Postfix = MaterialNaming.DefaultPostfix(type) });
-        ApplyTextureDefaults(mat);
+        {
+            var same = old.Where(t => t.Type == type).ToList();
+            if (same.Count == 0)
+            {
+                var slot = new TextureSlot { Type = type, Postfix = MaterialNaming.DefaultPostfix(type) };
+                same.Add(slot);
+                added.Add(slot);
+            }
+            mat.Textures.AddRange(same);
+        }
+        ApplyTextureDefaults(mat, added);
         MarkDirty();
     }
 
@@ -734,12 +748,14 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
     /// What a new material's slots start with: Auto compression, and for hair, the base normal and
     /// mask picked in Settings in its empty normal and mask slots.
     /// </summary>
-    private void ApplyTextureDefaults(MaterialSetup material)
+    /// <param name="added">When given, only these slots are new and get the default compression.</param>
+    private void ApplyTextureDefaults(MaterialSetup material, ICollection<TextureSlot>? added = null)
     {
         var cfg = _host.Configuration;
         foreach (var slot in material.Textures)
         {
-            slot.Compression = TextureCompression.Auto;
+            if (added == null || added.Contains(slot))
+                slot.Compression = TextureCompression.Auto;
             if (material.ShaderType != ShaderType.Hair || !string.IsNullOrWhiteSpace(slot.SourcePath))
                 continue;
             var start = slot.Type switch

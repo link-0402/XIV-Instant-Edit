@@ -372,9 +372,8 @@ internal sealed class PortEditor
         {
             var p = _askPreset;
             var mat = p is { } x ? MaterialAt(x.Item, x.Material) : null;
-            ImGui.TextUnformatted($"Replace the shader and all {mat?.Textures.Count} texture slot(s) of \"{mat?.Name}\"");
-            ImGui.TextUnformatted($"with the \"{(p is { } y ? MaterialPresets.Names[y.Preset] : "")}\" preset?");
-            ImGui.TextColored(Theme.Muted, "Texture source paths set on this material are cleared.");
+            ImGui.TextUnformatted($"Apply the \"{(p is { } y ? MaterialPresets.Names[y.Preset] : "")}\" preset to \"{mat?.Name}\"?");
+            ImGui.TextColored(Theme.Muted, "Slots the preset also has keep their files and settings. Other slots are removed.");
         }, "Apply", () =>
         {
             if (_askPreset is { } x && MaterialAt(x.Item, x.Material) is { } mat)
