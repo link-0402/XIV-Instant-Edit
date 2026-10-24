@@ -44,7 +44,7 @@ internal static partial class TimelineWindowViews
 
     /// <summary>The Add menus' fix items after Pin feet (<see cref="LoopPoseReader.DrawAddItems"/>): fix layers start with their fix.</summary>
     public const string MatchLoopName = "Match startup to loop";
-    public const string MatchLoopHint = "Blend this startup's end into its loop's first frame, so they flow into each other.";
+    public const string MatchLoopHint = "Blend this startup's end into the loop frame the game shows then, so they flow into each other.";
     public const string NoLoop = "Only a startup that leads into a loop";
     public const string SmoothJitterName = "Smooth jitter";
     public const string SmoothJitterHint = "Calm small shakes and keep sharp moves.";

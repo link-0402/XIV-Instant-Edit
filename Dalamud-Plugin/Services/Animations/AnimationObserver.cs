@@ -74,14 +74,34 @@ internal sealed class AnimationObserver : IDisposable
     public ulong Actor => actor;
     public string Status { get; private set; } = "Waiting for the local player";
     public event Action? CharacterChanged;
+    /// <summary>The startup to loop fades measured while listening (<see cref="LoopFadeWatch"/>).</summary>
+    public LoopFades LoopFades { get; }
+    private readonly LoopFadeWatch fadeWatch;
 
     public AnimationObserver(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets, PenumbraIpc penumbra,
-        AnimationNative native, AnimationResources resources, LivePoseAdapter poses, AnimationCatalog catalog, AnimationSkeletonIndex skeletons, IPluginLog log)
+        AnimationNative native, AnimationResources resources, LivePoseAdapter poses, AnimationCatalog catalog, AnimationSkeletonIndex skeletons, IPluginLog log,
+        LoopFades loopFades)
     {
         this.framework = framework; this.objects = objects; this.clientState = clientState; this.targets = targets; this.penumbra = penumbra;
         this.native = native; this.resources = resources; this.poses = poses; this.catalog = catalog;
         this.skeletons = skeletons;
         this.log = log;
+        LoopFades = loopFades;
+        fadeWatch = new LoopFadeWatch(loopFades, StartsInto);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="startup"/> leads into <paramref name="loop"/>: a heard capture pairs them, the Emote sheet's
+    /// family does, or their keys are one name's "_start" and "_loop" (idle and pose siblings the sheet doesn't pair).
+    /// </summary>
+    private bool StartsInto(ushort startup, ushort loop)
+    {
+        if (history.Any(capture => capture.Startup?.Timeline == startup && capture.Clip.Timeline == loop))
+            return true;
+        if (catalog.FindAny(loop) is not { } looped)
+            return false;
+        return looped.Startups.Contains(startup) || catalog.FindAny(startup) is { Key: var key } &&
+               key.EndsWith("_start", StringComparison.Ordinal) && looped.Key == key[..^"_start".Length] + "_loop";
     }
     public void Start()
     {
@@ -170,8 +190,11 @@ internal sealed class AnimationObserver : IDisposable
         var listeningToken = listening;
         if (!listeningEnabled || listeningToken is null || listeningToken.IsCancellationRequested) return;
         RuntimeChangeStamp? stamp;
-        try { stamp = AnimationRuntime.CaptureChangeStamp(Subject()); }
+        var subject = Subject();
+        try { stamp = AnimationRuntime.CaptureChangeStamp(subject); }
         catch (Exception e) { log.Debug(e, "Could not capture the animation change stamp."); return; }
+        try { fadeWatch.Update(subject); }
+        catch (Exception e) { log.Debug(e, "Could not measure a loop fade."); }
         followingGPose = stamp?.ObjectIndex >= 200;
         var current = stamp?.ActorId ?? 0;
         if (current != actor)

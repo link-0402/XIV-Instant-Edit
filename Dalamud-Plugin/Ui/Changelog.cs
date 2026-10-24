@@ -63,7 +63,7 @@ internal static class ChangelogCatalog
             Entry("Pose layers blend bones toward poses you key.", 1),
             Entry("Symmetry layers copy one side's motion onto the other, mirrored. Make symmetrical in the Bones window adds one.", 1),
             Entry("Pin layers hold a bone at a spot, feet on the floor or a hand on the chest, and bend the limb to reach it. Pin feet finds where the feet are down and holds them there.", 1),
-            Entry("Fix layers: Match startup to loop blends a startup's end into its loop's first frame over a length you set; Smooth jitter calms small shakes and keeps sharp moves.", 1),
+            Entry("Fix layers: Match startup to loop blends a startup's end into the loop frame the game shows then, after its own cross-fade, measured when you play the emote; Smooth jitter calms small shakes and keeps sharp moves.", 1),
             Entry("Start an animation from scratch: Still pose holds one frame for the whole clip, and a pose layer builds the motion. Key a pose stands bent legs back on the ground.", 1),
             Entry("Idle motion layers borrow breathing and a weight shift from another animation, such as your idle, with a share for the breath, arms, balance and tail.", 1),
             Entry("The gizmo's Drag mode pulls a bone where you want it and bends the limb above to follow.", 1),

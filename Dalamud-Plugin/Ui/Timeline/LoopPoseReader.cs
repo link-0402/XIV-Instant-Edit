@@ -22,22 +22,33 @@ internal sealed class LoopPoseReader(TimelineSession session)
     /// <summary>Whether a loop is being read.</summary>
     public bool Reading => reading != null;
 
-    /// <summary>Decodes <paramref name="capture"/>'s loop and takes its frames 0 and 1, as the Pose source "Loop's first frame" reads it.</summary>
-    public static async Task<MotionFix> Start(AnimationEditService service, AnimationCapture capture, CancellationToken token)
+    /// <summary>
+    /// Decodes <paramref name="capture"/>'s loop and takes its frames <paramref name="fade"/> and one after: the frame the game
+    /// shows as the startup ends, that many frames into its cross-fade (<see cref="MotionFixes.LoopPose"/>).
+    /// </summary>
+    public static async Task<MotionFix> Start(AnimationEditService service, AnimationCapture capture, int fade, CancellationToken token)
     {
         var loaded = await service.LoadTimelineAsync(capture, false, token).ConfigureAwait(false);
         var clip = await service.DecodeMotionAsync(loaded, _ => { }, token).ConfigureAwait(false);
-        var pose = MotionFixes.LoopPose(clip);
+        var pose = MotionFixes.LoopPose(clip, fade);
         return pose.LoopFirst is { IsEmpty: false } ? pose : throw new InvalidDataException("It has no bones.");
     }
 
-    /// <summary>Reads <paramref name="loaded"/>'s loop for a new match, or with <paramref name="layer"/> for that match; nothing while a read runs.</summary>
-    public void Read(AnimationTimelineSource loaded, string? layer)
+    /// <summary>The game fade measured for <paramref name="loaded"/>'s startup into its loop, or null when it never played.</summary>
+    public int? MeasuredFade(AnimationTimelineSource loaded) =>
+        loaded.Capture.Startup is { } startup ? session.Animations?.Observer.LoopFades.Measured(startup.Timeline, loaded.Capture.Clip.Timeline) : null;
+
+    /// <summary>
+    /// Reads <paramref name="loaded"/>'s loop for a new match at its measured fade (else <see cref="LoopFades.Default"/>), or with
+    /// <paramref name="layer"/> for that match at <paramref name="fade"/>; nothing while a read runs.
+    /// </summary>
+    public void Read(AnimationTimelineSource loaded, string? layer, int? fade = null)
     {
         if (session.Animations is { } service)
         {
             var capture = session.WithLoopMatch(loaded);
-            Read(loaded, layer, token => Task.Run(() => Start(service, capture, token), token));
+            var frames = fade ?? MeasuredFade(loaded) ?? LoopFades.Default;
+            Read(loaded, layer, token => Task.Run(() => Start(service, capture, frames, token), token));
         }
     }
 

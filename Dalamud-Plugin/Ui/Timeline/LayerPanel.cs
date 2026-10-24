@@ -72,7 +72,10 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 using (ImRaii.Disabled(readOnly))
                 {
                     if (match)
+                    {
                         DrawBlendOver(current, layer);
+                        DrawGameFade(layer, loaded);
+                    }
                     else
                     {
                         FrameField(current, layer, "Starts", "##layer-start", layer.Start, start => layer with { Start = start });
@@ -343,7 +346,33 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             ImGui.SetTooltip("How many frames before the end the blend starts. Ctrl+click to type.");
     }
 
-    /// <summary> A match's Re-read loop button, and that it applies last. </summary>
+    // The game fade being dragged, or read after a drag, for the match it belongs to; the layer has the old one until the read lands.
+    private (string Layer, int Frames)? fadeEdit;
+
+    /// <summary>
+    /// A match's game fade: how many frames before the startup's end the game starts the loop and fades into it. A new
+    /// fade reads the loop again at that frame, one undo step. Disabled where Re-read loop is.
+    /// </summary>
+    private void DrawGameFade(MotionLayer layer, AnimationTimelineSource loaded)
+    {
+        var reader = session.LoopPose;
+        if (fadeEdit is { } stale && (stale.Layer != layer.Key || !reader.Reading && !ImGui.IsAnyItemActive()))
+            fadeEdit = null;
+        TimelineUi.Fact("Game fade");
+        var frames = fadeEdit?.Frames ?? layer.Fix!.Fade;
+        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
+        using (ImRaii.Disabled(reader.Reading || !loaded.Startup || session.Animations == null))
+        {
+            if (ImGui.SliderInt("##fix-fade", ref frames, 0, LoopFades.Most, "%d frames"))
+                fadeEdit = (layer.Key, Math.Clamp(frames, 0, LoopFades.Most));
+            if (ImGui.IsItemDeactivatedAfterEdit() && fadeEdit is { } done && done.Frames != layer.Fix!.Fade)
+                reader.Read(loaded, layer.Key, done.Frames);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("How many frames before the end the game starts the loop and fades into it. The blend lands on the loop frame shown at the end. Ctrl+click to type.");
+    }
+
+    /// <summary> A match's Re-read loop button, whether its game fade was measured, and that it applies last. </summary>
     private void DrawReread(MotionLayer layer, AnimationTimelineSource loaded, bool readOnly)
     {
         Widgets.MutedWrapped("Applies after every other layer.");
@@ -352,13 +381,29 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             Widgets.HintWrapped("Only works on a startup that leads into a loop.");
         var reader = session.LoopPose;
         var startup = loaded.Startup && session.Animations != null;
+        if (startup)
+        {
+            if (reader.MeasuredFade(loaded) is not { } measured)
+                Widgets.HintWrapped($"Game fade not measured yet, so {LoopFades.Default} frames. Play this emote in game once with this window open.");
+            else if (measured == layer.Fix!.Fade)
+                Widgets.MutedWrapped("Game fade measured in game.");
+            else
+            {
+                Widgets.HintWrapped($"Measured in game: {measured} frames.");
+                using (ImRaii.Disabled(readOnly || reader.Reading))
+                {
+                    if (ImGui.Button("Use it###fix-measured"))
+                        reader.Read(loaded, layer.Key, measured);
+                }
+            }
+        }
         using (ImRaii.Disabled(readOnly || reader.Reading || !startup))
         {
             if (ImGui.Button((reader.Reading ? "Reading the loop" : "Re-read loop") + "###fix-reread"))
-                reader.Read(loaded, layer.Key);
+                reader.Read(loaded, layer.Key, layer.Fix!.Fade);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(startup ? "Read the loop's first frames again, after the loop changed." : TimelineWindowViews.NoLoop);
+            ImGui.SetTooltip(startup ? "Read the loop again, after the loop changed." : TimelineWindowViews.NoLoop);
     }
 
     private static void DrawAmount(TimelineEditor current, MotionLayer layer)

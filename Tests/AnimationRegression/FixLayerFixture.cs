@@ -26,6 +26,37 @@ internal static class FixLayerFixture
         Edits(check);
         Views(check);
         Reader(check);
+        Fades(check);
+    }
+
+    private static void Fades(Action<bool, string> check)
+    {
+        // Measured in game 2026-10-24: Red Ranger Pose A's 5.9 s startup had 0.33 s left as its loop started, Ground sit
+        // pose 1's 1.33 s one 0.65 s.
+        check(LoopFades.FramesLeft(5.9f, 5.57f) == 10 && LoopFades.FramesLeft(4f / 3, .68f) == 20,
+            "a measured fade is the startup's frames left as its loop starts");
+        check(LoopFades.FramesLeft(5.9f, 5.9f) == null && LoopFades.FramesLeft(5.9f, -1) == null && LoopFades.FramesLeft(float.NaN, 0) == null &&
+              LoopFades.FramesLeft(10, 0) == null && LoopFades.FramesLeft(1, .999f) == null,
+            "a startup at or past its end, a NaN or a fade past the longest is no measurement");
+
+        var temp = Path.Combine(Path.GetTempPath(), "ie-loop-fades-regression-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var fades = new LoopFades(temp);
+            fades.Record(4784, 4785, 10);
+            fades.Record(3135, 3136, 20);
+            fades.Record(3135, 3136, 0);
+            fades.Record(1, 2, LoopFades.Most + 1);
+            var again = new LoopFades(temp);
+            check(again.Measured(4784, 4785) == 10 && again.Measured(3135, 3136) == 20 && again.Measured(4785, 4784) == null && again.Measured(1, 2) == null,
+                "measured fades are kept by startup and loop, out of range ones dropped");
+            File.WriteAllText(Path.Combine(temp, "LoopFades.json"), "not json");
+            string? warned = null;
+            check(new LoopFades(temp, message => warned = message).Measured(4784, 4785) == null && warned != null,
+                "an unreadable fades file starts empty and says so");
+        }
+        finally { Directory.Delete(temp, true); }
     }
 
     private static void Match(Action<bool, string> check)
@@ -90,6 +121,21 @@ internal static class FixLayerFixture
               Near(MotionTransform.From(pose.LoopFirst![B1]), Startup(31, 30).Get(0, Index(B1)), 1e-5f) &&
               Near(MotionTransform.From(pose.LoopSecond![B1]), Startup(31, 30).Get(1, Index(B1)), 1e-5f) && pose.LoopFirst.Count == 3,
             "a loop pose holds the loop's frames 0 and 1 by bone name");
+
+        // The game fades a startup into its loop over its last frames, the loop starting at frame 0: the startup's last
+        // frame shows with the loop's frame of that number, which the match lands on.
+        var startup = Startup(31, 30);
+        check(MotionFixes.LoopPose(startup, 20) is { Fade: 20 } faded &&
+              Near(MotionTransform.From(faded.LoopFirst![B1]), startup.Get(20, Index(B1)), 1e-5f) &&
+              Near(MotionTransform.From(faded.LoopSecond![B1]), startup.Get(21, Index(B1)), 1e-5f),
+            "a loop pose read for a 20-frame game fade holds the loop's frames 20 and 21");
+        check(MotionFixes.LoopPose(startup, 35) is var wrapped &&
+              Near(MotionTransform.From(wrapped.LoopFirst![B1]), startup.Get(5, Index(B1)), 1e-5f) &&
+              Near(MotionTransform.From(wrapped.LoopSecond![B1]), startup.Get(6, Index(B1)), 1e-5f) &&
+              Near(MotionTransform.From(MotionFixes.LoopPose(startup, 30).LoopFirst![B1]), startup.Get(30, Index(B1)), 1e-5f),
+            "a game fade past the loop's end wraps round it, as the game plays it on; its end frame stays");
+        check(MotionFixes.LoopPose(startup, 500).Fade == LoopFades.Most && MotionFixes.LoopPose(startup, -3).Fade == 0,
+            "a loop pose's game fade is held to 0 to the longest one");
     }
 
     private static void Smooth(Action<bool, string> check)
@@ -109,6 +155,24 @@ internal static class FixLayerFixture
                   Vector3.Distance(steadied.Get(i, Index(bone)).Position, steady.Get(i, Index(bone)).Position) < 1e-4f &&
                   MotionCutter.Log(steadied.Get(i, Index(bone)).Rotation * Quaternion.Inverse(steady.Get(i, Index(bone)).Rotation)).Length() * 180 / MathF.PI < .01f)),
             "smooth ends: steady motion keeps the first and last samples");
+
+        // A fast, clean, speeding-up turn keyed every other sample as game clips decode: the keys lie farther off their
+        // low-pass than the samples between. Smoothing those apart (only the ones between, at Red Ranger Pose A's hand
+        // whirls) turned the steady speed-up into steps that go up and down: a ripple.
+        foreach (var speedUp in new[] { 6f, 12f })
+        {
+            var whirl = Clip(21, 10, (i, _) =>
+            {
+                float Key(int k) => speedUp * k * k;
+                var degrees = i % 2 == 0 ? Key(i / 2) : (Key(i / 2) + Key(i / 2 + 1)) / 2;
+                return [T(Vector3.Zero), T(Vector3.Zero, Q(Vector3.UnitY, degrees)), T(Vector3.UnitX)];
+            });
+            var whirled = Applied(whirl, SmoothLayer(.5f, 0, 10));
+            float Step(int i) => Degrees(whirled.Get(i, b1).Rotation, whirled.Get(i - 1, b1).Rotation);
+            check(Enumerable.Range(0, whirl.Samples).All(i => Degrees(whirled.Get(i, b1).Rotation, whirl.Get(i, b1).Rotation) < 3) &&
+                  Enumerable.Range(2, whirl.Samples - 2).All(i => Step(i) >= Step(i - 1) - .05f),
+                $"smooth adds no ripple to a fast clean move ({speedUp} deg per key squared): it moves little and its steps keep growing");
+        }
 
         check(Bits(Applied(noisy, SmoothLayer(0, 0, 60)), Applied(noisy)), "smooth zero: strength 0 changes nothing");
         var still = Clip(61, 60, (_, _) => [T(Vector3.Zero), T(new Vector3(.2f, .1f, 0), Q(Vector3.UnitY, 30)), T(Vector3.UnitX)]);
@@ -142,6 +206,11 @@ internal static class FixLayerFixture
             "a match whose loop pose isn't a transform is refused");
         reject(() => MotionEvaluator.Validate(match with { Fix = new MotionFix((MotionFixKind)9) }), "an unknown fix is refused");
         reject(() => MotionEvaluator.Validate(match with { Amount = 1.5f }), "a fix above 100% is refused");
+        MotionEvaluator.Validate(match with { Fix = Loop() with { Fade = LoopFades.Most } });
+        reject(() => MotionEvaluator.Validate(match with { Fix = Loop() with { Fade = -1 } }), "a match with a negative game fade is refused");
+        reject(() => MotionEvaluator.Validate(match with { Fix = Loop() with { Fade = LoopFades.Most + 1 } }), "a match with a game fade past the longest is refused");
+        reject(() => MotionEvaluator.Validate(SmoothLayer(.5f, 0, 30) with { Fix = new MotionFix(MotionFixKind.SmoothJitter, Fade: 10) }),
+            "a smooth with a game fade is refused");
         check(MotionEvaluator.Active(match) && MotionEvaluator.Active(SmoothLayer(.5f, 0, 30)) && !MotionEvaluator.Active(SmoothLayer(0, 0, 30)) &&
               !MotionEvaluator.Active(match with { Fix = null }) && !MotionEvaluator.Active(match with { Components = PoseComponents.Scale }),
             "a fix layer is active with a fix, an amount and a rotation or position to change");
@@ -157,7 +226,7 @@ internal static class FixLayerFixture
             var clip = new AnimationClip(resource.GamePath, "start", 0, 0, 42, "chara/test.sklb");
             var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource],
                 new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
-            var match = MatchLayer(Loop());
+            var match = MatchLayer(Loop() with { Fade = 20 });
             var smooth = SmoothLayer(.5f, 0, 30) with { Key = "m2" };
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
                 ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
@@ -165,7 +234,13 @@ internal static class FixLayerFixture
             new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });
             var loaded = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion;
             check(loaded.Length == 2 && MotionEdits.Same(loaded[0], match) && MotionEdits.Same(loaded[1], smooth) &&
-                  loaded[0].Fix!.LoopFirst![B1] == match.Fix!.LoopFirst![B1], "a journal keeps both fixes and the loop pose");
+                  loaded[0].Fix!.LoopFirst![B1] == match.Fix!.LoopFirst![B1] && loaded[0].Fix!.Fade == 20,
+                "a journal keeps both fixes, the loop pose and the game fade");
+            var noFade = JsonNode.Parse(File.ReadAllText(Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json")))!.AsObject();
+            check(noFade["Request"]!["Timeline"]!["Motion"]![0]!["Fix"]!.AsObject().Remove("Fade"), "a journal stores a match's game fade as Fade");
+            File.WriteAllText(Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json"), noFade.ToJsonString());
+            check(new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion[0].Fix is { Fade: 0, LoopFirst: not null },
+                "a match saved before game fades loads with 0, the loop's first frame");
 
             var path = Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json");
             var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
@@ -178,8 +253,9 @@ internal static class FixLayerFixture
 
         var a = MatchLayer(Loop());
         check(MotionEdits.Same(a, a with { Fix = Loop() }) && !MotionEdits.Same(a, a with { Fix = Loop(shifted: true) }) &&
-              !MotionEdits.Same(a, a with { Fix = new MotionFix(MotionFixKind.SmoothJitter) }) && !MotionEdits.Same(a, a with { Fix = null }),
-            "layers differ by their fix's kind and loop pose, compared by content");
+              !MotionEdits.Same(a, a with { Fix = new MotionFix(MotionFixKind.SmoothJitter) }) && !MotionEdits.Same(a, a with { Fix = null }) &&
+              !MotionEdits.Same(a, a with { Fix = Loop() with { Fade = 10 } }),
+            "layers differ by their fix's kind, loop pose and game fade, compared by content");
     }
 
     private static void Edits(Action<bool, string> check)
@@ -210,6 +286,13 @@ internal static class FixLayerFixture
         check(MotionEdits.Find(reread, matchKey)!.Fix!.LoopFirst![B1] == Loop(shifted: true).LoopFirst![B1] &&
               ReferenceEquals(MotionEdits.SetLoopPose(withSmooth, smoothKey, Loop()), withSmooth),
             "Re-read loop replaces a match's loop pose");
+        check(MotionEdits.Find(MotionEdits.AddFix(doc, Loop() with { Fade = 20 }, out var fadedKey, out _), fadedKey) is { Start: 80, End: 100, Fix.Fade: 20 } &&
+              MotionEdits.Find(MotionEdits.AddFix(doc, Loop() with { Fade = 5 }, out var shortFadeKey, out _), shortFadeKey) is { Start: 92, End: 100 },
+            "a new match blends over its game fade when that is longer than 8 frames");
+        var refaded = MotionEdits.SetLoopPose(withMatch, matchKey, Loop(shifted: true) with { Fade = 20 });
+        check(MotionEdits.Find(refaded, matchKey) is { Start: 80, End: 100, Fix.Fade: 20 } &&
+              MotionEdits.Find(MotionEdits.SetLoopPose(longer, matchKey, Loop() with { Fade = 4 }), matchKey) is { Start: 88, End: 100, Fix.Fade: 4 },
+            "a loop read for another game fade takes it, and a blend shorter than it grows to it");
         check(MotionEdits.KindName(MotionLayerKind.Fix) == "Fix" && MotionEdits.MaxAmount(MotionLayerKind.Fix) == 1, "the kind is named Fix and blends at most fully");
 
         // The canvas: a match's bar and end stay on the clip's last frame, its start sets its length.

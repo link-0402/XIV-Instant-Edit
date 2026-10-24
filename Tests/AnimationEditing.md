@@ -1560,25 +1560,63 @@ playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
 
 ## Fix layer (pending)
 
-Fix layers repair the motion: Match startup to loop lands a startup's end on its loop's first frame, Smooth
-jitter calms small shakes. Spec: docs/superpowers/specs/2026-10-24-fix-layer-design.md.
+Fix layers repair the motion: Match startup to loop lands a startup's end on the loop frame the game shows
+then, after its cross-fade, Smooth jitter calms small shakes. Spec: docs/superpowers/specs/2026-10-24-fix-layer-design.md.
 
-- [ ] 1 Open an emote startup that leads into a loop, Add > Match startup to loop: a layer appears at the
+- [x] 1 Open an emote startup that leads into a loop, Add > Match startup to loop: a layer appears at the
   clip's end, 8 frames long. In GPose play the startup, then the loop: no pop at the hand-off.
+  (XIV Bridge exec, 2026-10-24, Ground Sitting Idle 1 startup j_pose01_start, 40 frames, loop from Caked Up
+  - Groundsit: layer at 32-40; the last frame lands on the loop's frame 0 within 0.06 deg, from 90 deg;
+  earlier frames unchanged. Played in GPose as the game chains emotes, loop as base and startup as a
+  one-shot: no pop, but the unedited startup doesn't pop either, see 2.)
 - [ ] 2 Step frame by frame through the hand-off: no frame is held twice. (The spec assumes the game shows
   the loop's frame 0 right after the startup's last; if a frame holds, report it.)
-- [ ] 3 Set Blend over to 20: the change spreads over more frames.
-- [ ] 4 Set Blend to 50%: the end lands halfway to the loop's first frame.
-- [ ] 5 Edit the loop's start, save it, then Re-read loop on the startup's match: the startup follows the
-  new loop start.
-- [ ] 6 Open a loop clip: Match startup to loop is disabled, and its tooltip says "Only a startup that
-  leads into a loop".
+  Found 2026-10-24 (XIV Bridge exec, Havok control times and weights per frame): no frame holds, but the
+  assumption is wrong. The game starts the loop at its frame 0 before the startup ends and cross-fades:
+  on j_pose01_start the loop starts at startup frame ~20 and fades in over 20 frames; on Red Ranger Pose A
+  (177 frames) 10 frames before the end, over 10 frames. The startup's weight reaches 0 at its last frame,
+  when the loop is already at frame 10-20. So Match aims at the wrong loop frame for a loop that moves at
+  its start, and its 8 frames sit where the startup weighs 40% or less (in-game curves with and without
+  the layer were nearly the same). Decide whether Match should target the loop frame shown at the
+  startup's end and blend over the game's fade.
+  Changed 2026-10-24: the user chose to target that frame. Played for real (out of GPose, mods
+  on and off) the fade is 10 frames on Red Ranger Pose A and 20 on Ground sit pose 1; no file or sheet holds
+  it, so the listener measures it (LoopFades.json) and Match has a Game fade slider. Retest: items 9 and 10.
+- [x] 3 Set Blend over to 20: the change spreads over more frames. (XIV Bridge, 2026-10-24: slider set
+  to 20, the bar spans 20-40; the fastest step drops from 10.4 to 4.2 deg per half frame, still lands.)
+- [x] 4 Set Blend to 50%: the end lands halfway to the loop's first frame. (XIV Bridge, 2026-10-24:
+  every bone ends at half its gap, 90 to 45 deg, 89.5 to 44.77.)
+- [x] 5 Edit the loop's start, save it, then Re-read loop on the startup's match: the startup follows the
+  new loop start. (XIV Bridge, 2026-10-24, run the other way round: loop saved to a new mod with a 30 deg
+  left forearm offset, Match added on the startup read it (30 deg off the original); the loop save undone
+  from Edits, then Re-read loop: 0 deg off the original. One undo brings the read back.)
+- [x] 6 Open a loop clip: Match startup to loop is disabled, and its tooltip says "Only a startup that
+  leads into a loop". (XIV Bridge, 2026-10-24: greyed in the Add menu on j_pose01_loop. Tooltip not seen,
+  the bridge can't hover while the real mouse is elsewhere; the code passes TimelineWindowViews.NoLoop.)
 - [ ] 7 Add > Smooth jitter on a shaky port: the shakes calm and a sharp move stays sharp. At Strength 0
   nothing changes.
+  Partly checked 2026-10-24 (XIV Bridge exec, decoded clip with the layer applied): on the Caked Up -
+  Groundsit loop (nearly still) the summed second differences drop to 26%; at Strength 0 nothing changes
+  (1e-5 deg). On Red Ranger Pose A's startup the 85-110 deg finger snaps stay within 1 deg. Found: on fast
+  clean moves (hand whirls of 20-60 deg per half frame) Smooth leaves every other sample alone and moves
+  the ones between by up to 4.3 deg, so even steps (35.3, 35.3) become 37.8, 32.8: a new half-frame
+  ripple, 5 times the clip's own second differences where it was smooth. Not checked: a real shaky port,
+  and the result by eye in GPose.
+  Fixed 2026-10-24: the shake test and its share are taken over neighbours, so a key and
+  the samples beside it are treated alike (fixture: a fast speed-up keeps growing steps, the old code
+  failed it). Retest on Red Ranger Pose A's startup: its hand whirls change by well under a degree and
+  their half steps stay even.
 - [ ] 8 Open an idle's startup (such as Idle pose 5 start) with Live on: Live shows the startup and its
   layers, not the loop. Then, before the loop's skeleton has matched (straight after a reload), Add >
   Match startup to loop: it adds the layer instead of "Couldn't read the loop". The Pose source "Loop's
   first frame, at the end" reads the loop the same way.
+- [ ] 9 With the Timeline window open, play /rangerpose1r out of GPose until it loops, then open its
+  startup and Add > Match startup to loop: Game fade reads 10 frames, "Game fade measured in game." shows,
+  and the blend is 10 frames. Do the same for Ground sit pose 1 (/groundsit, then /changepose): 20 frames.
+  An emote never played says "Game fade not measured yet, so 10 frames."
+- [ ] 10 Set Game fade to 20 on Red Ranger Pose A's match: the loop is read again (one undo step), the
+  blend grows to 20 and the startup's last frame lands on the loop's frame 20. Play it in game with
+  Preview: the hand-off shows no pop, and the end of the fade matches the loop.
 
 ## Animations from scratch (pending)
 

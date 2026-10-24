@@ -74,7 +74,8 @@ internal sealed partial class AnimationEditService : IDisposable
                 catch (Exception e) when (e is not OutOfMemoryException) { return false; }
             },
             () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory), log);
-        Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log);
+        Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log,
+            new LoopFades(recoveryRoot, message => log.Warning("{Message}", message)));
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         Observer.CharacterChanged += Cancel;
     }

@@ -17,13 +17,18 @@ internal static class MotionFixes
     private static readonly float[] Window = [1, 4, 6, 4, 1];
 
     /// <summary>
-    /// <paramref name="loop"/>'s timeline frames 0 and 1 as local transforms by bone name: what a match lands on, and the
-    /// loop's speed per timeline frame whatever its sample rate. A loop with no frame 1 gives frame 0 twice.
+    /// <paramref name="loop"/>'s timeline frames <paramref name="fade"/> and one after as local transforms by bone name:
+    /// the frame the game shows as a startup ends that many frames into its cross-fade, which a match lands on, and the
+    /// loop's speed there per timeline frame whatever its sample rate. Past the loop's end the frames wrap round it, as
+    /// the game plays it on; a loop with no frame 1 gives frame 0 twice.
     /// </summary>
-    public static MotionFix LoopPose(MotionClip loop)
+    public static MotionFix LoopPose(MotionClip loop, int fade = 0)
     {
-        var first = loop.Pose(0);
-        var second = loop.Pose(Math.Min(1, loop.Frame(loop.Samples - 1)));
+        var length = loop.Frame(loop.Samples - 1);
+        float At(int frame) => length <= 0 ? 0 : frame <= length ? frame : frame % length;
+        fade = Math.Clamp(fade, 0, LoopFades.Most);
+        var first = loop.Pose(At(fade));
+        var second = loop.Pose(length < 1 ? Math.Max(0, length) : At(fade + 1));
         var firsts = ImmutableDictionary.CreateBuilder<string, BoneTransform>(StringComparer.Ordinal);
         var seconds = ImmutableDictionary.CreateBuilder<string, BoneTransform>(StringComparer.Ordinal);
         for (var b = 0; b < loop.Bones; b++)
@@ -32,7 +37,7 @@ internal static class MotionFixes
             firsts[name] = first[b].ToBone();
             seconds[name] = second[b].ToBone();
         }
-        return new MotionFix(MotionFixKind.MatchLoop, firsts.ToImmutable(), seconds.ToImmutable());
+        return new MotionFix(MotionFixKind.MatchLoop, firsts.ToImmutable(), seconds.ToImmutable(), fade);
     }
 
     /// <summary>
@@ -47,7 +52,7 @@ internal static class MotionFixes
 
     /// <summary>
     /// Match startup to loop: a quintic offset, zero with zero speed where the blend starts, that puts each loop bone's
-    /// last sample on the loop's frame 0 moving at its frame 0 to 1 speed. Rotations compose on the left like the cut
+    /// last sample on the loop frame the game shows then (<see cref="MotionFix.Fade"/>) moving at its speed there. Rotations compose on the left like the cut
     /// joins. Gaps are read from the clip as it arrives. Loop bones the skeleton lacks or the layer's limit leaves out are skipped.
     /// </summary>
     internal static void ApplyMatch(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, float end, CancellationToken token)
@@ -105,8 +110,11 @@ internal static class MotionFixes
 
     /// <summary>
     /// Smooth jitter over the layer's span: each sample of <paramref name="bones"/> moves toward a short low-pass of its
-    /// neighbours where it differs from it by little (a shake) and stays where it differs by a lot (a snap), through the
-    /// layer's fades. Bones that never move are left alone, so no track is made from rounding.
+    /// neighbours where the samples round it differ from theirs by little (a shake) and stays where one differs by a lot
+    /// (a snap or a fast curve), through the layer's fades. The test and the share it gives are taken over neighbours,
+    /// not per sample: game clips are keyed at half the sample rate, so on a fast move every other sample is a key whose
+    /// low-pass lies far off, and a per-sample test smoothed only the ones between, leaving a ripple. Bones that never
+    /// move are left alone, so no track is made from rounding.
     /// </summary>
     internal static void ApplySmooth(MotionClip clip, MotionLayer layer, IReadOnlyCollection<int> bones, float loop, float end, CancellationToken token)
     {
@@ -128,6 +136,12 @@ internal static class MotionFixes
         var moveLimit = layer.Amount * JitterDistance;
         var rotations = new Quaternion[clip.Samples];
         var positions = new Vector3[clip.Samples];
+        var averages = new Vector3[clip.Samples];
+        var means = new Vector3[clip.Samples];
+        var turnOff = new float[clip.Samples];
+        var moveOff = new float[clip.Samples];
+        var turnShare = new float[clip.Samples];
+        var moveShare = new float[clip.Samples];
         foreach (var b in bones)
         {
             token.ThrowIfCancellationRequested();
@@ -147,11 +161,9 @@ internal static class MotionFixes
             }
             if (!turns && !moves)
                 continue;
-            for (var i = first; i <= last; i++)
+            // Every sample's low-pass and how far it lies off it, the span's neighbours included.
+            for (var i = 0; i < clip.Samples; i++)
             {
-                var share = MotionEvaluator.Fade(layer, clip.Frame(i), end);
-                if (share <= 0)
-                    continue;
                 var q = rotations[i];
                 var back = Quaternion.Inverse(q);
                 Vector3 average = Vector3.Zero, mean = Vector3.Zero;
@@ -161,18 +173,58 @@ internal static class MotionFixes
                     average += Window[d + 2] * MotionCutter.Log(MotionEvaluator.Align(rotation, q) * back);
                     mean += Window[d + 2] * position;
                 }
-                average /= 16;
-                mean /= 16;
+                averages[i] = average / 16;
+                means[i] = mean / 16;
+                turnOff[i] = averages[i].Length();
+                moveOff[i] = Vector3.Distance(means[i], positions[i]);
+            }
+            // A sample is a shake only if no neighbour lies far off its low-pass...
+            for (var i = 0; i < clip.Samples; i++)
+            {
+                float turnMost = 0, moveMost = 0;
+                for (var d = -2; d <= 2; d++)
+                {
+                    var at = Near(i + d, clip.Samples, wraps);
+                    turnMost = MathF.Max(turnMost, turnOff[at]);
+                    moveMost = MathF.Max(moveMost, moveOff[at]);
+                }
+                turnShare[i] = turns ? Smoothing(turnMost, turnLimit) : 0;
+                moveShare[i] = moves ? Smoothing(moveMost, moveLimit) : 0;
+            }
+            for (var i = first; i <= last; i++)
+            {
+                var share = MotionEvaluator.Fade(layer, clip.Frame(i), end);
+                if (share <= 0)
+                    continue;
+                // ...and neighbours move by much the same share, so the hand-over to a kept move adds no ripple.
+                float smoothTurn = 0, smoothMove = 0;
+                for (var d = -2; d <= 2; d++)
+                {
+                    var at = Near(i + d, clip.Samples, wraps);
+                    smoothTurn += Window[d + 2] * turnShare[at];
+                    smoothMove += Window[d + 2] * moveShare[at];
+                }
+                smoothTurn *= share / 16;
+                smoothMove *= share / 16;
                 var value = clip.Get(i, b);
-                var smoothTurn = turns ? Smoothing(average.Length(), turnLimit) * share : 0;
-                var smoothMove = moves ? Smoothing(Vector3.Distance(mean, positions[i]), moveLimit) * share : 0;
                 if (smoothTurn > 0)
-                    value = value with { Rotation = MotionEvaluator.Slerp(value.Rotation, Quaternion.Normalize(MotionCutter.Exp(average) * q), smoothTurn) };
+                    value = value with { Rotation = MotionEvaluator.Slerp(value.Rotation, Quaternion.Normalize(MotionCutter.Exp(averages[i]) * rotations[i]), smoothTurn) };
                 if (smoothMove > 0)
-                    value = value with { Position = Vector3.Lerp(value.Position, mean, smoothMove) };
+                    value = value with { Position = Vector3.Lerp(value.Position, means[i], smoothMove) };
                 clip.Set(i, b, value);
             }
         }
+    }
+
+    /// <summary>Sample <paramref name="at"/>'s index, round a loop as <see cref="Neighbour"/> wraps, else held at the clip's ends.</summary>
+    private static int Near(int at, int samples, bool wraps)
+    {
+        if (wraps)
+        {
+            var period = samples - 1;
+            return (at % period + period) % period;
+        }
+        return Math.Clamp(at, 0, samples - 1);
     }
 
     /// <summary>How far a sample <paramref name="residual"/> off its low-pass moves to it: fully below <paramref name="limit"/>, not at all past twice it.</summary>

@@ -124,7 +124,11 @@ internal static class MotionEvaluator
             if (first.Count > MaxKeyBones || first.Count != second.Count || first.Any(pair => !second.ContainsKey(pair.Key)) ||
                 first.Concat(second).Any(pair => string.IsNullOrEmpty(pair.Key) || !IsTransform(pair.Value) || !InScale(pair.Value)))
                 throw new InvalidDataException($"{name} has a loop pose that can't be read.");
+            if (match.Fade is < 0 or > LoopFades.Most)
+                throw new InvalidDataException($"{name} has a game fade out of range.");
         }
+        if (layer.Fix is { Kind: not MotionFixKind.MatchLoop, Fade: not 0 })
+            throw new InvalidDataException($"{name} can't have a game fade.");
         var pinned = new Dictionary<string, MotionPin>(StringComparer.Ordinal);
         foreach (var pin in layer.Pins)
         {

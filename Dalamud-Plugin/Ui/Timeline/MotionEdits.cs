@@ -144,15 +144,16 @@ internal static class MotionEdits
 
     /// <summary>
     /// Adds a fix layer holding <paramref name="fix"/>: a match named "Match loop" over the clip's last
-    /// <see cref="DefaultFixLength"/> frames (from frame 0 on a shorter clip) at full blend, or a smooth named
-    /// "Smooth jitter" over the whole clip at half strength. Unchanged with an error when the document has no
-    /// room for another layer.
+    /// <see cref="DefaultFixLength"/> frames, or its game fade when that is longer (from frame 0 on a shorter clip), at
+    /// full blend, or a smooth named "Smooth jitter" over the whole clip at half strength. Unchanged with an error when
+    /// the document has no room for another layer.
     /// </summary>
     public static TimelineDocument AddFix(TimelineDocument doc, MotionFix fix, out string key, out string? error)
     {
         var length = Math.Max(TimelineDocument.MinLength, doc.Length);
         var match = fix.Kind == MotionFixKind.MatchLoop;
-        var added = Add(doc, MotionLayerKind.Fix, match ? Math.Max(0, length - DefaultFixLength) : 0, length, out key, out error);
+        var blend = Math.Max(DefaultFixLength, fix.Fade);
+        var added = Add(doc, MotionLayerKind.Fix, match ? Math.Max(0, length - blend) : 0, length, out key, out error);
         if (error != null)
             return doc;
         var index = IndexOf(added, key);
@@ -175,13 +176,21 @@ internal static class MotionEdits
             : doc with { Motion = doc.Motion.SetItem(index, Normalize(layer with { Start = start, End = length })) };
     }
 
-    /// <summary>Replaces the loop pose the match layer <paramref name="key"/> lands on by <paramref name="loopPose"/>'s.</summary>
+    /// <summary>
+    /// Replaces the loop pose the match layer <paramref name="key"/> lands on, and the game fade it was read for, by
+    /// <paramref name="loopPose"/>'s. A blend shorter than the new fade grows to it, so it still spans the cross-fade.
+    /// </summary>
     public static TimelineDocument SetLoopPose(TimelineDocument doc, string key, MotionFix loopPose)
     {
         var index = IndexOf(doc, key);
         if (index < 0 || doc.Motion[index] is not { Fix: { Kind: MotionFixKind.MatchLoop } fix } layer)
             return doc;
-        var next = layer with { Fix = fix with { LoopFirst = loopPose.LoopFirst, LoopSecond = loopPose.LoopSecond } };
+        var next = layer with { Fix = fix with { LoopFirst = loopPose.LoopFirst, LoopSecond = loopPose.LoopSecond, Fade = loopPose.Fade } };
+        if (next.End - next.Start < loopPose.Fade)
+        {
+            var length = Math.Max(TimelineDocument.MinLength, doc.Length);
+            next = Normalize(next with { Start = Math.Max(0, length - loopPose.Fade), End = length });
+        }
         return Same(layer, next) ? doc : doc with { Motion = doc.Motion.SetItem(index, next) };
     }
 
@@ -899,7 +908,8 @@ internal static class MotionEdits
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
         a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
         (a.Fix == null ? b.Fix == null
-            : b.Fix != null && a.Fix.Kind == b.Fix.Kind && SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond)) &&
+            : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade &&
+              SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond)) &&
         SameIdle(a.Idle, b.Idle) &&
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
