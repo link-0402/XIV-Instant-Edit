@@ -266,10 +266,23 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// layers applied there: what edits made to several bones at once and the rotation ball turn in.
     /// </summary>
     public sealed class BoneFrames(SkeletonDescription skeleton, Dictionary<string, int> index, MotionTransform[] before,
-        MotionTransform[] beforeModel, MotionTransform[] model, bool offset, MotionLayer? pins = null)
+        MotionTransform[] beforeModel, MotionTransform[] through, MotionTransform[] throughModel, MotionTransform[] model, bool offset,
+        MotionLayer? pins = null)
     {
+        /// <summary>Every bone's local transform as the layers before this one leave it.</summary>
+        public MotionTransform[] Before => before;
+
         /// <summary>Every bone's model transform as the layers before this one leave it.</summary>
         public MotionTransform[] BeforeModel => beforeModel;
+
+        /// <summary>Every bone's local transform as the layers through this one leave it.</summary>
+        public MotionTransform[] Through => through;
+
+        /// <summary>Every bone's model transform as the layers through this one leave it.</summary>
+        public MotionTransform[] ThroughModel => throughModel;
+
+        /// <summary>Where <paramref name="bone"/> is in character space as the layers through this one leave it; null for a bone these frames lack.</summary>
+        public Vector3? ThroughPosition(string bone) => index.TryGetValue(bone, out var at) ? throughModel[at].Position : null;
 
         /// <summary>
         /// The rotation from character space to the space a bone's value turns in: for an offset the bone's
@@ -304,7 +317,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             return cached.Frames;
         var skeleton = clip.Skeleton;
         var at = Math.Max(0, MotionEdits.IndexOf(doc, layer.Key));
-        MotionTransform[] before, after;
+        MotionTransform[] before, through, after;
         try
         {
             var loop = LoopFrames(loaded, doc);
@@ -316,15 +329,17 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
                          (other.Kind == MotionLayerKind.Amplitude || other.Kind == MotionLayerKind.Pin && other.Pins.Any(pin => pin.Planted)))
                 ? BakedBefore(output, earlier).Pose(frame)
                 : MotionEvaluator.ApplyAt(skeleton, own.Local, earlier, frame, loop, end, clip.SourceTracks);
+            through = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at + 1).ToArray(), frame, loop, end, clip.SourceTracks);
             after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end, clip.SourceTracks);
         }
         catch (InvalidDataException)
         {
             // A layer names a bone this skeleton lacks: the clip's own pose still gives frames.
-            before = after = own.Local;
+            before = through = after = own.Local;
         }
-        var frames = new BoneFrames(skeleton, BoneTree(skeleton).Index, before, MotionEvaluator.ModelSpace(skeleton, before),
-            MotionEvaluator.ModelSpace(skeleton, after), layer.Kind == MotionLayerKind.Offset, layer.Kind == MotionLayerKind.Pin ? layer : null);
+        var frames = new BoneFrames(skeleton, BoneTree(skeleton).Index, before, MotionEvaluator.ModelSpace(skeleton, before), through,
+            MotionEvaluator.ModelSpace(skeleton, through), MotionEvaluator.ModelSpace(skeleton, after), layer.Kind == MotionLayerKind.Offset,
+            layer.Kind == MotionLayerKind.Pin ? layer : null);
         boneFrames = (doc, layer.Key, frame, clip, frames);
         return frames;
     }

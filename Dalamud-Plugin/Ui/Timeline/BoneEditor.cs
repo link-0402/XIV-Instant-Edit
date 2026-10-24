@@ -22,11 +22,11 @@ internal interface IBonesOverlay
     /// <summary>The Bones window's switch: which bones show on the character in GPose, if any.</summary>
     BoneOverlayMode OnCharacter { get; set; }
 
-    /// <summary>Whether the gizmo moves the bones rather than turns them, for a layer that does both.</summary>
-    bool GizmoMoves { get; set; }
+    /// <summary>Whether the gizmo turns, moves or drags the bones, for a layer that can.</summary>
+    GizmoMode Gizmo { get; set; }
 
     /// <summary>What to do so the gizmo can pose the character with <paramref name="layer"/> at <paramref name="frame"/>; null when nothing the user does helps.</summary>
-    string? GizmoWaits(MotionLayer layer, int frame);
+    string? GizmoWaits(MotionLayer layer, int frame, SkeletonDescription skeleton);
 }
 
 /// <summary>
@@ -109,7 +109,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         using (ImRaii.Disabled(readOnly || !inside))
         {
             if (ball)
-                DrawBall(current, layer, frames, turned, primary, frame);
+                DrawBall(current, layer, skeleton, frames, turned, primary, frame);
             using var table = ImRaii.Table("##bone-value", 2, ImGuiTableFlags.SizingFixedFit);
             if (table.Success)
             {
@@ -238,7 +238,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (overlay.Shown)
         {
             DrawAxes(several);
-            DrawGizmoChoice(layer, frame);
+            DrawGizmoChoice(layer, frame, skeleton);
         }
     }
 
@@ -490,14 +490,16 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
     /// <see cref="PoseEdits.Turned"/>). With several of them the rings are the character's: each bone's
     /// own axes point elsewhere, so only those turn them all the same way.
     /// </summary>
-    private void DrawBall(TimelineEditor current, MotionLayer layer, BonePosing.BoneFrames? frames, IReadOnlyList<PoseTarget> turned,
-        PoseTarget primary, int frame)
+    private void DrawBall(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, BonePosing.BoneFrames? frames,
+        IReadOnlyList<PoseTarget> turned, PoseTarget primary, int frame)
     {
         if (CameraRotation() is not { } view)
             return;
         var actor = ActorRotation() ?? Quaternion.Identity;
         var several = turned.Count > 1;
-        var character = characterAxes || several;
+        // A drag forces the character's axes, so the ball shows them too, as the axes line says.
+        var drag = overlay.Shown && overlay.Gizmo == GizmoMode.Drag && TimelineWindowViews.DragGizmo(layer, posing.Selection.Primary, skeleton) == null;
+        var character = characterAxes || several || drag;
         // The primary bone as the layers turn it, in character space.
         Quaternion? bone = frames is { } known ? Quaternion.Normalize(known.Space(primary.Bone) * Quaternion.Normalize(primary.Value.Rotation)) : null;
         var ring = character || bone is not { } own ? actor : actor * own;
@@ -519,45 +521,53 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         }
         if (frames == null)
             decode.DrawWait();
-        DrawAxes(several);
+        DrawAxes(several, drag);
         if (overlay.Shown)
-            DrawGizmoChoice(layer, frame);
+            DrawGizmoChoice(layer, frame, skeleton);
     }
 
-    /// <summary> Whether the ball and the gizmo use the bone's own axes or the character's; several bones always use the character's. </summary>
-    private void DrawAxes(bool several)
+    /// <summary>
+    /// Whether the ball and the gizmo use the bone's own axes or the character's; several bones and a drag
+    /// (<paramref name="drag"/>) always use the character's.
+    /// </summary>
+    private void DrawAxes(bool several, bool drag = false)
     {
-        using (ImRaii.Disabled(several))
+        var forced = several || drag;
+        using (ImRaii.Disabled(forced))
         {
-            if (ImGui.RadioButton("Bone axes", !(characterAxes || several)))
+            if (ImGui.RadioButton("Bone axes", !(characterAxes || forced)))
                 characterAxes = false;
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(several
                 ? "Several bones turn about the character's axes: their own axes point different ways."
+                : drag ? "A drag moves the bone along the character's axes."
                 : "The ball and the gizmo use the bone's own axes.");
         ImGui.SameLine();
-        if (ImGui.RadioButton("Character axes", characterAxes || several))
+        if (ImGui.RadioButton("Character axes", characterAxes || forced))
             characterAxes = true;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("The ball and the gizmo use the character's axes: up, forward and to the side.");
     }
 
-    /// <summary> Whether the gizmo on the character turns or moves, and what it waits for. </summary>
-    private void DrawGizmoChoice(MotionLayer layer, int frame)
+    /// <summary> Whether the gizmo on the character turns, moves or drags, and what it waits for. </summary>
+    private void DrawGizmoChoice(MotionLayer layer, int frame, SkeletonDescription skeleton)
     {
         // A pin moves its key, and turns it when it holds its turn.
         var (turns, moves) = layer.Kind == MotionLayerKind.Pin
             ? (posing.Selection.Primary is { } primary && MotionEdits.PinIndex(layer, primary) is var at and >= 0 && layer.Pins[at].HoldTurn, true)
             : (layer.Components.HasFlag(PoseComponents.Rotation), layer.Components.HasFlag(PoseComponents.Position));
-        var move = moves && (overlay.GizmoMoves || !turns);
+        var dragHint = TimelineWindowViews.DragGizmo(layer, posing.Selection.Primary, skeleton);
+        // Drag kept from a layer where it could drag reads as Turn here.
+        var drag = overlay.Gizmo == GizmoMode.Drag && dragHint == null;
+        var move = !drag && moves && (overlay.Gizmo == GizmoMode.Move || !turns);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Gizmo");
         ImGui.SameLine(0, Theme.Gap);
         using (ImRaii.Disabled(!turns))
         {
-            if (ImGui.RadioButton("Turn##gizmo-turn", !move))
-                overlay.GizmoMoves = false;
+            if (ImGui.RadioButton("Turn##gizmo-turn", !move && !drag))
+                overlay.Gizmo = GizmoMode.Turn;
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(turns ? "The gizmo on the character turns the bones."
@@ -566,11 +576,19 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         using (ImRaii.Disabled(!moves))
         {
             if (ImGui.RadioButton("Move##gizmo-move", move))
-                overlay.GizmoMoves = true;
+                overlay.Gizmo = GizmoMode.Move;
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(moves ? "The gizmo on the character moves the bones." : "This layer doesn't move bones.");
-        if (overlay.GizmoWaits(layer, frame) is { } reason)
+        ImGui.SameLine();
+        using (ImRaii.Disabled(dragHint != null))
+        {
+            if (ImGui.RadioButton("Drag##gizmo-drag", drag))
+                overlay.Gizmo = GizmoMode.Drag;
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(dragHint ?? "The gizmo drags the bone; the limb above bends to follow.");
+        if (overlay.GizmoWaits(layer, frame, skeleton) is { } reason)
             Widgets.HintWrapped(reason);
     }
 

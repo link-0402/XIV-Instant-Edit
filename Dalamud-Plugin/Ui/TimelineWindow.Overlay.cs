@@ -32,9 +32,11 @@ public sealed partial class TimelineWindow
     private readonly BonesOverlay overlayWindow;
     private readonly ActorPose actorPose = new();
     private BoneOverlayMode showOnCharacter = BoneOverlayMode.All;
-    private bool gizmoMove;
+    private GizmoMode gizmoMode;
     // The editor a gizmo drag runs in as one undo step.
     private TimelineEditor? gizmoEditor;
+    // Where a Drag aims the bone: kept across the drag so a solve that lands short doesn't move the aim.
+    private Vector3? dragAim;
     // Whether the mouse was over the gizmo's rings or handles last frame: then the gizmo takes the click, not a dot.
     private bool gizmoOver;
     // Where the last drag left the gizmo on a bone, layer and frame, until Live shows the change there.
@@ -215,13 +217,14 @@ public sealed partial class TimelineWindow
     /// The gizmo on the primary bone, in the character's model space: its own axes are the bone's and its
     /// world axes the character's, forced with several bones as for the ball. Each frame of a drag turns or
     /// moves every bone the edit changes (see <see cref="PoseEdits.Turned"/>) by what the gizmo did since
-    /// the frame before, in character space. While the mouse is over its rings or handles it takes the
+    /// the frame before, in character space; a Drag instead bends the limb above the primary bone to follow
+    /// (<see cref="PoseEdits.Reach"/>). While the mouse is over its rings or handles it takes the
     /// click, and the dots under it don't (<see cref="gizmoOver"/>); a click elsewhere goes to a dot.
     /// </summary>
     private void DrawGizmo(TimelineEditor current, AnimationTimelineSource loaded, SkeletonDescription skeleton, MotionLayer? layer, int frame,
         Matrix4x4 modelView, Matrix4x4 projection, ImGuiViewportPtr viewport)
     {
-        if (layer == null || GizmoOperation(layer, frame, out _) is not { } operation || selection.Primary is not { } bone ||
+        if (layer == null || GizmoOperation(layer, frame, skeleton, out _) is not { } operation || selection.Primary is not { } bone ||
             !actorPose.Index.TryGetValue(bone, out var at) || Targets(layer, frame, skeleton, loaded, current.Document) is not { Count: > 0 } targets ||
             FramesAt(loaded, current.Document, layer, frame) is not { } frames)
         {
@@ -230,7 +233,8 @@ public sealed partial class TimelineWindow
             return;
         }
         var turned = targets.Count > 1 ? PoseEdits.Turned(targets, bone, skeleton) : targets;
-        var character = characterAxes || turned.Count > 1;
+        var drag = Drags(layer, skeleton);
+        var character = drag || characterAxes || turned.Count > 1;
         // A fade or an amount makes the bone move less than its keys: a drag changes them by more, so the
         // bone follows the gizmo. Where the layer barely applies, nothing changes and the gizmo stays on the bone.
         var weight = MotionEvaluator.Weight(layer, frame, MotionEnd(loaded, current.Document));
@@ -274,13 +278,24 @@ public sealed partial class TimelineWindow
         {
             current.BeginFieldEdit();
             gizmoEditor = current;
+            dragAim = null;
         }
         if (gizmoEditor == null)
             return;
         var (turn, move) = PoseGizmo.Delta(before, matrix);
         if (moved && ReferenceEquals(gizmoEditor, current) && PoseEdits.Follow(turn, move, weight) is { } follow)
         {
-            if (operation == ImGuizmoOperation.Translate)
+            // A drag aims the bone from where the layers through this one have it; Reach scales by the weight itself.
+            if (drag)
+            {
+                if ((dragAim ?? frames.ThroughPosition(bone)) is { } from)
+                {
+                    dragAim = from + move;
+                    current.Change(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
+                        from + move, weight, BonePosing.LoopFrames(loaded, current.Document)));
+                }
+            }
+            else if (operation == ImGuizmoOperation.Translate)
             {
                 var offset = layer.Kind == MotionLayerKind.Offset;
                 // A pin key is a spot in the pin's space: it moves from where it is, never from the clip's own position.
@@ -303,7 +318,7 @@ public sealed partial class TimelineWindow
     /// layers on the paused clip.
     /// <paramref name="reason"/> says what to do when that is up to the user.
     /// </summary>
-    private ImGuizmoOperation? GizmoOperation(MotionLayer layer, int frame, out string? reason)
+    private ImGuizmoOperation? GizmoOperation(MotionLayer layer, int frame, SkeletonDescription skeleton, out string? reason)
     {
         reason = null;
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry || frame < layer.Start || frame > layer.End || ReadOnly)
@@ -315,7 +330,7 @@ public sealed partial class TimelineWindow
         }
         // A pin layer's gizmo changes keyed pins' keys only.
         bool? pinMoves = null;
-        if (layer.Kind == MotionLayerKind.Pin && (pinMoves = TimelineWindowViews.PinGizmo(layer, selection.Primary, gizmoMove, out reason)) == null)
+        if (layer.Kind == MotionLayerKind.Pin && (pinMoves = TimelineWindowViews.PinGizmo(layer, selection.Primary, gizmoMode, out reason)) == null)
             return null;
         if (!LiveShowing)
         {
@@ -329,10 +344,17 @@ public sealed partial class TimelineWindow
         }
         if (pinMoves is { } moves)
             return moves ? ImGuizmoOperation.Translate : ImGuizmoOperation.Rotate;
+        // A drag moves the bone; its limb's turns are what it keys.
+        if (Drags(layer, skeleton))
+            return ImGuizmoOperation.Translate;
         var turn = layer.Components.HasFlag(PoseComponents.Rotation);
         var move = layer.Components.HasFlag(PoseComponents.Position);
-        return move && (gizmoMove || !turn) ? ImGuizmoOperation.Translate : turn ? ImGuizmoOperation.Rotate : null;
+        return move && (gizmoMode == GizmoMode.Move || !turn) ? ImGuizmoOperation.Translate : turn ? ImGuizmoOperation.Rotate : null;
     }
+
+    /// <summary>Whether the gizmo drags the primary bone in <paramref name="layer"/>: Drag chosen and able to; else a kept Drag acts as Turn.</summary>
+    private bool Drags(MotionLayer layer, SkeletonDescription skeleton) =>
+        gizmoMode == GizmoMode.Drag && TimelineWindowViews.DragGizmo(layer, selection.Primary, skeleton) == null;
 
     /// <summary>
     /// Ends a gizmo drag: its changes become one undo step in the editor it began in. An abandoned drag,

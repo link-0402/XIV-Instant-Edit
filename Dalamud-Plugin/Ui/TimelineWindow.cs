@@ -196,8 +196,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     // The overlay's state as the bone editor and the Bones window see it.
     bool IBonesOverlay.Shown => OverlayWanted;
     BoneOverlayMode IBonesOverlay.OnCharacter { get => showOnCharacter; set => showOnCharacter = value; }
-    bool IBonesOverlay.GizmoMoves { get => gizmoMove; set => gizmoMove = value; }
-    string? IBonesOverlay.GizmoWaits(MotionLayer layer, int frame) => GizmoOperation(layer, frame, out var reason) == null ? reason : null;
+    GizmoMode IBonesOverlay.Gizmo { get => gizmoMode; set => gizmoMode = value; }
+    string? IBonesOverlay.GizmoWaits(MotionLayer layer, int frame, SkeletonDescription skeleton) =>
+        GizmoOperation(layer, frame, skeleton, out var reason) == null ? reason : null;
 
     /// <summary> Unsaved edits of an editable timeline. </summary>
     private bool HasUnsavedChanges => editor is { Dirty: true } && source?.Document != null;

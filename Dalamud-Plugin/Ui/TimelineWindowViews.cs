@@ -6,6 +6,7 @@ using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui.Pose;
 using InstantEdit.Ui.Timeline;
 
 namespace InstantEdit.Ui;
@@ -52,9 +53,9 @@ internal static partial class TimelineWindowViews
     /// <summary>
     /// What the gizmo does to <paramref name="primary"/> in a pin layer: true moves its pin key, false turns it,
     /// null shows none, with <paramref name="reason"/> saying why. Only keyed pins have keys to change; a pin
-    /// that doesn't hold its turn only moves.
+    /// that doesn't hold its turn only moves. Drag turns, as Turn does.
     /// </summary>
-    public static bool? PinGizmo(MotionLayer layer, string? primary, bool gizmoMove, out string? reason)
+    public static bool? PinGizmo(MotionLayer layer, string? primary, GizmoMode mode, out string? reason)
     {
         reason = null;
         if (primary == null || MotionEdits.PinIndex(layer, primary) is not (var at and >= 0))
@@ -67,7 +68,27 @@ internal static partial class TimelineWindowViews
             reason = "Planted pins hold where the motion is down.";
             return null;
         }
-        return gizmoMove || !layer.Pins[at].HoldTurn;
+        return mode == GizmoMode.Move || !layer.Pins[at].HoldTurn;
+    }
+
+    /// <summary>
+    /// Why the gizmo can't drag <paramref name="primary"/> in <paramref name="layer"/>, bending the limb above it;
+    /// null when it can, and while <paramref name="skeleton"/> is unknown.
+    /// </summary>
+    public static string? DragGizmo(MotionLayer layer, string? primary, SkeletonDescription? skeleton)
+    {
+        if (layer.Kind == MotionLayerKind.Pin)
+            return "A pin already holds and bends.";
+        if (layer.Kind is not (MotionLayerKind.Offset or MotionLayerKind.Pose) || !layer.Components.HasFlag(PoseComponents.Rotation))
+            return "This layer doesn't turn bones.";
+        if (primary == null)
+            return "Select a bone to drag.";
+        // The overlay never offers a bone the skeleton lacks.
+        if (skeleton == null || !skeleton.Bones.Any(bone => bone.Name == primary))
+            return null;
+        return PinChains.Chain(skeleton, new MotionPin(primary)).Shape == PinChainShape.None
+            ? $"{AnimationPresentation.BoneName(primary)} sits right under the body, so nothing can bend to drag it."
+            : null;
     }
 
     /// <summary>The bone layer rows' legend when there is no layer yet.</summary>

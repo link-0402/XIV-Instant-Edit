@@ -1542,3 +1542,18 @@ Fortitude on Idle 6, option default (pose06_loop).
   bones, then none. Each tooltip matches what GPose shows.
 - [ ] 8 Open Side Step (Cute Groove) and Add, Pin feet: only a few short stretches are held. In GPose the
   feet still shuffle as the dance has them, and nothing pops where a hold lets go.
+
+## IK drag (pending)
+
+The gizmo's Drag mode moves a bone and bends the limb above it, keying the selected layer at the
+playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
+
+- [ ] 1 Open a dance in the Timeline, add an offset layer, select the right hand, Gizmo: Drag. In GPose with
+  Live on and paused: drag the hand forward 20 cm. The elbow bends naturally, the hand goes where the
+  gizmo is, and the layer gets keys on the upper arm and forearm at the playhead.
+- [ ] 2 Set the layer's amount to 50 %: a drag still puts the hand where the gizmo is.
+- [ ] 3 A pose layer, the left foot: drag it up; the knee bends forward, never backwards.
+- [ ] 4 Drag a hand far beyond the arm's reach: the arm straightens smoothly, nothing snaps or shakes. Then
+  drag back: the arm stays straight until the gizmo is back within reach, and the hand ends under the gizmo.
+- [ ] 5 Select the waist (j_kosi, right under the body): Drag is disabled with its hint.
+- [ ] 6 Undo once after a drag: the whole drag comes back in one step.

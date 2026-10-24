@@ -162,6 +162,48 @@ internal static class PoseEdits
         return doc;
     }
 
+    /// <summary>
+    /// Keys the chain above <paramref name="bone"/> in <paramref name="layer"/> at <paramref name="frame"/> so the
+    /// layer, at <paramref name="weight"/>, bends it to put the bone at <paramref name="aim"/> (character space).
+    /// <paramref name="before"/> is the pose as the layers before leave it, <paramref name="through"/> as the layers
+    /// through this one leave it (both local, the clip skeleton's order). The bone's own rotation is not keyed.
+    /// Returns <paramref name="doc"/> unchanged when nothing can bend, the weight is under MinFollowWeight, or no rotation changes.
+    /// <paramref name="layer"/> must be the layer as <paramref name="doc"/> holds it: values are read from it, keys written to the doc.
+    /// A key never turns a bone a half turn or more, so a layer at a low weight bends the chain only as far as it can carry it.
+    /// </summary>
+    public static TimelineDocument Reach(TimelineDocument doc, MotionLayer layer, int frame, SkeletonDescription skeleton,
+        ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, string bone, Vector3 aim, float weight, float loop = 0)
+    {
+        var chain = PinChains.Chain(skeleton, new MotionPin(bone));
+        if (chain.Shape == PinChainShape.None || !(weight >= MinFollowWeight))
+            return doc;
+        var local = through.ToArray();
+        var model = MotionEvaluator.ModelSpace(skeleton, local);
+        PinSolver.Reach(skeleton, local, model, chain, aim, PinSolver.RestNormal(skeleton, chain));
+        // A key past a half turn reads back the short way round, the opposite turn.
+        var most = weight * 179 * MathF.PI / 180;
+        foreach (var b in chain.Bones)
+        {
+            var solved = Quaternion.Normalize(local[b].Rotation);
+            // Float noise only: |dot| > 1 - 1e-8 (about 0.016 degrees), read off the turn's sine, as a float can't hold 1 - 1e-8.
+            var moved = Quaternion.Inverse(Quaternion.Normalize(through[b].Rotation)) * solved;
+            if (new Vector3(moved.X, moved.Y, moved.Z).LengthSquared() < 2e-8f)
+                continue;
+            // The turn the layer makes from the pose before it, scaled so that at its weight it gives the solved one.
+            var from = Quaternion.Normalize(before[b].Rotation);
+            var change = Quaternion.Normalize(Quaternion.Inverse(from) * solved);
+            var angle = 2 * MathF.Acos(Math.Clamp(Math.Abs(change.W), 0, 1));
+            if (angle > most)
+                change = MotionEvaluator.Pow(change, most / angle);
+            var turn = MotionEvaluator.Pow(change, 1 / weight);
+            var name = skeleton.Bones[b].Name;
+            var value = Value(layer, name, frame, through[b], loop)!.Value;
+            value = value with { Rotation = layer.Kind == MotionLayerKind.Pose ? Quaternion.Normalize(from * turn) : turn };
+            doc = MotionEdits.SetKey(doc, layer.Key, frame, name, value.ToBone());
+        }
+        return doc;
+    }
+
     /// <summary>The least weight a layer needs at the playhead for the gizmo to change its keys: below it the bone barely moves.</summary>
     public const float MinFollowWeight = .05f;
 

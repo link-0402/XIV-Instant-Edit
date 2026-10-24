@@ -25,7 +25,102 @@ internal static class PinLayerFixture
         Clips(check, reject);
         Edits(check);
         Views(check);
+        Drags(check, reject);
     }
+
+    /// <summary>The gizmo's IK drag: a solve on the pose the layers leave becomes an offset's or a pose's keys.</summary>
+    private static void Drags(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var body = Body();
+        // The arm hangs a little and the elbow bends 60 degrees, so a hand moved 7 cm stays within the arm's reach.
+        var before = Rest();
+        before[UpperArmL] = before[UpperArmL] with { Rotation = Q(Vector3.UnitZ, -20) };
+        before[ForearmL] = before[ForearmL] with { Rotation = Q(Vector3.UnitY, 60) };
+        var hand = MotionEvaluator.ModelSpace(body, before)[HandL].Position;
+        var near = hand + new Vector3(.05f, 0, .05f);
+        TimelineDocument Doc(MotionLayer layer) => new TimelineDocument(100, 100, null, [], 1) with { Motion = [layer] };
+        MotionLayer Keyed(TimelineDocument doc) => MotionEdits.Find(doc, "m1")!;
+        Vector3 Landed(MotionLayer layer) => MotionEvaluator.ModelSpace(body, MotionEvaluator.ApplyAt(body, before, [layer], 0))[HandL].Position;
+
+        foreach (var kind in new[] { MotionLayerKind.Pose, MotionLayerKind.Offset })
+            foreach (var amount in new[] { 1f, .5f })
+            {
+                var layer = BoneLayer(kind, amount);
+                var through = MotionEvaluator.ApplyAt(body, before, [layer], 0);
+                var keyed = Keyed(PoseEdits.Reach(Doc(layer), layer, 0, body, before, through, "j_te_l", near, MotionEvaluator.Weight(layer, 0)));
+                var bones = keyed.Keys.Single().Bones;
+                var name = $"{(kind == MotionLayerKind.Pose ? "a pose" : "an offset")} layer at {(amount < 1 ? "half" : "full")} weight";
+                check(Vector3.Distance(Landed(keyed), near) < .001f, $"a drag in {name} lands the hand on the aim");
+                check(!bones.ContainsKey("j_te_l") && bones.ContainsKey("j_ude_a_l") && bones.ContainsKey("j_ude_b_l") && bones.Count == 2,
+                    $"a drag in {name} keys the upper arm and the forearm, not the hand");
+                if (kind == MotionLayerKind.Pose && amount < 1)
+                    check(Degrees(bones["j_ude_b_l"].Rotation, MotionEvaluator.ApplyAt(body, before, [keyed], 0)[ForearmL].Rotation) > 1,
+                        "a pose at half weight keys past the solved turn, so its blend lands on it");
+                if (kind == MotionLayerKind.Offset)
+                    check(bones.Values.All(value => value.Position == Vector3.Zero && value.Scale == Vector3.One), $"a drag in {name} keys turns only");
+            }
+
+        // A pose key that sets the forearm's position keeps it, and its Moved mark, while its turn changes.
+        var moved = new Vector3(.3f, .02f, 0);
+        var held = BoneLayer(MotionLayerKind.Pose, 1, [Key(0, ("j_ude_b_l", T(moved, before[ForearmL].Rotation))) with { Moved = ["j_ude_b_l"] }]);
+        var heldThrough = MotionEvaluator.ApplyAt(body, before, [held], 0);
+        var heldAim = MotionEvaluator.ModelSpace(body, heldThrough)[HandL].Position + new Vector3(.05f, 0, .05f);
+        var heldKey = Keyed(PoseEdits.Reach(Doc(held), held, 0, body, before, heldThrough, "j_te_l", heldAim, 1)).Keys.Single();
+        check(Vector3.Distance(heldKey.Bones["j_ude_b_l"].Position, moved) < 1e-6f && heldKey.Moved.Contains("j_ude_b_l") &&
+              Degrees(heldKey.Bones["j_ude_b_l"].Rotation, before[ForearmL].Rotation) > 1,
+            "a drag keeps a pose key's position and Moved mark and changes its turn");
+
+        // A layer at a tenth of its weight can't carry a turn past 18 degrees: its keys stop short of a half turn
+        // (which would read back as the opposite way) and the hand still moves toward the aim.
+        var chain = PinChains.Chain(body, new("j_te_l"));
+        var wide = hand + new Vector3(-.15f, -.1f, .1f);
+        var (solvedLocal, solvedModel) = (before.ToArray(), MotionEvaluator.ModelSpace(body, before));
+        PinSolver.Reach(body, solvedLocal, solvedModel, chain, wide, PinSolver.RestNormal(body, chain));
+        var faint = BoneLayer(MotionLayerKind.Pose, .1f);
+        var faintKeyed = Keyed(PoseEdits.Reach(Doc(faint), faint, 0, body, before, before, "j_te_l", wide, MotionEvaluator.Weight(faint, 0)));
+        var faintKeys = faintKeyed.Keys.Single().Bones;
+        check(chain.Bones.Any(b => Degrees(solvedLocal[b].Rotation, before[b].Rotation) > 18) &&
+              faintKeys.All(pair => Quaternion.Dot(pair.Value.Rotation, before[MotionEvaluator.Index(body)[pair.Key]].Rotation) > 0 &&
+                  float.IsFinite(pair.Value.Rotation.X) && float.IsFinite(pair.Value.Rotation.Y) && float.IsFinite(pair.Value.Rotation.Z) && float.IsFinite(pair.Value.Rotation.W)) &&
+              Vector3.Distance(Landed(faintKeyed), wide) < Vector3.Distance(hand, wide) - .01f,
+            "a faint layer's keys stop short of a half turn and the hand still moves toward the aim");
+
+        // Beyond reach: the soft reach applies, the keys stay finite.
+        var model = MotionEvaluator.ModelSpace(body, before);
+        var shoulder = model[UpperArmL].Position;
+        var direction = Vector3.Normalize(new Vector3(1, -.5f, .3f));
+        var reach = Vector3.Distance(model[ForearmL].Position, shoulder) + Vector3.Distance(hand, model[ForearmL].Position);
+        var pose = BoneLayer(MotionLayerKind.Pose, 1);
+        var far = Keyed(PoseEdits.Reach(Doc(pose), pose, 0, body, before, before, "j_te_l", shoulder + direction * 10, 1));
+        var soft = shoulder + direction * PinSolver.SoftDistance(10, reach, reach - PinSolver.SoftReach(model, chain));
+        check(far.Keys.Single().Bones.Values.All(value =>
+                  float.IsFinite(value.Position.X) && float.IsFinite(value.Position.Y) && float.IsFinite(value.Position.Z) &&
+                  float.IsFinite(value.Rotation.X) && float.IsFinite(value.Rotation.Y) && float.IsFinite(value.Rotation.Z) && float.IsFinite(value.Rotation.W) &&
+                  float.IsFinite(value.Scale.X) && float.IsFinite(value.Scale.Y) && float.IsFinite(value.Scale.Z)) &&
+              Vector3.Distance(Landed(far), soft) < .001f,
+            "a drag beyond reach keys finite turns and the hand falls short on the line to the aim");
+
+        // Nothing to key.
+        var unchanged = Doc(pose);
+        check(ReferenceEquals(PoseEdits.Reach(unchanged, pose, 0, body, before, before, "j_te_l", hand, 1), unchanged), "a drag that doesn't move the hand keys nothing");
+        check(ReferenceEquals(PoseEdits.Reach(unchanged, pose, 0, body, before, before, "j_te_l", near, .01f), unchanged), "a drag in a layer that barely applies keys nothing");
+        check(ReferenceEquals(PoseEdits.Reach(unchanged, pose, 0, body, before, before, "j_kosi", near, 1), unchanged), "a bone right under the body has nothing to bend");
+        reject(() => PoseEdits.Reach(unchanged, pose, 0, body, before, before, "j_nothing", near, 1), "a drag on a bone the skeleton lacks is refused");
+
+        // When the gizmo's Drag mode is available, and why not.
+        var turnless = BoneLayer(MotionLayerKind.Offset, 1) with { Components = PoseComponents.Position };
+        check(TimelineWindowViews.DragGizmo(PinLayer([new("j_te_l")]), "j_te_l", body) == "A pin already holds and bends." &&
+              TimelineWindowViews.DragGizmo(turnless, "j_te_l", body) == "This layer doesn't turn bones." &&
+              TimelineWindowViews.DragGizmo(BoneLayer(MotionLayerKind.Amplitude, 1), "j_te_l", body) == "This layer doesn't turn bones." &&
+              TimelineWindowViews.DragGizmo(pose, null, body) == "Select a bone to drag." &&
+              TimelineWindowViews.DragGizmo(pose, "j_te_l", body) == null && TimelineWindowViews.DragGizmo(BoneLayer(MotionLayerKind.Offset, 1), "j_te_l", body) == null &&
+              TimelineWindowViews.DragGizmo(pose, "j_te_l", null) == null && TimelineWindowViews.DragGizmo(pose, "j_nothing", body) == null &&
+              TimelineWindowViews.DragGizmo(pose, "j_kosi", body) == $"{AnimationPresentation.BoneName("j_kosi")} sits right under the body, so nothing can bend to drag it.",
+            "Drag needs an offset or pose layer that turns bones and a bone with a limb above it to bend");
+    }
+
+    private static MotionLayer BoneLayer(MotionLayerKind kind, float amount, ImmutableArray<MotionKey> keys = default) =>
+        new("m1", kind, "Layer 1", 0, 30, 0, 0, amount, PoseComponents.Rotation | PoseComponents.Position, MotionInterpolation.Linear, [], keys);
 
     private static void Views(Action<bool, string> check)
     {
@@ -64,11 +159,12 @@ internal static class PinLayerFixture
 
         // The gizmo on a pin layer: only on a keyed pinned bone; moves, or turns when the pin holds its turn and Move isn't chosen.
         var gizmoLayer = PinLayer([new("j_te_l"), new("j_te_r", HoldTurn: false), new(PinChains.FootL, Planted: true)]);
-        check(TimelineWindowViews.PinGizmo(gizmoLayer, "j_kubi", false, out var why) == null && why == "Pin the selected bone to move it with the gizmo." &&
-              TimelineWindowViews.PinGizmo(gizmoLayer, PinChains.FootL, false, out why) == null && why == "Planted pins hold where the motion is down." &&
-              TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_l", false, out why) == false && why == null &&
-              TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_l", true, out _) == true && TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_r", false, out _) == true,
-            "the gizmo turns or moves keyed pins only");
+        check(TimelineWindowViews.PinGizmo(gizmoLayer, "j_kubi", GizmoMode.Turn, out var why) == null && why == "Pin the selected bone to move it with the gizmo." &&
+              TimelineWindowViews.PinGizmo(gizmoLayer, PinChains.FootL, GizmoMode.Turn, out why) == null && why == "Planted pins hold where the motion is down." &&
+              TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_l", GizmoMode.Turn, out why) == false && why == null &&
+              TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_l", GizmoMode.Move, out _) == true && TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_r", GizmoMode.Turn, out _) == true &&
+              TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_l", GizmoMode.Drag, out _) == false && TimelineWindowViews.PinGizmo(gizmoLayer, "j_te_r", GizmoMode.Drag, out _) == true,
+            "the gizmo turns or moves keyed pins only; Drag turns them as Turn does");
 
         // The bones' frames for a pin layer turn in the pin's space; its targets are the pinned bones' keys, else where they are.
         var relative = PinLayer([new("j_te_l", RelativeTo: "j_sebo_c"), new(PinChains.FootL), new(PinChains.FootR, Planted: true)], [Key(5, (PinChains.FootL, T(Vector3.One)))]);
@@ -76,9 +172,11 @@ internal static class PinLayerFixture
         swayed[Chest] = swayed[Chest] with { Rotation = Q(Vector3.UnitY, 30) };
         var beforeModel = MotionEvaluator.ModelSpace(Body(), swayed);
         var index = MotionEvaluator.Index(Body());
-        var frames = new BonePosing.BoneFrames(Body(), index, swayed, beforeModel, beforeModel, false, relative);
+        var frames = new BonePosing.BoneFrames(Body(), index, swayed, beforeModel, swayed, beforeModel, beforeModel, false, relative);
         check(Degrees(frames.Space("j_te_l"), beforeModel[Chest].Rotation) < .01f && frames.Space(PinChains.FootL) == Quaternion.Identity,
             "a pin's bone turns in its relative bone's space, else the character's");
+        check(frames.ThroughPosition("j_te_l") == beforeModel[HandL].Position && frames.ThroughPosition("j_nothing") == null,
+            "the frames give a bone's position through the layer, none for a bone they lack");
         var pinTargets = BonePosing.PinTargets(relative, 5, ["j_te_l", PinChains.FootL, PinChains.FootR, "j_kubi"], index, beforeModel, 0, false);
         var spots = BonePosing.PinTargets(relative, 5, ["j_te_l", PinChains.FootL], index, beforeModel, 0, true);
         var handSpot = MotionEvaluator.Relative(beforeModel[Chest], beforeModel[HandL]);
