@@ -19,7 +19,7 @@ internal static class TimelineUi
     ];
     // Offset, amplitude, pose, symmetry, pin and fix layers.
     public static readonly FontAwesomeIcon[] LayerIcons =
-        [FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView, FontAwesomeIcon.ArrowsAltH, FontAwesomeIcon.Thumbtack, FontAwesomeIcon.Wrench];
+        [FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView, FontAwesomeIcon.ArrowsAltH, FontAwesomeIcon.Thumbtack, FontAwesomeIcon.Wrench, FontAwesomeIcon.Wind];
 
     public static FontAwesomeIcon LaneIcon(TimelineLane lane) => LaneIcons[Math.Min((int)lane, LaneIcons.Length - 1)];
 

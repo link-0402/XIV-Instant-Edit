@@ -815,6 +815,25 @@ internal sealed class TimelineEditor
     public bool ReplaceMotion(MotionReplacement replacement) =>
         !FixedLength && Commit(TimelineEdits.ReplaceMotion(Document, replacement, ScaleEvents, loaded));
 
+    /// <summary>
+    /// Starts the clip from a still pose, as one undo step: the pose becomes its motion and a pose layer over
+    /// the whole clip, selected, takes the keys that build the new motion.
+    /// </summary>
+    public bool HoldStill(MotionReplacement still)
+    {
+        if (FixedLength)
+            return false;
+        LastError = null;
+        var held = TimelineEdits.ReplaceMotion(Document, still, ScaleEvents, loaded);
+        var next = MotionEdits.Add(held, MotionLayerKind.Pose, 0, Math.Max(TimelineDocument.MinLength, held.Length), out var key, out var error);
+        LastError = error;
+        if (!Commit(error == null ? next : held))
+            return false;
+        if (error == null)
+            SelectLayer(key);
+        return true;
+    }
+
     /// <summary>Goes back to the clip's own motion, as one undo step.</summary>
     public bool DropReplacement() => !FixedLength && Commit(TimelineEdits.DropReplacement(Document, ScaleEvents, loaded));
 

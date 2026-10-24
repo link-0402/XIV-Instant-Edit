@@ -84,7 +84,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                     // A pin holds a spot and a turn, whatever parts are set.
                     if (layer.Kind != MotionLayerKind.Pin)
                         DrawComponents(current, layer);
-                    if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix))
+                    if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle))
                         DrawInterpolation(current, layer);
                 }
             }
@@ -98,8 +98,15 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             DrawReread(layer, loaded, readOnly);
             ImGui.Spacing();
         }
+        PollIdle(current);
         if (skeleton == null)
             Widgets.HintWrapped(session.Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
+        else if (layer.Kind == MotionLayerKind.Idle)
+        {
+            DrawIdle(current, layer, loaded, skeleton, readOnly);
+            ImGui.Spacing();
+            boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
+        }
         else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
         else if (layer.Kind == MotionLayerKind.Symmetry)
@@ -353,7 +360,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     private static void DrawAmount(TimelineEditor current, MotionLayer layer)
     {
         var smooth = layer.Fix?.Kind == MotionFixKind.SmoothJitter;
-        TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch { MotionLayerKind.Offset => "Strength", MotionLayerKind.Amplitude => "Movement", MotionLayerKind.Pin => "Pull", _ => "Blend" });
+        TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch { MotionLayerKind.Offset or MotionLayerKind.Idle => "Strength", MotionLayerKind.Amplitude => "Movement", MotionLayerKind.Pin => "Pull", _ => "Blend" });
         var percent = layer.Amount * 100;
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
         var changed = ImGui.SliderFloat("##layer-amount", ref percent, 0, MotionEdits.MaxAmount(layer.Kind) * 100, "%.0f%%");
@@ -367,6 +374,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 MotionLayerKind.Pin => "How far the bones go to their pins. Ctrl+click to type.",
                 MotionLayerKind.Fix when smooth => "How big a shake it calms. Ctrl+click to type.",
                 MotionLayerKind.Fix => "How far the end goes to the loop's first frame. Ctrl+click to type.",
+                MotionLayerKind.Idle => "How much of the borrowed motion applies, over the shares below. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
     }
@@ -390,7 +398,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     private static void DrawComponents(TimelineEditor current, MotionLayer layer)
     {
         TimelineUi.Fact("Changes");
-        PoseComponents[] parts = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix
+        PoseComponents[] parts = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle
             ? [PoseComponents.Rotation, PoseComponents.Position]
             : [PoseComponents.Rotation, PoseComponents.Position, PoseComponents.Scale];
         var first = true;
@@ -582,6 +590,129 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip($"{TimelineWindowViews.FrameText(key.Frame)} · {(key.Bones.Count == 1 ? "1 bone" : $"{key.Bones.Count} bones")}");
         }
+    }
+
+    /// <summary>
+    /// An idle-motion layer's motion: the animation it is borrowed from (a seen one, read on a task), then each body
+    /// part's share of it, and Pin feet while the weight shift moves the body over them.
+    /// </summary>
+    private void DrawIdle(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded, SkeletonDescription skeleton, bool readOnly)
+    {
+        var idle = layer.Idle;
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Motion from");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(140), ImGui.GetContentRegionAvail().X));
+        using (ImRaii.Disabled(readOnly || idleReading != null))
+        using (var combo = ImRaii.Combo("##idle-donor", idleReading != null ? "Reading the motion" : idle?.Donor ?? "Choose an animation", ImGuiComboFlags.HeightLarge))
+        {
+            if (combo.Success)
+            {
+                var any = false;
+                foreach (var (capture, startup) in PoseSourcePanel.SeenClips(session))
+                {
+                    any = true;
+                    var name = AnimationPresentation.AnimationName(capture, startup);
+                    if (ImGui.Selectable($"{name}##{capture.Id}-{startup}"))
+                        ReadIdle(loaded, layer.Key, capture, startup, name);
+                }
+                if (!any)
+                {
+                    using (ImRaii.Disabled())
+                        ImGui.Selectable("No animations seen yet");
+                }
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("The animation whose motion is borrowed, such as your race's standing idle. Play it once with Load to list it.");
+        if (idleError is { } error)
+            Widgets.HintWrapped(error);
+        if (idle == null)
+            return;
+
+        using (ImRaii.Disabled(readOnly))
+        using (var table = ImRaii.Table("##idle-shares", 2, ImGuiTableFlags.SizingFixedFit))
+        {
+            if (table.Success)
+            {
+                ImGui.TableSetupColumn("##fact", ImGuiTableColumnFlags.WidthFixed);
+                ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
+                IdleShare(current, layer, idle, IdleGroup.Spine, "Breathing", "The back, chest, neck and head.");
+                IdleShare(current, layer, idle, IdleGroup.Arms, "Arms", "Shoulders, arms and fingers. Hands drift with them, so keep it low when they touch something.");
+                IdleShare(current, layer, idle, IdleGroup.Balance, "Balance", "The body's weight shift: its slide with the hips and legs, which only works as a whole.");
+                if (idle.Turns.Keys.Any(bone => MotionIdles.Group(bone) == IdleGroup.Tail))
+                    IdleShare(current, layer, idle, IdleGroup.Tail, "Tail", "The tail's swing. Above 100% swings it further.");
+            }
+        }
+        if (idle.Balance > 0)
+        {
+            Widgets.HintWrapped("Balance moves the body over the feet. Pin feet after this layer to keep them planted.");
+            var feet = TimelineWindowViews.CanPinFeet(skeleton);
+            using (ImRaii.Disabled(readOnly || !feet))
+            {
+                if (ImGui.Button(TimelineWindowViews.PinFeetName + "##idle-pin-feet"))
+                    current.AddPinFeet(skeleton);
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
+        }
+    }
+
+    /// <summary> One body part's share of the idle motion, as a percent slider; a drag is one undo step. </summary>
+    private static void IdleShare(TimelineEditor current, MotionLayer layer, MotionIdle idle, IdleGroup group, string label, string tooltip)
+    {
+        TimelineUi.Fact(label);
+        var percent = MotionIdles.Share(idle, group) * 100;
+        var most = (group == IdleGroup.Tail ? MotionIdles.MaxTailShare : MotionIdles.MaxShare) * 100;
+        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
+        var changed = ImGui.SliderFloat($"##idle-{group}", ref percent, 0, most, "%.0f%%");
+        TrackLayer(current, changed, changed ? layer with { Idle = MotionIdles.WithShare(idle, group, Math.Clamp(percent, 0, most) / 100) } : null);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip + " 100% is the motion as borrowed. Ctrl+click to type.");
+    }
+
+    // shortcut: the read waits for this panel to be drawn again before it lands; move it to the session if users lose reads by switching tabs.
+    private Task<MotionIdle>? idleReading;
+    private CancellationTokenSource? idleCancel;
+    private string? idleLayer, idleClip, idleError;
+
+    /// <summary>Decodes a seen clip on a task and borrows its motion for <paramref name="layerKey"/>; one read at a time.</summary>
+    private void ReadIdle(AnimationTimelineSource loaded, string layerKey, AnimationCapture capture, bool startup, string name)
+    {
+        if (idleReading != null || session.Animations is not { } service)
+            return;
+        idleCancel = new CancellationTokenSource();
+        var token = idleCancel.Token;
+        idleLayer = layerKey;
+        idleClip = TimelineSession.ClipKey(loaded);
+        idleError = null;
+        idleReading = Task.Run(async () =>
+        {
+            var donor = await service.LoadTimelineAsync(capture, startup, token).ConfigureAwait(false);
+            var clip = await service.DecodeMotionAsync(donor, _ => { }, token).ConfigureAwait(false);
+            return MotionIdles.Borrow(clip, name);
+        }, token);
+    }
+
+    /// <summary>A finished read becomes the layer's motion, keeping its shares; it waits while a drag or field edit runs.</summary>
+    private void PollIdle(TimelineEditor current)
+    {
+        if (idleReading is not { IsCompleted: true } task || session.ReadOnly || current.Gesture != TimelineGesture.None || current.History.InGesture)
+            return;
+        idleReading = null;
+        idleCancel?.Dispose();
+        idleCancel = null;
+        if (task.IsCanceled || session.Source is not { } open || TimelineSession.ClipKey(open) != idleClip ||
+            MotionEdits.Find(current.Document, idleLayer!) is not { Kind: MotionLayerKind.Idle } layer)
+            return;
+        if (task.IsFaulted)
+        {
+            idleError = "Couldn't borrow its motion: " + TimelineSession.ErrorText(task.Exception);
+            return;
+        }
+        var read = task.Result;
+        var kept = layer.Idle is { } old ? read with { Spine = old.Spine, Arms = old.Arms, Balance = old.Balance, Tail = old.Tail } : read;
+        current.Commit(MotionEdits.Replace(current.Document, layer with { Idle = kept }));
     }
 
     /// <summary> A field edit of the layer's own values: begun when the field activates, one undo step when it is left. </summary>

@@ -18,6 +18,8 @@ internal enum MotionLayerKind : byte
     Pin,
     /// <summary>Repairs the motion: lands a startup's end on its loop, or smooths jitter (<see cref="MotionFix"/>).</summary>
     Fix,
+    /// <summary>Plays another clip's idle motion over the bones, such as breathing (<see cref="MotionIdle"/>).</summary>
+    Idle,
 }
 
 /// <summary>What a fix layer repairs. Saved as numbers.</summary>
@@ -184,6 +186,8 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 /// and its amount is the pull toward them. Other kinds have none.</param>
 /// <param name="Fix">For a fix layer, what it repairs; its amount is a match's blend or a smooth's strength.
 /// Other kinds have none, and journals written before fix layers load with none.</param>
+/// <param name="Idle">For an idle-motion layer, the motion it borrows, null until one is read; its amount is that
+/// motion's strength. Other kinds have none.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -201,7 +205,8 @@ internal sealed record MotionLayer(
     bool Enabled = true,
     MotionSide From = MotionSide.Left,
     ImmutableArray<MotionPin> Pins = default,
-    MotionFix? Fix = null)
+    MotionFix? Fix = null,
+    MotionIdle? Idle = null)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;

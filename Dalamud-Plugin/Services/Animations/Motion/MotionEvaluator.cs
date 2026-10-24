@@ -32,6 +32,8 @@ internal static class MotionEvaluator
         MotionLayerKind.Pin => layer.Amount > 0 && layer.Pins.Any(pin => pin.Planted || layer.Keys.Any(key => key.Bones.ContainsKey(pin.Bone))),
         MotionLayerKind.Fix => layer.Amount > 0 && layer.Fix != null && (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0 &&
                                (layer.Fix.Kind != MotionFixKind.MatchLoop || layer.Fix.LoopFirst is { IsEmpty: false }),
+        MotionLayerKind.Idle => layer.Amount > 0 && layer.Idle is { } idle && MotionIdles.Moves(idle) &&
+                                (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -103,7 +105,7 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} lists a bone twice or a bone without a name.");
         if (layer.Keys.Length > MaxKeys)
             throw new InvalidDataException($"{name} has too many keys.");
-        if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix && !layer.Keys.IsEmpty)
+        if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle && !layer.Keys.IsEmpty)
             throw new InvalidDataException($"{name} can't have keys.");
         if (layer.Kind != MotionLayerKind.Pin && !layer.Pins.IsEmpty)
             throw new InvalidDataException($"{name} can't have pins.");
@@ -111,6 +113,10 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} has no fix.");
         if (layer.Kind != MotionLayerKind.Fix && layer.Fix != null)
             throw new InvalidDataException($"{name} can't have a fix.");
+        if (layer.Kind != MotionLayerKind.Idle && layer.Idle != null)
+            throw new InvalidDataException($"{name} can't have idle motion.");
+        if (layer.Idle is { } idle)
+            MotionIdles.Validate(idle, name);
         if (layer.Fix is { Kind: MotionFixKind.MatchLoop } match)
         {
             if (match.LoopFirst is not { IsEmpty: false } first || match.LoopSecond is not { } second)
@@ -209,6 +215,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Fix:
                     MotionFixes.ApplySmooth(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
+                    break;
+                case MotionLayerKind.Idle:
+                    ApplyIdle(clip, layer, index, mask, end, token);
                     break;
             }
         }
@@ -534,6 +543,11 @@ internal static class MotionEvaluator
                             Sample(pinTrack.Frames, pinTrack.Values, pinTrack.Curves, frame, around), pull, resolved.RestNormal);
                 continue;
             }
+            if (layer.Kind == MotionLayerKind.Idle)
+            {
+                MotionIdles.Apply(pose, layer, index, Mask(layer, index), frame, Weight(layer, frame, end));
+                continue;
+            }
             var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
             var move = layer.Components.HasFlag(PoseComponents.Position);
             var scale = layer.Components.HasFlag(PoseComponents.Scale);
@@ -567,6 +581,29 @@ internal static class MotionEvaluator
                     pose[b] = pose[b] with { Position = Vector3.Lerp(pose[b].Position, Sample(track.Frames, track.Values, track.Curves, frame, wrap).Position, weight) };
         }
         return pose;
+    }
+
+    /// <summary>An idle-motion layer over the clip, sample by sample (see <see cref="MotionIdles.Apply"/>); only the bones it moves are read and written.</summary>
+    private static void ApplyIdle(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, HashSet<int>? mask, float end, CancellationToken token)
+    {
+        var moved = MotionIdles.Moved(layer).Where(index.ContainsKey).Select(bone => index[bone]).ToArray();
+        if (moved.Length == 0)
+            return;
+        var pose = new MotionTransform[clip.Bones];
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var frame = clip.Frame(i);
+            var weight = Weight(layer, frame, end);
+            if (weight <= 0)
+                continue;
+            foreach (var b in moved)
+                pose[b] = clip.Get(i, b);
+            MotionIdles.Apply(pose, layer, index, mask, frame, weight);
+            foreach (var b in moved)
+                clip.Set(i, b, pose[b]);
+        }
     }
 
     private static void ApplyAmplitude(MotionClip clip, MotionLayer layer, IReadOnlyCollection<int> bones, float end, CancellationToken token)

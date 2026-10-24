@@ -129,6 +129,13 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
         session.LoopPose.DrawAddItems(current, session.ReadOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
+        ImGui.Separator();
+        var still = blenderMotion.StillUnavailable(current);
+        if (ImGui.MenuItem("Still pose (start from scratch)", "", false, still == null))
+            blenderMotion.HoldStill(current);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(still ?? "Hold the pose at the playhead for the whole clip, in place of its motion, and add a pose layer to animate it. " +
+                "Use the clip's motion goes back.");
         if (session.Source == null)
             return;
         ImGui.Separator();

@@ -53,6 +53,7 @@ internal static class MotionEdits
         MotionLayerKind.Symmetry => "Symmetry",
         MotionLayerKind.Pin => "Pin",
         MotionLayerKind.Fix => "Fix",
+        MotionLayerKind.Idle => "Idle motion",
         _ => "Pose",
     };
 
@@ -494,8 +495,8 @@ internal static class MotionEdits
     public static TimelineDocument SetKey(TimelineDocument doc, string key, int frame, string bone, BoneTransform? value, bool? moved = null)
     {
         var index = IndexOf(doc, key);
-        // Symmetry and fix layers never hold keys; a pin layer keys only its keyed pins.
-        if (index < 0 || string.IsNullOrEmpty(bone) || doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix ||
+        // Symmetry, fix and idle-motion layers never hold keys; a pin layer keys only its keyed pins.
+        if (index < 0 || string.IsNullOrEmpty(bone) || doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle ||
             doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted))
             return doc;
         frame = Math.Clamp(frame, 0, TimelineDocument.MaxFrames);
@@ -700,9 +701,17 @@ internal static class MotionEdits
         a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
         (a.Fix == null ? b.Fix == null
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond)) &&
+        SameIdle(a.Idle, b.Idle) &&
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));
+
+    private static bool SameIdle(MotionIdle? a, MotionIdle? b) =>
+        ReferenceEquals(a, b) ||
+        a != null && b != null && a.Donor == b.Donor && a.Duration.Equals(b.Duration) && a.Samples == b.Samples && a.Spine.Equals(b.Spine) &&
+        a.Arms.Equals(b.Arms) && a.Balance.Equals(b.Balance) && a.Tail.Equals(b.Tail) && a.Slide.SequenceEqual(b.Slide) &&
+        (ReferenceEquals(a.Turns, b.Turns) || a.Turns.Count == b.Turns.Count &&
+            a.Turns.All(bone => b.Turns.TryGetValue(bone.Key, out var other) && other.SequenceEqual(bone.Value)));
 
     private static bool SameBones(IReadOnlyDictionary<string, BoneTransform>? a, IReadOnlyDictionary<string, BoneTransform>? b) =>
         a == null ? b == null : b != null && a.Count == b.Count && a.All(bone => b.TryGetValue(bone.Key, out var other) && other == bone.Value);

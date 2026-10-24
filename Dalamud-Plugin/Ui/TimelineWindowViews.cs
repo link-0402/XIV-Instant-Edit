@@ -35,7 +35,7 @@ internal static partial class TimelineWindowViews
 
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
-        [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Pin];
+        [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Pin];
 
     /// <summary>The Add menus' item after the layer kinds: a pin layer that plants both feet.</summary>
     public const string PinFeetName = "Pin feet";
@@ -101,10 +101,14 @@ internal static partial class TimelineWindowViews
     /// <summary>The bone layer rows' legend when there is no layer yet.</summary>
     public const string BonesLaneName = "Bones";
 
-    /// <summary>The line under the toolbar while the clip plays a motion from Blender: where it came from and what it kept.</summary>
+    /// <summary>
+    /// The line under the toolbar while the clip plays a motion from Blender (where it came from and what it
+    /// kept) or a still pose (the frame it holds).
+    /// </summary>
     public static string BlenderMotionLine(MotionReplacement replacement)
     {
-        var report = replacement.Report;
+        if (replacement.Report is not { } report)
+            return $"Still pose: {replacement.Action} held for {replacement.Frames} frames.";
         var line = $"Motion from Blender: \"{replacement.Action}\" on \"{replacement.Armature}\", {report.FromBlender} bones, {replacement.Frames} frames.";
         if (report.Kept > 0)
             line += report.Kept == 1 ? " 1 bone kept the clip's motion." : $" {report.Kept} bones kept the clip's motion.";
@@ -128,6 +132,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Symmetry => Theme.MaterialKind,
         MotionLayerKind.Pin => Theme.ModelKind,
         MotionLayerKind.Fix => Theme.MaskTexture,
+        MotionLayerKind.Idle => Theme.Success,
         _ => Theme.Important,
     };
 
@@ -139,6 +144,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Symmetry => "Copy one side's motion onto the other, mirrored.",
         MotionLayerKind.Pin => "Hold bones at a spot while the limb bends to reach it.",
         MotionLayerKind.Fix => "Repair the motion.",
+        MotionLayerKind.Idle => "Add breathing and a weight shift taken from another animation, such as an idle.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -194,6 +200,11 @@ internal static partial class TimelineWindowViews
                 moved.UnionWith(PinnedBones(layer, clip));
                 continue;
             }
+            if (layer.Kind == MotionLayerKind.Idle)
+            {
+                moved.UnionWith(MotionIdles.Moved(layer));
+                continue;
+            }
             foreach (var key in layer.Keys)
                 foreach (var bone in key.Bones.Keys)
                     if (layer.Bones.IsEmpty || layer.Bones.Contains(bone))
@@ -221,6 +232,8 @@ internal static partial class TimelineWindowViews
             var keyText = keyCount == 0 ? "no keys" : keyCount == 1 ? "1 key" : $"{Whole(keyCount)} keys";
             return planted == 0 ? $"{pins} · {keyText}" : $"{pins} · {Whole(planted)} planted · {keyText}";
         }
+        if (layer.Kind == MotionLayerKind.Idle)
+            return layer.Idle is { } idle ? $"From {idle.Donor}" : "No motion read yet";
         if (layer.Kind == MotionLayerKind.Symmetry)
             return (layer.From == MotionSide.Left ? "From the left · " : "From the right · ") +
                    (layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones");
@@ -533,6 +546,7 @@ internal static partial class TimelineWindowViews
                     MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip),
                     MotionLayerKind.Pin => PinnedBones(layer, clip),
+                    MotionLayerKind.Idle => MotionIdles.Moved(layer),
                     _ => layer.Keys.SelectMany(key => key.Bones.Keys),
                 })
                 .Where(left.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();

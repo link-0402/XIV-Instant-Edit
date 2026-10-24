@@ -341,8 +341,37 @@ internal sealed partial class AnimationEditService
         var (motion, report) = await Task.Run(() => BlenderMotion.Build(BlenderMotion.Fill(playing, read), read, clip.GamePath, clip.Name), token);
         if (BlenderMotion.ChangesNothing(report, motion.Duration, playing.Duration, document))
             return null;
+        return await ReplaceMotionAsync(source, selected, motion, read.Action, read.Armature, report, status, token);
+    }
+
+    /// <summary>
+    /// Starts the clip from scratch: <paramref name="playing"/>'s pose at timeline frame <paramref name="frame"/>
+    /// held still for <paramref name="frames"/> frames, as the clip's motion (see <see cref="MotionHold.Still"/>).
+    /// </summary>
+    public async Task<MotionReplacement> HoldStillAsync(AnimationTimelineSource source, MotionClip playing, int frame, int frames,
+        Action<string> status, CancellationToken token)
+    {
+        if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
+        if (source.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
+            throw new InvalidOperationException(source.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
+        status("Holding the pose");
+        var motion = await Task.Run(() => MotionHold.Still(playing, frame, frames), token);
+        return await ReplaceMotionAsync(source, selected, motion, StillPoseFrame(frame), "", null, status, token);
+    }
+
+    /// <summary>What a still pose's <see cref="MotionReplacement.Action"/> says: the frame it was held from.</summary>
+    public static string StillPoseFrame(int frame) => $"frame {frame}";
+
+    /// <summary>
+    /// Bakes <paramref name="motion"/> into the clip's PAP in place of its own motion; the replacement the
+    /// document then holds. <paramref name="report"/> is what Blender changed, null for a still pose.
+    /// </summary>
+    private async Task<MotionReplacement> ReplaceMotionAsync(AnimationTimelineSource source, SkeletonCandidate selected, MotionClip motion,
+        string action, string armature, BlenderMotionReport? report, Action<string> status, CancellationToken token)
+    {
+        var clip = source.Clip;
         if (TimelineDocument.MotionFrames(motion.Duration) is not { } frames || frames < TimelineDocument.MinLength || frames > TimelineDocument.MaxLength)
-            throw new InvalidDataException("The motion from Blender is too long or too short.");
+            throw new InvalidDataException(report == null ? "The pose is held for too long or too short." : "The motion from Blender is too long or too short.");
         var skeleton = (await resources.ReadSkeletonAsync(source.Capture.CollectionId, selected.Source, token)).Bytes;
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit motion", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
@@ -353,7 +382,7 @@ internal sealed partial class AnimationEditService
             try { Directory.Delete(work, true); } catch (IOException) { }
         }
         var fingerprint = await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(pap).GetValueOrDefault(clip.BindingIndex, string.Empty));
-        return new MotionReplacement(pap, fingerprint, AnimationPap.Hash(pap), frames, read.Action, read.Armature, report);
+        return new MotionReplacement(pap, fingerprint, AnimationPap.Hash(pap), frames, action, armature, report);
     }
 
     /// <summary>

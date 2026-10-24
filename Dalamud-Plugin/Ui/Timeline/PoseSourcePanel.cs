@@ -49,6 +49,8 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
     private readonly HashSet<string> poseGroupsKept = new(StringComparer.Ordinal);
     // Whether positions are keyed; null until chosen for the waiting pose, which then decides.
     private bool? posePositions;
+    // Whether the body is moved so the feet stand on the ground; null until chosen.
+    private bool? poseGround;
     private string? poseKeyed;
     private string? lastPoseFolder;
     // The waiting pose made local on one skeleton, for a key frame and a frame of its clip.
@@ -113,7 +115,10 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
     }
 
     /// <summary>The animations the listener has seen, loops and startups, without expressions: a frame of any of them can be keyed.</summary>
-    private IEnumerable<(AnimationCapture Capture, bool Startup)> PoseClips()
+    private IEnumerable<(AnimationCapture Capture, bool Startup)> PoseClips() => SeenClips(session);
+
+    /// <summary>The animations the listener has seen, loops and startups, without expressions, each once.</summary>
+    public static IEnumerable<(AnimationCapture Capture, bool Startup)> SeenClips(TimelineSession session)
     {
         if (session.Animations is not { } service)
             yield break;
@@ -359,6 +364,13 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         if (import.OtherProportions)
             Widgets.HintWrapped("The pose was made on a body with other proportions. Moving bones would reshape this one.");
 
+        // Feet on the ground: on by default when the clip starts from a still pose, where nothing else stands it up.
+        var ground = poseGround ?? current.Document.Replacement is { Still: true };
+        if (ImGui.Checkbox("Feet on the ground###pose-ground", ref ground))
+            poseGround = ground;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Move the body up or down so the lowest foot stands as low as in the clip, after bent legs lift it.");
+
         var inside = frame >= layer.Start && frame <= layer.End;
         var own = posing.MotionPose(loaded, frame);
         var blocked = readOnly ? "Wait for the save to finish."
@@ -372,8 +384,11 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
                 own is { } clipPose)
             {
                 var index = posing.BoneTree(skeleton).Index;
-                current.Commit(PoseEdits.KeyPose(current.Document, layer.Key, frame, import, bones, positions,
-                    bone => index.TryGetValue(bone, out var at) ? clipPose.Local[at] : null));
+                var next = PoseEdits.KeyPose(current.Document, layer.Key, frame, import, bones, positions,
+                    bone => index.TryGetValue(bone, out var at) ? clipPose.Local[at] : null);
+                if (ground && PoseEdits.Grounded(skeleton, clipPose.Local, import, bones, positions) is { } body)
+                    next = MotionEdits.SetKey(next, layer.Key, frame, MotionHold.Body, body.ToBone(), true);
+                current.Commit(next);
                 current.SelectLayer(layer.Key, frame);
                 if (staged.AtEnd)
                     current.Playhead = frame;

@@ -321,8 +321,13 @@ public sealed partial class TimelineWindow
     private ImGuizmoOperation? GizmoOperation(MotionLayer layer, int frame, SkeletonDescription skeleton, out string? reason)
     {
         reason = null;
-        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix || frame < layer.Start || frame > layer.End || ReadOnly)
+        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle || ReadOnly)
             return null;
+        if (frame < layer.Start || frame > layer.End)
+        {
+            reason = "Move the playhead into the layer to pose it with the gizmo.";
+            return null;
+        }
         if (!layer.Enabled)
         {
             reason = "The layer is off. Tick it to pose with the gizmo.";

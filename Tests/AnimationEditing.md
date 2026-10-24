@@ -1579,3 +1579,26 @@ jitter calms small shakes. Spec: docs/superpowers/specs/2026-10-24-fix-layer-des
   layers, not the loop. Then, before the loop's skeleton has matched (straight after a reload), Add >
   Match startup to loop: it adds the layer instead of "Couldn't read the loop". The Pose source "Loop's
   first frame, at the end" reads the loop the same way.
+
+## Animations from scratch (pending)
+
+Start from a still pose, stand it on the ground, and borrow breathing from an idle (Pose2Idle's idea).
+Plan: C:\Users\Example\.claude\plans\i-want-to-expand-smooth-allen.md. Test clip: a standing emote, such as
+/stretch, and your race's Standing idle.
+
+- [ ] 1 Load a standing emote, move the playhead to a calm frame, Add > Still pose (start from scratch).
+  The line under the toolbar says "Still pose: frame N held for ... frames", a Pose layer over the whole
+  clip is selected, and Live shows the character holding that frame.
+- [ ] 2 In that Pose layer, Key a pose > Pose file, a crossed-leg or kneeling pose from D:\Mods\Poses.
+  "Feet on the ground" is ticked. Key at frame 0: the character takes the pose with the feet on the
+  floor, not floating. Untick it and key again: the pose floats as before.
+- [ ] 3 With Live on and paused at frame 45, turn the head with the gizmo: a key appears at 45 and the
+  head moves between frame 0 and 45 when played. With the playhead outside the layer, the Bones panel
+  says "Move the playhead into the layer to pose it with the gizmo."
+- [ ] 4 Play your race's Standing idle once (Load), open the emote again, Add > Idle motion layer, Motion
+  from: the idle. The chest breathes and the body shifts its weight; Breathing 0% stops the chest.
+  Press Pin feet: the feet stay planted while the body shifts.
+- [ ] 5 Change the length to twice as long: the breath still loops without a jump at the end.
+- [ ] 6 Save to a new mod: the emote plays the new animation in game, breathing included.
+- [ ] 7 Use the clip's motion: the emote's own motion comes back; Ctrl+Z brings the still pose back.
+- [ ] 8 On a Miqo'te or Au Ra, raise Tail to 200%: the tail swings further.

@@ -11,7 +11,8 @@ namespace InstantEdit.Ui.Timeline;
 /// <summary>
 /// The clip's motion to Blender and back: Send motion to Blender sends it as the timeline plays it now
 /// (cuts and bone layers applied), and Motion from Blender reads the armature's motion back and puts it
-/// in place of the clip's, as one undo step. The line under the toolbar says which motion plays.
+/// in place of the clip's, as one undo step. A still pose takes the clip's place the same way, to start
+/// it from scratch (Add menu). The line under the toolbar says which motion plays.
 /// </summary>
 internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode decode)
 {
@@ -26,6 +27,8 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
     private CancellationTokenSource? cancel;
     // Cancel was pressed: the read ends at its next check.
     private bool stopping;
+    // The read is a still pose being held, not a motion from Blender.
+    private bool holding;
     private volatile string progress = string.Empty;
     private string? note;
     private bool noteWarns;
@@ -113,8 +116,48 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         });
     }
 
+    /// <summary>Why the clip can't start from a still pose now; null when it can.</summary>
+    public string? StillUnavailable(TimelineEditor current)
+    {
+        if (session.Animations == null || session.Source is not { } loaded || session.ReadOnly)
+            return "Wait for the timeline to finish.";
+        if (loaded.Standalone || current.FixedLength)
+            return "An expression has no motion.";
+        if (reading != null)
+            return "Wait for the motion being read.";
+        return decode.DecodedPose(loaded) == null ? "The motion is still being read." : null;
+    }
+
+    /// <summary>
+    /// Start from a still pose: the frame at the playhead, as the timeline plays it now, held for the clip's
+    /// length becomes its motion; a pose layer over it then takes the keys (see <see cref="TimelineEditor.HoldStill"/>).
+    /// </summary>
+    public void HoldStill(TimelineEditor current)
+    {
+        var loaded = session.Fresh(session.Source!);
+        if (decode.DecodedPose(loaded) is not { } decoded || session.Animations is not { } service)
+            return;
+        var output = decode.OutputMotion(current, decoded);
+        var layers = current.Document.Motion;
+        var frame = current.Playhead;
+        var frames = current.Document.Length;
+        cancel = new CancellationTokenSource();
+        var token = cancel.Token;
+        stopping = false;
+        holding = true;
+        readingClip = TimelineSession.ClipKey(loaded);
+        note = null;
+        progress = "Holding the pose";
+        reading = Task.Run(async () =>
+        {
+            var playing = Playing(output, layers, token);
+            return ((MotionReplacement?)await service.HoldStillAsync(loaded, playing, frame, frames, message => progress = message, token), false);
+        }, token);
+    }
+
     private void Read(TimelineEditor current)
     {
+        holding = false;
         var loaded = session.Fresh(session.Source!);
         if (decode.DecodedPose(loaded) is not { } decoded || session.Animations is not { } service)
             return;
@@ -167,13 +210,15 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         if (stopped || read.IsCanceled)
             Message("Reading stopped.", false);
         else if (!read.IsCompletedSuccessfully)
-            Message("The motion was not read: " + TimelineSession.ErrorText(read.Exception), true);
+            Message((holding ? "The pose was not held: " : "The motion was not read: ") + TimelineSession.ErrorText(read.Exception), true);
         else if (session.Source is not { } now || TimelineSession.ClipKey(now) != readingClip)
             Message("The clip changed while reading. Read it again.", true);
         else if (read.Result.Motion is not { } replacement)
             Message(TimelineWindowViews.BlenderUnchangedLine(read.Result.ScaleIgnored), false);
-        else if (session.ReadOnly || !current.ReplaceMotion(replacement))
-            Message("The timeline is busy. Read it again.", true);
+        else if (session.ReadOnly || !(holding ? current.HoldStill(replacement) : current.ReplaceMotion(replacement)))
+            Message(holding ? "The timeline is busy. Try again." : "The timeline is busy. Read it again.", true);
+        else if (holding)
+            Message("Holding the pose. Key a pose or pose bones in the new pose layer.", false);
     }
 
     private void Message(string text, bool warns)

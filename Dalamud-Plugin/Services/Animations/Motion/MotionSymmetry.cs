@@ -125,6 +125,11 @@ internal static class MotionSymmetry
                             if ((layer.Bones.IsEmpty || layer.Bones.Contains(name)) && index.TryGetValue(name, out var bone))
                                 animated.Add(bone);
                     break;
+                case MotionLayerKind.Idle:
+                    foreach (var name in MotionIdles.Moved(layer))
+                        if (index.TryGetValue(name, out var moved))
+                            animated.Add(moved);
+                    break;
                 case MotionLayerKind.Symmetry:
                     try
                     {

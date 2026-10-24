@@ -191,7 +191,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     {
         if (layer != null)
         {
-            if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix) && PoseEdits.Keyed(layer, bone, frame))
+            if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle) && PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
             if (layerBones?.Pinned.Contains(bone) == true)
                 return BoneState.Pinned;
@@ -211,6 +211,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             MotionLayerKind.Symmetry => "Copied from the other side.",
             MotionLayerKind.Pin => "Bent to hold a pin.",
             MotionLayerKind.Fix => "This layer fixes its motion.",
+            MotionLayerKind.Idle => "This layer adds idle motion.",
             _ => "This layer changes it.",
         },
         BoneState.Animated => "The clip moves it.",

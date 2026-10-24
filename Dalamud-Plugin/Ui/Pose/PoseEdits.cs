@@ -41,6 +41,7 @@ internal static class PoseEdits
     {
         MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.Contains(bone),
         MotionLayerKind.Symmetry or MotionLayerKind.Pin => changed?.Contains(bone) == true,
+        MotionLayerKind.Idle => MotionIdles.Moved(layer).Contains(bone),
         _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),
     };
 
@@ -227,12 +228,32 @@ internal static class PoseEdits
         {
             if (!pose.Local.TryGetValue(bone, out var value))
                 continue;
-            var clip = own(bone);
             var moved = positions && pose.Moved.Contains(bone);
-            var key = new MotionTransform(moved || clip is not { } kept ? value.Position : kept.Position, value.Rotation, clip?.Scale ?? Vector3.One);
-            doc = MotionEdits.SetKey(doc, layer, frame, bone, key.ToBone(), moved);
+            doc = MotionEdits.SetKey(doc, layer, frame, bone, PoseKey(value, own(bone), moved).ToBone(), moved);
         }
         return doc;
+    }
+
+    /// <summary>A pose's bone as <see cref="KeyPose"/> keys it: its rotation, its position when it moves, the clip's own scale.</summary>
+    private static MotionTransform PoseKey(MotionTransform value, MotionTransform? clip, bool moved) =>
+        new(moved || clip is not { } kept ? value.Position : kept.Position, value.Rotation, clip?.Scale ?? Vector3.One);
+
+    /// <summary>
+    /// The body's key that stands the pose <see cref="KeyPose"/> keys on the ground: its feet as low as in the
+    /// clip's own pose there (<paramref name="own"/>, one local transform per bone of <paramref name="skeleton"/>).
+    /// Null on a skeleton without a body bone or feet.
+    /// </summary>
+    public static MotionTransform? Grounded(SkeletonDescription skeleton, MotionTransform[] own, PoseImport pose, IEnumerable<string> bones, bool positions)
+    {
+        // shortcut: the pose is measured over the clip's own pose, not over the layers before this one; measure the evaluated pose if users stack pose layers.
+        var posed = (MotionTransform[])own.Clone();
+        var index = MotionEvaluator.Index(skeleton);
+        foreach (var bone in bones)
+            if (pose.Local.TryGetValue(bone, out var value) && index.TryGetValue(bone, out var at))
+                posed[at] = PoseKey(value, own[at], positions && pose.Moved.Contains(bone));
+        if (!index.TryGetValue(MotionHold.Body, out var body) || MotionHold.OnGround(skeleton, posed, own) is not { } place)
+            return null;
+        return posed[body] with { Position = place };
     }
 
     /// <summary>Bones a whole-body pose never keys: the skeleton's root nodes, and the face, which a body clip doesn't move.</summary>
