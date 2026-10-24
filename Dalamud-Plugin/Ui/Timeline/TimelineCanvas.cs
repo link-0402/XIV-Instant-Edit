@@ -118,7 +118,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             else if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
                 current.Release();
             else if (current.Gesture == TimelineGesture.Scrub || ImGui.IsMouseDragging(ImGuiMouseButton.Left, Theme.Scaled(3)))
-                current.Drag(current.View.FrameAt(trackX), io.KeyAlt);
+                current.Drag(current.View.FrameAt(trackX), io.KeyAlt, hit.Row);
         }
 
         if (active && ImGui.IsMouseDown(ImGuiMouseButton.Middle))
@@ -168,7 +168,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
 
         var resizing = current.Gesture is TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight or TimelineGesture.Length or
             TimelineGesture.LayerLeft or TimelineGesture.LayerRight or TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or
-            TimelineGesture.BoneKey or TimelineGesture.TrimLeft or TimelineGesture.TrimRight or TimelineGesture.BlendLength or TimelineGesture.EaseLength or
+            TimelineGesture.BoneKey or TimelineGesture.LayerKeys or TimelineGesture.TrimLeft or TimelineGesture.TrimRight or TimelineGesture.BlendLength or TimelineGesture.EaseLength or
             TimelineGesture.Stretch;
         if (!readOnly && (resizing || hovered && current.Gesture == TimelineGesture.None &&
                 hit.Part is TimelinePart.LeftEdge or TimelinePart.RightEdge or TimelinePart.LengthHandle or TimelinePart.LayerLeft or
@@ -744,10 +744,19 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         var index = MotionEdits.IndexOf(doc, layer.Key);
         if (current.SelectedKey is { } frame && MotionEdits.KeyIndex(layer, frame) is var at and >= 0)
         {
-            if (ImGui.MenuItem(current.SelectedBone is { } bone ? $"Delete {AnimationPresentation.BoneName(bone)}'s key" : "Delete key", "Del", false, !readOnly))
+            var label = current.SelectedKeys.Count > 1 ? $"Delete {current.SelectedKeys.Count} picked keys"
+                : current.SelectedBone is { } bone ? $"Delete {AnimationPresentation.BoneName(bone)}'s key" : "Delete key";
+            if (ImGui.MenuItem(label, "Del", false, !readOnly))
                 current.DeleteLayerSelection();
+            if (ImGui.MenuItem("Copy keys", "Ctrl+C"))
+                current.CopyKeys();
             DrawEaseMenu(current, layer, layer.Keys[at], readOnly);
             ImGui.Separator();
+        }
+        if (TimelineEditor.CanPasteKeys && ImGui.MenuItem("Paste keys at the playhead", "Ctrl+V", false, !readOnly))
+        {
+            current.SelectLayer(layer.Key);
+            current.PasteKeys();
         }
         if (TimelineLayout.Unfolds(layer) && ImGui.MenuItem(current.IsUnfolded(layer.Key) ? "Hide bone rows" : "Show bone rows"))
             current.SetUnfolded(layer.Key, !current.IsUnfolded(layer.Key));

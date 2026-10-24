@@ -1641,3 +1641,29 @@ offline in PoseEditorFixture (Clipboard).
   how many bones were skipped, the rest are keyed.
 - [ ] 7 Move the playhead outside the layer: both paste buttons are disabled with "Move the playhead into the
   layer."
+
+## Picking several keys (pending)
+
+Pick keys across a layer's rows and move, spread, delete, copy or paste them together. The edits are covered
+offline in MotionEditsFixture (KeyPicks); these checks are the canvas, the panel and the feel.
+
+- [ ] 1 On a pose layer with four keys and its bone rows shown, click a key, Ctrl+click two more: all three get
+  a ring, the panel's Keys row highlights them. Ctrl+click one again: it drops out.
+- [ ] 2 Drag one of the picked keys: all of them move together and stop at a key that isn't picked. One
+  Ctrl+Z puts them back, and Escape during the drag too. Dragging a bone's value in a picked key moves the
+  group. A plain click on a picked key without dragging leaves it picked alone.
+- [ ] 3 Click a key, Shift+click a later one on the layer's row: every key in between is picked. On a bone's
+  row, Shift+click picks only that bone's values.
+- [ ] 4 Press on an empty bone row and drag a box over keys on two bone rows: those bones' values are
+  picked (faint rings on the layer's row). Drag it up over the layer's row: the whole keys are picked.
+  Ctrl+drag on the bar adds a box to the picks; Escape during that box goes back to the picks before it.
+  The box never reaches into the next layer's rows.
+- [ ] 5 Alt+Right nudges every picked key a frame; Delete takes them all out; the menu says
+  "Delete N picked keys".
+- [ ] 6 With keys picked on 3 frames, the panel shows "3 picked · Spread over N frames". Type half: they
+  play twice as fast in Preview, the first key stays put, and the field edit is one undo step. A number
+  that would put two keys on one frame shows a reason in the toolbar and changes nothing.
+- [ ] 7 Ctrl+C, move the playhead, Ctrl+V: the keys are pasted from the playhead on and picked. Paste into
+  another animation's pose layer: they carry over. Into an offset layer: the toolbar says they came from a
+  Pose layer. After copying an event, Ctrl+V pastes the event again, not the keys.
+- [ ] 8 On a pin layer with a keyed pin, pick two of its keys and drag them: the pins move in time.

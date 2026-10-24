@@ -120,6 +120,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
                 ImGui.Spacing();
                 DrawLayerKeys(current, layer);
+                using (ImRaii.Disabled(readOnly))
+                    DrawSpread(current, layer);
                 if (current.SelectedKey is { } pinKeyFrame && MotionEdits.KeyIndex(layer, pinKeyFrame) is var pinKeyAt and >= 0)
                 {
                     ImGui.Spacing();
@@ -133,6 +135,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             boneEditor.Draw(current, layer, skeleton, loaded, readOnly, false);
             ImGui.Spacing();
             DrawLayerKeys(current, layer);
+            using (ImRaii.Disabled(readOnly))
+                DrawSpread(current, layer);
             if (current.SelectedKey is { } keyFrame && MotionEdits.KeyIndex(layer, keyFrame) is var keyAt and >= 0)
             {
                 ImGui.Spacing();
@@ -563,6 +567,35 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             ImGui.SetTooltip("Drag a handle to shape how the bones get to the next key.");
     }
 
+    /// <summary>
+    /// With keys picked on two frames or more: how many, and Spread over, the frames from the first picked key to the last.
+    /// Fewer play them faster, more slower. One undo step per field edit.
+    /// </summary>
+    private static void DrawSpread(TimelineEditor current, MotionLayer layer)
+    {
+        var picks = MotionEdits.Picks(layer, current.SelectedKeys);
+        if (picks.Length < 2 || picks[^1].Frame == picks[0].Frame)
+            return;
+        ImGui.Spacing();
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, $"{picks.Length} picked · Spread over");
+        ImGui.SameLine(0, Theme.Gap);
+        var frames = picks[^1].Frame - picks[0].Frame;
+        ImGui.SetNextItemWidth(Theme.Scaled(90));
+        var changed = ImGui.InputInt("##spread-keys", ref frames, 0, 0);
+        if (ImGui.IsItemActivated())
+            current.BeginFieldEdit();
+        if (changed)
+            current.SpreadKeys(Math.Max(1, frames));
+        if (ImGui.IsItemDeactivated())
+            current.EndFieldEdit();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Frames from the first picked key to the last. Fewer play them faster, more slower; the first stays put.");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "frames");
+    }
+
     /// <summary> The layer's keys: click one to move the playhead there and select it. </summary>
     private static void DrawLayerKeys(TimelineEditor current, MotionLayer layer)
     {
@@ -580,7 +613,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             ImGui.SameLine(0, Theme.Scaled(4));
             if (ImGui.GetContentRegionAvail().X < Theme.Scaled(48))
                 ImGui.NewLine();
-            var chosen = current.SelectedKey == key.Frame;
+            var chosen = current.SelectedKeys.Any(pick => pick.Frame == key.Frame);
             using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, chosen);
             if (ImGui.SmallButton($"{TimelineText.Seconds(key.Frame)}##key-{key.Frame}"))
             {

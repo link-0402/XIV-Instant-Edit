@@ -191,9 +191,10 @@ internal static class TimelinePainter
                 if (x < trackLeft - half || x > max.X + half)
                     continue;
                 var shape = KeyShapeOf(layer, key);
-                if (selected && current.SelectedKey == key.Frame)
+                // A whole picked key gets a full ring, a key with only bones picked a faint one.
+                if (selected && (current.IsPicked(layer.Key, key.Frame) || current.SelectedKeys.Any(pick => pick.Frame == key.Frame)))
                     DrawKeyMark(drawList, shape, x, middle, half + Theme.Scaled(2),
-                        TimelineUi.U32(current.SelectedBone == null ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
+                        TimelineUi.U32(current.IsPicked(layer.Key, key.Frame) ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
                 // A key outside the layer still shapes the curve but never applies on its own.
                 var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
                 var hotKey = hot && hit.Part == TimelinePart.LayerKey && hit.KeyFrame == key.Frame;
@@ -210,6 +211,13 @@ internal static class TimelinePainter
             }
         }
         DrawBoneRows(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hit);
+        if (current.KeyBox is var (from, to, first, last))
+        {
+            var corner = new Vector2(trackLeft + view.X(from), Math.Max(rowsTop, min.Y + geometry.RowTop(first)));
+            var end = new Vector2(Math.Max(trackLeft + view.X(to), corner.X + 1), Math.Max(corner.Y, min.Y + geometry.RowTop(last) + geometry.Row));
+            drawList.AddRectFilled(corner, end, TimelineUi.U32(Theme.WithAlpha(Theme.Accent, .12f)));
+            drawList.AddRect(corner, end, TimelineUi.U32(Theme.WithAlpha(Theme.Accent, .7f)), 0, ImDrawFlags.None, line);
+        }
     }
 
     private enum KeyShape : byte { Diamond, Circle, Square }
@@ -267,9 +275,10 @@ internal static class TimelinePainter
                 if (x < trackLeft - half || x > max.X + half)
                     continue;
                 var shape = KeyShapeOf(layer, key);
-                if (selectedLayer && current.SelectedKey == key.Frame && (current.SelectedBone == null || current.SelectedBone == entry.Bone))
+                var bonePicked = selectedLayer && current.IsPicked(layer.Key, key.Frame, entry.Bone);
+                if (bonePicked || selectedLayer && current.IsPicked(layer.Key, key.Frame))
                     DrawKeyMark(drawList, shape, x, middle, half + Theme.Scaled(2),
-                        TimelineUi.U32(current.SelectedBone == entry.Bone ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
+                        TimelineUi.U32(bonePicked ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
                 var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
                 var hotKey = hit.Part == TimelinePart.BoneKey && hit.Row == row && hit.KeyFrame == key.Frame;
                 DrawKeyMark(drawList, shape, x, middle, half, TimelineUi.U32(Theme.WithAlpha(hotKey ? Theme.Text : colour, (inside ? hotKey ? 1 : .95f : .4f) * alpha)));

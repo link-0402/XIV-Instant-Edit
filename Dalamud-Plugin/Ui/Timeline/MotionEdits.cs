@@ -6,6 +6,15 @@ using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
 
+/// <summary>A picked key of a bone layer: the whole key at <paramref name="Frame"/>, or with <paramref name="Bone"/> that bone's value in it.</summary>
+internal readonly record struct KeyPick(int Frame, string? Bone = null);
+
+/// <summary>
+/// Keys copied from a layer of <paramref name="Kind"/>, frames counted from the first: a whole key as it was, a bone's
+/// value alone in a key of its own without an ease.
+/// </summary>
+internal sealed record KeyCopy(MotionLayerKind Kind, ImmutableArray<MotionKey> Keys);
+
 /// <summary>
 /// Every change the editor makes to a document's bone layers, as <see cref="TimelineEdits"/> does for
 /// its events: each takes a document and returns a new one, or the same instance when nothing changes.
@@ -445,6 +454,196 @@ internal static class MotionEdits
             keys = keys.Insert(insert, started);
         }
         return doc with { Motion = doc.Motion.SetItem(index, layer with { Keys = keys }) };
+    }
+
+    /// <summary>
+    /// <paramref name="picks"/> that still name a key of the layer (and for a bone, its value there), once each, by frame
+    /// then bone. A whole key's pick takes in picks of its bones.
+    /// </summary>
+    public static ImmutableArray<KeyPick> Picks(MotionLayer layer, IEnumerable<KeyPick> picks)
+    {
+        var all = picks.ToHashSet();
+        var whole = all.Where(pick => pick.Bone == null && KeyIndex(layer, pick.Frame) >= 0).Select(pick => pick.Frame).ToHashSet();
+        return [.. all.Where(pick => pick.Bone == null
+                ? whole.Contains(pick.Frame)
+                : !whole.Contains(pick.Frame) && KeyIndex(layer, pick.Frame) is var at and >= 0 && layer.Keys[at].Bones.ContainsKey(pick.Bone))
+            .OrderBy(pick => pick.Frame).ThenBy(pick => pick.Bone, StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// Moves the picked keys and bone values of the layer together by <paramref name="delta"/> frames, as far as none
+    /// lands on or passes what stays behind: a whole key stops at any key left, a bone's value at that bone's next value.
+    /// A bone's value joins a key it lands on. <paramref name="landed"/> is where the picks end up, by frame then bone,
+    /// and <paramref name="applied"/> how far they moved.
+    /// </summary>
+    public static TimelineDocument MoveKeys(TimelineDocument doc, string key, IEnumerable<KeyPick> picks, int delta,
+        out ImmutableArray<KeyPick> landed, out int applied)
+    {
+        applied = 0;
+        var index = IndexOf(doc, key);
+        landed = index < 0 ? [] : Picks(doc.Motion[index], picks);
+        if (landed.IsEmpty || delta == 0)
+            return doc;
+        var layer = doc.Motion[index];
+        var left = LeftBehind(layer, landed);
+        int low = int.MinValue, high = int.MaxValue;
+        foreach (var pick in landed)
+        {
+            low = Math.Max(low, -pick.Frame);
+            high = Math.Min(high, TimelineDocument.MaxFrames - pick.Frame);
+            foreach (var (frame, bones) in left)
+                if (pick.Bone == null ? bones.Count > 0 : bones.Contains(pick.Bone))
+                {
+                    if (frame < pick.Frame)
+                        low = Math.Max(low, frame + 1 - pick.Frame);
+                    else if (frame > pick.Frame)
+                        high = Math.Min(high, frame - 1 - pick.Frame);
+                }
+        }
+        var step = Math.Clamp(delta, Math.Min(0, low), Math.Max(0, high));
+        if (step == 0 || Shift(doc, key, landed, frame => frame + step, out var moved) is not { } next)
+            return doc;
+        landed = moved;
+        applied = step;
+        return next;
+    }
+
+    /// <summary>
+    /// Spreads the picked keys and bone values of the layer over <paramref name="frames"/> frames from the first, each
+    /// keeping its share of the way (to the nearest frame): fewer frames play them faster, more slower. Unchanged with an
+    /// <paramref name="error"/> when two would land on one frame or one would land on or pass what stays behind.
+    /// <paramref name="landed"/> is where the picks end up, in the same order.
+    /// </summary>
+    public static TimelineDocument ScaleKeys(TimelineDocument doc, string key, IEnumerable<KeyPick> picks, int frames,
+        out ImmutableArray<KeyPick> landed, out string? error)
+    {
+        error = null;
+        var index = IndexOf(doc, key);
+        landed = index < 0 ? [] : Picks(doc.Motion[index], picks);
+        if (landed.IsEmpty)
+            return doc;
+        var first = landed[0].Frame;
+        var span = landed[^1].Frame - first;
+        if (span == 0)
+        {
+            error = "Pick keys on two frames or more to spread them.";
+            return doc;
+        }
+        frames = Math.Clamp(frames, 0, TimelineDocument.MaxFrames - first);
+        if (frames == span)
+            return doc;
+        int Target(int frame) => first + (int)Math.Round((frame - first) * (double)frames / span, MidpointRounding.AwayFromZero);
+        var origins = landed.Select(pick => pick.Frame).Distinct().ToArray();
+        if (origins.Select(Target).Distinct().Count() < origins.Length || Shift(doc, key, landed, Target, out var moved) is not { } next)
+        {
+            error = frames < span ? "Two keys would land on the same frame, or one on a key that isn't picked." : "A key would pass one that isn't picked.";
+            return doc;
+        }
+        landed = moved;
+        return next;
+    }
+
+    /// <summary>Deletes the picked keys and bone values of the layer; keys left empty go.</summary>
+    public static TimelineDocument DeleteKeys(TimelineDocument doc, string key, IEnumerable<KeyPick> picks)
+    {
+        if (Find(doc, key) is not { } layer)
+            return doc;
+        foreach (var pick in Picks(layer, picks))
+            doc = pick.Bone is { } bone ? SetKey(doc, key, pick.Frame, bone, null) : DeleteKey(doc, key, pick.Frame);
+        return doc;
+    }
+
+    /// <summary>The picked keys and bone values of the layer for <see cref="PasteKeys"/>; null when none is left.</summary>
+    public static KeyCopy? CopyKeys(TimelineDocument doc, string key, IEnumerable<KeyPick> picks)
+    {
+        if (Find(doc, key) is not { } layer || Picks(layer, picks) is not { IsEmpty: false } picked)
+            return null;
+        var first = picked[0].Frame;
+        var keys = ImmutableArray.CreateBuilder<MotionKey>();
+        foreach (var group in picked.GroupBy(pick => pick.Frame))
+        {
+            var source = layer.Keys[KeyIndex(layer, group.Key)];
+            if (group.Any(pick => pick.Bone == null))
+            {
+                keys.Add(source with { Frame = group.Key - first });
+                continue;
+            }
+            var bones = group.Select(pick => pick.Bone!).ToHashSet(StringComparer.Ordinal);
+            keys.Add(new MotionKey(group.Key - first, source.Bones.Where(bone => bones.Contains(bone.Key)).ToImmutableDictionary(StringComparer.Ordinal),
+                [.. source.Moved.Where(bones.Contains)]));
+        }
+        return new KeyCopy(layer.Kind, keys.ToImmutable());
+    }
+
+    /// <summary>
+    /// Keys <paramref name="copy"/> from <paramref name="frame"/> on in a layer of the kind it was copied from: each bone's
+    /// value goes into the key there, a key it starts takes a whole copied key's ease. <paramref name="pasted"/> picks what
+    /// was keyed: a key the paste started whole, else the bones it set. A pin layer takes only its keyed pins' bones.
+    /// </summary>
+    public static TimelineDocument PasteKeys(TimelineDocument doc, string key, int frame, KeyCopy copy, out ImmutableArray<KeyPick> pasted)
+    {
+        pasted = [];
+        if (Find(doc, key) is not { } layer || layer.Kind != copy.Kind)
+            return doc;
+        var picks = ImmutableArray.CreateBuilder<KeyPick>();
+        foreach (var item in copy.Keys)
+        {
+            var at = frame + item.Frame;
+            if (at < 0 || at > TimelineDocument.MaxFrames)
+                continue;
+            var started = KeyIndex(Find(doc, key)!, at) < 0;
+            var set = new List<KeyPick>();
+            foreach (var (bone, value) in item.Bones)
+            {
+                var next = SetKey(doc, key, at, bone, value, copy.Kind == MotionLayerKind.Pose ? item.Moved.Contains(bone) : null);
+                if (!ReferenceEquals(next, doc))
+                    set.Add(new KeyPick(at, bone));
+                doc = next;
+            }
+            if (started && set.Count > 0)
+            {
+                doc = item.Ease is { } ease ? SetEase(doc, key, at, ease, item.Curve) : doc;
+                picks.Add(new KeyPick(at));
+            }
+            else
+                picks.AddRange(set);
+        }
+        pasted = picks.ToImmutable();
+        return doc;
+    }
+
+    /// <summary>Each key's bones that <paramref name="picks"/> leave where they are, by frame.</summary>
+    private static Dictionary<int, HashSet<string>> LeftBehind(MotionLayer layer, ImmutableArray<KeyPick> picks)
+    {
+        var left = new Dictionary<int, HashSet<string>>();
+        foreach (var item in layer.Keys)
+            left[item.Frame] = picks.Contains(new KeyPick(item.Frame)) ? [] : item.Bones.Keys.ToHashSet(StringComparer.Ordinal);
+        foreach (var pick in picks)
+            if (pick.Bone != null)
+                left[pick.Frame].Remove(pick.Bone);
+        return left;
+    }
+
+    /// <summary>
+    /// Moves each pick to <paramref name="target"/> of its frame with <see cref="MoveKey"/> or <see cref="MoveBoneKey"/>, the
+    /// leading edge first so a pick never stops on one that hasn't moved yet; null when one can't land there.
+    /// </summary>
+    private static TimelineDocument? Shift(TimelineDocument doc, string key, ImmutableArray<KeyPick> picks, Func<int, int> target,
+        out ImmutableArray<KeyPick> landed)
+    {
+        landed = picks;
+        var forward = picks.Any(pick => target(pick.Frame) > pick.Frame);
+        var order = forward ? picks.OrderByDescending(pick => pick.Frame) : picks.OrderBy(pick => pick.Frame);
+        foreach (var pick in order)
+        {
+            var to = target(pick.Frame);
+            int at;
+            doc = pick.Bone is { } bone ? MoveBoneKey(doc, key, bone, pick.Frame, to - pick.Frame, out at) : MoveKey(doc, key, pick.Frame, to - pick.Frame, out at);
+            if (at != to)
+                return null;
+        }
+        landed = [.. picks.Select(pick => pick with { Frame = target(pick.Frame) })];
+        return doc;
     }
 
     /// <summary>

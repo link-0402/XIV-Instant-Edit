@@ -47,6 +47,10 @@ internal enum TimelineGesture : byte
     LayerKey,
     /// <summary>Moves one bone's value out of a key of a bone layer, on that bone's row.</summary>
     BoneKey,
+    /// <summary>Moves every picked key and bone value of a bone layer together.</summary>
+    LayerKeys,
+    /// <summary>Picks a layer's keys and bone values inside a box drawn on its rows; never edits.</summary>
+    KeyBox,
     /// <summary>Trims the start of a part of the cut motion.</summary>
     TrimLeft,
     /// <summary>Trims the end of a part of the cut motion.</summary>
@@ -97,6 +101,13 @@ internal sealed class TimelineEditor
     private string? gestureLayer;
     private int gestureKeyFrame;
     private string? gestureBone;
+    // The picks a group key drag or a key box began with, the primary pick a plain click narrows to on release, and the
+    // rows the box spans (from its pressed row to the last one under the pointer).
+    private ImmutableArray<KeyPick> gesturePicks = [];
+    private KeyPick? collapseToPick;
+    private int boxRow;
+    private int boxLastRow;
+    private float boxFrame = float.NaN;
     // A trim's part or a blend drag's join (-1: the seam), and which way a blend edge lengthens it.
     private int gesturePart;
     private int gestureSide;
@@ -264,6 +275,32 @@ internal sealed class TimelineEditor
     /// </summary>
     public string? SelectedBone { get; private set; }
 
+    private readonly HashSet<KeyPick> keyPicks = [];
+
+    /// <summary>
+    /// Every picked key and bone value of the selected layer, the selected key among them: Ctrl+click adds one, Shift+click
+    /// a row's range, a box on the layer's rows those inside. They move, spread, delete and copy together.
+    /// </summary>
+    public IReadOnlySet<KeyPick> SelectedKeys => keyPicks;
+
+    /// <summary>Whether the selected layer's key at <paramref name="frame"/> is picked whole, or with <paramref name="bone"/> that bone's value in it.</summary>
+    public bool IsPicked(string layer, int frame, string? bone = null) => SelectedLayer == layer && keyPicks.Contains(new KeyPick(frame, bone));
+
+    /// <summary>The box a key box gesture spans while dragged: frames from and to, first and last row; null otherwise.</summary>
+    public (float From, float To, int FirstRow, int LastRow)? KeyBox
+    {
+        get
+        {
+            if (gesture != TimelineGesture.KeyBox || !dragged || MotionEdits.IndexOf(Document, gestureLayer) is not (var index and >= 0))
+                return null;
+            // The box stays on its layer's rows: the layer's own and its bones'.
+            var top = Layout.LayerRow(index);
+            var bottom = top + Layout.BoneRows(index);
+            return (Math.Min(pressFrame, boxFrame), Math.Max(pressFrame, boxFrame),
+                Math.Clamp(Math.Min(boxRow, boxLastRow), top, bottom), Math.Clamp(Math.Max(boxRow, boxLastRow), top, bottom));
+        }
+    }
+
     public MotionLayer? SelectedLayerValue => MotionEdits.Find(Document, SelectedLayer);
 
     /// <summary>
@@ -414,6 +451,10 @@ internal sealed class TimelineEditor
                         ? new[] { item.Start, TimelineEdits.End(item) } : [item.Start])],
                     TimelineSnap.Targets(doc, playhead, keys.ToHashSet(StringComparer.Ordinal)));
                 break;
+            case TimelinePart.MotionLane or TimelinePart.BoneLane when hit.Row >= 0 && MotionEdits.Find(doc, hit.Layer) != null:
+            case TimelinePart.LayerBody when (ctrl || shift) && hit.Row >= 0 && MotionEdits.Find(doc, hit.Layer) != null:
+                PressBox(hit, hit.Layer!, ctrl || shift);
+                break;
             case TimelinePart.Lane or TimelinePart.None or TimelinePart.MotionLane:
                 if (!ctrl && !shift)
                     ClearSelection();
@@ -427,7 +468,7 @@ internal sealed class TimelineEditor
                 break;
             case TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or TimelinePart.LayerFadeIn or
                 TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey when hit.Layer is { } key && MotionEdits.Find(doc, key) is { } layer:
-                PressLayer(hit, key, layer, doc);
+                PressLayer(hit, key, layer, doc, ctrl, shift);
                 break;
             case TimelinePart.ClipRow:
                 ClearSelection();
@@ -504,15 +545,80 @@ internal sealed class TimelineEditor
     }
 
     /// <summary>
+    /// A press on a layer's empty rows, or on its bar with Ctrl or Shift, starts a key box: dragged, it picks the keys and
+    /// bone values inside it, added to the layer's picks with Ctrl or Shift. Pressed on a bone row (or the bar) the layer
+    /// becomes the selection as a click always made it; on its own row the selection clears unless Ctrl or Shift is held.
+    /// </summary>
+    private void PressBox(TimelineHit hit, string key, bool adding)
+    {
+        var keep = adding && SelectedLayer == key;
+        gesturePicks = keep ? [.. keyPicks] : [];
+        if (!keep && hit.Part is TimelinePart.BoneLane or TimelinePart.LayerBody)
+            SelectLayer(key);
+        else if (!keep && !adding)
+            ClearSelection();
+        gestureLayer = key;
+        boxRow = boxLastRow = hit.Row;
+        boxFrame = hit.Frame;
+        gesture = TimelineGesture.KeyBox;
+    }
+
+    /// <summary>Picks the keys and bone values inside the key box on its layer's rows, after those it began with.</summary>
+    private void BoxPicks()
+    {
+        var doc = Document;
+        if (gestureLayer is not { } key || MotionEdits.IndexOf(doc, key) is not (var index and >= 0) || KeyBox is not var (from, to, first, last))
+            return;
+        var layer = doc.Motion[index];
+        var rows = Layout;
+        var top = rows.LayerRow(index);
+        var picks = new List<KeyPick>(gesturePicks);
+        foreach (var item in layer.Keys)
+        {
+            if (item.Frame < from || item.Frame > to)
+                continue;
+            if (first == top)
+                picks.Add(new KeyPick(item.Frame));
+            for (var row = Math.Max(first, top + 1); row <= last; row++)
+                if (rows.BoneAt(row) is { } entry && item.Bones.ContainsKey(entry.Bone))
+                    picks.Add(new KeyPick(item.Frame, entry.Bone));
+        }
+        if (SelectedLayer != key)
+            SelectLayer(key);
+        SetPicks(picks, null);
+    }
+
+    /// <summary>
     /// A press on a bone layer: it becomes the selection and the drag that follows moves it, an end, a
     /// fade, a key or one bone's value in a key. A press on a key also moves the playhead there, so the
-    /// panel shows that key.
+    /// panel shows that key. On the selected layer Ctrl+click adds a key to the picks or takes it out and
+    /// Shift+click picks the row's keys from the selected one to it; a press on a picked key keeps the picks,
+    /// so they drag together, and a plain click without a drag narrows them to that key.
     /// </summary>
-    private void PressLayer(TimelineHit hit, string key, MotionLayer layer, TimelineDocument doc)
+    private void PressLayer(TimelineHit hit, string key, MotionLayer layer, TimelineDocument doc, bool ctrl, bool shift)
     {
         var at = hit.OnKey ? MotionEdits.KeyIndex(layer, hit.KeyFrame) : -1;
         var onKey = at >= 0 && (hit.Part == TimelinePart.LayerKey || hit.Bone is { } named && layer.Keys[at].Bones.ContainsKey(named));
-        SelectLayer(key, onKey ? hit.KeyFrame : null, onKey && hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
+        var pick = new KeyPick(hit.KeyFrame, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
+        // A bone's value in a whole picked key is picked with it.
+        var held = keyPicks.Contains(pick) ? pick : new KeyPick(pick.Frame);
+        if (onKey && (ctrl || shift) && SelectedLayer == key)
+        {
+            if (ctrl)
+                TogglePick(pick);
+            else
+                PickRange(pick);
+            gesture = TimelineGesture.Select;
+            return;
+        }
+        if (onKey && SelectedLayer == key && keyPicks.Count > 1 && keyPicks.Contains(held))
+        {
+            SelectedKey = held.Frame;
+            SelectedBone = held.Bone;
+            collapseToPick = pick;
+        }
+        else
+            SelectLayer(key, onKey ? hit.KeyFrame : null, onKey && hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
         if (onKey)
             Playhead = hit.KeyFrame;
         var snap = TimelineSnap.Targets(doc, playhead, motion: true, exceptLayer: key);
@@ -536,6 +642,14 @@ internal sealed class TimelineEditor
             case TimelinePart.LayerFadeOut:
                 BeginEdit(TimelineGesture.LayerFadeOut, [], [layer.End - layer.FadeOut], snap);
                 break;
+            case TimelinePart.LayerKey or TimelinePart.BoneKey when onKey && keyPicks.Count > 1:
+                gestureKeyFrame = hit.KeyFrame;
+                gestureBone = held.Bone;
+                gesturePicks = [.. keyPicks];
+                var picked = keyPicks.Select(item => item.Frame).ToHashSet();
+                BeginEdit(TimelineGesture.LayerKeys, [], [hit.KeyFrame],
+                    [.. snap.Concat(layer.Keys.Select(item => item.Frame).Where(frame => !picked.Contains(frame))).Distinct().Order()]);
+                break;
             case TimelinePart.LayerKey or TimelinePart.BoneKey when onKey:
                 gestureKeyFrame = hit.KeyFrame;
                 gestureBone = hit.Part == TimelinePart.BoneKey ? hit.Bone : null;
@@ -553,11 +667,20 @@ internal sealed class TimelineEditor
     /// The mouse moved to <paramref name="frameAtMouse"/> while held. Edits are computed from the
     /// document at the press plus a whole-frame offset, so a long drag never drifts.
     /// </summary>
-    public void Drag(float frameAtMouse, bool alt = false)
+    public void Drag(float frameAtMouse, bool alt = false, int row = -1)
     {
         if (gesture is TimelineGesture.None or TimelineGesture.Select || !float.IsFinite(frameAtMouse))
             return;
         dragged = true;
+        if (gesture == TimelineGesture.KeyBox)
+        {
+            // Off the rows the box keeps its last row.
+            if (row >= 0)
+                boxLastRow = row;
+            boxFrame = frameAtMouse;
+            BoxPicks();
+            return;
+        }
         var magnet = Snap && !alt;
         if (gesture == TimelineGesture.Scrub)
         {
@@ -587,7 +710,7 @@ internal sealed class TimelineEditor
                 landed = next.Length;
                 break;
             case TimelineGesture.LayerMove or TimelineGesture.LayerLeft or TimelineGesture.LayerRight or
-                TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or TimelineGesture.BoneKey
+                TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or TimelineGesture.BoneKey or TimelineGesture.LayerKeys
                 when gestureLayer is { } layerKey:
                 (next, landed) = DragLayer(start, layerKey, delta);
                 break;
@@ -653,23 +776,29 @@ internal sealed class TimelineEditor
                 var next = MotionEdits.Fade(start, layerKey, fadeIn, delta);
                 return (next, MotionEdits.Find(next, layerKey) is { } faded ? fadeIn ? faded.Start + faded.FadeIn : faded.End - faded.FadeOut : -1);
             }
+            case TimelineGesture.LayerKeys:
+            {
+                var next = MotionEdits.MoveKeys(start, layerKey, gesturePicks, delta, out var landed, out var applied);
+                SetPicks(landed, new KeyPick(gestureKeyFrame + applied, gestureBone), next);
+                return (next, gestureKeyFrame + applied);
+            }
             case TimelineGesture.BoneKey when gestureBone is { } bone:
             {
                 var next = MotionEdits.MoveBoneKey(start, layerKey, bone, gestureKeyFrame, delta, out var landed);
-                SelectedKey = landed;
+                PickOnly(landed, bone);
                 return (next, landed);
             }
             default:
             {
                 var next = MotionEdits.MoveKey(start, layerKey, gestureKeyFrame, delta, out var landed);
-                SelectedKey = landed;
+                PickOnly(landed, null);
                 return (next, landed);
             }
         }
     }
 
     /// <summary>Whether <paramref name="kind"/> edits the document, so it is one undo step.</summary>
-    private static bool Edits(TimelineGesture kind) => kind is not (TimelineGesture.None or TimelineGesture.Select or TimelineGesture.Scrub);
+    private static bool Edits(TimelineGesture kind) => kind is not (TimelineGesture.None or TimelineGesture.Select or TimelineGesture.Scrub or TimelineGesture.KeyBox);
 
     /// <summary>The mouse was released: a drag becomes one undo step; a click without a drag only selects.</summary>
     public void Release()
@@ -678,6 +807,8 @@ internal sealed class TimelineEditor
             History.End();
         if (!dragged && collapseOnClick && pressKey != null && TimelineEdits.Find(Document, pressKey) != null)
             SelectOnly(pressKey);
+        if (!dragged && collapseToPick is { } narrowed && SelectedLayer is { } layerKey)
+            SelectLayer(layerKey, narrowed.Frame, narrowed.Bone);
         EndGesture();
         ClampView();
     }
@@ -688,7 +819,9 @@ internal sealed class TimelineEditor
         if (Edits(gesture))
             History.Cancel();
         if (gesture is TimelineGesture.LayerKey or TimelineGesture.BoneKey)
-            SelectedKey = gestureKeyFrame;
+            PickOnly(gestureKeyFrame, gestureBone);
+        if (gesture is TimelineGesture.LayerKeys or TimelineGesture.KeyBox)
+            SetPicks(gesturePicks, gesture == TimelineGesture.LayerKeys ? new KeyPick(gestureKeyFrame, gestureBone) : null);
         if (gesture != TimelineGesture.None)
             Playhead = playheadAtPress;
         EndGesture();
@@ -724,8 +857,8 @@ internal sealed class TimelineEditor
             case TimelineKey.RemoveAfter: return RemoveAfterPlayhead();
             case TimelineKey.Blend: return ToggleSelectedBlend();
             case TimelineKey.Duplicate: return SelectedLayer != null ? DuplicateLayer() : DuplicateSelection();
-            case TimelineKey.Copy: return Copy();
-            case TimelineKey.Paste: return Paste();
+            case TimelineKey.Copy: return SelectedLayer != null ? CopyKeys() : Copy();
+            case TimelineKey.Paste: return SelectedLayer != null && CanPasteKeys ? PasteKeys() : Paste();
             case TimelineKey.SelectAll:
                 SelectAll();
                 return selected.Count > 0;
@@ -1022,6 +1155,8 @@ internal sealed class TimelineEditor
         if (copied.Count == 0)
             return false;
         var first = copied.Min(ev => ev.Start);
+        // The last copy is what Ctrl+V pastes, even with a layer selected.
+        keyClipboard = null;
         clipboard = [.. copied.Select(ev => ev with { Start = ev.Start - first })];
         clipboardLoaded = loaded;
         clipboardPack = copied.Any(ev => ev.Lane == TimelineLane.Expression) ? Document.FacePack : null;
@@ -1154,6 +1289,10 @@ internal sealed class TimelineEditor
             else
                 SelectOnly(hit.Key!);
         }
+        else if (gesture == TimelineGesture.None && hit.OnKey && IsPicked(hit.Layer!, hit.KeyFrame, hit.Part == TimelinePart.BoneKey ? hit.Bone : null))
+            (SelectedKey, SelectedBone) = (hit.KeyFrame, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
+        else if (gesture == TimelineGesture.None && hit.OnKey && IsPicked(hit.Layer!, hit.KeyFrame))
+            (SelectedKey, SelectedBone) = (hit.KeyFrame, null);
         else if (gesture == TimelineGesture.None && hit.OnLayer)
             SelectLayer(hit.Layer!, hit.OnKey ? hit.KeyFrame : null, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
         else if (gesture == TimelineGesture.None && hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Layer != null)
@@ -1181,13 +1320,23 @@ internal sealed class TimelineEditor
     {
         if (SelectedKey is not { } frame)
             return Commit(MotionEdits.Move(Document, key, step));
+        // The commit drops a pick whose frame moved, so the bone is kept from before it.
+        var selectedBone = SelectedBone;
+        if (keyPicks.Count > 1)
+        {
+            var moved = MotionEdits.MoveKeys(Document, key, keyPicks, step, out var picks, out var applied);
+            if (!Commit(moved))
+                return false;
+            SetPicks(picks, new KeyPick(frame + applied, selectedBone));
+            return true;
+        }
         int landed;
-        var next = SelectedBone is { } bone
+        var next = selectedBone is { } bone
             ? MotionEdits.MoveBoneKey(Document, key, bone, frame, step, out landed)
             : MotionEdits.MoveKey(Document, key, frame, step, out landed);
         if (!Commit(next))
             return false;
-        SelectedKey = landed;
+        PickOnly(landed, selectedBone);
         return true;
     }
 
@@ -1335,13 +1484,127 @@ internal sealed class TimelineEditor
         var at = keyFrame is { } frame ? MotionEdits.KeyIndex(layer, frame) : -1;
         SelectedKey = at >= 0 ? keyFrame : null;
         SelectedBone = at >= 0 && bone != null && layer.Keys[at].Bones.ContainsKey(bone) ? bone : null;
+        keyPicks.Clear();
+        if (SelectedKey is { } picked)
+            keyPicks.Add(new KeyPick(picked, SelectedBone));
     }
 
-    /// <summary>Deletes the selected bone's value in its key, else the selected key, or with none the selected layer.</summary>
+    /// <summary>The selected layer's key at <paramref name="frame"/> (with <paramref name="bone"/>, that bone's value) as the only pick.</summary>
+    private void PickOnly(int frame, string? bone)
+    {
+        SelectedKey = frame;
+        SelectedBone = bone;
+        keyPicks.Clear();
+        keyPicks.Add(new KeyPick(frame, bone));
+    }
+
+    /// <summary>
+    /// Picks <paramref name="picks"/> in the selected layer as it is in <paramref name="doc"/> (the current document when
+    /// null), <paramref name="primary"/> as the selected key while it is picked, else the first.
+    /// </summary>
+    private void SetPicks(IEnumerable<KeyPick> picks, KeyPick? primary, TimelineDocument? doc = null)
+    {
+        var kept = MotionEdits.Find(doc ?? Document, SelectedLayer) is { } layer ? MotionEdits.Picks(layer, picks) : [];
+        keyPicks.Clear();
+        keyPicks.UnionWith(kept);
+        KeyPick? main = primary is { } wanted && keyPicks.Contains(wanted) ? wanted : kept.IsEmpty ? null : kept[0];
+        SelectedKey = main?.Frame;
+        SelectedBone = main?.Bone;
+    }
+
+    private void TogglePick(KeyPick pick)
+    {
+        var picks = keyPicks.ToList();
+        if (picks.Remove(pick))
+            SetPicks(picks, SelectedKey is { } frame && new KeyPick(frame, SelectedBone) != pick ? new KeyPick(frame, SelectedBone) : null);
+        else
+            SetPicks([.. picks, pick], pick);
+    }
+
+    /// <summary>Picks the row's keys from the selected key's frame to <paramref name="pick"/>'s: whole keys on the layer's row, that bone's values on a bone's.</summary>
+    private void PickRange(KeyPick pick)
+    {
+        if (SelectedLayerValue is not { } layer)
+            return;
+        var primary = SelectedKey is { } frame ? new KeyPick(frame, SelectedBone) : pick;
+        var (low, high) = (Math.Min(primary.Frame, pick.Frame), Math.Max(primary.Frame, pick.Frame));
+        var picks = keyPicks.ToList();
+        foreach (var item in layer.Keys)
+            if (item.Frame >= low && item.Frame <= high && (pick.Bone == null || item.Bones.ContainsKey(pick.Bone)))
+                picks.Add(new KeyPick(item.Frame, pick.Bone));
+        SetPicks(picks, primary);
+    }
+
+    // Static so keys carry to another animation, as copied layers do; an event copy clears them, so Ctrl+V pastes the last copy.
+    private static KeyCopy? keyClipboard;
+
+    public static bool CanPasteKeys => keyClipboard != null;
+
+    /// <summary>Keeps the picked keys and bone values for <see cref="PasteKeys"/>.</summary>
+    public bool CopyKeys()
+    {
+        if (SelectedLayer is not { } key || MotionEdits.CopyKeys(Document, key, keyPicks) is not { } copy)
+            return false;
+        keyClipboard = copy;
+        return true;
+    }
+
+    /// <summary>Keys the copied keys from the playhead on in the selected layer, which must be of the kind they came from, and picks them.</summary>
+    public bool PasteKeys()
+    {
+        LastError = null;
+        if (SelectedLayerValue is not { } layer || keyClipboard is not { } copy)
+            return false;
+        if (layer.Kind != copy.Kind)
+        {
+            LastError = $"These keys came from a {MotionEdits.KindName(copy.Kind)} layer: paste them into one.";
+            return false;
+        }
+        var next = MotionEdits.PasteKeys(Document, layer.Key, playhead, copy, out var pasted);
+        if (!Commit(next))
+            return false;
+        SetPicks(pasted, pasted.IsEmpty ? null : pasted[0]);
+        return true;
+    }
+
+    // The document and picks a field edit of Spread over began with.
+    private TimelineDocument? spreadFrom;
+    private ImmutableArray<KeyPick> spreadPicks = [];
+    private KeyPick? spreadPrimary;
+
+    /// <summary>
+    /// Spreads the picked keys over <paramref name="frames"/> frames from the first (see <see cref="MotionEdits.ScaleKeys"/>):
+    /// live during a field edit, else one undo step; refused with <see cref="LastError"/> when keys would collide. A field
+    /// edit spreads the keys it began with, so each number typed replaces the last one's spread.
+    /// </summary>
+    public bool SpreadKeys(int frames)
+    {
+        LastError = null;
+        if (SelectedLayer is not { } key)
+            return false;
+        var from = History.GestureStart ?? Document;
+        if (!ReferenceEquals(from, spreadFrom))
+        {
+            spreadFrom = from;
+            spreadPicks = MotionEdits.Find(from, key) is { } layer ? MotionEdits.Picks(layer, keyPicks) : [];
+            spreadPrimary = SelectedKey is { } frame ? new KeyPick(frame, SelectedBone) : null;
+        }
+        var next = MotionEdits.ScaleKeys(from, key, spreadPicks, frames, out var landed, out var error);
+        LastError = error;
+        if (error != null || !Change(next))
+            return false;
+        var at = spreadPrimary is { } primary ? spreadPicks.IndexOf(primary) : -1;
+        SetPicks(landed, at >= 0 ? landed[at] : null);
+        return true;
+    }
+
+    /// <summary>Deletes the picked keys and bone values, else the selected layer.</summary>
     public bool DeleteLayerSelection()
     {
         if (SelectedLayer is not { } key)
             return false;
+        if (keyPicks.Count > 1)
+            return Commit(MotionEdits.DeleteKeys(Document, key, keyPicks));
         if (SelectedKey is not { } frame)
             return Commit(MotionEdits.Remove(Document, key));
         return SelectedBone is { } bone
@@ -1427,6 +1690,7 @@ internal sealed class TimelineEditor
         SelectedLayer = null;
         SelectedKey = null;
         SelectedBone = null;
+        keyPicks.Clear();
         SelectedCut = null;
     }
 
@@ -1551,6 +1815,9 @@ internal sealed class TimelineEditor
         targets = [];
         gestureLayer = null;
         gestureBone = null;
+        gesturePicks = [];
+        collapseToPick = null;
+        boxFrame = float.NaN;
     }
 
     private void Scrub(float frame, bool alt)
@@ -1628,12 +1895,8 @@ internal sealed class TimelineEditor
         {
             if (MotionEdits.Find(doc, SelectedLayer) is not { } layer)
                 ClearLayerSelection();
-            else if (SelectedKey is { } frame && gesture is not (TimelineGesture.LayerKey or TimelineGesture.BoneKey) &&
-                     (MotionEdits.KeyIndex(layer, frame) is not (var at and >= 0) || SelectedBone is { } bone && !layer.Keys[at].Bones.ContainsKey(bone)))
-            {
-                SelectedKey = null;
-                SelectedBone = null;
-            }
+            else if (keyPicks.Count > 0 && gesture is not (TimelineGesture.LayerKey or TimelineGesture.BoneKey or TimelineGesture.LayerKeys))
+                SetPicks([.. keyPicks], SelectedKey is { } frame ? new KeyPick(frame, SelectedBone) : null);
         }
         // Parts and joins are numbered in order, so a cut that comes or goes before the one selected (an undo, say) gives its number to
         // another: then it stays selected only while its number still starts at the same frame (within half a frame: a length rounds).

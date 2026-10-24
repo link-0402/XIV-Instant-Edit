@@ -21,6 +21,7 @@ internal static class MotionEditsFixture
         Rows(check);
         Gestures(check);
         BoneRows(check);
+        KeyPicks(check);
         Views(check);
         Symmetry(check);
     }
@@ -398,6 +399,123 @@ internal static class MotionEditsFixture
         editor.SelectLayer("m1");
         editor.Key(TimelineKey.Delete);
         check(!editor.IsUnfolded("m1") && editor.Layout.LayerIndexAt(6) == 0 && editor.Layout.RowCount == 7, "a deleted layer's bone rows go with it");
+    }
+
+    private static void KeyPicks(Action<bool, string> check)
+    {
+        const string Arm = "j_ude_a_l";
+        // m1: keys at 30 (hand and arm), 40 (arm) and 50 (hand).
+        var doc = Layered(Empty());
+        doc = MotionEdits.SetKey(doc, "m1", 30, Arm, Turn(5));
+        doc = MotionEdits.SetKey(doc, "m1", 40, Arm, Turn(15));
+        static int[] Frames(TimelineDocument doc) => [.. doc.Motion[0].Keys.Select(key => key.Frame)];
+        static string[] BonesAt(TimelineDocument doc, int frame) => [.. doc.Motion[0].Keys.Single(key => key.Frame == frame).Bones.Keys.Order(StringComparer.Ordinal)];
+        KeyPick[] wholeFirstTwo = [new(30), new(40)];
+
+        var moved = MotionEdits.MoveKeys(doc, "m1", wholeFirstTwo, 5, out var landed, out var applied);
+        check(Frames(moved).SequenceEqual([35, 45, 50]) && landed.SequenceEqual([new KeyPick(35), new KeyPick(45)]) && applied == 5,
+            "picked keys move together");
+        MotionEdits.MoveKeys(doc, "m1", wholeFirstTwo, 20, out landed, out applied);
+        check(applied == 9 && landed.SequenceEqual([new KeyPick(39), new KeyPick(49)]), "picked keys stop together at a key that isn't picked");
+        var mixed = MotionEdits.MoveKeys(doc, "m1", [new(30), new(50, Hand)], -5, out landed, out _);
+        check(Frames(mixed).SequenceEqual([25, 40, 45]) && BonesAt(mixed, 25).SequenceEqual([Hand, Arm]) && BonesAt(mixed, 45).SequenceEqual([Hand]),
+            "a whole key and a bone's value move together");
+        var both = MotionEdits.MoveKeys(doc, "m1", [new(30, Hand), new(30, Arm)], 3, out _, out _);
+        check(Frames(both).SequenceEqual([33, 40, 50]) && BonesAt(both, 33).SequenceEqual([Hand, Arm]), "two bones picked in one key land in one key");
+        var joined = MotionEdits.MoveKeys(doc, "m1", [new(50, Hand)], -10, out _, out _);
+        check(Frames(joined).SequenceEqual([30, 40]) && BonesAt(joined, 40).SequenceEqual([Hand, Arm]), "a picked bone's value joins a key it lands on");
+        check(MotionEdits.Picks(doc.Motion[0], [new(30), new(30, Hand), new(45), new(40, Hand)]).SequenceEqual([new KeyPick(30)]),
+            "a whole key's pick takes in its bones', and picks of missing keys or bones go");
+
+        KeyPick[] all = [new(30), new(40), new(50)];
+        var spread = MotionEdits.ScaleKeys(doc, "m1", all, 40, out landed, out var error);
+        check(error == null && Frames(spread).SequenceEqual([30, 50, 70]) && landed.SequenceEqual([new KeyPick(30), new KeyPick(50), new KeyPick(70)]),
+            "spreading picked keys over more frames plays them slower from the first");
+        check(Frames(MotionEdits.ScaleKeys(doc, "m1", all, 10, out _, out error)).SequenceEqual([30, 35, 40]) && error == null,
+            "over fewer frames they play faster");
+        check(ReferenceEquals(MotionEdits.ScaleKeys(doc, "m1", all, 1, out _, out error), doc) && error != null,
+            "a spread that would put two keys on one frame is refused");
+        check(ReferenceEquals(MotionEdits.ScaleKeys(doc, "m1", [new(30), new(50)], 5, out _, out error), doc) && error != null &&
+              Frames(MotionEdits.ScaleKeys(doc, "m1", [new(30), new(50)], 30, out _, out _)).SequenceEqual([30, 40, 60]),
+            "a spread that would pass a key that isn't picked is refused; one that stays clear of it works");
+
+        var deleted = MotionEdits.DeleteKeys(doc, "m1", [new(30, Hand), new(40)]);
+        check(Frames(deleted).SequenceEqual([30, 50]) && BonesAt(deleted, 30).SequenceEqual([Arm]), "deleting picks takes out whole keys and single bones' values");
+
+        var eased = MotionEdits.SetEase(doc, "m1", 30, MotionInterpolation.Step);
+        var copy = MotionEdits.CopyKeys(eased, "m1", [new(30), new(50, Hand)]);
+        check(copy is { Kind: MotionLayerKind.Offset, Keys: [{ Frame: 0, Ease: MotionInterpolation.Step }, { Frame: 20, Ease: null }] }, "copied keys count from the first");
+        var pasted = MotionEdits.PasteKeys(eased, "m1", 70, copy!, out var picks);
+        check(Frames(pasted).SequenceEqual([30, 40, 50, 70, 90]) && BonesAt(pasted, 70).SequenceEqual([Hand, Arm]) && pasted.Motion[0].Keys[3].Ease == MotionInterpolation.Step &&
+              picks.SequenceEqual([new KeyPick(70), new KeyPick(90)]),
+            "pasted keys land from the frame on, a whole key with its ease");
+        check(ReferenceEquals(MotionEdits.PasteKeys(eased, "m2", 70, copy!, out _), eased), "keys paste only into a layer of the kind they came from");
+
+        // Rows: 6 the layer, 7 the hand, 8 the arm.
+        var editor = new TimelineEditor(doc);
+        editor.SetWidth(440);
+        void Click(float frame, int row, bool ctrl = false, bool shift = false)
+        {
+            editor.Press(editor.HitTest(Geometry, At(frame, row)), ctrl, shift);
+            editor.Release();
+        }
+        Click(30, 6);
+        Click(50, 6, ctrl: true);
+        check(editor.SelectedKeys.SetEquals([new KeyPick(30), new KeyPick(50)]) && editor.SelectedKey == 50, "Ctrl+click adds a key to the picks");
+        editor.Press(editor.HitTest(Geometry, At(30, 6)));
+        check(editor.Gesture == TimelineGesture.LayerKeys, "pressing a picked key starts moving all of them");
+        editor.Drag(33, alt: true);
+        editor.Release();
+        check(Frames(editor.Document).SequenceEqual([33, 40, 53]) && editor.SelectedKeys.SetEquals([new KeyPick(33), new KeyPick(53)]) &&
+              editor.SelectedKey == 33 && editor.History.UndoCount == 1,
+            "dragging picked keys moves them together as one undo step");
+        editor.Press(editor.HitTest(Geometry, At(53, 7)));
+        check(editor.Gesture == TimelineGesture.LayerKeys, "pressing a bone's value in a picked key drags the whole group");
+        editor.Drag(40, alt: true);
+        editor.Cancel();
+        check(Frames(editor.Document).SequenceEqual([33, 40, 53]) && editor.SelectedKeys.SetEquals([new KeyPick(33), new KeyPick(53)]) && editor.History.UndoCount == 1,
+            "Escape during a group drag puts the keys and the picks back");
+        Click(53, 6);
+        check(editor.SelectedKeys.SetEquals([new KeyPick(53)]), "a plain click on a picked key without a drag picks it alone");
+        Click(33, 6);
+        Click(53, 6, shift: true);
+        check(editor.SelectedKeys.SetEquals([new KeyPick(33), new KeyPick(40), new KeyPick(53)]), "Shift+click picks the row's keys in between");
+        editor.Key(TimelineKey.Right, alt: true);
+        check(Frames(editor.Document).SequenceEqual([34, 41, 54]) && editor.SelectedKeys.SetEquals([new KeyPick(34), new KeyPick(41), new KeyPick(54)]),
+            "Alt+arrows nudge every picked key");
+        check(editor.SpreadKeys(40) && Frames(editor.Document).SequenceEqual([34, 48, 74]) && editor.SelectedKeys.Contains(new KeyPick(74)),
+            "Spread over spreads the picks and keeps them picked");
+        var before = editor.History.UndoCount;
+        editor.BeginFieldEdit();
+        editor.SpreadKeys(10);
+        editor.SpreadKeys(60);
+        editor.EndFieldEdit();
+        check(Frames(editor.Document).SequenceEqual([34, 55, 94]) && editor.History.UndoCount == before + 1,
+            "a field edit spreads the keys it began with, as one undo step");
+        check(!editor.SpreadKeys(1) && editor.LastError != null && Frames(editor.Document).SequenceEqual([34, 55, 94]), "a colliding spread says why and changes nothing");
+        editor.Key(TimelineKey.Delete);
+        check(editor.Document.Motion[0].Keys.IsEmpty && editor.SelectedKeys.Count == 0, "Delete takes out every picked key");
+        editor.Undo();
+        editor.Undo();
+        check(Frames(editor.Document).SequenceEqual([34, 48, 74]) && editor.SelectedKeys.All(pick => MotionEdits.KeyIndex(editor.Document.Motion[0], pick.Frame) >= 0),
+            "undo brings the keys back and drops picks of keys it took away");
+
+        var boxed = new TimelineEditor(doc);
+        boxed.SetWidth(440);
+        boxed.Press(boxed.HitTest(Geometry, At(25, 7)));
+        check(boxed.Gesture == TimelineGesture.KeyBox && boxed.SelectedLayer == "m1", "pressing a bone row's empty space starts a key box");
+        boxed.Drag(45, row: 8);
+        check(boxed.KeyBox is { FirstRow: 7, LastRow: 8 } && boxed.SelectedKeys.SetEquals([new KeyPick(30, Hand), new KeyPick(30, Arm), new KeyPick(40, Arm)]),
+            "the box picks the bones' values inside it");
+        boxed.Drag(55, row: 6);
+        boxed.Release();
+        check(boxed.SelectedKeys.SetEquals([new KeyPick(30), new KeyPick(40), new KeyPick(50)]) && boxed.History.UndoCount == 0 && boxed.KeyBox == null,
+            "over the layer's row it picks whole keys, and picking is no edit");
+        check(boxed.Key(TimelineKey.Copy), "Ctrl+C copies the picked keys");
+        boxed.Playhead = 70;
+        check(boxed.Key(TimelineKey.Paste) && Frames(boxed.Document).SequenceEqual([30, 40, 50, 70, 80, 90]) &&
+              boxed.SelectedKeys.SetEquals([new KeyPick(70), new KeyPick(80), new KeyPick(90)]),
+            "Ctrl+V pastes them at the playhead and picks the copies");
     }
 
     private static void Gestures(Action<bool, string> check)
