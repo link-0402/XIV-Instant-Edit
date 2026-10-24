@@ -996,6 +996,9 @@ public sealed class ExportContextRegistry : IDisposable
             List<PersistedExportContext> snapshot;
             lock (_lock)
             {
+                // Dispose cleared the contexts; saving now would record every one of them as deleted.
+                if (_disposed)
+                    return;
                 var cutoff = DateTimeOffset.UtcNow - (_retention?.Invoke() ?? ExportContextSessionStore.Retention);
                 foreach (var expired in _contexts
                              .Where(pair => pair.Value.Context.LastTouchedAtUtc < cutoff)

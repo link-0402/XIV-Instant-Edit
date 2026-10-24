@@ -130,7 +130,17 @@ internal static class TextureCopies
         }
         catch
         {
-            if (metaWritten) File.WriteAllText(metaFile, metaText);
+            if (metaWritten)
+            {
+                // Through a temp file like the forward write, so a failed rollback never leaves half a meta.json.
+                var restore = metaFile + $".{Guid.NewGuid():N}.tmp";
+                try
+                {
+                    File.WriteAllText(restore, metaText);
+                    File.Move(restore, metaFile, true);
+                }
+                finally { if (File.Exists(restore)) File.Delete(restore); }
+            }
             if (File.Exists(target)) File.Delete(target);
             throw;
         }

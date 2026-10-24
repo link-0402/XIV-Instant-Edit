@@ -160,6 +160,14 @@ internal sealed class PhysicsModService
     /// </summary>
     internal static string UpdatePhysicsModFiles(string folder, string gamePath, byte[] bytes)
     {
+        // meta.json is read and written as one step under the gate Studio's writers take too; the one
+        // physics file written in between is small.
+        lock (Studio.Services.Project.ModFiles.Gate)
+            return UpdatePhysicsModFilesLocked(folder, gamePath, bytes);
+    }
+
+    private static string UpdatePhysicsModFilesLocked(string folder, string gamePath, byte[] bytes)
+    {
         var meta = LoadV4ModMetadata(folder);
         if (meta["DefaultData"] is not JsonObject defaults)
             meta["DefaultData"] = defaults = new JsonObject { ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray() };

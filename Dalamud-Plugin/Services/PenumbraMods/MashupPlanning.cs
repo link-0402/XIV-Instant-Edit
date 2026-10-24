@@ -45,6 +45,19 @@ internal static class MashupPlanning
         JsonArray? manipulations = null,
         IReadOnlyDictionary<string, string>? fileSwaps = null)
     {
+        // meta.json is read and written as one step under the gate Studio's writers take too.
+        lock (Studio.Services.Project.ModFiles.Gate)
+            return WriteMashupGroupLocked(modFolder, name, mappings, description, manipulations, fileSwaps);
+    }
+
+    private static string? WriteMashupGroupLocked(
+        string modFolder,
+        string name,
+        IReadOnlyDictionary<string, string> mappings,
+        string? description,
+        JsonArray? manipulations,
+        IReadOnlyDictionary<string, string>? fileSwaps)
+    {
         try
         {
             fileSwaps ??= new Dictionary<string, string>();

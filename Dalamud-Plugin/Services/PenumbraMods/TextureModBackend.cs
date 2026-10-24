@@ -201,7 +201,8 @@ internal sealed class TextureModBackend : ITextureEditBackend
         if (!PathRules.IsPathWithin(file, root) || !string.Equals(Path.GetFullPath(Path.Combine(root, relative)), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
             throw new TextureConflictException("The texture no longer belongs to its captured mod directory.");
         token.ThrowIfCancellationRequested();
-        var (available, registered) = await _framework.RunOnFrameworkThread(() => (_ipc.Available,_sources.ResolveModScanOnFramework(mod))).ConfigureAwait(false);
+        var available = await _framework.RunOnFrameworkThread(() => _ipc.Available).ConfigureAwait(false);
+        var registered = available ? await _sources.ResolveModScanAsync(mod, null).ConfigureAwait(false) : null;
         // Penumbra lists no mods while it is unavailable, and not every mod while it loads them again.
         if (!available)
             throw new TextureWaitException("Penumbra isn't available right now.");
@@ -546,18 +547,22 @@ internal sealed class TextureModBackend : ITextureEditBackend
         if (!IsSafeGameResourcePath(gamePath, ".tex")) throw new IOException("Invalid vanilla texture destination.");
         _ = TextureFiles.ReadTex(bytes);
         TextureFiles.EnsureLocalPath(modRoot);
-        var meta = LoadV4ModMetadata(modRoot);
-        if (meta["DefaultData"] is not JsonObject defaults) throw new InvalidDataException("The mod has no default option.");
-        if (defaults["Files"] is not JsonObject files)
-        {
-            files = new JsonObject();
-            defaults["Files"] = files;
-        }
         var relative = "Files/" + gamePath;
-        WriteBytesAtomic(modRoot, relative, bytes);
-        files[gamePath] = relative;
-        TouchV4ModMetadata(meta);
-        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        // Read, changed and written under the gate every writer of a mod's meta.json takes, so a Studio save isn't lost.
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            if (meta["DefaultData"] is not JsonObject defaults) throw new InvalidDataException("The mod has no default option.");
+            if (defaults["Files"] is not JsonObject files)
+            {
+                files = new JsonObject();
+                defaults["Files"] = files;
+            }
+            WriteBytesAtomic(modRoot, relative, bytes);
+            files[gamePath] = relative;
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        }
     }
 
     private static void DeleteTextureStaging(string path, string expected)
@@ -616,7 +621,11 @@ internal sealed class TextureModBackend : ITextureEditBackend
 
         try
         {
-            var (groupId, originalId, optionId) = WriteTextureVariantGroup(session, variant, relative);
+            // meta.json is read, changed and written under the gate every writer of it takes, so a Studio save isn't lost.
+            (Guid groupId, Guid originalId, Guid optionId) ids;
+            lock (Studio.Services.Project.ModFiles.Gate)
+                ids = WriteTextureVariantGroup(session, variant, relative);
+            var (groupId, originalId, optionId) = ids;
             return new TextureVariantCommit(TextureFiles.Hash(tex), backup, relative, groupId, originalId, optionId,
                 TextureMappingFingerprint(session.ModRoot, session.RelativePath));
         }

@@ -60,13 +60,14 @@ public sealed partial class ModelBackupStore
             try
             {
                 File.Copy(targetFile, path, false);
-                Cleanup();
-                return path;
             }
             catch (IOException) when (File.Exists(path))
             {
                 // Retry if two backups landed on the same timestamp.
+                continue;
             }
+            Cleanup();
+            return path;
         }
         throw new IOException("Could not allocate a managed backup filename.");
     }
@@ -150,8 +151,15 @@ public sealed partial class ModelBackupStore
             {
                 var backup = path[..^suffix.Length];
                 if (BackupNameRegex().IsMatch(Path.GetFileName(backup)) && !File.Exists(backup))
-                    File.Delete(path);
+                    TryDelete(() => File.Delete(path));
             }
+    }
+
+    // A locked (indexer, antivirus) or read-only file is left for a later cleanup instead of failing the save or the plugin's load.
+    private static void TryDelete(Action delete)
+    {
+        try { delete(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     /// <summary> The backups kept of a mod file, newest first; none when the target isn't one the store backs up. </summary>
@@ -217,11 +225,11 @@ public sealed partial class ModelBackupStore
                 if (match.Success && DateTimeOffset.TryParseExact(match.Groups["stamp"].Value,
                         "yyyyMMdd'T'HHmmss.ffffff'Z'", CultureInfo.InvariantCulture,
                         DateTimeStyles.AssumeUniversal, out var created) && created < cutoff)
-                    File.Delete(path);
+                    TryDelete(() => File.Delete(path));
             }
             DeleteOrphanedEstStates(directory);
             if (!Directory.EnumerateFileSystemEntries(directory).Any())
-                Directory.Delete(directory);
+                TryDelete(() => Directory.Delete(directory));
         }
     }
 

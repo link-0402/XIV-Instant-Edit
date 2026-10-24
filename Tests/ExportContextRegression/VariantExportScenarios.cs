@@ -18,6 +18,44 @@ internal static class VariantExportScenarios
         AttributeGroupsAreGeneratedAndUpdated(Path.Combine(testRoot, "AttributeGroups"));
         AttributeGroupsWithoutACapture(testRoot);
         ExportReceiptsMatchOperation();
+        VariantFileIsNeverTaken(Path.Combine(testRoot, "VariantFileTaken"));
+    }
+
+    private static void VariantFileIsNeverTaken(string root)
+    {
+        var file = Path.Combine(root, "Files", "Large.mdl");
+        var groupId = Guid.NewGuid();
+        var sizes = Group(groupId, "Sizes");
+        var meta = Metadata(sizes);
+        Require(!ModOptionGroups.MayOverwriteVariantFile(meta, root, file, GamePath, "Large", "Sizes", null),
+            "variant save: an existing Large.mdl no option maps is never written over by a save set up in Penumbra");
+        Require(ModOptionGroups.MayOverwriteVariantFile(meta, root, file, GamePath, "Large", null, null),
+            "variant save: not set up in Penumbra, a Large.mdl no option maps is written over, so it can be saved again");
+        var unrelated = new JsonObject
+        {
+            ["Id"] = Guid.NewGuid(), ["Name"] = "Other", ["Type"] = "Single",
+            ["Options"] = new JsonArray(new JsonObject
+            {
+                ["Id"] = Guid.NewGuid(), ["Name"] = "Large",
+                ["Files"] = new JsonObject { ["chara/equipment/e0002/model/c0101e0002_top.mdl"] = "Files/Large.mdl" },
+            }),
+        };
+        meta["Groups"]!.AsArray().Add(unrelated);
+        Require(!ModOptionGroups.MayOverwriteVariantFile(meta, root, file, GamePath, "Large", "Sizes", null) &&
+                !ModOptionGroups.MayOverwriteVariantFile(meta, root, file, GamePath, "Large", null, null),
+            "variant save: Large.mdl mapped by an option named Large in another group is never written over");
+        meta["Groups"]!.AsArray().Remove(unrelated);
+        sizes["Options"]!.AsArray().Add(new JsonObject
+        {
+            ["Id"] = Guid.NewGuid(), ["Name"] = "Large", ["Files"] = new JsonObject { [GamePath] = "Files/Large.mdl" },
+        });
+        // As read from disk, where IDs are strings.
+        meta = JsonNode.Parse(meta.ToJsonString())!.AsObject();
+        Require(ModOptionGroups.MayOverwriteVariantFile(meta, root, file, GamePath, "Large", "Sizes", null) &&
+                ModOptionGroups.MayOverwriteVariantFile(meta, root, file, GamePath, "Large", "", $"group:{groupId:D}"),
+            "variant save: the same variant saved again into its own option writes over its file");
+        Require(!ModOptionGroups.MayOverwriteVariantFile(meta, root, file, GamePath, "Small", "Sizes", null),
+            "variant save: another variant name never takes that file");
     }
 
     private static JsonObject Metadata(params JsonObject[] groups) => new()

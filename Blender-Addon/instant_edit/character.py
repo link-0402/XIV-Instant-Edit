@@ -16,10 +16,11 @@ its own armature, as a single import does. Given the character bone the game hol
 place relative to that bone, that armature hangs from the bone and follows its pose. Exports put
 such an armature back at the origin, where its own skeleton puts the model.
 
-A send's armatures and model collections live in one collection per character. A new send of the
-same character first removes the previous one: its collections, the objects imported into them,
-and its Instant Edit contexts, which the plugin is told to forget. Objects that someone put into
-those collections themselves are moved to the scene's own collection instead.
+A send's armatures and model collections live in one collection per character. Once a new send of
+the same character has bound a model, it removes the previous one: its collections, the objects
+imported into them, and its Instant Edit contexts, which the plugin is told to forget. Objects that
+someone put into those collections themselves are moved to the scene's own collection instead. A
+model that fails to import leaves the previous send as it was.
 
 A send shows the character as the game draws it now. The entry names the attributes the game
 enables on each copy of the model it draws and the shape keys it has on, by the model's own
@@ -205,6 +206,10 @@ def _is_character_collection(collection) -> bool:
     return collection.get(KIND_PROPERTY) == COLLECTION_KIND
 
 
+def _holder_name(character: CharacterImport) -> str:
+    return f"XIV Instant Edit Character [{character.name}]"
+
+
 def character_collection(scene, character: CharacterImport, *, create: bool = True):
     """The collection holding this send's armatures and model collections, made on first use."""
     import bpy
@@ -216,7 +221,7 @@ def character_collection(scene, character: CharacterImport, *, create: bool = Tr
             return collection
     if not create:
         return None
-    collection = bpy.data.collections.new(f"XIV Instant Edit Character [{character.name}]")
+    collection = bpy.data.collections.new(_holder_name(character))
     scene.collection.children.link(collection)
     collection[KIND_PROPERTY] = COLLECTION_KIND
     collection[NAME_PROPERTY] = character.name
@@ -300,7 +305,22 @@ def replace_previous(scene, character: CharacterImport) -> int:
         for collection in reversed(tree):
             if collection.name in bpy.data.collections:
                 bpy.data.collections.remove(collection)
+    # The new send's collection was made while a replaced one still held its name.
+    new_holder = character_collection(scene, character, create=False) if stale else None
+    if new_holder is not None:
+        new_holder.name = _holder_name(character)
     return len(stale)
+
+
+def claim_armature_name(armature, character: CharacterImport) -> str:
+    """Give a send's new armature the name the plugin asks for, which a replaced send may have
+    held while it was built. Returns a note for the status line, or ""."""
+    armature.name = character.armature_name
+    if armature.name == character.armature_name:
+        return ""
+    # Blender suffixes a name another object holds; animations sent by name find that object.
+    return (f'the armature is named "{armature.name}" since another object is named '
+            f'"{character.armature_name}"; animations sent to that name go to the other object')
 
 
 def discard_if_empty(scene, character: CharacterImport) -> None:
@@ -321,17 +341,13 @@ def bind_body(context, character: CharacterImport, collection, mesh_objects, bon
     scene = context.scene
     holder = character_collection(scene, character)
     armature = body_armature(scene, character.send_id)
-    renamed = ""
     if armature is None:
+        # Named by claim_armature_name once a replaced send no longer holds the name.
         armature, report = create_armature(context, holder, character.armature_name, bone_names, mesh_objects,
                                            skeleton, created_objects=created_objects)
         _tag(armature, character, BODY)
         # As for single imports, the bones stay out of the viewport; the armature still deforms.
         armature.hide_set(True)
-        if armature.name != character.armature_name:
-            # Blender suffixes a name another object holds; animations sent by name find that object.
-            renamed = (f'the armature is named "{armature.name}" since another object is named '
-                       f'"{character.armature_name}"; animations sent to that name go to the other object')
     else:
         report = add_bones(context, armature, bone_names, mesh_objects, skeleton)
     adopt_collection(scene, character, collection)
@@ -340,7 +356,7 @@ def bind_body(context, character: CharacterImport, collection, mesh_objects, bon
         modifier = obj.modifiers.new(name="Armature", type="ARMATURE")
         modifier.object = armature
         _tag(obj, character)
-    return "; ".join(part for part in (report.summary(), renamed) if part)
+    return report.summary()
 
 
 def _offset_matrix(offset):

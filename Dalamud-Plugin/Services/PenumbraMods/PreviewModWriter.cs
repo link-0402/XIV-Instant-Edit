@@ -75,6 +75,7 @@ internal sealed class PreviewModWriter
         try
         {
             var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
+            await LeaveFrameworkThread();
             if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
                 throw new IOException("Penumbra's mod directory is unavailable.");
             root = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -165,6 +166,7 @@ internal sealed class PreviewModWriter
         if (!IsSafeModName(modDirectory))
             return (true, "The preview mod's folder name is invalid.");
         var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
+        await LeaveFrameworkThread();
         if (string.IsNullOrWhiteSpace(root))
             return (false, "Penumbra's mod directory is unavailable.");
         var folder = Path.Combine(root, modDirectory);
@@ -200,7 +202,7 @@ internal sealed class PreviewModWriter
             {
                 if (!source.IsModFile || !IsSafeModName(source.ModDirectory) || !IsSafeRelativeResourcePath(source.RelativePath))
                     throw new IOException($"{source.Label} is not a writable mod file.");
-                var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false)
+                var scan = await _sources.ResolveModScanAsync(source.ModDirectory, source.ModStableId).ConfigureAwait(false)
                     ?? throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
                 var file = Path.GetFullPath(source.ActualPath);
                 var root = scan.CandidateRoots.FirstOrDefault(candidate =>
@@ -435,7 +437,7 @@ internal sealed class PreviewModWriter
                     throw new IOException($"{source.Label} is not a writable mod file.");
                 if (!string.Equals(_backups.Describe(source.ModDirectory, source.RelativePath).Id, backup.TargetId, StringComparison.Ordinal))
                     throw new IOException($"The backup {backup.Name} doesn't belong to {source.Label}.");
-                var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false)
+                var scan = await _sources.ResolveModScanAsync(source.ModDirectory, source.ModStableId).ConfigureAwait(false)
                     ?? throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
                 var file = Path.GetFullPath(source.ActualPath);
                 var root = scan.CandidateRoots.FirstOrDefault(candidate =>

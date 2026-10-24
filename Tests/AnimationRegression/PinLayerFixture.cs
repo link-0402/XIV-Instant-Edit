@@ -416,6 +416,15 @@ internal static class PinLayerFixture
         var seamStart = PinPlanting.Find(BonePath(i => i is > 40 and < 119 ? new Vector3(.2f * MathF.Sin(MathF.PI * (i - 40) / 79), .1f * MathF.Sin(MathF.PI * (i - 40) / 79), 0) : Vector3.Zero),
             60, 0, 119, true, PinSensitivity.Normal, 6, 8, 8);
         check(seamStart.Stretches is [{ First: 0 }] && seamStart.Hold(80) == 0 && seamStart.Target(80) == null, "a stretch starting on the seam doesn't hold round the whole loop");
+        // A loop whose ends don't match: down on the last sample but not on sample 0, stepping over 5-29, down 30-49.
+        var openSeam = PinPlanting.Find(BonePath(i => i switch
+        {
+            0 => new Vector3(.1f, 0, 0),
+            >= 5 and < 30 => new Vector3(.2f * MathF.Sin(MathF.PI * (i - 4) / 26), .1f * MathF.Sin(MathF.PI * (i - 4) / 26), 0),
+            > 50 and < 119 => new Vector3(.2f * MathF.Sin(MathF.PI * (i - 50) / 69), .1f * MathF.Sin(MathF.PI * (i - 50) / 69), 0),
+            _ => Vector3.Zero,
+        }), 60, 0, 119, true, PinSensitivity.Normal, 6, 8, 8);
+        check(openSeam.Stretches is [{ First: 30, Last: 49 }] && openSeam.Hold(15) == 0, "a foot down only on an open loop's last sample isn't held over the step before the first stretch");
         check(PinPlanting.Find(Step(), 60, 0, 0, false, PinSensitivity.Normal, 6, 8, 1).Stretches.IsEmpty &&
               PinPlanting.Find(Step(), 60, 50, 40, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty, "a one-sample or empty range finds nothing");
         check(PinPlanting.Find(Gap(3), 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches[0].Held.Position.Y < 1e-6f,

@@ -514,9 +514,22 @@ def check_replace(context, importer):
     previous.select_set(True)
     context.view_layer.objects.active = previous
     queued, scheduled = [], []
+    previous_objects = {obj.name for obj in bpy.data.objects if obj.get(character.SEND_PROPERTY) == SEND_A}
+    previous_collections = {c.name for c in bpy.data.collections if c.get(character.SEND_PROPERTY) == SEND_A}
     with patch.object(revocation, "queue_context_revocations", lambda collections: queued.extend(
             c.get("context_id") for c in collections) or len(collections)), \
             patch.object(revocation, "schedule_revocations", lambda: scheduled.append(True)):
+        failed, _failed_mesh = importer.run(
+            "context-top-b-failed", entry(send_id=SEND_B), bones=["j_kao"], skeleton=payload(CHARACTER),
+            name="Top B Failed", vertices=[Vector((0, 0, 1)), Vector((0.1, 0, 1)), Vector((0, 0.1, 1))],
+            groups={"j_kao": [(0, 1.0), (1, 1.0), (2, 1.0)]}, fail_armature=True)
+        require(failed == {"CANCELLED"} and not queued and not scheduled
+                and {obj.name for obj in bpy.data.objects if obj.get(character.SEND_PROPERTY) == SEND_A} == previous_objects
+                and {c.name for c in bpy.data.collections if c.get(character.SEND_PROPERTY) == SEND_A} == previous_collections
+                and {"context-top", "context-hair", "context-weapon"} <= {c.get("context_id") for c in bpy.data.collections}
+                and "User Keepsake" in holder_a.objects
+                and not any(c.get(character.SEND_PROPERTY) == SEND_B for c in bpy.data.collections),
+                "a new send whose model fails to bind leaves the previous send and its contexts as they were")
         result, new_top = importer.run(
             "context-top-b", entry(send_id=SEND_B), bones=["j_kao"], skeleton=payload(CHARACTER), name="Top B",
             vertices=[Vector((0, 0, 1)), Vector((0.1, 0, 1)), Vector((0, 0.1, 1))], groups={"j_kao": [(0, 1.0), (1, 1.0), (2, 1.0)]})
@@ -537,8 +550,14 @@ def check_replace(context, importer):
     require(single.name in names and any(c.get("context_id") == "context-single" for c in bpy.data.collections)
             and character.body_armature(context.scene, SEND_C) is not None,
             "single imports and other characters' sends stay")
-    require(new_top.parent is not None and new_top.parent == character.body_armature(context.scene, SEND_B),
+    new_armature = character.body_armature(context.scene, SEND_B)
+    require(new_top.parent is not None and new_top.parent == new_armature,
             "the new send builds its own armature")
+    holder_b = character.character_collection(context.scene, character.CharacterImport(SEND_B, KEY, "", "body", "Skeleton"),
+                                              create=False)
+    require(new_armature.name == "Skeleton.001" and holder_b.name == "XIV Instant Edit Character [Firstname Lastname]"
+            and 'the armature is named "Skeleton.001"' in context.scene.xiv_ie_instant_edit_props.last_status,
+            "the new send takes the names the previous one held while it was built")
 
 
 def check_failure_cleanup(context, importer):

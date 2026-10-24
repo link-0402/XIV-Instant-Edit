@@ -287,7 +287,6 @@ internal static class ModMetadata
     /// </summary>
     internal static bool RenameAnimationFileMapping(string modRoot, string gamePath, string oldRelativePath, string newRelativePath)
     {
-        var meta = LoadV4ModMetadata(modRoot);
         var oldNormalized = oldRelativePath.Replace('\\', '/').Trim();
         var renamed = false;
         var stillReferenced = false;
@@ -307,20 +306,25 @@ internal static class ModMetadata
             }
         }
 
-        Visit(meta["DefaultData"] as JsonObject);
-        if (meta["Groups"] is JsonArray groups)
-            foreach (var group in groups.OfType<JsonObject>())
-            {
-                Visit(group);
-                if (group["Options"] is JsonArray options)
-                    foreach (var option in options.OfType<JsonObject>()) Visit(option);
-                if (group["Containers"] is JsonArray containers)
-                    foreach (var container in containers.OfType<JsonObject>()) Visit(container);
-            }
+        // Read, changed and written under the gate every writer of a mod's meta.json takes, so a Studio save isn't lost.
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            Visit(meta["DefaultData"] as JsonObject);
+            if (meta["Groups"] is JsonArray groups)
+                foreach (var group in groups.OfType<JsonObject>())
+                {
+                    Visit(group);
+                    if (group["Options"] is JsonArray options)
+                        foreach (var option in options.OfType<JsonObject>()) Visit(option);
+                    if (group["Containers"] is JsonArray containers)
+                        foreach (var container in containers.OfType<JsonObject>()) Visit(container);
+                }
 
-        if (!renamed) throw new InvalidDataException($"{gamePath} is no longer mapped to {oldRelativePath} in this mod.");
-        TouchV4ModMetadata(meta);
-        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+            if (!renamed) throw new InvalidDataException($"{gamePath} is no longer mapped to {oldRelativePath} in this mod.");
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        }
         return stillReferenced;
     }
 
@@ -389,19 +393,22 @@ internal static class ModMetadata
     internal static void AddAnimationResourceMapping(string modRoot, string ownerGamePath, string gamePath, string relativePath,
         string? ownerFile = null)
     {
-        var meta = LoadV4ModMetadata(modRoot);
-        var containers = AnimationMappingContainers(meta).ToArray();
-        var owners = containers.Where(files => files.Any(pair => SameGamePath(pair.Key, ownerGamePath) &&
-            (ownerFile == null || string.Equals(NormalizedModFile(JsonString(pair.Value)), NormalizedModFile(ownerFile),
-                StringComparison.OrdinalIgnoreCase))))
-            .ToArray();
-        if ((ownerFile == null ? containers : owners).Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))))
-            throw new InvalidDataException($"The mod already maps {gamePath}.");
-        if (owners.Length == 0) throw new InvalidDataException($"The mod no longer maps {ownerGamePath}{(ownerFile == null ? "" : $" to {ownerFile}")}.");
-        foreach (var files in owners)
-            files[gamePath] = relativePath;
-        TouchV4ModMetadata(meta);
-        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            var containers = AnimationMappingContainers(meta).ToArray();
+            var owners = containers.Where(files => files.Any(pair => SameGamePath(pair.Key, ownerGamePath) &&
+                (ownerFile == null || string.Equals(NormalizedModFile(JsonString(pair.Value)), NormalizedModFile(ownerFile),
+                    StringComparison.OrdinalIgnoreCase))))
+                .ToArray();
+            if ((ownerFile == null ? containers : owners).Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))))
+                throw new InvalidDataException($"The mod already maps {gamePath}.");
+            if (owners.Length == 0) throw new InvalidDataException($"The mod no longer maps {ownerGamePath}{(ownerFile == null ? "" : $" to {ownerFile}")}.");
+            foreach (var files in owners)
+                files[gamePath] = relativePath;
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        }
     }
 
     /// <summary>
@@ -411,20 +418,23 @@ internal static class ModMetadata
     /// </summary>
     internal static void RemoveAnimationResourceMapping(string modRoot, string gamePath, string relativePath)
     {
-        var meta = LoadV4ModMetadata(modRoot);
         var normalized = relativePath.Replace('\\', '/').Trim();
-        var removed = false;
-        foreach (var files in AnimationMappingContainers(meta))
-            foreach (var pair in files.ToArray())
-                if (SameGamePath(pair.Key, gamePath) && JsonString(pair.Value) is { } value &&
-                    string.Equals(value.Replace('\\', '/').Trim(), normalized, StringComparison.OrdinalIgnoreCase))
-                {
-                    files.Remove(pair.Key);
-                    removed = true;
-                }
-        if (!removed) return;
-        TouchV4ModMetadata(meta);
-        WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            var removed = false;
+            foreach (var files in AnimationMappingContainers(meta))
+                foreach (var pair in files.ToArray())
+                    if (SameGamePath(pair.Key, gamePath) && JsonString(pair.Value) is { } value &&
+                        string.Equals(value.Replace('\\', '/').Trim(), normalized, StringComparison.OrdinalIgnoreCase))
+                    {
+                        files.Remove(pair.Key);
+                        removed = true;
+                    }
+            if (!removed) return;
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        }
     }
 
     /// <summary>The Files objects of a mod's DefaultData, groups, options and containers.</summary>

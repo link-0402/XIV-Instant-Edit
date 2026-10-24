@@ -406,7 +406,8 @@ internal unsafe sealed class AnimationNative
             // Havok reads every block at these offsets into Data without checking them.
             if (value->BlockOffsets.Length < value->NumBlocks || a->NumberOfFloatTracks > 0 && value->FloatBlockOffsets.Length < value->NumBlocks)
                 throw new InvalidDataException("Spline block offsets are missing.");
-            ValidateBounds(value->BlockOffsets, value->Data.Length);
+            // A block must start inside the data (Data.Length is at least 1 here); float offsets count from the block start.
+            ValidateBounds(value->BlockOffsets, value->Data.Length - 1);
             ValidateBounds(value->FloatBlockOffsets, value->Data.Length);
         }
         else if (a->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation)

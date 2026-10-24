@@ -113,19 +113,17 @@ internal sealed class ModelExportService
         string? committedTarget = null;
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(
-                () => _sources.ResolveSourceModTargetOnFramework(
-                    sourceModDirectory,
-                    sourceFilePath,
-                    sourceModRootPath,
-                    targetRelativePath,
-                    sourceModStableId)).ConfigureAwait(false);
+            var resolved = await _sources.ResolveSourceModTargetAsync(
+                sourceModDirectory,
+                sourceFilePath,
+                sourceModRootPath,
+                targetRelativePath,
+                sourceModStableId).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(
                     false,
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
-            await LeaveFrameworkThread();
             var meta = LoadV4ModMetadata(resolved.Target.Folder);
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
@@ -147,10 +145,13 @@ internal sealed class ModelExportService
                     return new ExportResult(false, optionTarget.Code, optionTarget.Error);
                 targetFile = optionTarget.FilePath!;
             }
-            // A new variant gets its own file; never overwrite a model the mod already uses.
+            // A new variant gets its own file; never overwrite a model the mod already has, unless it is this
+            // variant's own file from an earlier save into the same group (or, not set up in Penumbra, one no option maps).
             else if (variantName is not null && File.Exists(targetFile) &&
                      (PathRules.SamePhysicalPath(targetFile, resolved.Target.FilePath) ||
-                      IsMappedOutsideOption(meta, resolved.Target.Folder, targetFile, variantName)))
+                      !MayOverwriteVariantFile(meta, resolved.Target.Folder, targetFile, sourceGamePath, variantName,
+                          setupVariantInPenumbra ? variantGroupName ?? "" : null,
+                          setupVariantInPenumbra && variantTarget == "group" ? variantTargetId : null)))
                 return new ExportResult(false, ResultCode.InvalidVariantName,
                     $"The mod already uses {variantName}.mdl. Choose a different variant name.");
             JsonObject? sourceOptionTemplate = null;
@@ -305,13 +306,11 @@ internal sealed class ModelExportService
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(
-                () => _sources.ResolveSourceModTargetOnFramework(
-                    sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
+            var resolved = await _sources.ResolveSourceModTargetAsync(
+                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new VariantTargetsResult(false, resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.", []);
-            await LeaveFrameworkThread();
             return new VariantTargetsResult(true, ResultCode.VariantTargetsLoaded, "Compatible Penumbra targets loaded.",
                 ReadVariantTargets(resolved.Target.Folder, sourceGamePath, resolved.Target.Directory, _backups));
         }

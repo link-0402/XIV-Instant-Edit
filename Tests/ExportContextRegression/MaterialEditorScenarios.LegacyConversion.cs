@@ -98,6 +98,8 @@ internal static partial class MaterialEditorScenarios
         Require(LegacyConversion.DyeForShader(dye, false, true, [205]).Template == 205
                 && LegacyConversion.DyeForShader(dawntrailOnly, false, true, [205]) == default,
             "a template the legacy file has maps back; a Dawntrail-only one pastes undyed instead of naming a template legacy lacks");
+        Require(LegacyConversion.DyeForShader(dye, false, true, []).Template == 205,
+            "an empty legacy template list (stainingtemplate.stm unread) checks nothing, so a dye still maps back");
         Require(LegacyConversion.DyeForShader(dye, true, true) == dye && LegacyConversion.DyeForShader(default, true, false) == default,
             "dyes paste unchanged between materials of the same kind, and an undyed row stays undyed");
 

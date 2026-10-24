@@ -99,11 +99,11 @@ internal sealed class SizesExportService
             // A size keeps its option's file only when no other option or group maps that file too.
             if (existingGroup?["Options"] is JsonArray options)
                 for (var index = 0; index < sizeNames.Count; index++)
-                    if (FindOption(options, sizeNames[index])?["Files"] is JsonObject mappings &&
+                    if (FindOption(options, sizeNames[index]) is { } option && option["Files"] is JsonObject mappings &&
                         TryNormalizeRelativeModPath(
                             JsonString(mappings.FirstOrDefault(pair => SameGamePath(pair.Key, sourceGamePath)).Value),
                             out var mapped) &&
-                        !IsMappedOutsideOption(meta, root, Path.Combine(root, mapped), sizeNames[index]) &&
+                        !IsMappedOutsideOption(meta, root, Path.Combine(root, mapped), option) &&
                         taken.Add(mapped))
                         files[index] = mapped;
             var replaced = files.OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -193,19 +193,17 @@ internal sealed class SizesExportService
         string? committedTarget = null;
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(
-                () => _sources.ResolveSourceModTargetOnFramework(
-                    sourceModDirectory,
-                    sourceFilePath,
-                    sourceModRootPath,
-                    targetRelativePath,
-                    sourceModStableId)).ConfigureAwait(false);
+            var resolved = await _sources.ResolveSourceModTargetAsync(
+                sourceModDirectory,
+                sourceFilePath,
+                sourceModRootPath,
+                targetRelativePath,
+                sourceModStableId).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(
                     false,
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
-            await LeaveFrameworkThread();
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
                 var attributeError = ValidateAttributeGroups(
@@ -241,17 +239,18 @@ internal sealed class SizesExportService
             // every new one is in place.
             var order = Enumerable.Range(0, sizes.Count)
                 .OrderBy(index => plan.Replaced.Contains(targets[index].RelativePath)).ToArray();
+            // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
+            // Read before the first write, so EST records that can't be read leave every size unwritten.
+            var estStates = targets.Select(target => backupExisting && File.Exists(target.Path)
+                ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, target.RelativePath)
+                : null).ToArray();
             for (var step = 0; step < order.Length; step++)
             {
                 var index = order[step];
                 var (relative, targetFile) = targets[index];
-                // The backup keeps the model's EST entries too, so restoring it undoes this export's EST change.
-                var estState = backupExisting && File.Exists(targetFile)
-                    ? _est.CaptureEstState(resolved.Target.Folder, resolved.Target.Directory, relative)
-                    : null;
                 var writeError = _writer.WriteModelToOriginalLocation(
                     resolved.Target.Folder, targetFile, sizes[index].ExportedFile, backupExisting,
-                    resolved.Target.Directory, relative, estState);
+                    resolved.Target.Directory, relative, estStates[index]);
                 if (writeError is null)
                     continue;
                 var replacedSizes = order.Take(step).Where(done => plan.Replaced.Contains(targets[done].RelativePath))

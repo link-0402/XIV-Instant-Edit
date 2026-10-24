@@ -688,6 +688,23 @@ def _named_readiness_issue(label: str, names: list[str]) -> str:
     return f"{label} ({len(names)}): {shown}"
 
 
+def _export_groups(export_objects) -> list:
+    """The export's mesh groups; refuses empty meshes and meshes not named as mesh parts."""
+    export_groups = group_mesh_objects(export_objects)
+    recognized = {obj for group in export_groups for obj in group.objects}
+    unrecognized = [obj for obj in export_objects if obj not in recognized]
+    # group_mesh_objects skips meshes without vertices, whatever their name.
+    empty = [obj.name for obj in unrecognized if obj.type == "MESH" and len(obj.data.vertices) == 0]
+    if empty:
+        raise ValueError(_named_readiness_issue("Empty meshes", empty))
+    if unrecognized:
+        raise ValueError(
+            "Visible mesh names must use 'group.part Name' or 'Name group.part': "
+            + ", ".join(obj.name for obj in unrecognized)
+        )
+    return export_groups
+
+
 def _material_coverage_warning_message(missing_materials) -> str:
     names = list(dict.fromkeys(
         _normalize_mashup_material(name)
@@ -1581,10 +1598,10 @@ class InstantImport(Operator):
     ) -> tuple[str, str]:
         """Binds a model of a whole-character send (see character.py): body models to the send's
         shared armature, a weapon to an armature of its own hung from the bone that holds it, then
-        shows the model as the game draws it. A new send of the character first replaces its
-        previous one. Returns a warning for the status line and what the game hides of the model,
-        each an empty string when there is nothing to say."""
-        character_send.replace_previous(context.scene, character)
+        shows the model as the game draws it. Once the model is bound, a new send of the character
+        replaces its previous one, so a failed import leaves that one as it was. Returns a warning
+        for the status line and what the game hides of the model, each an empty string when there
+        is nothing to say."""
         model = XIVModel.from_file(str(file_path))
         if character.role == character_send.WEAPON:
             note = self._create_armature(context, file_path, mesh_objects, collection, metadata, created_objects)
@@ -1593,13 +1610,18 @@ class InstantImport(Operator):
                          if armature is not None else "")
             character_send.adopt_collection(context.scene, character, collection)
             drawn_note = character_send.apply_draw_state(model, mesh_objects, character)
+            character_send.replace_previous(context.scene, character)
             return "; ".join(part for part in (note, hang_note) if part), drawn_note
         _check_unbound_meshes(mesh_objects, collection, created_objects)
         game_skeleton, skeleton_error = self._load_game_skeleton()
         note = character_send.bind_body(
             context, character, collection, mesh_objects, model.bones, game_skeleton, created_objects)
         drawn_note = character_send.apply_draw_state(model, mesh_objects, character)
-        return skeleton_error or note, drawn_note
+        character_send.replace_previous(context.scene, character)
+        # The send's first model built the armature, while a replaced send may have held its name.
+        armature = next((obj for obj in created_objects if obj.type == "ARMATURE"), None)
+        renamed = character_send.claim_armature_name(armature, character) if armature is not None else ""
+        return skeleton_error or "; ".join(part for part in (note, renamed) if part), drawn_note
 
     def _load_game_skeleton(self):
         """The game skeleton the plugin sent, or None, and why it could not be read."""
@@ -1706,26 +1728,31 @@ def _create_mashup_output_context(
             alias = assignments[(source_context_id, source_material.casefold())]
             duplicate = obj.copy()
             duplicate.data = obj.data.copy()
+            created_objects.append(duplicate)
             duplicate.name = _mashup_duplicate_name(obj, output_context_id)
             collection.objects.link(duplicate)
-            tag_object(duplicate, {
-                "context_id": output_context_id,
-                "schema": metadata["schema"],
-                "version": metadata["version"],
-            })
+            # A mesh made in Blender has no import metadata; its collection routes it, as for the source.
+            if _value(obj, "context_id"):
+                tag_object(duplicate, {
+                    "context_id": output_context_id,
+                    "schema": metadata["schema"],
+                    "version": metadata["version"],
+                })
             duplicate["xiv_material"] = alias
             duplicate["instant_edit_xiv_material"] = alias
             # The mashup's own mod only has the aliases, so the material picker offers those.
             duplicate["original_material"] = alias
             duplicate["instant_edit_original_material"] = alias
             duplicate.pop(MASHUP_SOURCE_MATERIAL_PROPERTY, None)
-            created_objects.append(duplicate)
 
         return validate_context(output_context_id, context.scene), created_objects
     except Exception:
         for obj in reversed(created_objects):
+            data = obj.data
             if obj.name in bpy.data.objects:
                 bpy.data.objects.remove(obj, do_unlink=True)
+            if data is not None and data.users == 0:
+                bpy.data.meshes.remove(data)
         if collection.name in bpy.data.collections:
             bpy.data.collections.remove(collection, do_unlink=True)
         raise
@@ -2816,13 +2843,7 @@ def perform_mashup_export(
     if destination == "ACTIVE_MOD" and len(refs) < 2:
         raise ValueError(
             "Every part uses the active Context's materials. Export it instead, or choose New Mod.")
-    export_groups = group_mesh_objects(export_objects)
-    recognized = {obj for group in export_groups for obj in group.objects}
-    unrecognized = [obj.name for obj in export_objects if obj not in recognized]
-    if unrecognized:
-        raise ValueError(
-            "Visible mesh names must use 'group.part Name' or 'Name group.part': "
-            + ", ".join(unrecognized))
+    _export_groups(export_objects)
     raise_unless_exportable(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
@@ -3082,14 +3103,7 @@ def instant_export_steps(
     export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
     if not export_objects:
         raise ValueError("No visible mesh objects to export.")
-    export_groups = group_mesh_objects(export_objects)
-    recognized = {obj for group in export_groups for obj in group.objects}
-    unrecognized = [obj.name for obj in export_objects if obj not in recognized]
-    if unrecognized:
-        raise ValueError(
-            "Visible mesh names must use 'group.part Name' or 'Name group.part': "
-            + ", ".join(unrecognized)
-        )
+    export_groups = _export_groups(export_objects)
     raise_unless_exportable(export_objects, ref.source_game_path)
     scaled_race = racial_scaling.own_race(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (
@@ -3270,14 +3284,7 @@ def race_export_steps(context: Context, ref, new_mod_name: str | None = None):
     export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
     if not export_objects:
         raise ValueError("No visible mesh objects to export.")
-    export_groups = group_mesh_objects(export_objects)
-    recognized = {obj for group in export_groups for obj in group.objects}
-    unrecognized = [obj.name for obj in export_objects if obj not in recognized]
-    if unrecognized:
-        raise ValueError(
-            "Visible mesh names must use 'group.part Name' or 'Name group.part': "
-            + ", ".join(unrecognized)
-        )
+    export_groups = _export_groups(export_objects)
     race = raise_unless_exportable(export_objects, ref.source_game_path, race_model=True)
     attribute_tags, attribute_masks = (
         attribute_group_data(export_objects, use_lods=get_settings().use_lods)
@@ -3417,14 +3424,7 @@ def sizes_export_steps(context: Context, ref):
     export_objects = export_objects_for_scope(ref, getattr(props, "export_scope", "VISIBLE"))
     if not export_objects:
         raise ValueError("No visible mesh objects to export.")
-    export_groups = group_mesh_objects(export_objects)
-    recognized = {obj for group in export_groups for obj in group.objects}
-    unrecognized = [obj.name for obj in export_objects if obj not in recognized]
-    if unrecognized:
-        raise ValueError(
-            "Visible mesh names must use 'group.part Name' or 'Name group.part': "
-            + ", ".join(unrecognized)
-        )
+    _export_groups(export_objects)
     raise_unless_exportable(export_objects, ref.source_game_path)
     scaled_race = racial_scaling.own_race(export_objects, ref.source_game_path)
     attribute_tags, attribute_masks = (

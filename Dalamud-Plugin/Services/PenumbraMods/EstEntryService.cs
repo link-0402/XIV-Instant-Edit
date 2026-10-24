@@ -242,6 +242,18 @@ internal sealed partial class EstEntryService
         IReadOnlyList<EstEntryRequest>? requests,
         EstEntryStore? store)
     {
+        // meta.json is read and written as one step under the gate Studio's writers take too.
+        lock (Studio.Services.Project.ModFiles.Gate)
+            return UpdateEstEntriesLocked(modFolder, modDirectory, modelRelativePath, requests, store);
+    }
+
+    private static List<string> UpdateEstEntriesLocked(
+        string modFolder,
+        string modDirectory,
+        string modelRelativePath,
+        IReadOnlyList<EstEntryRequest>? requests,
+        EstEntryStore? store)
+    {
         var warnings = new List<string>();
         if (requests is null)
             return warnings;
@@ -443,6 +455,13 @@ internal sealed partial class EstEntryService
 
     /// <summary>Put back the EST entries a model backup carries, with the plugin's ownership of them.</summary>
     internal static List<string> RestoreEstState(
+        string modFolder, string modDirectory, JsonObject state, EstEntryStore? store)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+            return RestoreEstStateLocked(modFolder, modDirectory, state, store);
+    }
+
+    private static List<string> RestoreEstStateLocked(
         string modFolder, string modDirectory, JsonObject state, EstEntryStore? store)
     {
         var warnings = new List<string>();

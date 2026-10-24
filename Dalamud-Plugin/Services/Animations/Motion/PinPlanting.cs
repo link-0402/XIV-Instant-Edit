@@ -243,10 +243,9 @@ internal static class PinPlanting
                 runs.RemoveAt(r);
             }
         var joined = false;
-        if (wraps && runs.Count > 1 && runs[^1].First == last)
+        if (wraps && runs.Count > 1 && runs[^1].First == last && runs[0].First == first)
         {
-            // Down only on the last sample, which is the first one's moment: the first run already starts there.
-            runs[0] = (first, runs[0].Last);
+            // Down only on the last sample, which is the first one's moment, and the first run starts there too: one run.
             runs.RemoveAt(runs.Count - 1);
         }
         else if (wraps && runs.Count > 1 && runs[0].First - first + (last - runs[^1].Last) - 1 <= gapSamples)

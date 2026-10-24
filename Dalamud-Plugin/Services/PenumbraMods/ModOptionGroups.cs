@@ -203,13 +203,21 @@ internal static class ModOptionGroups
         return parts is ["group", var group] && Guid.TryParse(group, out groupId);
     }
 
-    internal sealed record VariantGroupWrite(string Path, JsonObject Document);
+    /// <summary>A planned group write; <paramref name="Replan"/> makes the same plan again from meta.json as it is then.</summary>
+    internal sealed record VariantGroupWrite(string Path, JsonObject Document, Func<(string? Error, VariantGroupWrite? Prepared)> Replan);
 
     internal static string? CommitVariantGroup(VariantGroupWrite prepared)
     {
         try
         {
-            WriteJsonAtomic(prepared.Path, prepared.Document);
+            lock (Studio.Services.Project.ModFiles.Gate)
+            {
+                // The plan was read before the model write; planned again under the gate, a Studio save since then stays.
+                var (error, current) = prepared.Replan();
+                if (error is not null)
+                    return error;
+                WriteJsonAtomic(current!.Path, current.Document);
+            }
             return null;
         }
         catch (Exception error)
@@ -297,7 +305,12 @@ internal static class ModOptionGroups
             else
                 groups.Add(updatedGroup);
             TouchV4ModMetadata(meta);
-            prepared = new VariantGroupWrite(metaPath, meta);
+            prepared = new VariantGroupWrite(metaPath, meta, () =>
+            {
+                var error = PrepareOptionGroup(modFolder, sourceGamePath, optionFiles, groupName, selectedName, addNone,
+                    out var again, sourceOption, targetId);
+                return (error, again);
+            });
             return null;
         }
         catch (Exception e)
@@ -470,14 +483,11 @@ internal static class ModOptionGroups
         return false;
     }
 
-    /// <summary>Whether the default data or an option not named <paramref name="optionName"/> maps <paramref name="file"/>.</summary>
-    internal static bool IsMappedOutsideOption(JsonObject meta, string modRoot, string file, string optionName)
+    /// <summary>Whether the default data or an option or container other than <paramref name="owner"/> maps <paramref name="file"/>.</summary>
+    internal static bool IsMappedOutsideOption(JsonObject meta, string modRoot, string file, JsonObject? owner)
     {
         var relative = Path.GetRelativePath(modRoot, file).Replace('\\', '/');
-        bool Maps(JsonNode? container) => container is JsonObject value && value["Files"] is JsonObject files &&
-            files.Any(pair => string.Equals(JsonString(pair.Value)?.Replace('\\', '/').TrimStart('/'), relative,
-                StringComparison.OrdinalIgnoreCase));
-        if (Maps(meta["DefaultData"]))
+        if (MapsFile(meta["DefaultData"], relative))
             return true;
         if (meta["Groups"] is not JsonArray groups)
             return false;
@@ -485,10 +495,34 @@ internal static class ModOptionGroups
             foreach (var key in new[] { "Options", "Containers" })
                 if (group[key] is JsonArray options)
                     foreach (var option in options.OfType<JsonObject>())
-                        if (Maps(option) &&
-                            !string.Equals(JsonString(option["Name"]), optionName, StringComparison.OrdinalIgnoreCase))
+                        if (!ReferenceEquals(option, owner) && MapsFile(option, relative))
                             return true;
         return false;
+    }
+
+    private static bool MapsFile(JsonNode? container, string relative)
+        => container is JsonObject value && value["Files"] is JsonObject files &&
+           files.Any(pair => string.Equals(JsonString(pair.Value)?.Replace('\\', '/').TrimStart('/'), relative,
+               StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Whether a variant may write over its existing <paramref name="file"/>: only when the option that receives
+    /// it (<paramref name="variantName"/> in the group it goes into) maps the file and nothing else does, so the
+    /// same variant can be saved again. Without a receiving group (<paramref name="groupName"/> and
+    /// <paramref name="groupTargetId"/> null: not set up in Penumbra) a file no option maps is taken, so a
+    /// variant saved that way can be saved again.
+    /// </summary>
+    internal static bool MayOverwriteVariantFile(JsonObject meta, string modRoot, string file, string sourceGamePath,
+        string variantName, string? groupName, string? groupTargetId)
+    {
+        if (groupName is null && groupTargetId is null)
+            return !IsMappedOutsideOption(meta, modRoot, file, owner: null);
+        if (FindOptionGroup(meta["Groups"] as JsonArray ?? [], sourceGamePath, groupName ?? "", groupTargetId,
+                out var group, out _, out _) is not null ||
+            group?["Options"] is not JsonArray options || FindOption(options, variantName) is not { } option)
+            return false;
+        return MapsFile(option, Path.GetRelativePath(modRoot, file).Replace('\\', '/')) &&
+               !IsMappedOutsideOption(meta, modRoot, file, option);
     }
 
     internal static JsonObject BuildVariantOptionForRegression(

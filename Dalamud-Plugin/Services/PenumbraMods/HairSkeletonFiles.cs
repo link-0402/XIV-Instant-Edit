@@ -227,6 +227,8 @@ internal static partial class HairSkeletonFiles
         var folder = FolderName(modFolder);
         var previousIds = (plan.PreviousIds ?? []).Where(moved => moved != plan.SkeletonId).Distinct().ToList();
         var stored = store.Load();
+        // Both record files are read before the first write, so one that can't be read changes nothing.
+        var estRecords = estStore.Load().ToList();
         var records = stored.Where(record => !Owns(record, modKey, model, modFolder)).ToList();
         // A record from before the folder was kept, whose ID this export leaves because another folder uses it:
         // when that is the one other folder with the mod's identifier, this is its copy, and the record is that folder's.
@@ -240,8 +242,6 @@ internal static partial class HairSkeletonFiles
         foreach (var (bytes, path) in targets)
             WriteAtomic(path, bytes);
 
-        var meta = LoadV4ModMetadata(modFolder);
-        var estRecords = estStore.Load().ToList();
         var estCount = estRecords.Count;
         // The EST entries the original's skeleton ID got from before folders were kept are the original's too, so this copy
         // neither releases nor overwrites them.
@@ -252,22 +252,28 @@ internal static partial class HairSkeletonFiles
                 estRecords[i] = est with { Folder = original };
                 estStamped = true;
             }
-        var metaChanged = false;
-        // The previous IDs belong to another mod now, or to a move that is being finished: none of their keys or EST entries stay.
-        foreach (var previous in previousIds)
+        JsonObject meta;
+        // meta.json is read and written as one step under the gate Studio's writers take too.
+        lock (Studio.Services.Project.ModFiles.Gate)
         {
-            metaChanged |= Remap(meta, model, previous, new Dictionary<int, IReadOnlyList<string>>());
-            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, previous, [], estRecords);
-        }
-        var built = plan.Files.ToDictionary(file => file.GenderRace, IReadOnlyList<string> (file) => [file.GamePath, file.PhysicsPath]);
-        metaChanged |= Remap(meta, model, plan.SkeletonId, built);
-        // Races and options that dropped the model keep no EST entry naming the skeleton.
-        metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, plan.SkeletonId, built.Keys, estRecords);
-        // meta.json goes first, so a failed write never leaves an option mapping a deleted file.
-        if (metaChanged)
-        {
-            TouchV4ModMetadata(meta);
-            WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+            meta = LoadV4ModMetadata(modFolder);
+            var metaChanged = false;
+            // The previous IDs belong to another mod now, or to a move that is being finished: none of their keys or EST entries stay.
+            foreach (var previous in previousIds)
+            {
+                metaChanged |= Remap(meta, model, previous, new Dictionary<int, IReadOnlyList<string>>());
+                metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, previous, [], estRecords);
+            }
+            var built = plan.Files.ToDictionary(file => file.GenderRace, IReadOnlyList<string> (file) => [file.GamePath, file.PhysicsPath]);
+            metaChanged |= Remap(meta, model, plan.SkeletonId, built);
+            // Races and options that dropped the model keep no EST entry naming the skeleton.
+            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, plan.SkeletonId, built.Keys, estRecords);
+            // meta.json goes first, so a failed write never leaves an option mapping a deleted file.
+            if (metaChanged)
+            {
+                TouchV4ModMetadata(meta);
+                WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+            }
         }
         if (estRecords.Count != estCount || estStamped)
             estStore.Save(estRecords);
@@ -304,19 +310,24 @@ internal static partial class HairSkeletonFiles
             return [];
 
         var ids = (record.MovingFrom ?? []).Prepend(record.SkeletonId).Distinct().ToList();
-        var meta = LoadV4ModMetadata(modFolder);
         var estRecords = estStore.Load().ToList();
         var estCount = estRecords.Count;
-        var metaChanged = false;
-        foreach (var id in ids)
+        JsonObject meta;
+        // meta.json is read and written as one step under the gate Studio's writers take too.
+        lock (Studio.Services.Project.ModFiles.Gate)
         {
-            metaChanged |= Remap(meta, model, id, new Dictionary<int, IReadOnlyList<string>>());
-            metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, id, [], estRecords);
-        }
-        if (metaChanged)
-        {
-            TouchV4ModMetadata(meta);
-            WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+            meta = LoadV4ModMetadata(modFolder);
+            var metaChanged = false;
+            foreach (var id in ids)
+            {
+                metaChanged |= Remap(meta, model, id, new Dictionary<int, IReadOnlyList<string>>());
+                metaChanged |= EstEntryService.ReleaseEstEntries(meta, modFolder, modKey, model, id, [], estRecords);
+            }
+            if (metaChanged)
+            {
+                TouchV4ModMetadata(meta);
+                WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+            }
         }
         if (estRecords.Count != estCount)
             estStore.Save(estRecords);
@@ -389,6 +400,19 @@ internal static partial class HairSkeletonFiles
     /// unreadable state changes nothing. Returns the warnings.
     /// </summary>
     public static List<string> RestoreState(
+        string modFolder,
+        string modDirectory,
+        string modelRelativePath,
+        JsonObject state,
+        HairSkeletonStore store)
+    {
+        // meta.json is read and written as one step under the gate Studio's writers take too; the skeleton
+        // files written in between are small.
+        lock (Studio.Services.Project.ModFiles.Gate)
+            return RestoreStateLocked(modFolder, modDirectory, modelRelativePath, state, store);
+    }
+
+    private static List<string> RestoreStateLocked(
         string modFolder,
         string modDirectory,
         string modelRelativePath,

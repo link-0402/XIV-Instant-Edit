@@ -219,7 +219,9 @@ class ModelImport:
             return tuple(self.created_mesh_objects)
 
         if self.select_objects:
-            bpy.context.selected_objects.clear()
+            # selected_objects is a fresh list each time; clearing it deselects nothing.
+            for obj in bpy.context.selected_objects:
+                obj.select_set(False)
         self.shapes = get_shapes(self.model, lod_level)
         for mesh_idx, mesh in enumerate(self.model.meshes[:mesh_count]):
             self.mesh_idx, self.mesh = mesh_idx, mesh

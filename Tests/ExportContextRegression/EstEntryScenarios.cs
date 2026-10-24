@@ -26,6 +26,26 @@ internal static class EstEntryScenarios
         CopiedFolderKeepsTheOriginalsRecords(Path.Combine(testRoot, "EstCopiedFolder"));
         OldRecordsLoadAndAreOwned(Path.Combine(testRoot, "EstOldRecords"));
         RenamedFolderKeepsItsRecords(Path.Combine(testRoot, "EstRenamedFolder"));
+        UnreadableRecords(Path.Combine(testRoot, "EstUnreadableRecords"));
+    }
+
+    private static void UnreadableRecords(string root)
+    {
+        Directory.CreateDirectory(root);
+        var store = new EstEntryStore(root);
+        store.Save([new ManagedEstEntry("id:m", "default", "Hair", 108, 801, 4321, null)]);
+        var path = Path.Combine(root, "est-entries.json");
+        var threw = false;
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            try { store.Load(); }
+            catch (IOException) { threw = true; }
+        }
+        Require(threw && store.Load() is [{ Entry: 4321 }],
+            "EST store: a file another program holds throws instead of reading as no records");
+        File.WriteAllText(path, "[{");
+        Require(store.Load() is [] && !File.Exists(path) && Directory.EnumerateFiles(root, "est-entries.json.unreadable-*").Any(),
+            "EST store: a damaged file reads as no records and is kept aside");
     }
 
     private static EstEntryRequest Hair(int entry, string race = "c0801") => new() { Slot = "Hair", Entry = entry, Race = race };

@@ -60,20 +60,18 @@ internal sealed class ModelBackupService
         string? committedTarget = null;
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(
-                () => _sources.ResolveSourceModTargetOnFramework(
-                    sourceModDirectory,
-                    sourceFilePath,
-                    sourceModRootPath,
-                    targetRelativePath,
-                    sourceModStableId)).ConfigureAwait(false);
+            var resolved = await _sources.ResolveSourceModTargetAsync(
+                sourceModDirectory,
+                sourceFilePath,
+                sourceModRootPath,
+                targetRelativePath,
+                sourceModStableId).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(
                     false,
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
 
-            await LeaveFrameworkThread();
             if (!string.Equals(Path.GetExtension(originalName), ".mdl", StringComparison.OrdinalIgnoreCase))
                 return new ExportResult(false, ResultCode.InvalidRestore, "The backup target is invalid.");
             if (targetRelativePath is null)
@@ -202,11 +200,10 @@ internal sealed class ModelBackupService
         await _exportGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(() => _sources.ResolveSourceModTargetOnFramework(
-                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
+            var resolved = await _sources.ResolveSourceModTargetAsync(
+                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(false, resolved.Code, resolved.Error ?? "The source mod is unavailable.");
-            await LeaveFrameworkThread();
             var validIds = ReadVariantTargets(resolved.Target.Folder, sourceGamePath, sourceModDirectory, _backups)
                 .SelectMany(group => group.Options)
                 .Select(option => option.BackupTargetId)

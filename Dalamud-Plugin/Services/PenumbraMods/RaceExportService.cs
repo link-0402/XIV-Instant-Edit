@@ -55,10 +55,11 @@ internal sealed class RaceExportService
     /// <summary>
     /// Where a race export writes: the race's game path, the file the mod maps there (new or the one it
     /// already mapped), the updated metadata and the options it went into. <paramref name="Undo"/> holds
-    /// what each of those options had before (see <see cref="RestoreRaceExportMeta"/>).
+    /// what each of those options had before (see <see cref="RestoreRaceExportMeta"/>). <paramref name="LoadedMeta"/>
+    /// is meta.json as the plan read it, so a change made since is never written over.
     /// </summary>
     internal sealed record RaceModelPlan(string GamePath, string RelativePath, JsonObject Meta, IReadOnlyList<string> Containers,
-        JsonArray Undo);
+        JsonArray Undo, string LoadedMeta);
 
     private const string RaceStateSchema = "instant-edit.race-export";
 
@@ -163,6 +164,7 @@ internal sealed class RaceExportService
         if (!TryNormalizeRelativeModPath(modelRelativePath.TrimStart('/', '\\'), out var model))
             return "The imported model is outside its mod.";
         var meta = LoadV4ModMetadata(modFolder);
+        var loadedMeta = meta.ToJsonString();
         var containers = new List<EstContainer>();
         var mapped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var container in EstContainers(meta))
@@ -235,7 +237,7 @@ internal sealed class RaceExportService
             SetEqdpModel(container.Data, identity, race, gameEqdpBits);
         }
         TouchV4ModMetadata(meta);
-        plan = new RaceModelPlan(racePath, relative, meta, containers.Select(container => container.Label).ToArray(), undo);
+        plan = new RaceModelPlan(racePath, relative, meta, containers.Select(container => container.Label).ToArray(), undo, loadedMeta);
         return null;
     }
 
@@ -245,6 +247,13 @@ internal sealed class RaceExportService
     /// for the set and slot go back to what they were. Returns the warnings, such as an option that's gone.
     /// </summary>
     internal static List<string> RestoreRaceExportMeta(string modFolder, JsonObject state)
+    {
+        // meta.json is read and written as one step under the gate Studio's writers take too.
+        lock (Studio.Services.Project.ModFiles.Gate)
+            return RestoreRaceExportMetaLocked(modFolder, state);
+    }
+
+    private static List<string> RestoreRaceExportMetaLocked(string modFolder, JsonObject state)
     {
         if (!string.Equals(JsonString(state["schema"]), RaceStateSchema, StringComparison.Ordinal) || JsonInt(state["version"]) != 1 ||
             JsonString(state["racePath"]) is not { } racePath || !IsSafeGamePath(racePath) ||
@@ -359,19 +368,17 @@ internal sealed class RaceExportService
         string? committedTarget = null;
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(
-                () => _sources.ResolveSourceModTargetOnFramework(
-                    sourceModDirectory,
-                    sourceFilePath,
-                    sourceModRootPath,
-                    targetRelativePath,
-                    sourceModStableId)).ConfigureAwait(false);
+            var resolved = await _sources.ResolveSourceModTargetAsync(
+                sourceModDirectory,
+                sourceFilePath,
+                sourceModRootPath,
+                targetRelativePath,
+                sourceModStableId).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new ExportResult(
                     false,
                     resolved.Code,
                     resolved.Error ?? "The original Penumbra mod is no longer available.");
-            await LeaveFrameworkThread();
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {
                 var attributeError = ValidateAttributeGroups(
@@ -409,7 +416,13 @@ internal sealed class RaceExportService
             var warnings = new List<string>();
             try
             {
-                WriteJsonAtomic(Path.Combine(resolved.Target.Folder, "meta.json"), plan.Meta);
+                // The plan was read before the model write; a Studio save since then would be lost by writing it.
+                lock (Studio.Services.Project.ModFiles.Gate)
+                {
+                    if (LoadV4ModMetadata(resolved.Target.Folder).ToJsonString() != plan.LoadedMeta)
+                        throw new IOException("meta.json changed during the export. Export again.");
+                    WriteJsonAtomic(Path.Combine(resolved.Target.Folder, "meta.json"), plan.Meta);
+                }
             }
             catch (Exception e)
             {
@@ -602,9 +615,14 @@ internal sealed class RaceExportService
             return [];
         try
         {
-            var meta = LoadV4ModMetadata(modFolder);
-            if (EnsureRaceModelEqdpMeta(meta, gamePath, modelRelativePath, code, GameEqdpBits(NormalizeGamePath(gamePath), code)))
-                WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+            var bits = GameEqdpBits(NormalizeGamePath(gamePath), code);
+            // meta.json is read and written as one step under the gate Studio's writers take too.
+            lock (Studio.Services.Project.ModFiles.Gate)
+            {
+                var meta = LoadV4ModMetadata(modFolder);
+                if (EnsureRaceModelEqdpMeta(meta, gamePath, modelRelativePath, code, bits))
+                    WriteJsonAtomic(Path.Combine(modFolder, "meta.json"), meta);
+            }
             return [];
         }
         catch (Exception e)

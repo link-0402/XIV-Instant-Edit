@@ -161,6 +161,50 @@ static void CheckSessionStore(string testRoot)
 
 }
 
+// A save still waiting to persist when the plugin unloads used to save an empty list, which the
+// session store records as every context deleted.
+static void CheckDisposeDuringSave()
+{
+    const string path = "chara/equipment/e0001/model/c0101e0001_top.mdl";
+    var saves = new List<IReadOnlyList<PersistedExportContext>>();
+    using var firstSaveHeld = new ManualResetEventSlim();
+    using var releaseFirstSave = new ManualResetEventSlim();
+    var registry = new ExportContextRegistry("dispose-race", persist: contexts =>
+    {
+        bool first;
+        lock (saves)
+        {
+            saves.Add(contexts);
+            first = saves.Count == 1;
+        }
+        if (first)
+        {
+            firstSaveHeld.Set();
+            releaseFirstSave.Wait(TimeSpan.FromSeconds(10));
+        }
+    });
+    void Save()
+    {
+        try { registry.CreateGameContext(path, path, 0, 42428); }
+        catch (ObjectDisposedException) { }
+    }
+    var firstThread = new Thread(Save);
+    firstThread.Start();
+    Require(firstSaveHeld.Wait(TimeSpan.FromSeconds(10)), "dispose race: the first save reaches its persist callback");
+    var secondThread = new Thread(Save);
+    secondThread.Start();
+    // The second save has added its context and now waits for the first save to finish.
+    Require(SpinWait.SpinUntil(() => (secondThread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0, 10000),
+        "dispose race: the second save waits behind the first");
+    registry.Dispose();
+    releaseFirstSave.Set();
+    firstThread.Join();
+    secondThread.Join();
+    lock (saves)
+        Require(saves.Count == 1 && saves.All(saved => saved.Count > 0),
+            "dispose race: a save that runs after the plugin unloads saves nothing rather than an empty list");
+}
+
 var testRoot = Path.Combine(Path.GetTempPath(), "InstantEditExportContextRegression", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(testRoot);
 try
@@ -173,7 +217,9 @@ try
     Scenarios.Run(() => HairSkeletonScenarios.Run(testRoot));
     Scenarios.Run(() => HairPhysicsScenarios.Run());
     Scenarios.Run(() => CheckSessionStore(testRoot));
+    Scenarios.Run(CheckDisposeDuringSave);
     Scenarios.Run(() => SelectorStabilityScenarios.Run(testRoot));
+    Scenarios.Run(() => SourceModIdentityScenarios.Run(testRoot));
     Scenarios.Run(() => ModHandoffScenarios.Run(testRoot));
     Scenarios.Run(() => ModHandoffScenarios.RunCopies(testRoot));
     Scenarios.Run(() => MaterialVariantScenarios.Run(testRoot));
@@ -2287,6 +2333,32 @@ static async Task CheckExportContextsAsync(string testRoot)
     Require(cleanupFailure.Warnings.Count == 1 && cleanupFailure.PathRemap is null &&
             File.ReadAllText(cleanupFailurePath) == cleanupFailureBefore,
         "cleanup failures warn and retain the committed mashup unchanged");
+
+    // An old file another program holds can't be deleted once meta.json is written: the mod stays normalised.
+    var cleanupHeldRoot = Path.Combine(testRoot, "CleanupHeld");
+    var cleanupHeldFile = Path.Combine(cleanupHeldRoot, "legacy", "item.mdl");
+    Directory.CreateDirectory(Path.GetDirectoryName(cleanupHeldFile)!);
+    File.WriteAllBytes(cleanupHeldFile, [1, 2, 3]);
+    File.WriteAllText(Path.Combine(cleanupHeldRoot, "meta.json"), new JsonObject
+    {
+        ["FileVersion"] = 4,
+        ["Identifier"] = Guid.NewGuid(),
+        ["LastWrite"] = DateTime.UtcNow,
+        ["Name"] = "Cleanup Held",
+        ["DefaultData"] = new JsonObject { ["Files"] = new JsonObject { [cleanupModelPath] = "legacy/item.mdl" } },
+        ["Groups"] = new JsonArray(),
+    }.ToJsonString());
+    (IReadOnlyList<string> Warnings, ModPathRemap? PathRemap) cleanupHeld;
+    // Readers may share it (the clean-up hashes and snapshots it), but nobody may delete it.
+    using (new FileStream(cleanupHeldFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+        cleanupHeld = ModCleanup.NormalizeAndDeduplicateModForRegression(cleanupHeldRoot, "cleanup-held");
+    var cleanupHeldMeta = JsonNode.Parse(File.ReadAllText(Path.Combine(cleanupHeldRoot, "meta.json")))!;
+    Require(cleanupHeld.PathRemap is not null && cleanupHeld.Warnings is [var cleanupHeldWarning] &&
+            cleanupHeldWarning.Contains("legacy/item.mdl", StringComparison.Ordinal) &&
+            cleanupHeldMeta["DefaultData"]!["Files"]![cleanupModelPath]!.GetValue<string>() == "Files/" + cleanupModelPath &&
+            File.Exists(Path.Combine(cleanupHeldRoot, "Files", cleanupModelPath.Replace('/', Path.DirectorySeparatorChar))) &&
+            File.Exists(cleanupHeldFile),
+        "cleanup: an old file that can't be deleted is a warning naming it, and the mod stays normalised");
 
     var sourceDescription = MashupPlanning.FormatMashupDescription(
     [

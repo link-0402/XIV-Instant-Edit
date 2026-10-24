@@ -1,3 +1,4 @@
+using System.Globalization;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.NeckSeam;
@@ -133,6 +134,32 @@ internal static class PreviewModScenarios
         kept.Cleanup(DateTimeOffset.UtcNow + TimeSpan.FromDays(10));
         Require(keptLonger && !File.Exists(keptBackup) && kept.RetentionDays == 7,
             "model backups: kept for the days set in Settings, read again at every cleanup");
+
+        // An expired backup an indexer holds open, or one marked read-only, used to fail every save and the plugin's load.
+        var lockedRoot = Path.Combine(folder, "locked-backups");
+        var expiredDirectory = new ModelBackupStore(lockedRoot).Describe("Skin", "chara/x/old.mtrl").Directory;
+        Directory.CreateDirectory(expiredDirectory);
+        var stamp = (DateTimeOffset.UtcNow - TimeSpan.FromDays(30)).ToString("yyyyMMdd'T'HHmmss.ffffff'Z'", CultureInfo.InvariantCulture);
+        var lockedBackup = Path.Combine(expiredDirectory, $"old.mtrl.{stamp}.bak");
+        var readOnlyBackup = Path.Combine(expiredDirectory, $"old.tex.{stamp}.bak");
+        File.WriteAllBytes(lockedBackup, [1]);
+        File.WriteAllBytes(readOnlyBackup, [2]);
+        File.SetAttributes(readOnlyBackup, FileAttributes.ReadOnly);
+        try
+        {
+            using (File.Open(lockedBackup, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var reopened = new ModelBackupStore(lockedRoot);
+                var made = reopened.Create(keptFile, "Skin", "chara/x/kept.mtrl");
+                Require(File.Exists(made) && reopened.List("Skin", "chara/x/kept.mtrl").Count == 1 &&
+                        File.Exists(lockedBackup) && File.Exists(readOnlyBackup),
+                    "model backups: an expired backup that can't be deleted is skipped; the store opens and a save makes one backup");
+            }
+        }
+        finally
+        {
+            File.SetAttributes(readOnlyBackup, FileAttributes.Normal);
+        }
         Require(PreviewModWriter.UniqueModName("", _ => false, "Skin Seam Fix") == "Skin Seam Fix" &&
                 PreviewModWriter.UniqueModName("Skin Seam Preview - A", name => name == "Skin Seam Preview - A") == "Skin Seam Preview - A (2)",
             "preview mods: new mod names fall back to the feature's name and are made unique");

@@ -92,6 +92,12 @@ public sealed class SimsScanResult
     /// <summary>Detail levels present in this package, ascending; drives the LOD picker.</summary>
     public List<int> AvailableLods = new();
 
+    /// <summary>
+    /// The mesh keys each hairstyle's parts list, by style. A swatch package lists the meshes of the package
+    /// that holds them, so extracting the two together cuts the swatches as that package's hair.
+    /// </summary>
+    public Dictionary<int, HashSet<SimsResourceKey>> HairStyleMeshes = new();
+
     public IEnumerable<SimsAsset> Meshes   => Assets.Where(a => a.Kind == SimsAssetKind.Mesh);
     public IEnumerable<SimsAsset> Textures => Assets.Where(a => a.Kind == SimsAssetKind.Texture);
 }
@@ -127,6 +133,12 @@ public static class SimsPackageInspector
         result.HasCasPartData = parts.Count > 0;
         result.IsHair = parts.Any(p => p.IsHair);
         var styles = HairStyles(parts);
+        foreach (var (part, style) in styles)
+        {
+            if (!result.HairStyleMeshes.TryGetValue(style, out var keys))
+                result.HairStyleMeshes[style] = keys = new HashSet<SimsResourceKey>();
+            keys.UnionWith(part.Meshes.Concat(part.Lods.SelectMany(l => l.Meshes)));
+        }
 
         AddMeshes(package, parts, styles, result, progress, cancel);
         AddTextures(package, parts, styles, result, progress, cancel);
@@ -613,15 +625,27 @@ public static class SimsPackageInspector
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int extracted = 0, failed = 0;
 
+            // Every package's hair measured first: a swatch package's hairstyle has its meshes in another one.
+            var measured = new List<(Dictionary<SimsAsset, SimsGeomMesh> Meshes, Dictionary<int, UvRegion> Regions, StringBuilder Notes)>();
             foreach (var scan in scans)
             {
+                using var package = new DbpfPackage(scan.PackagePath);
+                var meshes = new Dictionary<SimsAsset, SimsGeomMesh>();
+                var notes = new StringBuilder();
+                measured.Add((meshes, HairRegions(package, scan, meshes, notes, cancel), notes));
+            }
+            ShareHairRegions(scans, measured.Select(m => m.Regions).ToList(), measured.Select(m => m.Notes).ToList());
+
+            for (int i = 0; i < scans.Count; i++)
+            {
+                var scan = scans[i];
                 report.AppendLine();
                 if (scans.Count > 1)
                     report.AppendLine($"{Path.GetFileName(scan.PackagePath)}:");
 
                 using var package = new DbpfPackage(scan.PackagePath);
-                var meshes = new Dictionary<SimsAsset, SimsGeomMesh>();
-                var regions = HairRegions(package, scan, meshes, report, cancel);
+                var (meshes, regions, notes) = measured[i];
+                report.Append(notes);
 
                 foreach (var asset in scan.Assets.Where(a => a.Selected))
                 {
@@ -794,6 +818,42 @@ public static class SimsPackageInspector
             report.AppendLine();
         }
         return regions;
+    }
+
+    /// <summary>
+    /// Gives a hairstyle without meshes in its own package (a swatch package's) the region of the style in
+    /// another package of the batch whose parts list the same meshes, or, when nothing matches, the batch's
+    /// only region. A style with meshes of its own keeps what they measured.
+    /// </summary>
+    internal static void ShareHairRegions(IReadOnlyList<SimsScanResult> scans, IReadOnlyList<Dictionary<int, UvRegion>> regions,
+        IReadOnlyList<StringBuilder> notes)
+    {
+        if (scans.Count < 2)
+            return;
+        var all = Enumerable.Range(0, scans.Count).SelectMany(i => regions[i].Select(r => (Scan: i, r.Key, Region: r.Value))).ToList();
+        var only = all.Select(r => r.Region).Distinct().Count() == 1 ? all[0] : ((int Scan, int Key, UvRegion Region)?)null;
+
+        for (int i = 0; i < scans.Count; i++)
+        {
+            var styles = scans[i].Assets.Where(a => a.HairStyle != SimsAsset.NoHairStyle).GroupBy(a => a.HairStyle).ToList();
+            foreach (var style in styles)
+            {
+                if (regions[i].ContainsKey(style.Key) || style.Any(a => a.Kind == SimsAssetKind.Mesh))
+                    continue;
+                var keys = scans[i].HairStyleMeshes.GetValueOrDefault(style.Key) ?? new HashSet<SimsResourceKey>();
+                var match = all.Where(r => r.Scan != i && scans[r.Scan].HairStyleMeshes.TryGetValue(r.Key, out var other) && other.Overlaps(keys))
+                               .Select(r => ((int Scan, int Key, UvRegion Region)?)r).FirstOrDefault();
+                if ((match ?? only) is not { } found)
+                    continue;
+                regions[i][style.Key] = found.Region;
+                var label = styles.Count > 1 ? $"Hair sheet {style.Key + 1}:" : "Hair sheet:";
+                var from = Path.GetFileName(scans[found.Scan].PackagePath);
+                notes[i].AppendLine(match != null
+                    ? $"{label,-16}cut as in {from}, which holds its meshes."
+                    : $"{label,-16}cut as in {from}, the only hair sheet in this batch.");
+                notes[i].AppendLine();
+            }
+        }
     }
 
     private static void ExtractMesh(DbpfPackage package, SimsAsset asset, ExtractionResult result,

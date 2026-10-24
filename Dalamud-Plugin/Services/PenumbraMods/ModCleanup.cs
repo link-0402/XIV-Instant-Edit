@@ -25,7 +25,8 @@ internal static class ModCleanup
     /// Normalize and deduplicate a committed mod without relying on a
     /// Penumbra-version-specific IPC endpoint. The complete directory is
     /// snapshotted before mutation so failures leave the committed mashup
-    /// exactly as it was before cleanup started.
+    /// exactly as it was before cleanup started. Once meta.json is written the
+    /// mod is complete: old files that can't be deleted are warnings.
     /// </summary>
     internal static ModCleanupResult NormalizeAndDeduplicateMod(string modRoot, string modDirectory)
     {
@@ -89,6 +90,7 @@ internal static class ModCleanup
             }
 
             var meta = LoadV4ModMetadata(root);
+            var loadedMeta = meta.ToJsonString();
             AddContainer(meta["DefaultData"], null, null, "meta.json.DefaultData");
             if (meta["Groups"] is JsonArray groups)
                 for (var index = 0; index < groups.Count; ++index)
@@ -160,23 +162,14 @@ internal static class ModCleanup
             {
                 foreach (var file in desiredFiles)
                     WriteModContentAtomic(root, file.Key, file.Value);
-                TouchV4ModMetadata(meta);
-                WriteJsonAtomic(Path.Combine(root, "meta.json"), meta);
-
-                // Only files an old mapping pointed at can have become redundant; readmes,
-                // images and unmapped extras belong to the mod and stay.
-                var previouslyMapped = mappings.Select(mapping => mapping.OldRelativePath)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToArray())
+                lock (Studio.Services.Project.ModFiles.Gate)
                 {
-                    var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                    if (IsModMetadataFile(relative) || desiredFiles.ContainsKey(relative) ||
-                        !previouslyMapped.Contains(relative))
-                        continue;
-                    File.Delete(file);
+                    // A Studio save in the meantime would be lost by writing the copy read above.
+                    if (LoadV4ModMetadata(root).ToJsonString() != loadedMeta)
+                        throw new IOException("meta.json changed while the mod was cleaned up.");
+                    TouchV4ModMetadata(meta);
+                    WriteJsonAtomic(Path.Combine(root, "meta.json"), meta);
                 }
-                DeleteEmptyDirectories(root);
-                TryDeleteCleanupSnapshot(snapshot);
             }
             catch
             {
@@ -184,7 +177,36 @@ internal static class ModCleanup
                 throw;
             }
 
-            return new ModCleanupResult([], new ModPathRemap(modDirectory, root, remappedPaths));
+            // The mod is complete from here; an old file that can't be deleted is only left over.
+            var warnings = new List<string>();
+            // Only files an old mapping pointed at can have become redundant; readmes,
+            // images and unmapped extras belong to the mod and stay.
+            var previouslyMapped = mappings.Select(mapping => mapping.OldRelativePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToArray())
+                {
+                    var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+                    if (IsModMetadataFile(relative) || desiredFiles.ContainsKey(relative) ||
+                        !previouslyMapped.Contains(relative))
+                        continue;
+                    try { File.Delete(file); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        warnings.Add($"Mashup cleanup could not delete the unused file {relative}: {e.Message}");
+                    }
+                }
+                DeleteEmptyDirectories(root);
+            }
+            catch (Exception e)
+            {
+                // meta.json already maps the new paths, so the remap still goes back to the caller.
+                warnings.Add($"Mashup cleanup could not remove the old files: {e.Message}");
+            }
+            TryDeleteCleanupSnapshot(snapshot);
+
+            return new ModCleanupResult(warnings, new ModPathRemap(modDirectory, root, remappedPaths));
         }
         catch (Exception e)
         {
@@ -310,10 +332,14 @@ internal static class ModCleanup
     {
         try
         {
+            // A rollback always comes before this run writes meta.json, so the file on disk stays: it may
+            // hold a Studio save made meanwhile.
+            File.Delete(Path.Combine(snapshot, "meta.json"));
             foreach (var entry in Directory.EnumerateFileSystemEntries(root).ToArray())
             {
                 var attributes = File.GetAttributes(entry);
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                if ((attributes & FileAttributes.ReparsePoint) != 0 ||
+                    string.Equals(Path.GetFileName(entry), "meta.json", StringComparison.OrdinalIgnoreCase))
                     continue;
                 if ((attributes & FileAttributes.Directory) != 0)
                     Directory.Delete(entry, true);
@@ -368,7 +394,16 @@ internal static class ModCleanup
     {
         foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
                      .OrderByDescending(path => path.Length))
-            if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
-                Directory.Delete(directory);
+        {
+            try
+            {
+                if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
+                    Directory.Delete(directory);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // An empty folder left behind is harmless.
+            }
+        }
     }
 }

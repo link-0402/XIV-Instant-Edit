@@ -35,8 +35,7 @@ internal sealed class ModResourceScanner
 
         try
         {
-            var request = await _framework.RunOnFrameworkThread(
-                () => _sources.ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
+            var request = await _sources.ResolveModScanAsync(modDirectory, stableId).ConfigureAwait(false);
             if (request is null)
                 return null;
             return await Task.Run(() => ScanModResources(request, cancellationToken), cancellationToken)

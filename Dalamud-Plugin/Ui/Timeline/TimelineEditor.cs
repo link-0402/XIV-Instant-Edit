@@ -106,16 +106,12 @@ internal sealed class TimelineEditor
     private IReadOnlyDictionary<string, int>? boneOrder;
     private int layoutStamp;
     private int builtStamp = -1;
-    // How many parts and joins the document had at its last change.
-    private (int Parts, int Joins) cutCounts;
 
     public TimelineEditor(TimelineDocument document, int capacity = TimelineHistory.DefaultCapacity)
     {
         History = new TimelineHistory(document, capacity);
         History.Changed += OnDocumentChanged;
         loaded = document;
-        var cuts = CutEdits.CutsOf(document);
-        cutCounts = (cuts.Parts.Length, cuts.Joins.Length);
         View = new TimelineView(0, 1, 0);
     }
 
@@ -274,7 +270,33 @@ internal sealed class TimelineEditor
     /// The selected part, join or seam of the cut motion, which the properties panel shows. Selecting
     /// one clears the event and layer selection, and the other way round.
     /// </summary>
-    public TimelineCutSelection? SelectedCut { get; private set; }
+    public TimelineCutSelection? SelectedCut
+    {
+        get;
+        private set
+        {
+            field = value;
+            selectedCutAt = CutPlace(value);
+            var cuts = CutEdits.CutsOf(Document);
+            selectedCutCounts = (cuts.Parts.Length, cuts.Joins.Length);
+        }
+    }
+
+    // Where the selected part starts or the selected join sits, in output frames, and how many parts and joins
+    // there were, when it was selected or last kept.
+    private double? selectedCutAt;
+    private (int Parts, int Joins) selectedCutCounts;
+
+    private double? CutPlace(TimelineCutSelection? cut)
+    {
+        var cuts = CutEdits.CutsOf(Document);
+        return cut switch
+        {
+            { Target: TimelineCutTarget.Part, Index: var part } when part >= 0 && part < cuts.Parts.Length => cuts.PartStart(part, Document.Length),
+            { Target: TimelineCutTarget.Join, Index: var join } when join >= 0 && join < cuts.Joins.Length => cuts.PartEnd(join, Document.Length),
+            _ => null,
+        };
+    }
 
     /// <summary>Whether the game plays the clip as a loop: only then is there a seam to blend or fix.</summary>
     public bool Loops { get; set; }
@@ -1553,11 +1575,15 @@ internal sealed class TimelineEditor
                 SelectedBone = null;
             }
         }
-        // Parts and joins are numbered in order, so a cut that comes or goes (an undo, say) moves the numbers: the one selected may be another now.
-        var cuts = CutEdits.CutsOf(doc);
-        if (SelectedCut is { Target: not TimelineCutTarget.Seam } && (cuts.Parts.Length, cuts.Joins.Length) != cutCounts)
-            SelectedCut = null;
-        cutCounts = (cuts.Parts.Length, cuts.Joins.Length);
+        // Parts and joins are numbered in order, so a cut that comes or goes before the one selected (an undo, say) gives its number to
+        // another: then it stays selected only while its number still starts at the same frame (within half a frame: a length rounds).
+        // An edit that keeps every cut (a stretch, a blend length, or its undo) keeps the selection wherever the part moved to.
+        if (SelectedCut is { Target: not TimelineCutTarget.Seam } cut)
+        {
+            var cuts = CutEdits.CutsOf(doc);
+            var samePlace = CutPlace(cut) is { } at && selectedCutAt is { } was && Math.Abs(at - was) < .5;
+            SelectedCut = samePlace || (cuts.Parts.Length, cuts.Joins.Length) == selectedCutCounts ? cut : null;
+        }
         if (folded.RemoveWhere(key => MotionEdits.Find(doc, key) == null) > 0)
             layoutStamp++;
         if (selected.Count > 0)

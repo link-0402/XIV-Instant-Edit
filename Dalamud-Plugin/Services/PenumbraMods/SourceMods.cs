@@ -74,37 +74,30 @@ internal sealed class SourceMods
         }
     }
 
-    internal SourceTargetResolution ResolveSourceModTargetOnFramework(
+    /// <summary>
+    /// The source mod's file to write, reading only Penumbra on the framework thread: a renamed or deleted
+    /// source mod means reading every mod's meta.json. Returns on the thread pool.
+    /// </summary>
+    internal async Task<SourceTargetResolution> ResolveSourceModTargetAsync(
         string sourceModDirectory,
         string sourceFilePath,
         string? sourceModRootPath,
         string? targetRelativePath,
         Guid? sourceModStableId = null)
     {
-        if (!_ipc.TryGetModList(out var modList))
-            return new SourceTargetResolution(null, ResultCode.PenumbraUnavailable, "Could not retrieve the Penumbra mod list.");
-
-        if (!TryResolveRegisteredModIdentity(
-                modList,
-                sourceModDirectory,
-                sourceModStableId,
-                sourceModRootPath,
-                out var registeredDirectory,
-                out var identityError))
-            return new SourceTargetResolution(null, identityError.Code, identityError.Message);
-
+        var (directory, snapshot, code, message) = await ResolveRegisteredModAsync(
+            sourceModDirectory, sourceModStableId, sourceModRootPath).ConfigureAwait(false);
+        if (directory is null)
+            return new SourceTargetResolution(null, code, message);
         try
         {
-            var configuredRoot = _ipc.GetModDirectory();
             return ResolveSourceModTargetFromRoots(
-                registeredDirectory,
+                directory,
                 sourceFilePath,
                 sourceModRootPath,
                 targetRelativePath,
-                _ipc.GetRegisteredModPath(registeredDirectory),
-                string.IsNullOrWhiteSpace(configuredRoot)
-                    ? null
-                    : Path.Combine(configuredRoot, registeredDirectory));
+                snapshot!.RegisteredPaths.GetValueOrDefault(directory),
+                string.IsNullOrWhiteSpace(snapshot.ConfiguredRoot) ? null : Path.Combine(snapshot.ConfiguredRoot, directory));
         }
         catch (Exception e)
         {
@@ -301,11 +294,10 @@ internal sealed class SourceMods
     {
         try
         {
-            var resolved = await _framework.RunOnFrameworkThread(() => ResolveSourceModTargetOnFramework(
-                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId)).ConfigureAwait(false);
+            var resolved = await ResolveSourceModTargetAsync(
+                sourceModDirectory, sourceFilePath, sourceModRootPath, targetRelativePath, sourceModStableId).ConfigureAwait(false);
             if (resolved.Target is null)
                 return new SourceOptionCapture(null, "unknown", resolved.Error);
-            await LeaveFrameworkThread();
             var option = ResolveSourceOption(resolved.Target.Folder, sourceGamePath, resolved.Target.RelativePath);
             if (preferredMemberships is { Count: > 0 })
             {
@@ -384,14 +376,66 @@ internal sealed class SourceMods
         }
     }
 
-    private bool TryResolveRegisteredModIdentity(
-        IReadOnlyDictionary<string, string> modList,
+    /// <summary> Penumbra's mod list with the registered paths read so far, taken on the framework thread. </summary>
+    internal sealed record ModListSnapshot(
+        IReadOnlyDictionary<string, string> ModList,
+        IReadOnlyDictionary<string, string?> RegisteredPaths,
+        string? ConfiguredRoot);
+
+    private ModListSnapshot SnapshotOnFramework(IReadOnlyDictionary<string, string> modList, string? onlyDirectory)
+    {
+        var paths = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var directory in modList.Keys)
+            if (onlyDirectory is null || string.Equals(directory, onlyDirectory, StringComparison.OrdinalIgnoreCase))
+                paths.TryAdd(directory, _ipc.GetRegisteredModPath(directory));
+        return new ModListSnapshot(modList, paths, _ipc.GetModDirectory());
+    }
+
+    /// <summary>
+    /// The registered directory key for a saved directory and stable identity, with the snapshot it was
+    /// resolved from. Penumbra is read on the framework thread, the meta.json files after leaving it; every
+    /// mod's path is read only when the requested folder doesn't hold the identity. Returns on the thread pool.
+    /// </summary>
+    private async Task<(string? Directory, ModListSnapshot? Snapshot, ResultCode Code, string Message)> ResolveRegisteredModAsync(
+        string requestedDirectory, Guid? expectedStableId, string? capturedRootPath)
+    {
+        var snapshot = await _framework.RunOnFrameworkThread(() =>
+            _ipc.TryGetModList(out var modList) ? SnapshotOnFramework(modList, requestedDirectory) : null).ConfigureAwait(false);
+        await LeaveFrameworkThread();
+        if (snapshot is null)
+            return (null, null, ResultCode.PenumbraUnavailable, "Could not retrieve the Penumbra mod list.");
+        if (TryResolveRegisteredModIdentity(snapshot, requestedDirectory, expectedStableId, capturedRootPath,
+                requestedOnly: true, out var directory, out var error, out var needsAllPaths))
+            return (directory, snapshot, ResultCode.Accepted, string.Empty);
+        if (needsAllPaths)
+        {
+            var modList = snapshot.ModList;
+            snapshot = await _framework.RunOnFrameworkThread(() => SnapshotOnFramework(modList, null)).ConfigureAwait(false);
+            await LeaveFrameworkThread();
+            if (TryResolveRegisteredModIdentity(snapshot, requestedDirectory, expectedStableId, capturedRootPath,
+                    requestedOnly: false, out directory, out error, out _))
+                return (directory, snapshot, ResultCode.Accepted, string.Empty);
+        }
+        return (null, snapshot, error.Code, error.Message);
+    }
+
+    /// <summary>
+    /// Matches a saved directory and stable identity against the snapshot's mods. With
+    /// <paramref name="requestedOnly"/>, stops with <paramref name="needsAllPaths"/> where every mod
+    /// would have to be checked, since the snapshot then holds only the requested mod's path.
+    /// </summary>
+    internal static bool TryResolveRegisteredModIdentity(
+        ModListSnapshot snapshot,
         string requestedDirectory,
         Guid? expectedStableId,
         string? capturedRootPath,
+        bool requestedOnly,
         out string registeredDirectory,
-        out (ResultCode Code, string Message) error)
+        out (ResultCode Code, string Message) error,
+        out bool needsAllPaths)
     {
+        var modList = snapshot.ModList;
+        needsAllPaths = false;
         registeredDirectory = string.Empty;
         error = (ResultCode.SourceModMissing, "The source mod is no longer registered in Penumbra.");
         if (!IsSafeModName(requestedDirectory))
@@ -418,7 +462,7 @@ internal sealed class SourceMods
 
         if (requested is not null)
         {
-            var requestedRoots = RegisteredModRootCandidates(requested, capturedRootPath).ToArray();
+            var requestedRoots = RegisteredModRootCandidates(snapshot, requested, capturedRootPath).ToArray();
             if (requestedRoots.Select(ReadModStableIdentifier).Any(identifier => identifier == expectedStableId))
             {
                 registeredDirectory = requested;
@@ -426,11 +470,17 @@ internal sealed class SourceMods
             }
         }
 
+        if (requestedOnly)
+        {
+            needsAllPaths = true;
+            return false;
+        }
         var matches = new List<string>();
         Guid? requestedObserved = null;
         foreach (var directory in modList.Keys)
         {
             var roots = RegisteredModRootCandidates(
+                snapshot,
                 directory,
                 string.Equals(directory, requestedDirectory, StringComparison.OrdinalIgnoreCase)
                     ? capturedRootPath
@@ -472,9 +522,9 @@ internal sealed class SourceMods
         return false;
     }
 
-    private IEnumerable<string> RegisteredModRootCandidates(string directory, string? capturedRootPath = null)
+    private static IEnumerable<string> RegisteredModRootCandidates(ModListSnapshot snapshot, string directory, string? capturedRootPath)
     {
-        var registered = _ipc.GetRegisteredModPath(directory);
+        var registered = snapshot.RegisteredPaths.GetValueOrDefault(directory);
         if (!string.IsNullOrWhiteSpace(registered))
         {
             yield return registered;
@@ -486,18 +536,45 @@ internal sealed class SourceMods
             if (Directory.Exists(registered))
                 yield break;
         }
-        var configured = _ipc.GetModDirectory();
-        if (!string.IsNullOrWhiteSpace(configured))
-            yield return Path.Combine(configured, directory);
+        if (!string.IsNullOrWhiteSpace(snapshot.ConfiguredRoot))
+            yield return Path.Combine(snapshot.ConfiguredRoot, directory);
         if (!string.IsNullOrWhiteSpace(capturedRootPath))
             yield return capturedRootPath;
     }
 
-    internal ModScanRequest? ResolveModScanOnFramework(string modDirectory, Guid? stableId = null)
+    /// <summary>
+    /// A registered mod's candidate roots and stable identity (the mod a saved identity names, when given),
+    /// reading only Penumbra on the framework thread. Returns on the thread pool.
+    /// </summary>
+    internal async Task<ModScanRequest?> ResolveModScanAsync(string modDirectory, Guid? stableId)
     {
-        if (stableId is not null && _ipc.TryGetModList(out var modList) &&
-            !TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out modDirectory, out _))
-            return null;
+        if (stableId is not null)
+        {
+            var (directory, _, _, _) = await ResolveRegisteredModAsync(modDirectory, stableId, null).ConfigureAwait(false);
+            if (directory is null)
+                return null;
+            modDirectory = directory;
+        }
+        var scan = await _framework.RunOnFrameworkThread(() => ScanRootsOnFramework(modDirectory)).ConfigureAwait(false);
+        await LeaveFrameworkThread();
+        return WithStableId(scan);
+    }
+
+    private static ModScanRequest? WithStableId(ModScanRequest? scan)
+        => scan is null
+            ? null
+            : scan with
+            {
+                Mod = scan.Mod with
+                {
+                    StableId = scan.CandidateRoots
+                        .Select(ReadModStableIdentifier)
+                        .FirstOrDefault(identifier => identifier.HasValue),
+                },
+            };
+
+    private ModScanRequest? ScanRootsOnFramework(string modDirectory)
+    {
         var mod = _ipc.GetMods().FirstOrDefault(item =>
             string.Equals(item.Directory, modDirectory, StringComparison.OrdinalIgnoreCase));
         if (mod is null)
@@ -513,26 +590,20 @@ internal sealed class SourceMods
         var modDirectoryRoot = _ipc.GetModDirectory();
         if (!string.IsNullOrWhiteSpace(modDirectoryRoot))
             AddCandidateRoot(candidateRoots, Path.Combine(modDirectoryRoot, mod.Directory));
-        mod = mod with
-        {
-            StableId = candidateRoots
-                .Select(ReadModStableIdentifier)
-                .FirstOrDefault(identifier => identifier.HasValue),
-        };
         return new ModScanRequest(mod, candidateRoots.ToArray());
     }
 
-    internal string[] GetRegisteredManifestRoots(string modDirectory, Guid? stableId = null)
+    /// <summary> The roots of a registered mod that may hold its manifest resources. Returns on the thread pool. </summary>
+    internal async Task<string[]> GetRegisteredManifestRootsAsync(string modDirectory, Guid? stableId = null)
     {
-        var modList = _ipc.GetModList();
-        if (!TryResolveRegisteredModIdentity(modList, modDirectory, stableId, null, out var registeredDirectory, out _))
+        var (registeredDirectory, snapshot, _, _) = await ResolveRegisteredModAsync(modDirectory, stableId, null).ConfigureAwait(false);
+        if (registeredDirectory is null)
             return [];
 
         var roots = new List<string>();
-        AddCandidateRoot(roots, _ipc.GetRegisteredModPath(registeredDirectory));
-        var configuredRoot = _ipc.GetModDirectory();
-        if (!string.IsNullOrWhiteSpace(configuredRoot))
-            AddCandidateRoot(roots, Path.Combine(configuredRoot, registeredDirectory));
+        AddCandidateRoot(roots, snapshot!.RegisteredPaths.GetValueOrDefault(registeredDirectory));
+        if (!string.IsNullOrWhiteSpace(snapshot.ConfiguredRoot))
+            AddCandidateRoot(roots, Path.Combine(snapshot.ConfiguredRoot, registeredDirectory));
         return roots.ToArray();
     }
 }

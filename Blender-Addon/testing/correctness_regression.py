@@ -495,8 +495,80 @@ def quick_export_format_override_is_restored(addon):
     print("[PASS] Quick Export and mashups leave the Simple Export format as the user set it")
 
 
+# A plugin-created mashup output context, as /mashup/export returns it for a new mod.
+MASHUP_OUTPUT_CONTEXT = {
+    "schema": "instant-edit.context", "version": 3, "pluginInstanceId": "plugin", "contextId": "mashup-output",
+    "importId": "mashup-output-import", "capability": "capability",
+    "sourceGamePath": "chara/equipment/e0001/model/c0101e0001_top.mdl", "sourceKind": "mod",
+    "resolvedGamePath": "chara/equipment/e0001/model/c0101e0001_top.mdl", "destinationState": "ready",
+    "objectIndex": 0, "managedDestination": "C:/Penumbra/New Mod/Files/mashup",
+    "targetFilePath": "C:/Penumbra/New Mod/Files/mashup/model.mdl", "sourceModDirectory": "New Mod",
+    "sourceModName": "New Mod", "sourceModRootPath": "C:/Penumbra/New Mod",
+    "targetRelativePath": "Files/mashup/model.mdl", "resourceManifestVersion": 0,
+    "resourceManifestStatus": "capture_failed", "backupTargetId": "c" * 64,
+    "backupDirectory": "C:/Cache/Backups/" + "c" * 64, "callbackPort": 42428,
+}
+
+
+def mashup_output_context_takes_user_meshes(addon):
+    ops = importlib.import_module(f"{addon.__name__}.instant_edit.ops")
+    context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
+    with temporary_scene_data():
+        imported = mesh("0.0 Imported")
+        context_module.tag_object(imported, {
+            "schema": context_module.SCHEMA, "version": 3, "original_material": imported["xiv_material"],
+            "material_index": 0, "mesh_index": 0, "submesh_index": 0})
+        made = mesh("1.0 Made In Blender")
+        del made["context_id"]
+        made["xiv_material"] = "/mt_c0101e0001_top_c.mtrl"
+        objects = [imported, made]
+        object_contexts = {obj.as_pointer(): ("source", obj["xiv_material"]) for obj in objects}
+        assignments = {("source", "/mt_c0101e0001_top_a.mtrl"): "/mt_c0101e0001_top_b.mtrl"}
+
+        # The made mesh has no alias, so the second duplicate fails after the first exists.
+        before = [{item.as_pointer() for item in data} for data in (bpy.data.objects, bpy.data.meshes, bpy.data.collections)]
+        try:
+            ops._create_mashup_output_context(bpy.context, MASHUP_OUTPUT_CONTEXT, "", objects, object_contexts, assignments)
+        except KeyError:
+            pass
+        else:
+            raise AssertionError("a mashup output without an alias for every material did not fail")
+        after = [{item.as_pointer() for item in data} for data in (bpy.data.objects, bpy.data.meshes, bpy.data.collections)]
+        assert after == before, "a failed mashup output context left objects, meshes or its collection behind"
+
+        assignments[("source", "/mt_c0101e0001_top_c.mtrl")] = "/mt_c0101e0001_top_d.mtrl"
+        ref, created = ops._create_mashup_output_context(
+            bpy.context, MASHUP_OUTPUT_CONTEXT, "", objects, object_contexts, assignments)
+        made_copy = next(obj for obj in created if obj.name.startswith("1.0 "))
+        assert ref.context_id == "mashup-output" and len(ref.mesh_objects) == 2, ref.mesh_objects
+        assert context_module.context_id_for_object(made_copy) == "mashup-output", made_copy.name
+        assert "context_id" not in made_copy and "instant_edit_context_id" not in made_copy
+        assert made_copy["xiv_material"] == "/mt_c0101e0001_top_d.mtrl"
+    print("[PASS] a new mod's mashup context takes meshes made in Blender; a failed one leaves no meshes behind")
+
+
+def export_refuses_empty_meshes_as_empty(addon):
+    ops = importlib.import_module(f"{addon.__name__}.instant_edit.ops")
+    with temporary_scene_data():
+        good = mesh("0.0 Good")
+        empty = bpy.data.objects.new("0.1 Empty", bpy.data.meshes.new("Empty Data"))
+        bad = mesh("Badly Named")
+        for objects, expected, wrong in (([good, empty], "Empty meshes (1): 0.1 Empty", "Visible mesh names"),
+                                         ([good, bad], "Visible mesh names must use", "Empty meshes")):
+            try:
+                ops._export_groups(objects)
+            except ValueError as error:
+                assert expected in str(error) and wrong not in str(error), str(error)
+            else:
+                raise AssertionError(f"exporting {[obj.name for obj in objects]} was not refused")
+        assert [group.mesh_index for group in ops._export_groups([good])] == [0]
+    print("[PASS] Quick Export calls a well-named mesh without geometry empty, not badly named")
+
+
 def run():
     with addon_session("_xiv_ie_correctness_regression") as addon:
+        mashup_output_context_takes_user_meshes(addon)
+        export_refuses_empty_meshes_as_empty(addon)
         duplicate_face_keeps_corner_layers_aligned(addon)
         assert_combination_failures(addon)
         assert_linked_mesh_rejected(addon)

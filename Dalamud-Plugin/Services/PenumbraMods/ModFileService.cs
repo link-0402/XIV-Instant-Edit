@@ -35,8 +35,7 @@ internal sealed class ModFileService
     {
         if (!source.IsModFile || !IsSafeModName(source.ModDirectory) || !IsSafeRelativeResourcePath(source.RelativePath))
             throw new IOException($"{source.Label} is not a writable mod file.");
-        var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(source.ModDirectory, source.ModStableId)).ConfigureAwait(false);
-        await LeaveFrameworkThread();
+        var scan = await _sources.ResolveModScanAsync(source.ModDirectory, source.ModStableId).ConfigureAwait(false);
         if (scan is null)
             throw new TextureConflictException($"The mod {source.ModName} is no longer registered in Penumbra.");
         var file = Path.GetFullPath(source.ActualPath);
@@ -74,8 +73,7 @@ internal sealed class ModFileService
     {
         if (!IsSafeModName(modDirectory))
             return null;
-        var scan = await _framework.RunOnFrameworkThread(() => _sources.ResolveModScanOnFramework(modDirectory, stableId)).ConfigureAwait(false);
-        await LeaveFrameworkThread();
+        var scan = await _sources.ResolveModScanAsync(modDirectory, stableId).ConfigureAwait(false);
         return scan?.CandidateRoots.FirstOrDefault(root => File.Exists(Path.Combine(root, "meta.json")) &&
                                                           (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0);
     }

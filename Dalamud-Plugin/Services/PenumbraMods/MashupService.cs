@@ -88,17 +88,16 @@ internal sealed class MashupService
             SourceModTarget? activeTarget = null;
             if (destination == "active_mod")
             {
-                var resolution = await _framework.RunOnFrameworkThread(() => _sources.ResolveSourceModTargetOnFramework(
+                var resolution = await _sources.ResolveSourceModTargetAsync(
                     activeContext.SourceModDirectory!,
                     activeContext.TargetFilePath!,
                     activeContext.SourceModRootPath,
                     activeContext.TargetRelativePath,
-                    activeContext.SourceModStableId)).ConfigureAwait(false);
+                    activeContext.SourceModStableId).ConfigureAwait(false);
                 if (resolution.Target is null)
                     return new ExportResult(false, resolution.Code,
                         resolution.Error ?? "The active Penumbra mod is no longer available.");
                 activeTarget = resolution.Target;
-                await LeaveFrameworkThread();
             }
 
             var modelBytes = await File.ReadAllBytesAsync(exportedFile).ConfigureAwait(false);
@@ -567,6 +566,8 @@ internal sealed class MashupService
         if (directories.Count == 0)
             return Array.Empty<string>();
         var mods = await _framework.RunOnFrameworkThread(_ipc.GetMods).ConfigureAwait(false);
+        // The caller commits the mashup (writes, hashing) right after this returns.
+        await LeaveFrameworkThread();
         var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var directory in directories)
         {
@@ -634,11 +635,10 @@ internal sealed class MashupService
         else if (locator.Kind == "mod" && IsSafeModName(locator.SourceModDirectory) &&
                  IsSafeRelativeResourcePath(locator.SourceRelativePath))
         {
-            var roots = await _framework.RunOnFrameworkThread(
-                () => _sources.GetRegisteredManifestRoots(locator.SourceModDirectory!, locator.SourceModStableId)).ConfigureAwait(false);
+            var roots = await _sources.GetRegisteredManifestRootsAsync(
+                locator.SourceModDirectory!, locator.SourceModStableId).ConfigureAwait(false);
             if (roots.Length == 0)
                 return null;
-            await LeaveFrameworkThread();
             return await ReadVerifiedModManifestResourceAsync(locator, roots).ConfigureAwait(false);
         }
 
@@ -753,6 +753,8 @@ internal sealed class MashupService
             {
                 warnings.Add($"The mashup was committed, but Penumbra refresh failed: {e.Message}");
             }
+            // The manifest below reads meta.json files.
+            await LeaveFrameworkThread();
             var modelRelative = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
             if (cleanup.PathRemap?.RelativePaths.TryGetValue(modelRelative, out var remappedModel) == true)
                 modelRelative = remappedModel;
@@ -806,6 +808,7 @@ internal sealed class MashupService
         if (!IsSafeNewModName(modName))
             return new ExportResult(false, ResultCode.InvalidModName, "The Penumbra mod name is invalid.");
         var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
+        await LeaveFrameworkThread();
         if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
             return new ExportResult(false, ResultCode.PenumbraRootMissing, "The Penumbra mod root is unavailable.");
         var modList = await _framework.RunOnFrameworkThread(() =>
@@ -897,6 +900,8 @@ internal sealed class MashupService
             {
                 warnings.Add($"The mashup mod was committed, but Penumbra setup failed: {e.Message}");
             }
+            // The manifest below reads meta.json files.
+            await LeaveFrameworkThread();
             var modelRelative = prepared.Mappings[NormalizeGamePath(activeContext.GamePath)];
             if (cleanup.PathRemap?.RelativePaths.TryGetValue(modelRelative, out var remappedModel) == true)
                 modelRelative = remappedModel;

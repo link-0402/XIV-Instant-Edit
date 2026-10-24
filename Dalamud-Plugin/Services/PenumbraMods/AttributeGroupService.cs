@@ -135,11 +135,15 @@ internal sealed class AttributeGroupService
                 return "attribute_group_imc_unavailable: Could not resolve the current IMC entry for this model. Re-import it with game data available, then retry the export.";
         }
 
-        var error = PrepareAttributeGroups(
-            modFolder, resolvedGamePath, tags, masks, imcEntry, out var prepared, withoutImc: refusal is not null);
-        if (error is not null)
-            return error;
-        return (prepared is null ? null : CommitAttributeGroups(prepared)) ?? refusal;
+        // meta.json is read and written as one step under the gate Studio's writers take too.
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var error = PrepareAttributeGroups(
+                modFolder, resolvedGamePath, tags, masks, imcEntry, out var prepared, withoutImc: refusal is not null);
+            if (error is not null)
+                return error;
+            return (prepared is null ? null : CommitAttributeGroups(prepared)) ?? refusal;
+        }
     }
 
     /// <summary>

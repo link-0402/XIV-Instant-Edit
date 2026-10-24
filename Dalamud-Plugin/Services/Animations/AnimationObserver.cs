@@ -448,7 +448,9 @@ internal sealed class AnimationObserver : IDisposable
             }
             // Publish identified clips before any native source-skeleton search.
             await PublishAsync(captures, expectedGeneration, token);
-            if (matching.IsCompleted) matching = MatchAsync(captures.ToArray(), expectedGeneration, token);
+            // The match outlives this observation, whose token is disposed (and so unlinked) at the next one: it stops
+            // at Dispose through the lifetime, and at Stop or a new character at its generation check.
+            if (matching.IsCompleted) matching = MatchAsync(captures.ToArray(), expectedGeneration, lifetime.Token);
             token.ThrowIfCancellationRequested();
             await framework.RunOnFrameworkThread(() =>
             {

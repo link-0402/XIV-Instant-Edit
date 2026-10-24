@@ -335,6 +335,22 @@ internal static class CutEditsFixture
         undoing.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 1));
         check(undoing.Undo() && undoing.Document.Cuts!.Parts.Length == 2 && undoing.SelectedCut == null,
             "undoing a cut drops the selected part, whose number now belongs to another part");
+        var later = new TimelineEditor(Doc(100)) { Loops = false };
+        later.Playhead = 30;
+        later.Key(TimelineKey.Cut);
+        later.Playhead = 60;
+        later.Key(TimelineKey.Cut);
+        later.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 1));
+        later.Playhead = 80;
+        check(later.Key(TimelineKey.Cut) && later.Document.Cuts!.Parts.Length == 4 && later.SelectedCut == new TimelineCutSelection(TimelineCutTarget.Part, 1),
+            "cutting a later part keeps the selected part, whose number and place stay");
+        later.SelectCut(new TimelineCutSelection(TimelineCutTarget.Join, 0));
+        check(later.SetJoin(0, later.Document.Cuts!.Joins[0] with { Frames = 20 }) && later.Document.Cuts!.Joins[0].Frames == 20 &&
+              later.SelectedCut == new TimelineCutSelection(TimelineCutTarget.Join, 0),
+            "editing the selected join's blend keeps it selected");
+        later.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 1));
+        check(later.SetPartLength(0, 45) && later.Undo() && later.SelectedCut == new TimelineCutSelection(TimelineCutTarget.Part, 1),
+            "stretching an earlier part, and undoing it, keeps the selected part, which only moved");
         // Q at 50, on the part playing 30 to 70, removes 30 to 50: the events starting at 30 and 45, and the key at 40.
         editor.Playhead = 50;
         check(editor.Key(TimelineKey.RemoveBefore) && editor.Document.Length == 50 && editor.LastRemoval == new CutRemoval(2, 1),

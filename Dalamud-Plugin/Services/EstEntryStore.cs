@@ -35,22 +35,29 @@ public sealed class EstEntryStore
     public EstEntryStore(string configDirectory)
         => _path = Path.Combine(Path.GetFullPath(configDirectory), "est-entries.json");
 
+    /// <summary>
+    /// The records. A file that can't be read (held by another program) throws, so no export saves over
+    /// the records it holds; a damaged one is kept aside under another name and reads as no records.
+    /// </summary>
     public IReadOnlyList<ManagedEstEntry> Load()
     {
         lock (_sync)
         {
+            if (!File.Exists(_path))
+                return [];
+            List<ManagedEstEntry> entries;
             try
             {
-                if (!File.Exists(_path))
-                    return [];
-                var entries = JsonSerializer.Deserialize<List<ManagedEstEntry>>(File.ReadAllText(_path)) ?? [];
-                return entries.Where(entry => entry is { Mod.Length: > 0, Container.Length: > 0, Slot.Length: > 0 }).ToArray();
+                entries = JsonSerializer.Deserialize<List<ManagedEstEntry>>(File.ReadAllText(_path)) ?? [];
             }
-            catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
+            catch (JsonException)
             {
-                // Without the records a later export only leaves entries in place, never removes one.
+                // Without the records a later export only leaves entries in place, never removes one, so the
+                // damaged file is kept for whoever can mend it.
+                File.Move(_path, $"{_path}.unreadable-{DateTime.UtcNow:yyyyMMdd-HHmmss}", true);
                 return [];
             }
+            return entries.Where(entry => entry is { Mod.Length: > 0, Container.Length: > 0, Slot.Length: > 0 }).ToArray();
         }
     }
 

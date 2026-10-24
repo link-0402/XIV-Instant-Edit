@@ -29,6 +29,47 @@ internal static class SimsImportScenarios
         HairKeepsTheFullMeshOfEachShader();
         HairKeepsTheLightestGreyDiffuse();
         HairIsCutToItsPartOfTheSheet();
+        SwatchPackageTakesTheMeshPackagesCut();
+    }
+
+    /// <summary>
+    /// A mesh package and its swatch package extracted together: the swatches get the mesh package's cut.
+    /// Tested on the sharing step, since no test builds a hair CAS part to scan.
+    /// </summary>
+    private static void SwatchPackageTakesTheMeshPackagesCut()
+    {
+        var geom = new SimsResourceKey(SimsResourceType.Geom, 0, 0x1234);
+        SimsScanResult Package(string name, bool withMesh, params SimsResourceKey[] meshKeys)
+        {
+            var scan = new SimsScanResult { PackagePath = $@"C:\cc\{name}.package" };
+            scan.HairStyleMeshes[0] = meshKeys.ToHashSet();
+            if (withMesh)
+                scan.Assets.Add(new SimsAsset { Kind = SimsAssetKind.Mesh, HairStyle = 0, LodLevel = 0 });
+            scan.Assets.Add(new SimsAsset { Kind = SimsAssetKind.Texture, Role = SimsTextureRole.Diffuse, HairStyle = 0 });
+            return scan;
+        }
+        var cut = new UvRegion(0f, 0f, 0.5f, 0.25f);
+        var other = new UvRegion(0.5f, 0f, 0.5f, 0.25f);
+        Dictionary<int, UvRegion>[] Share(SimsScanResult[] scans, Dictionary<int, UvRegion>[] regions)
+        {
+            SimsPackageInspector.ShareHairRegions(scans, regions, scans.Select(_ => new StringBuilder()).ToList());
+            return regions;
+        }
+
+        var shared = Share([Package("hair", true, geom), Package("swatches", false, geom)], [new() { [0] = cut }, new()]);
+        Require(shared[1].TryGetValue(0, out var got) && got == cut,
+            "a swatch package's hairstyle takes the cut of the package holding the meshes its parts list");
+
+        var stranger = new SimsResourceKey(SimsResourceType.Geom, 0, 0x9999);
+        shared = Share([Package("hair", true, geom), Package("swatches", false, stranger)], [new() { [0] = cut }, new()]);
+        Require(shared[1].GetValueOrDefault(0) == cut, "with no mesh in common, the batch's only cut is used");
+        shared = Share([Package("a", true, geom), Package("b", true, stranger), Package("swatches", false, new SimsResourceKey(SimsResourceType.Geom, 0, 7))],
+            [new() { [0] = cut }, new() { [0] = other }, new()]);
+        Require(shared[2].Count == 0, "with no mesh in common and two cuts in the batch, the swatches stay whole");
+        shared = Share([Package("hair", true, geom), Package("hair2", true, geom)], [new() { [0] = cut }, new()]);
+        Require(shared[1].Count == 0, "a hairstyle with meshes of its own keeps what they measured");
+        shared = Share([Package("swatches", false, geom)], [new()]);
+        Require(shared[0].Count == 0, "a package extracted alone is left as it was");
     }
 
     private static void HairIsCutToItsPartOfTheSheet()
