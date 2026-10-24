@@ -715,11 +715,3 @@ def active_context(context=None) -> ContextRef:
         context_id = next(iter(ids))
 
     return validate_context(context_id, context.scene)
-
-
-def metadata_for_export(obj) -> tuple[int, int, int]:
-    """Return YAA-compatible name-based ordering within an XIV Instant Edit context."""
-    context_id = context_id_for_object(obj)
-    if not context_id:
-        raise ContextValidationError(f"{obj.name}: object is outside an XIV Instant Edit context")
-    return mesh_ids_from_name(obj)

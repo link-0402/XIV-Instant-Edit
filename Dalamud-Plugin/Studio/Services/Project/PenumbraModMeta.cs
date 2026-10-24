@@ -566,8 +566,6 @@ internal sealed class PenumbraModMeta
     // Groups this plugin writes
     // ─────────────────────────────────────────────────────────────────────────
 
-    public bool HasGroup(string id) => FindGroupObject(id) != null;
-
     /// <summary>
     /// Adds a group, or replaces the one with the same id. Fields a user may have changed in
     /// Penumbra's own editor — description, priority, page, which option is the default — are kept

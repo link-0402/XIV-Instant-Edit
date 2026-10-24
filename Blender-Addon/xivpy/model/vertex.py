@@ -145,15 +145,4 @@ class VertexDeclaration:
             stream = element.stream
             element.offset = stream_size[stream]
             stream_size[stream] += element.size
-
-    def print_info(self) -> None:
-        print("=" * 60)
-        print("VERTEX DECLARATION")
-        print("=" * 60)
-        
-        print("  #  | Stream | Offset | Type      | Usage")
-        print("-----|--------|--------|-----------|------------------")
-        
-        for idx, element in enumerate(self.vertex_elements):
-            print(f"  {idx + 1:2d} |   {element.stream:3d}  |   {element.offset:3d}  | {element.type.name:9s} | {element.usage.name} ({element.usage_idx})")
     

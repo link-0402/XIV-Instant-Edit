@@ -11,9 +11,6 @@ using static InstantEdit.Services.PenumbraMods.ModPaths;
 
 namespace InstantEdit.Services.PenumbraMods;
 
-/// <summary> How a preview mod's source file is used inside its mod, for the confirmation before applying. </summary>
-internal sealed record ModFileUsage(IReadOnlyList<string> Options, bool SeveralGamePaths);
-
 /// <summary>
 /// Preview mods: new mods holding a preview's files at a high priority, and applying a preview's
 /// files to the source mods they came from, with managed backups to restore.
@@ -480,32 +477,6 @@ internal sealed class PreviewModWriter
         if (await RedrawPreviewActorAsync(objectIndex).ConfigureAwait(false) is { } redraw)
             warnings.Add(redraw);
         return warnings;
-    }
-
-    /// <summary>
-    /// For files of one mod: the options that map each one, and whether it is mapped from more than
-    /// one game path. Empty when the mod's metadata can't be read.
-    /// </summary>
-    internal static IReadOnlyDictionary<string, ModFileUsage> DescribeModFileUsages(string modRoot, IEnumerable<string> relativePaths)
-    {
-        var usages = new Dictionary<string, ModFileUsage>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            var mappings = ReadModMappings(modRoot);
-            foreach (var relativePath in relativePaths)
-            {
-                var label = OptionMappingFor(relativePath, mappings.OptionLabels);
-                var options = label == "Unmapped" ? [] : label.Split(" | ", StringSplitOptions.RemoveEmptyEntries);
-                var several = ModPathKeys(relativePath).Any(key => mappings.GamePaths.TryGetValue(key, out var gamePath) && gamePath is null);
-                usages[relativePath] = new ModFileUsage(options, several);
-            }
-        }
-        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or
-                                        System.Text.Json.JsonException or FormatException)
-        {
-            // Only a hint shown before applying; writing checks each file again.
-        }
-        return usages;
     }
 
     private Task<string?> RedrawPreviewActorAsync(int objectIndex)

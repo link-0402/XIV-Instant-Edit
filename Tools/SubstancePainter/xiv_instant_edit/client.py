@@ -93,11 +93,3 @@ def poll_failure(error: Exception, unreachable_since, now: float):
     if now - since >= UNREACHABLE_SECONDS:
         return f"Lost contact with Instant Edit: {error}", since
     return None, since
-
-
-def is_available(ports: list) -> bool:
-    try:
-        call(ports, "/status", None, timeout=1.5)
-        return True
-    except (PluginUnavailable, PluginRefused):
-        return False

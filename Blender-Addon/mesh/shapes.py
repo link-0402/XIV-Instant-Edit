@@ -1,10 +1,8 @@
 import numpy as np
 
 from numpy        import single, double
-from bpy.types    import Object, Depsgraph
+from bpy.types    import Object
 from numpy.typing import NDArray
-
-from .objects     import evaluate_obj
 
 
 def get_shape_mix(source_obj: Object, extra_key: str="") -> NDArray[single]:
@@ -49,40 +47,3 @@ def get_shape_mix(source_obj: Object, extra_key: str="") -> NDArray[single]:
             mix_coords += offset * blend
     
     return mix_coords.astype(single)
-
-def create_co_cache(co_cache: dict[str, None], shapes: dict[str, Object], target: Object, base_key: str, vert_count: int, depsgraph: Depsgraph) -> None:
-    '''Takes a dict of shape key names of relative keys on a mesh and creates a cache of their coordinates per key.'''
-    for key_name in co_cache:
-        shape = shapes[key_name]
-        evaluate_obj(shape, depsgraph)
-
-        shape_co = np.zeros(vert_count * 3, dtype=double)
-        shape.data.vertices.foreach_get("co", shape_co)
-
-        co_cache[key_name] = shape_co
-
-        if key_name == base_key:
-            target.data.shape_keys.key_blocks[0].data.foreach_set("co", shape_co)
-        else:
-            new_shape = target.data.shape_keys.key_blocks.get(key_name)
-            new_shape.data.foreach_set("co", shape_co.astype(single))
-
-        del shapes[key_name]
-
-def create_shape_keys(co_cache: dict[str, NDArray[double]], shapes: dict[str, Object], target: Object, base_key:str, vert_count: int, depsgraph: Depsgraph) -> None:
-    '''Uses a co_cache to recreate shape keys on target mesh.'''
-    for key_name, shape in shapes.items():
-        evaluate_obj(shape, depsgraph)
-        shape_co = np.zeros(vert_count * 3, dtype=double)
-        shape.data.vertices.foreach_get("co", shape_co)
-
-        rel_key = target.data.shape_keys.key_blocks.get(key_name).relative_key
-        new_shape = target.data.shape_keys.key_blocks.get(key_name)
-        if rel_key.name not in co_cache:
-            continue
- 
-        offset     = shape_co - co_cache[base_key]
-        mix_coords = co_cache[rel_key.name] + offset
-        new_shape.data.foreach_set("co", mix_coords.astype(single))
-
-    target.data.update()

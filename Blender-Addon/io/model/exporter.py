@@ -2,8 +2,7 @@
 from bpy.types        import Object
 from collections      import defaultdict
 
-from ..logging        import YetAnotherLogger
-from .exp.scene       import prepare_submeshes
+from .exp.scene      import prepare_submeshes
 from .com.exceptions  import XIVMeshError
 from .exp.constructor import CreateLOD
 
@@ -22,9 +21,8 @@ def get_lod_range(lod_level: int) -> float:
 
 class ModelExport:
     
-    def __init__(self, logger: YetAnotherLogger=None, **model_flags):
+    def __init__(self, **model_flags):
         self.model             = XIVModel()
-        self.logger            = logger
 
         self.model_flags : dict[str, bool]      = model_flags
         self.export_stats: dict[str, list[str]] = defaultdict(list)
@@ -35,12 +33,11 @@ class ModelExport:
                 export_obj : list[Object], 
                 file_path  : str,
                 export_lods: bool,
-                neck_morphs: list[tuple[list[float], list[float]]], 
-                logger     : YetAnotherLogger=None, 
+                neck_morphs: list[tuple[list[float], list[float]]],
                 **model_flags
             ) -> dict[str, list[str]]:
-        
-        exporter = cls(logger=logger, **model_flags)
+
+        exporter = cls(**model_flags)
         return exporter._create_model(export_obj, file_path, export_lods, neck_morphs)
 
     def _create_model(
@@ -57,10 +54,6 @@ class ModelExport:
                         for obj in export_obj if obj.data.shape_keys)
         
         for lod_level, active_lod in enumerate(self.model.lods[:max_lod]):
-            if self.logger:
-                self.logger.last_item = "Model geometry"
-                self.logger.log("Configuring model geometry...", 2)
-                
             sorted_meshes = prepare_submeshes(export_obj, self.model.attributes, lod_level)
             if not sorted_meshes:
                 break
@@ -72,8 +65,7 @@ class ModelExport:
                                 lod_level,
                                 active_lod, 
                                 face_data, 
-                                sorted_meshes,
-                                logger=self.logger
+                                sorted_meshes
                             )
             
             self.export_stats.update(**lod.export_stats)

@@ -39,7 +39,6 @@ public sealed class BlenderClient : IDisposable
 {
     public const string ImportOptionsCapability = "instant-edit.import-options.v1";
     public const string MaterialPreviewCapability = "instant-edit.material-preview.v1";
-    public const string CacheHandoffCapability = "instant-edit.cache-handoff.v1";
     public const string TextureCacheCapability = "instant-edit.texture-cache.v1";
     public const string CacheSettingsCapability = "instant-edit.cache-settings.v1";
     public const string VanillaContextCapability = "instant-edit.vanilla-context.v1";
@@ -166,14 +165,6 @@ public sealed class BlenderClient : IDisposable
         }
     }
 
-    /// <summary>
-    /// Ping Blender's add-on server without blocking the caller's thread.
-    /// A stopped add-on is a normal condition, so connection and timeout failures
-    /// are reported as false rather than escaping to the UI thread.
-    /// </summary>
-    public async Task<bool> IsReachableAsync(int port, CancellationToken cancellationToken = default)
-        => (await GetStatusAsync(port, cancellationToken).ConfigureAwait(false)).Reachable;
-
     /// <summary>Returns whether the connected add-on advertises import options support.</summary>
     public async Task<bool> SupportsImportOptionsAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, ImportOptionsCapability, cancellationToken).ConfigureAwait(false);
@@ -181,9 +172,6 @@ public sealed class BlenderClient : IDisposable
     /// <summary>Returns whether the connected add-on can consume material preview bundles.</summary>
     public async Task<bool> SupportsMaterialPreviewAsync(int port, CancellationToken cancellationToken = default)
         => await SupportsCapabilityAsync(port, MaterialPreviewCapability, cancellationToken).ConfigureAwait(false);
-
-    public async Task<bool> SupportsCacheHandoffAsync(int port, CancellationToken cancellationToken = default)
-        => await SupportsCapabilityAsync(port, CacheHandoffCapability, cancellationToken).ConfigureAwait(false);
 
     public async Task<string?> ConfigureCacheAsync(
         int port,

@@ -90,10 +90,6 @@ internal sealed class TmbFile
         Pointers.TryGetValue(magic, out var layouts) && layouts.Where(l => l.Kind == Kind.String).Select(l => l.Offset).FirstOrDefault(-1) is var offset
             ? offset : -1;
 
-    /// <summary>Where a kind keeps its vector pointers (offset, then count).</summary>
-    public static ImmutableArray<int> VectorOffsets(string magic) =>
-        Pointers.TryGetValue(magic, out var layouts) ? [.. layouts.Where(l => l.Kind == Kind.Vector).Select(l => l.Offset)] : [];
-
     private sealed class Field(Layout layout)
     {
         public Layout Layout { get; } = layout;

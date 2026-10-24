@@ -1,7 +1,6 @@
 import re
 import bpy
 
-from typing    import Literal
 from bpy.types import Object, Depsgraph
 
 
@@ -43,13 +42,6 @@ def get_collection_obj(collection_name: str, type='ANY', sub_collections=False) 
             all_objects.extend(sub_obj)
     
     return all_objects
-
-def get_object_from_mesh(mesh_name:str) -> Object | Literal[False]:
-    """Returns the object bashed on mesh name."""
-    for obj in bpy.context.scene.objects:
-        if obj.type == "MESH" and obj.data.name == mesh_name:
-            return obj
-    return False
 
 def armature_for_object(obj: Object) -> Object | None:
     """Return the armature that drives a mesh, if any.
@@ -221,11 +213,3 @@ def baked_copy(source_obj: Object) -> Object:
                 continue
             setattr(modifier, prop.identifier, getattr(source, prop.identifier))
     return new_obj
-
-
-def evaluate_obj(obj: Object, depsgraph: Depsgraph) -> Object:
-        eval_obj  = obj.evaluated_get(depsgraph)
-        obj.data = bpy.data.meshes.new_from_object(
-                        eval_obj,
-                        preserve_all_data_layers=True,
-                        depsgraph=depsgraph)

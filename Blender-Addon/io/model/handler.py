@@ -8,7 +8,6 @@ from bpy.types             import Object, Depsgraph, ShapeKey
 from collections           import defaultdict
 from collections.abc       import Iterable 
    
-from ..logging             import YetAnotherLogger
 from ...properties         import get_settings
 from .com.space            import lin_to_srgb       
 from ...mesh.shapes        import get_shape_mix
@@ -92,7 +91,7 @@ class SceneHandler:
 
     """
 
-    def __init__(self, logger: YetAnotherLogger=None, depsgraph: Depsgraph=None, batch=False, source_objects=None):
+    def __init__(self, depsgraph: Depsgraph=None, batch=False, source_objects=None):
         props                            = get_settings()
         self.depsgraph : Depsgraph       = depsgraph
         self.shapekeys : bool            = props.keep_shapekeys
@@ -102,14 +101,10 @@ class SceneHandler:
         self.delete    : list[Object]    = []
         self.tri_method: tuple[str, str] = ("BEAUTY", "BEAUTY")
 
-        self.logger     : YetAnotherLogger = logger
-        self.meshes     : dict[Object, dict[str, list | bool]] = {}
+        self.meshes    : dict[Object, dict[str, list | bool]] = {}
         self.export_objs: list[Object] = []                       
     
     def prepare_scene(self) -> None:
-        if self.logger:
-            self.logger.log("Preparing meshes...", 2)
-
         from ...instant_edit.character import game_shape_keys
 
         visible_obj = list(self.source_objects) if self.source_objects is not None else visible_meshobj()
@@ -164,9 +159,6 @@ class SceneHandler:
         
         transparency = []
         for obj, stats in self.meshes.items():
-            if self.logger:
-                self.logger.last_item = f"{obj.name}"
-            
             if stats["transparency"]:
                 transparency.append(obj)
 
@@ -174,9 +166,6 @@ class SceneHandler:
             fixed_transp = self.handle_transparency(transparency)
 
         for obj, stats in self.meshes.items():
-            if self.logger:
-                self.logger.last_item = f"{obj.name}"
-
             if obj in fixed_transp:
                 dupe = fixed_transp[obj]
             else:
@@ -215,15 +204,9 @@ class SceneHandler:
         self.export_objs = dupes
 
     def handle_transparency(self, transparency: list[Object]) -> dict[Object, Object]:
-        if self.logger:
-            self.logger.log("Fixing face order...", 2)
-
         fixed_transp = {}
         to_process: list[tuple[Object, list]] = []
         for obj in transparency:
-            if self.logger:
-                self.logger.last_item = f"{obj.name}"
-            
             original_faces = get_original_faces(obj)
 
             dupe = copy_mesh_object(obj, self.depsgraph)
@@ -258,9 +241,6 @@ class SceneHandler:
             obj.name = old_name
 
     def handle_shape_keys(self, shape_keys: list[tuple[Object, Object, list[ShapeKey]]]) -> None:
-        if self.logger:
-            self.logger.log("Retaining shape keys...", 2)
-
         vert_mismatches = []
         for dupe, original, keys in shape_keys:
             if len(original.data.vertices) != len(dupe.data.vertices):
@@ -268,13 +248,9 @@ class SceneHandler:
                 continue
 
             for key in keys:
-                if self.logger:
-                    self.logger.last_item = f"{dupe.name}: Shape {key.name}"
                 self._keep_shapes(original, dupe, key.name)
 
         if vert_mismatches:
-            if self.logger:
-                self.logger.log("-> Accounting for vert mismatch...", 2)
             self._shape_vert_mismatch(vert_mismatches)
 
     def _keep_shapes(self, original: Object, dupe: Object, key_name: str) -> None:
@@ -293,9 +269,6 @@ class SceneHandler:
         """
         temp_copies: dict[Object, dict[str, Object]] = defaultdict(dict)
 
-        if self.logger:
-            self.logger.log("-> Creating temp objects...", 2)
-
         for dupe, original, keys in vert_mismatches:
             for key in keys:
                 temp_copy:Object = quick_copy(original, key.name)
@@ -304,14 +277,8 @@ class SceneHandler:
 
         shape_graph = bpy.context.evaluated_depsgraph_get()
 
-        if self.logger:
-            self.logger.log("-> Applying shape keys...", 2)
-
         for dupe, copies in temp_copies.items():
             for key_name, copy in copies.items():
-                if self.logger:
-                    self.logger.last_item = f"{dupe.name}: Shape {key_name}"
-
                 mesh = None
                 try:
                     eval_obj   = copy.evaluated_get(shape_graph)
@@ -328,11 +295,6 @@ class SceneHandler:
 
                     new_shape.data.foreach_set("co", basis_co)
 
-                except Exception as e:
-                    if self.logger:
-                        self.logger.last_item = (f"Vertex count mismatch for {dupe.name} shape {key_name}.")
-                    raise e
-                
                 finally:
                     if mesh is not None:
                         bpy.data.meshes.remove(mesh)
@@ -340,9 +302,6 @@ class SceneHandler:
                     safe_object_delete(copy)
 
     def handle_vertex_groups(self, dupes: Iterable[Object]):
-        if self.logger:
-            self.logger.log("Cleaning vertex groups...", 2)
-
         for dupe in dupes:
             # Collect first: removing while iterating skips the group after each removed one.
             bones = dupe.parent.data.bones
@@ -377,9 +336,6 @@ class SceneHandler:
 
     def restore_meshes(self) -> None:
         """We're trying a lot."""
-        if self.logger:
-            self.logger.log("Restoring scene...", 2)
-        
         for obj in reversed(self.delete):
             safe_object_delete(obj)
         self.delete.clear()
@@ -397,14 +353,8 @@ class SceneHandler:
                         if key is not None:
                             key.value = value
             except Exception as e:
-                if self.logger:
-                    self.logger.log_exception(f"Error deleting {obj.name}: {e}")
-                else:
-                    print(f"Error restoring {obj.name}: {e}")
+                print(f"Error restoring {obj.name}: {e}")
         try:
             bpy.context.view_layer.update()
         except Exception as e:
-            if self.logger:
-                    self.logger.log_exception(f"Error updating view layer: {e}")
-            else:
-                print(f"Error updating view layer: {e}")
+            print(f"Error updating view layer: {e}")

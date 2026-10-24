@@ -20,14 +20,6 @@ public sealed record MaterialSlot(uint SamplerId, string Path, bool Dx11, uint S
 
     public MaterialSlot WithWrap(int u, int v)
         => this with { SamplerSettings = (SamplerSettings & ~0xFu) | (uint)(u & 0x3) | (uint)(v & 0x3) << 2 };
-
-    public MaterialSlot WithLodBias(float bias)
-    {
-        var steps = Math.Clamp((int)MathF.Round(bias * 64f), -512, 511);
-        return this with { SamplerSettings = (SamplerSettings & ~(0x3FFu << 10)) | ((uint)steps & 0x3FF) << 10 };
-    }
-
-    public MaterialSlot WithMinLod(int lod) => this with { SamplerSettings = (SamplerSettings & ~(0xFu << 20)) | (uint)(lod & 0xF) << 20 };
 }
 
 /// <summary>

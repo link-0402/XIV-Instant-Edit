@@ -331,7 +331,6 @@ public sealed partial class ExportServer : IDisposable
     private readonly MashupService _mashups;
     private readonly ModResourceScanner _scanner;
     private readonly ExportContextRegistry _contexts;
-    private readonly bool _ownsContexts;
     private readonly IPluginLog       _log;
     private readonly CancellationTokenSource _cts = new();
     private const int MaxRequestBytes = 256 * 1024;
@@ -373,17 +372,8 @@ public sealed partial class ExportServer : IDisposable
         _mashups = mashups;
         _scanner = scanner;
         _contexts = contexts;
-        _ownsContexts = false;
         _log      = log;
     }
-
-    /// <summary> Compatibility constructor for hosts that do not provide a shared registry. </summary>
-    internal ExportServer(Configuration config, ModelExportService modelExports, RaceExportService raceExports,
-        SizesExportService sizesExports, ModelBackupService modelBackups, MashupService mashups, ModResourceScanner scanner,
-        IPluginLog log)
-        : this(config, modelExports, raceExports, sizesExports, modelBackups, mashups, scanner,
-            new ExportContextRegistry(Guid.NewGuid().ToString("N")), log)
-        => _ownsContexts = true;
 
     public void Start()
     {
@@ -1822,6 +1812,19 @@ public sealed partial class ExportServer : IDisposable
 
     private string EnrichErrorResponse(string path, int status, string body)
     {
+        var (code, cause) = ErrorCause(body);
+        return StructuredError(
+            status,
+            OperationForPath(path),
+            StageForCode(code),
+            code,
+            cause,
+            RemedyForCode(code)).Body;
+    }
+
+    /// <summary> The code and reason a handler's error body gives, from its "code" and "error" fields. </summary>
+    internal static (ResultCode Code, string Cause) ErrorCause(string body)
+    {
         var code = ResultCode.RequestRejected;
         var cause = "The Dalamud plugin rejected the bridge request.";
         try
@@ -1829,7 +1832,7 @@ public sealed partial class ExportServer : IDisposable
             using var document = JsonDocument.Parse(body);
             if (document.RootElement.ValueKind == JsonValueKind.Object)
             {
-                // Every error body comes from Error(), so its code is always one of ours.
+                // Every error body comes from Error() here or in PainterJobService, so its code is always one of ours.
                 if (document.RootElement.TryGetProperty("code", out var codeValue) &&
                     codeValue.ValueKind == JsonValueKind.String && ResultCodes.TryParse(codeValue.GetString(), out var parsed))
                     code = parsed;
@@ -1844,14 +1847,7 @@ public sealed partial class ExportServer : IDisposable
             code = ResultCode.InvalidErrorResponse;
             cause = "The Dalamud plugin produced an invalid error response.";
         }
-
-        return StructuredError(
-            status,
-            OperationForPath(path),
-            StageForCode(code),
-            code,
-            cause,
-            RemedyForCode(code)).Body;
+        return (code, cause);
     }
 
     private static string OperationForPath(string path)
@@ -2220,8 +2216,6 @@ public sealed partial class ExportServer : IDisposable
         _cts.Cancel();
         StopListener();
         _cts.Dispose();
-        if (_ownsContexts)
-            _contexts.Dispose();
     }
 
     private void StopListener()

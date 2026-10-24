@@ -360,11 +360,6 @@ internal static unsafe class AnimationRuntime
         }
         return result.ToImmutable();
     }
-    public static void CheckSkeleton(byte[] bytes, string expected)
-    {
-        if (InspectSkeleton(bytes) != expected)
-            throw new InvalidDataException("The effective skeleton does not match the playing partial skeleton.");
-    }
     public static string InspectSkeleton(byte[] bytes)
     {
         using var doc = new AnimationNative.Document(AnimationPap.SkeletonHavok(bytes));

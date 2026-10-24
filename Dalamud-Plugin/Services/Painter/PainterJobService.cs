@@ -567,8 +567,9 @@ internal sealed class PainterJobService : IDisposable
 
     private static string Json(object value) => JsonSerializer.Serialize(value);
 
-    private static (int, string) Error(int status, ResultCode code, string message)
-        => (status, Json(new { ok = false, code, message }));
+    // "error" is the field ExportServer passes on as the reason; it rewrites every error body.
+    internal static (int, string) Error(int status, ResultCode code, string message)
+        => (status, Json(new { ok = false, code, error = message }));
 
     public void Dispose()
     {

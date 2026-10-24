@@ -319,10 +319,6 @@ internal sealed class NeckSeamService
         return bytes;
     }
 
-    /// <summary> What <see cref="ApplyAsync"/> would write, for the confirmation. </summary>
-    public static IReadOnlyList<(string Kind, NeckSeamSource Source)> ApplyTargets(NeckSeamPreview preview)
-        => preview.Files.Select(f => (f.Kind, f.Source)).ToList();
-
     /// <summary>
     /// Writes the preview's files over their sources: mod files in place (backed up first), game data
     /// into a new "Skin Seam Fix" mod. The materials get their original texture paths back, since

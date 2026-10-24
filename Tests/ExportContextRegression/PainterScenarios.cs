@@ -38,6 +38,15 @@ internal static class PainterScenarios
         OptionalSetsStayOutUntilTicked();
         PluginShipsWithTheAssembly();
         PainterVersionChecks();
+        RefusalsKeepTheirReason();
+    }
+
+    /// <summary> The export server rewrites every error body; a Painter refusal's reason and code must survive it. </summary>
+    private static void RefusalsKeepTheirReason()
+    {
+        var (_, body) = PainterJobService.Error(404, ResultCode.UnknownProject, "Open it again.");
+        var (code, cause) = ExportServer.ErrorCause(body);
+        Require(code == ResultCode.UnknownProject && cause == "Open it again.", "a Painter refusal keeps its code and reason through the export server");
     }
 
     /// <summary> Painter is online at or above the declared minimum Painter plugin version, newer included. </summary>

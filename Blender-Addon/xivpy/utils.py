@@ -1,47 +1,14 @@
-import os
-import json
-import copy
 import numpy as np
 import struct
 
-from io           import BytesIO
-from typing       import Self
-from pathlib      import Path
-from dataclasses  import asdict, fields
 from numpy.typing import NDArray
 
-
-def write_null_string(file: BytesIO, string:str, fixed_length: int | None=None) -> None:
-    string_length = len(string)
-    if fixed_length is not None and string_length > fixed_length:
-        raise Exception(f"String longer than set length: {fixed_length}")
-    
-    padding = 1 if fixed_length is None else fixed_length - string_length
-
-    file.write(string.encode())
-    file.write(write_padding(padding))
 
 def write_padding(amount: int) -> bytes:
     if amount == 0:
         return b''
     
     return bytes([0] * amount)
-
-def write_alignment(file: BytesIO, alignment: int=8) -> None:
-    current_pos = file.tell()
-    if current_pos % alignment == 0:
-        return
-    
-    padding = alignment - (current_pos % alignment)
-    
-    file.write(bytes([0] * padding))
-
-def read_packed_version(packed_version: int) -> float:
-    build = packed_version & 0xFF
-    patch = (packed_version >> 8) & 0xFF
-    minor = (packed_version >> 16) & 0xFF
-    major = (packed_version >> 24) & 0xFF
-    return f"{major}.{minor}.{patch}.{build}"
 
 class BinaryReader:
     def __init__(self, data: bytes):
@@ -72,21 +39,12 @@ class BinaryReader:
     def read_bool(self) -> bool:
         return self.read_struct('<?')
     
-    def read_int16(self) -> int:
-        return self.read_struct('<h')
-    
-    def read_int32(self) -> int:
-        return self.read_struct('<i')
-    
     def read_uint16(self) -> int:
         return self.read_struct('<H')
     
     def read_uint32(self) -> int:
         return self.read_struct('<I')
-      
-    def read_uint64(self) -> int:
-        return self.read_struct('<Q')  
-    
+
     def read_float(self) -> float:
         return self.read_struct('<f')
     
@@ -122,55 +80,7 @@ class BinaryReader:
         try:
             return string_bytes.decode(encoding)
         except UnicodeDecodeError as e:
-            raise UnicodeDecodeError(encoding, raw_bytes, self.pos, self.pos + length, f"Couldn't decode string: {e}") 
-    
-    def slice_from(self, offset: int, length: int) -> 'BinaryReader':
-        if offset + length > self.length:
-            raise EOFError("Slice extends beyond stream")
-        return BinaryReader(self.data[offset:offset + length])
-    
+            raise UnicodeDecodeError(encoding, raw_bytes, self.pos, self.pos + length, f"Couldn't decode string: {e}")
+
     def remaining_bytes(self) -> int:
         return self.length - self.pos
-
-class PMPJson:
-
-    @classmethod
-    def from_dict(cls, input: dict):
-        field_names = {field.name for field in fields(cls)}
-        
-        filtered_input = {}
-        for key, value in input.items():
-            if key in field_names:
-                filtered_input[key] = value
-            else:
-                print(f"Unknown field: {key} in {cls.__name__}")
-        
-        return cls(**filtered_input)
-
-    def update_from_dict(self, input: dict):
-        field_names = {field.name for field in fields(self)}
-        
-        for key, value in input.items():
-            if key in field_names:
-                setattr(self, key, value)
-            else:
-                print(f"Unknown field: {key} in {self.__class__.__name__}")
-
-    def remove_none(self, obj):
-        if isinstance(obj, dict):
-            return {key: self.remove_none(value) for key, value in obj.items() if value is not None}
-        
-        elif isinstance(obj, list):
-            return [self.remove_none(index) for index in obj if index is not None]
-        
-        return obj
-
-    def to_json(self):
-        return json.dumps(self.remove_none(asdict(self)), indent=4)
-    
-    def write_json(self, output_dir:Path, file_name):
-        with open(os.path.join(output_dir, file_name + ".json"), "w") as file:
-                file.write(self.to_json())
-    
-    def copy(self) -> Self:
-        return copy.deepcopy(self)

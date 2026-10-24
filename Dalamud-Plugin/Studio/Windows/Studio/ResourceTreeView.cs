@@ -85,12 +85,6 @@ internal sealed class ResourceTreeView
 
     private bool ShowThumbs => _host.Configuration.ShowThumbnails;
 
-    /// <summary>The entry the selection lies in, if it still exists.</summary>
-    public ResourceRoot? CurrentRoot()
-    {
-        return _session.Selection is { Kind: TargetKind.Resource } s ? _session.Graph.FindRoot(s.Root) : null;
-    }
-
     /// <summary>What the selection asks the centre to show, if it still exists.</summary>
     private Scope? CurrentScope()
     {

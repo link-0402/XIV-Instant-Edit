@@ -750,7 +750,4 @@ internal sealed class TextureModBackend : ITextureEditBackend
             return null;
         }
     }
-
-    internal static (string Group, string Option)? ReadTextureVariantSelectionForRegression(string modRoot, Guid groupId, Guid optionId)
-        => ReadTextureVariantSelection(modRoot, groupId, optionId);
 }

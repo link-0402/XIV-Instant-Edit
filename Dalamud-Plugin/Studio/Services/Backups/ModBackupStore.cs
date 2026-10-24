@@ -66,6 +66,7 @@ internal sealed partial class ModBackupStore
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly Lock _lock = new();
+    private static readonly Lock CopyLock = new();
     private readonly string _journalPath;
     private BackupJournal _journal = new();
 
@@ -261,15 +262,19 @@ internal sealed partial class ModBackupStore
         var folder = Path.Combine(cacheRoot, FolderName);
         Directory.CreateDirectory(folder);
         var path = Path.Combine(folder, sha);
-        if (File.Exists(path) && new FileInfo(path).Length == content.LongLength)
+        // Operations on two mods can store the same contents at once, and Windows refuses a move over a file being replaced.
+        lock (CopyLock)
         {
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+            if (File.Exists(path) && new FileInfo(path).Length == content.LongLength)
+            {
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+                return sha;
+            }
+            var temp = path + ".tmp";
+            File.WriteAllBytes(temp, content);
+            File.Move(temp, path, overwrite: true);
             return sha;
         }
-        var temp = path + ".tmp";
-        File.WriteAllBytes(temp, content);
-        File.Move(temp, path, overwrite: true);
-        return sha;
     }
 
     internal static string? HashOf(string path)

@@ -10,7 +10,6 @@ from .shapes          import create_shape_data, submesh_to_mesh_shapes, create_f
 from .weights         import sort_weights, normalise_weights, empty_vertices
 from .streams         import create_stream_arrays, get_submesh_streams, update_mesh_streams
 from .accessors       import get_weights, get_xiv_uv_layers
-from ...logging       import YetAnotherLogger
 from .validators      import clean_material_path, USHORT_LIMIT
 from ..com.helpers    import normalised_int_array, WEIGHT_THRESHOLD, unweighted_message
 from ..com.exceptions import XIVModelError, XIVMeshError
@@ -95,9 +94,8 @@ def decl_from_blend_mesh(submeshes: list[Object], export_flow=False) -> VertexDe
     return decl
 
 class CreateLOD:
-    def __init__(self, model: XIVModel, lod_level: int, face_data: bool, logger: YetAnotherLogger = None):
+    def __init__(self, model: XIVModel, lod_level: int, face_data: bool):
         self.model        = model
-        self.logger       = logger
         self.lod_level    = lod_level
         self.face_data    = face_data
 
@@ -115,8 +113,8 @@ class CreateLOD:
         self.unweighted  : list[str]                            = []
 
     @classmethod
-    def construct(cls, model: XIVModel, lod_level: int, active_lod: Lod, face_data: bool, sorted_meshes: list[list[Object]], logger: YetAnotherLogger = None ) -> 'CreateLOD':
-        lod = cls(model, lod_level, face_data, logger=logger)
+    def construct(cls, model: XIVModel, lod_level: int, active_lod: Lod, face_data: bool, sorted_meshes: list[list[Object]]) -> 'CreateLOD':
+        lod = cls(model, lod_level, face_data)
         lod._construct(active_lod, sorted_meshes)
         return lod
 
@@ -135,10 +133,6 @@ class CreateLOD:
 
         for mesh_scene_idx, blend_objs in enumerate(sorted_meshes):
             self.mesh_idx = active_lod.mesh_idx + mesh_scene_idx
-            if self.logger:
-                self.logger.last_item = f"Mesh #{self.mesh_idx}"
-                self.logger.log(f"Processing Mesh #{self.mesh_idx}...", 3)
-            
             try:
                 self._create_mesh(blend_objs)
             except XIVMeshError as e:
@@ -173,9 +167,6 @@ class CreateLOD:
 
             for submesh in self.model.submeshes[start: start + count]:
                 submesh.idx_offset += padding
-
-        if self.logger:
-            self.logger.last_item = "Model buffers"
 
         header = self.model.header
         current_offset = len(self.model.buffers)
@@ -221,9 +212,6 @@ class CreateLOD:
         return lod_buffer
 
     def _create_shape_meshes(self, lod_level: int) -> None:
-        if self.logger:
-            self.logger.last_item = f"LOD{lod_level} shape meshes"
-
         arr_offset = len(self.model.shape_values)
         if arr_offset < self.model.mesh_header.shape_value_count:
             self.model.shape_values = np.resize(self.model.shape_values, self.model.mesh_header.shape_value_count)
@@ -278,10 +266,6 @@ class CreateLOD:
         vert_offset = 0
         self.shape_arrays: dict[str, list[tuple[NDArray, dict[int, NDArray]]]] = defaultdict(list)
         for obj in blend_objs:
-            if self.logger:
-                self.logger.last_item = f"{obj.name}"
-                self.logger.log(f"Processing {obj.name}...", 4)
-
             if len(obj.data.vertices) == 0:
                 continue
 
@@ -294,10 +278,6 @@ class CreateLOD:
             vert_offset             += submesh_vert_count
             self.mesh.vertex_count  += submesh_vert_count
             self.mesh.submesh_count += 1
-        
-        if self.logger:
-            self.logger.last_item = f"Mesh #{self.mesh_idx}"
-            self.logger.log(f"Finalising Mesh #{self.mesh_idx}...", 3)
 
         if self.bone_limit < 5:
             vert_decl.update_usage_type(VertexUsage.BLEND_WEIGHTS, VertexType.UBYTE4)

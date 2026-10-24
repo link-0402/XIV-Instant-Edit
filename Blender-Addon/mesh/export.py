@@ -11,7 +11,6 @@ from .heels          import apply_calculated_heels_offset, is_heels_offset_attri
 from .objects        import visible_meshobj, armature_for_object
 from .shapes         import get_shape_mix
 from ..io.model      import ModelExport, SceneHandler, exportable_shape_keys
-from ..io.logging    import YetAnotherLogger
 from ..properties    import get_settings
 from ..backups       import create_backup
 from ..instant_edit.character import is_hung_weapon
@@ -239,14 +238,6 @@ def flush_edit_mode(objects) -> None:
         if obj.mode == "EDIT":
             obj.update_from_editmode()
 
-def get_export_path(directory: Path, file_name: str, subfolder: bool, body_slot:str ="") -> str:
-    if subfolder:
-        export_path = directory / body_slot / file_name
-    else:
-        export_path = directory / file_name
-
-    return export_path
-
 @contextmanager
 def _showing(export_objects):
     """Show hidden meshes an export was given for its duration: parts a character send imported
@@ -266,12 +257,12 @@ def _showing(export_objects):
                 obj.hide_set(True)
 
 
-def export_result(file_path: Path, file_format: str, logger: YetAnotherLogger=None, batch=False, export_objects=None) -> None:
+def export_result(file_path: Path, file_format: str, batch=False, export_objects=None) -> None:
     settings = get_settings()
     flush_edit_mode(export_objects)
     with _showing(export_objects), _clean_export_state(export_objects, settings.reset_scaling_on_export):
         bpy.context.evaluated_depsgraph_get().update()
-        export = FileExport(file_path, file_format, logger=logger, batch=batch, export_objects=export_objects)
+        export = FileExport(file_path, file_format, batch=batch, export_objects=export_objects)
         export.export_template()
 
 class ShapeExports:
@@ -624,8 +615,7 @@ def get_export_settings(format: str) -> dict[str, str | int | bool]:
     
 
 class FileExport:
-    def __init__(self, file_path: Path, file_format: str, logger: YetAnotherLogger=None, batch=False, export_objects=None):
-        self.logger      = logger
+    def __init__(self, file_path: Path, file_format: str, batch=False, export_objects=None):
         self.file_format = file_format
         self.file_path   = file_path
         self.batch       = batch
@@ -636,9 +626,7 @@ class FileExport:
 
         scene_handler = None
         try:
-            scene_handler = SceneHandler(
-                logger=self.logger, batch=self.batch, source_objects=self.export_objects
-            )
+            scene_handler = SceneHandler(batch=self.batch, source_objects=self.export_objects)
             scene_handler.prepare_scene()
             scene_handler.process_scene()
 
@@ -647,12 +635,6 @@ class FileExport:
                 # Measured on the prepared export copies: rest pose, modifiers
                 # and shape-key basis match what the exporter writes.
                 heels_offset = apply_calculated_heels_offset(scene_handler.export_objs)
-
-            if self.logger:
-                self.logger.log_separator()
-                self.logger.log(f"Exporting {self.file_path.stem}")
-                self.logger.log_separator()
-                self.logger.last_item = None
 
             if self.file_format == 'GLTF':
                 bpy.ops.export_scene.gltf(
@@ -670,8 +652,6 @@ class FileExport:
                                 )
                 
             else:
-                if self.logger:
-                    self.logger.log(f"Converting to MDL...", 2)
                 settings = get_settings()
                 if settings.backup_models_on_export:
                     create_backup(self.file_path.parent, self.file_path.name + ".mdl")
@@ -680,7 +660,6 @@ class FileExport:
                                                 str(self.file_path) + ".mdl",
                                                 settings.use_lods,
                                                 [],
-                                                logger=self.logger,
                                                 **settings.get_model_flags()
                                             )
 

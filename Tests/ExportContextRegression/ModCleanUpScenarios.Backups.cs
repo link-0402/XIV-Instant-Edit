@@ -18,6 +18,25 @@ internal static partial class ModCleanUpScenarios
         SplitLayoutModsRestoreWhole(testRoot);
         SplitLayoutRollbackPutsTheFilesBack(testRoot);
         BackupsFollowAModRenamedInPenumbra(testRoot);
+        SameContentsCanBeStoredAtOnce(testRoot);
+    }
+
+    /// <summary>Two clean-ups of two mods holding the same file store one copy at the same moment.</summary>
+    private static void SameContentsCanBeStoredAtOnce(string testRoot)
+    {
+        var (_, _, cache) = Store(testRoot);
+        var content = new byte[4 * 1024 * 1024];
+        Random.Shared.NextBytes(content);
+        var failed = 0;
+        Parallel.For(0, 16, _ =>
+        {
+            try { ModBackupStore.StoreCopy(cache, content); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Interlocked.Increment(ref failed); }
+        });
+        var folder = Path.Combine(cache, ModBackupStore.FolderName);
+        Require(failed == 0 && Directory.EnumerateFiles(folder).Count() == 1 &&
+                File.ReadAllBytes(Directory.EnumerateFiles(folder).Single()).SequenceEqual(content),
+            "storing the same contents from several operations at once keeps one whole copy and fails none");
     }
 
     private static void ModPathsStayInsideTheMod(string testRoot)
