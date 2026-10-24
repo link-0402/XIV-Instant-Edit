@@ -146,7 +146,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             Say(FeedbackSeverity.Warning, blocked);
             return;
         }
-        if (session != null && SameFile(session.Source, row) && opening == null)
+        // Unsaved edits stay; a clean session reads its file again, which another tool or a save elsewhere may have changed.
+        if (session is { History.Dirty: true } && SameFile(session.Source, row) && opening == null)
         {
             this.copies = copies ?? this.copies;
             return;
@@ -157,6 +158,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             openSwitchPopup = true;
             return;
         }
+        if (session != null && SameFile(session.Source, row))
+            copies ??= this.copies;
         Load(row, actor, copies);
     }
 
@@ -411,7 +414,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         var old = session;
         var reload = old != null && string.Equals(old.Source.ActualPath, opened.Source.ActualPath, StringComparison.OrdinalIgnoreCase)
                      && string.Equals(old.Source.GamePath, opened.Source.GamePath, StringComparison.OrdinalIgnoreCase);
-        if (old != null && !reload)
+        // A re-read file replaces what a preview still shows of the old one.
+        if (old != null && (!reload || old.PreviewShown))
             DiscardAfterWork(old, opened.Source.FileName);
         if (!reload)
             RestoreLive();
