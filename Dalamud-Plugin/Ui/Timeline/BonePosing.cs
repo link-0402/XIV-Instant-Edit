@@ -191,7 +191,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     {
         if (layer != null)
         {
-            if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry) && PoseEdits.Keyed(layer, bone, frame))
+            if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix) && PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
             if (layerBones?.Pinned.Contains(bone) == true)
                 return BoneState.Pinned;
@@ -210,6 +210,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             MotionLayerKind.Amplitude => "This layer scales its movement.",
             MotionLayerKind.Symmetry => "Copied from the other side.",
             MotionLayerKind.Pin => "Bent to hold a pin.",
+            MotionLayerKind.Fix => "This layer fixes its motion.",
             _ => "This layer changes it.",
         },
         BoneState.Animated => "The clip moves it.",
@@ -323,10 +324,10 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             var loop = LoopFrames(loaded, doc);
             var end = MotionEnd(loaded, doc);
             var earlier = doc.Motion.Take(at).ToArray();
-            // One pose leaves out amplitudes and planted pins, which take the whole clip: a pin's spots then come
+            // One pose leaves out amplitudes, fixes and planted pins, which take the whole clip: a pin's spots then come
             // from the bake, so Pin here and the gizmo key the bone where Live has it.
             before = layer.Kind == MotionLayerKind.Pin && OutputClip(loaded) is { } output && earlier.Any(other => MotionEvaluator.Active(other) &&
-                         (other.Kind == MotionLayerKind.Amplitude || other.Kind == MotionLayerKind.Pin && other.Pins.Any(pin => pin.Planted)))
+                         (other.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix || other.Kind == MotionLayerKind.Pin && other.Pins.Any(pin => pin.Planted)))
                 ? BakedBefore(output, earlier).Pose(frame)
                 : MotionEvaluator.ApplyAt(skeleton, own.Local, earlier, frame, loop, end, clip.SourceTracks);
             through = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at + 1).ToArray(), frame, loop, end, clip.SourceTracks);

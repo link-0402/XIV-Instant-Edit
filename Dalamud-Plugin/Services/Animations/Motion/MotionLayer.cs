@@ -16,7 +16,26 @@ internal enum MotionLayerKind : byte
     Symmetry,
     /// <summary>Holds bones at a spot while the chain above them bends to reach it.</summary>
     Pin,
+    /// <summary>Repairs the motion: lands a startup's end on its loop, or smooths jitter (<see cref="MotionFix"/>).</summary>
+    Fix,
 }
+
+/// <summary>What a fix layer repairs. Saved as numbers.</summary>
+internal enum MotionFixKind : byte
+{
+    /// <summary>Blends a startup's end onto its loop's first frame, pose and speed.</summary>
+    MatchLoop,
+    /// <summary>Smooths small shakes and keeps sharp moves.</summary>
+    SmoothJitter,
+}
+
+/// <summary>
+/// A fix layer's fix. For <see cref="MotionFixKind.MatchLoop"/>, <paramref name="LoopFirst"/> and
+/// <paramref name="LoopSecond"/> are the loop's local transforms at timeline frames 0 and 1 by bone name,
+/// so their difference is the loop's speed per timeline frame.
+/// </summary>
+internal sealed record MotionFix(MotionFixKind Kind, ImmutableDictionary<string, BoneTransform>? LoopFirst = null,
+    ImmutableDictionary<string, BoneTransform>? LoopSecond = null);
 
 /// <summary>How readily a planted pin counts its bone as down. Saved as numbers; Normal first, so a missing value reads as Normal.</summary>
 internal enum PinSensitivity : byte
@@ -163,6 +182,8 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 /// <param name="From">For a symmetry layer, the side whose motion is copied; other kinds ignore it.</param>
 /// <param name="Pins">For a pin layer, the bones it holds; its keys hold their spots in each pin's space
 /// and its amount is the pull toward them. Other kinds have none.</param>
+/// <param name="Fix">For a fix layer, what it repairs; its amount is a match's blend or a smooth's strength.
+/// Other kinds have none, and journals written before fix layers load with none.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -179,7 +200,8 @@ internal sealed record MotionLayer(
     ImmutableArray<MotionKey> Keys = default,
     bool Enabled = true,
     MotionSide From = MotionSide.Left,
-    ImmutableArray<MotionPin> Pins = default)
+    ImmutableArray<MotionPin> Pins = default,
+    MotionFix? Fix = null)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;

@@ -421,7 +421,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
                 current.Commit(MotionEdits.SetBones(current.Document, layer.Key, layer.Bones.Concat(chosen)));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Add the selected bones to the ones this layer scales. With none listed, it scales every bone.");
+            ImGui.SetTooltip(layer.Kind == MotionLayerKind.Fix
+                ? "Add the selected bones to the ones this layer fixes. With none listed, it fixes every bone."
+                : "Add the selected bones to the ones this layer scales. With none listed, it scales every bone.");
         ImGui.SameLine();
         using (ImRaii.Disabled(readOnly || layer.Bones.IsEmpty))
         {

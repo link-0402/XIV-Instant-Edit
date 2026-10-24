@@ -288,6 +288,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         blenderMotion.Forget();
         decode.Forget();
         poseSources.Drop();
+        session.LoopPose.Drop();
         reader.Stop();
         source = null;
         session.CatalogKey = null;
@@ -307,6 +308,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         reader.Dispose();
         decode.Forget();
         poseSources.Drop();
+        session.LoopPose.Drop();
     }
 
     private bool Showing(AnimationCapture capture, bool startup)
@@ -361,6 +363,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             // Another clip, or this one opened afresh: its own file is the motion to edit.
             saveFooter.ForgetMotion();
             blenderMotion.Forget();
+            session.LoopPose.Drop();
         }
         // The preview's temporary mod must be gone first, or the read would get the previewed file.
         reader.Start(service, capture, startup, keepView, again, afterUndo, timelinePreview.Stopping ?? Task.CompletedTask);
@@ -495,6 +498,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             return;
         }
         livePose.Poll(editor, source);
+        session.LoopPose.Poll(editor);
         if (reader.Error is { } readError)
             Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + readError);
         if (pending == PendingAction.None && ChangedCapture() is { } changed)

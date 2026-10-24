@@ -34,12 +34,12 @@ internal static class PoseEdits
         MotionEdits.KeyIndex(layer, frame) is var at and >= 0 && layer.Keys[at].Bones.ContainsKey(bone);
 
     /// <summary>
-    /// Whether any key of the layer has <paramref name="bone"/>, or for an amplitude whether it is limited to
+    /// Whether any key of the layer has <paramref name="bone"/>, or for an amplitude or a fix whether it is limited to
     /// it. A symmetry's or a pin's bones come from the skeleton (<paramref name="changed"/>, see BonePosing.BonesOf).
     /// </summary>
     public static bool Changes(MotionLayer layer, string bone, IReadOnlySet<string>? changed = null) => layer.Kind switch
     {
-        MotionLayerKind.Amplitude => layer.Bones.Contains(bone),
+        MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.Contains(bone),
         MotionLayerKind.Symmetry or MotionLayerKind.Pin => changed?.Contains(bone) == true,
         _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),
     };

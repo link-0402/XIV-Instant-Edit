@@ -157,7 +157,7 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         if (layout.IsMotionRow(row))
             return layerIndex < 0
                 ? new TimelineHit(TimelinePart.MotionLane, frame, null, null, row)
-                : HitLayer(doc.Motion[layerIndex], view, x, y - RowTop(row), frame, row);
+                : HitLayer(MotionEdits.Shown(doc.Motion[layerIndex], doc.Length), view, x, y - RowTop(row), frame, row);
 
         var events = doc.Events.IsDefault ? [] : doc.Events;
         TimelineHit? nearest = null;
@@ -210,7 +210,8 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             if (nearest is { } key0)
                 return key0;
         }
-        if (y < Row / 3 && right - left > Edge * 2)
+        // A match has no fades, so its start edge is grabbed at any height.
+        if (y < Row / 3 && right - left > Edge * 2 && layer.Fix?.Kind != MotionFixKind.MatchLoop)
         {
             if (MathF.Abs(x - view.X(layer.Start + layer.FadeIn)) <= Edge)
                 return new TimelineHit(TimelinePart.LayerFadeIn, frame, null, null, row, layer.Key);

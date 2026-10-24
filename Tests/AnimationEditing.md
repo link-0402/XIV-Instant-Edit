@@ -1557,3 +1557,21 @@ playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
   drag back: the arm stays straight until the gizmo is back within reach, and the hand ends under the gizmo.
 - [ ] 5 Select the waist (j_kosi, right under the body): Drag is disabled with its hint.
 - [ ] 6 Undo once after a drag: the whole drag comes back in one step.
+
+## Fix layer (pending)
+
+Fix layers repair the motion: Match startup to loop lands a startup's end on its loop's first frame, Smooth
+jitter calms small shakes. Spec: docs/superpowers/specs/2026-10-24-fix-layer-design.md.
+
+- [ ] 1 Open an emote startup that leads into a loop, Add > Match startup to loop: a layer appears at the
+  clip's end, 8 frames long. In GPose play the startup, then the loop: no pop at the hand-off.
+- [ ] 2 Step frame by frame through the hand-off: no frame is held twice. (The spec assumes the game shows
+  the loop's frame 0 right after the startup's last; if a frame holds, report it.)
+- [ ] 3 Set Blend over to 20: the change spreads over more frames.
+- [ ] 4 Set Blend to 50%: the end lands halfway to the loop's first frame.
+- [ ] 5 Edit the loop's start, save it, then Re-read loop on the startup's match: the startup follows the
+  new loop start.
+- [ ] 6 Open a loop clip: Match startup to loop is disabled, and its tooltip says "Only a startup that
+  leads into a loop".
+- [ ] 7 Add > Smooth jitter on a shaky port: the shakes calm and a sharp move stays sharp. At Strength 0
+  nothing changes.

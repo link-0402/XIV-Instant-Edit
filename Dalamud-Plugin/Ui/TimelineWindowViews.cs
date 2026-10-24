@@ -42,6 +42,13 @@ internal static partial class TimelineWindowViews
     public const string PinFeetHint = "Hold both feet where the motion has them down, so they stop sliding.";
     public const string NoFeet = "This skeleton has no feet to pin.";
 
+    /// <summary>The Add menus' fix items after Pin feet (<see cref="LoopPoseReader.DrawAddItems"/>): fix layers start with their fix.</summary>
+    public const string MatchLoopName = "Match startup to loop";
+    public const string MatchLoopHint = "Blend this startup's end into its loop's first frame, so they flow into each other.";
+    public const string NoLoop = "Only a startup that leads into a loop";
+    public const string SmoothJitterName = "Smooth jitter";
+    public const string SmoothJitterHint = "Calm small shakes and keep sharp moves.";
+
     /// <summary>Whether Pin feet can pin both feet on <paramref name="skeleton"/>; false while it is unknown.</summary>
     public static bool CanPinFeet(SkeletonDescription? skeleton) =>
         skeleton != null && skeleton.Bones.Any(bone => bone.Name == PinChains.FootL) && skeleton.Bones.Any(bone => bone.Name == PinChains.FootR);
@@ -120,6 +127,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Amplitude => Theme.Watching,
         MotionLayerKind.Symmetry => Theme.MaterialKind,
         MotionLayerKind.Pin => Theme.ModelKind,
+        MotionLayerKind.Fix => Theme.MaskTexture,
         _ => Theme.Important,
     };
 
@@ -130,7 +138,16 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Amplitude => "Make bones move more or less around their average pose.",
         MotionLayerKind.Symmetry => "Copy one side's motion onto the other, mirrored.",
         MotionLayerKind.Pin => "Hold bones at a spot while the limb bends to reach it.",
+        MotionLayerKind.Fix => "Repair the motion.",
         _ => "Blend bones toward poses you key.",
+    };
+
+    /// <summary>What a layer does, for its panel: a fix layer says which fix.</summary>
+    public static string LayerHint(MotionLayer layer) => layer.Fix?.Kind switch
+    {
+        MotionFixKind.MatchLoop => MatchLoopHint,
+        MotionFixKind.SmoothJitter => SmoothJitterHint,
+        _ => LayerKindHint(layer.Kind),
     };
 
     /// <summary>The amount as the panel and bar show it: "150%".</summary>
@@ -157,8 +174,14 @@ internal static partial class TimelineWindowViews
         var moved = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var layer in doc.Motion.Where(MotionEvaluator.Active))
         {
-            // An amplitude only scales motion that is there, so it never adds a track.
-            if (layer.Kind == MotionLayerKind.Amplitude)
+            // A match gives tracks to the loop's bones it moves off rest.
+            if (MotionEdits.IsMatch(layer))
+            {
+                moved.UnionWith(MatchedBones(layer, clip));
+                continue;
+            }
+            // An amplitude only scales motion that is there, so it never adds a track; a smooth only calms it.
+            if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
                 continue;
             // A symmetry gives tracks to the bones it copies onto, as the bake finds them; a pin to the bones it bends.
             if (layer.Kind == MotionLayerKind.Symmetry)
@@ -183,7 +206,7 @@ internal static partial class TimelineWindowViews
         return $"Bone layers move {names}, which other players' skeletons may not have. Sync plugins can refuse the saved file.";
     }
 
-    /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude has no keys, only the bones it is limited to.</summary>
+    /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude or a fix has no keys, only the bones it is limited to.</summary>
     public static string LayerContent(MotionLayer layer)
     {
         if (layer.Kind == MotionLayerKind.Pin)
@@ -201,10 +224,11 @@ internal static partial class TimelineWindowViews
         if (layer.Kind == MotionLayerKind.Symmetry)
             return (layer.From == MotionSide.Left ? "From the left · " : "From the right · ") +
                    (layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones");
-        var bones = layer.Kind == MotionLayerKind.Amplitude
+        var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix;
+        var bones = limited
             ? layer.Bones.Length
             : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct(StringComparer.Ordinal).Count();
-        if (layer.Kind == MotionLayerKind.Amplitude)
+        if (limited)
             return bones == 0 ? "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
         var keys = layer.Keys.Length;
         return (keys == 1 ? "1 key" : $"{Whole(keys)} keys") + " · " + (bones == 1 ? "1 bone" : $"{Whole(bones)} bones");
@@ -450,6 +474,25 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
+    /// The bones a match can move off rest when saved: the loop's within the layer's limit that the clip's skeleton
+    /// has and the loop holds away from their rest pose. None before the skeleton is known.
+    /// </summary>
+    public static IEnumerable<string> MatchedBones(MotionLayer layer, AnimationClip clip)
+    {
+        if (layer.Fix is not { LoopFirst: { } first, LoopSecond: { } second } || clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+            return [];
+        return skeleton.Bones.Where(bone => (layer.Bones.IsEmpty || layer.Bones.Contains(bone.Name)) &&
+                first.TryGetValue(bone.Name, out var at) && second.TryGetValue(bone.Name, out var next) &&
+                !(AtRest(at, bone.Reference) && AtRest(next, bone.Reference)))
+            .Select(bone => bone.Name);
+    }
+
+    // The loose end of the bake's own "no track" comparison: a loop pose read back from a decode is a little off rest.
+    private static bool AtRest(BoneTransform value, BoneTransform rest) =>
+        Vector3.Distance(value.Position, rest.Position) <= 1e-5f &&
+        1 - Math.Abs(Quaternion.Dot(Quaternion.Normalize(value.Rotation), Quaternion.Normalize(rest.Rotation))) <= 1e-5f;
+
+    /// <summary>
     /// The bones a pin layer changes when saved: each pin's bone and the bones it bends, on the clip's
     /// skeleton. None before the skeleton is known, or for a pin the skeleton can't resolve, which applying
     /// the layer reports.
@@ -487,7 +530,7 @@ internal static partial class TimelineWindowViews
             var moved = doc.Motion.Where(MotionEvaluator.Active)
                 .SelectMany(layer => layer.Kind switch
                 {
-                    MotionLayerKind.Amplitude => layer.Bones.AsEnumerable(),
+                    MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip),
                     MotionLayerKind.Pin => PinnedBones(layer, clip),
                     _ => layer.Keys.SelectMany(key => key.Bones.Keys),

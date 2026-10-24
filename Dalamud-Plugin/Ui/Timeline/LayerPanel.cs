@@ -13,8 +13,8 @@ namespace InstantEdit.Ui.Timeline;
 /// <summary>
 /// The selected bone layer in the properties panel: its timing, amount and the parts of a bone it
 /// changes; for offsets and poses the selected bones' values at the playhead, which set the layer's
-/// key there (<see cref="BoneEditor"/>), and the selected key's ease; for amplitudes the bones it is
-/// limited to. A field's changes until it is left are one undo step, and Live shows each change as it
+/// key there (<see cref="BoneEditor"/>), and the selected key's ease; for amplitudes and fixes the bones it is
+/// limited to, and a match's length and loop. A field's changes until it is left are one undo step, and Live shows each change as it
 /// is made.
 /// </summary>
 internal sealed class LayerPanel(TimelineSession session, BonePosing posing, BoneEditor boneEditor, PoseSourcePanel poseSources, Window bonesWindow)
@@ -55,12 +55,14 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(layer.Enabled ? "On. Untick to see and save the motion without it." : "Off. Tick to apply it again.");
-        Widgets.HintWrapped(TimelineWindowViews.LayerKindHint(layer.Kind));
+        Widgets.HintWrapped(TimelineWindowViews.LayerHint(layer));
         ImGui.Spacing();
         if (layer.Kind == MotionLayerKind.Symmetry)
             using (ImRaii.Disabled(readOnly))
                 DrawFrom(current, layer);
 
+        // A match ends on the clip's last frame and its blend is its fade: only its length is set.
+        var match = layer.Fix?.Kind == MotionFixKind.MatchLoop;
         using (var facts = ImRaii.Table("##layer-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
             if (facts.Success)
@@ -69,15 +71,20 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
                 using (ImRaii.Disabled(readOnly))
                 {
-                    FrameField(current, layer, "Starts", "##layer-start", layer.Start, start => layer with { Start = start });
-                    FrameField(current, layer, "Ends", "##layer-end", layer.End, end => layer with { End = end });
-                    FrameField(current, layer, "Fade in", "##layer-fade-in", layer.FadeIn, fade => layer with { FadeIn = fade });
-                    FrameField(current, layer, "Fade out", "##layer-fade-out", layer.FadeOut, fade => layer with { FadeOut = fade });
+                    if (match)
+                        DrawBlendOver(current, layer);
+                    else
+                    {
+                        FrameField(current, layer, "Starts", "##layer-start", layer.Start, start => layer with { Start = start });
+                        FrameField(current, layer, "Ends", "##layer-end", layer.End, end => layer with { End = end });
+                        FrameField(current, layer, "Fade in", "##layer-fade-in", layer.FadeIn, fade => layer with { FadeIn = fade });
+                        FrameField(current, layer, "Fade out", "##layer-fade-out", layer.FadeOut, fade => layer with { FadeOut = fade });
+                    }
                     DrawAmount(current, layer);
                     // A pin holds a spot and a turn, whatever parts are set.
                     if (layer.Kind != MotionLayerKind.Pin)
                         DrawComponents(current, layer);
-                    if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry))
+                    if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix))
                         DrawInterpolation(current, layer);
                 }
             }
@@ -86,9 +93,14 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
+        if (match)
+        {
+            DrawReread(layer, loaded, readOnly);
+            ImGui.Spacing();
+        }
         if (skeleton == null)
             Widgets.HintWrapped(session.Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
-        else if (layer.Kind == MotionLayerKind.Amplitude)
+        else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
         else if (layer.Kind == MotionLayerKind.Symmetry)
             boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, true);
@@ -302,9 +314,46 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         ImGui.TextColored(Theme.Muted, TimelineText.Seconds(value));
     }
 
+    /// <summary> A match's length: how many frames before the clip's end it starts blending. One undo step per drag. </summary>
+    private static void DrawBlendOver(TimelineEditor current, MotionLayer layer)
+    {
+        TimelineUi.Fact("Blend over");
+        // The stored length, which cuts, stretches and pastes keep as far as the clip allows.
+        var frames = layer.End - layer.Start;
+        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
+        var changed = ImGui.SliderInt("##fix-length", ref frames, 1, Math.Max(1, current.Document.Length), "%d frames");
+        if (ImGui.IsItemActivated())
+            current.BeginFieldEdit();
+        if (changed)
+            current.SetFixLength(layer.Key, frames);
+        if (ImGui.IsItemDeactivated())
+            current.EndFieldEdit();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("How many frames before the end the blend starts. Ctrl+click to type.");
+    }
+
+    /// <summary> A match's Re-read loop button, and that it applies last. </summary>
+    private void DrawReread(MotionLayer layer, AnimationTimelineSource loaded, bool readOnly)
+    {
+        Widgets.MutedWrapped("Applies after every other layer.");
+        // The evaluator skips a match on a looping clip.
+        if (loaded.Clip.IsLoop)
+            Widgets.HintWrapped("Only works on a startup that leads into a loop.");
+        var reader = session.LoopPose;
+        var startup = loaded.Startup && session.Animations != null;
+        using (ImRaii.Disabled(readOnly || reader.Reading || !startup))
+        {
+            if (ImGui.Button((reader.Reading ? "Reading the loop" : "Re-read loop") + "###fix-reread"))
+                reader.Read(loaded, layer.Key);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(startup ? "Read the loop's first frames again, after the loop changed." : TimelineWindowViews.NoLoop);
+    }
+
     private static void DrawAmount(TimelineEditor current, MotionLayer layer)
     {
-        TimelineUi.Fact(layer.Kind switch { MotionLayerKind.Offset => "Strength", MotionLayerKind.Amplitude => "Movement", MotionLayerKind.Pin => "Pull", _ => "Blend" });
+        var smooth = layer.Fix?.Kind == MotionFixKind.SmoothJitter;
+        TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch { MotionLayerKind.Offset => "Strength", MotionLayerKind.Amplitude => "Movement", MotionLayerKind.Pin => "Pull", _ => "Blend" });
         var percent = layer.Amount * 100;
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
         var changed = ImGui.SliderFloat("##layer-amount", ref percent, 0, MotionEdits.MaxAmount(layer.Kind) * 100, "%.0f%%");
@@ -316,6 +365,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 MotionLayerKind.Amplitude => "100% keeps the motion. Less calms it toward the average pose, more exaggerates it. Ctrl+click to type.",
                 MotionLayerKind.Symmetry => "How far the bones blend toward the other side's motion. Ctrl+click to type.",
                 MotionLayerKind.Pin => "How far the bones go to their pins. Ctrl+click to type.",
+                MotionLayerKind.Fix when smooth => "How big a shake it calms. Ctrl+click to type.",
+                MotionLayerKind.Fix => "How far the end goes to the loop's first frame. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
     }
@@ -339,7 +390,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     private static void DrawComponents(TimelineEditor current, MotionLayer layer)
     {
         TimelineUi.Fact("Changes");
-        PoseComponents[] parts = layer.Kind == MotionLayerKind.Amplitude
+        PoseComponents[] parts = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix
             ? [PoseComponents.Rotation, PoseComponents.Position]
             : [PoseComponents.Rotation, PoseComponents.Position, PoseComponents.Scale];
         var first = true;

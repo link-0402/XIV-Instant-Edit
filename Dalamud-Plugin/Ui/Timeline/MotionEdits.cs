@@ -29,12 +29,30 @@ internal static class MotionEdits
 
     public static MotionLayer? Find(TimelineDocument doc, string? key) => IndexOf(doc, key) is var index and >= 0 ? doc.Motion[index] : null;
 
+    /// <summary>
+    /// <paramref name="layer"/> as the timeline draws, grabs and snaps to it on a clip <paramref name="length"/> frames
+    /// long: a match over the frames it blends (<see cref="MotionFixes.MatchSpan"/>), without fades; any other as it is.
+    /// </summary>
+    public static MotionLayer Shown(MotionLayer layer, int length) =>
+        IsMatch(layer) && MotionFixes.MatchSpan(layer, length) is var (start, end) ? layer with { Start = start, End = end, FadeIn = 0, FadeOut = 0 } : layer;
+
+    /// <summary>Whether <paramref name="layer"/> is a Match startup to loop, which ends on the clip's last frame.</summary>
+    public static bool IsMatch(MotionLayer layer) => layer.Fix?.Kind == MotionFixKind.MatchLoop;
+
+    /// <summary>
+    /// A match on a clip <paramref name="length"/> frames long: its blend length kept, at least a frame and at most the clip,
+    /// ending on the last frame. Cuts, stretches and pastes put it there, as its stored frames only carry that length.
+    /// </summary>
+    public static MotionLayer Anchored(MotionLayer layer, int length) =>
+        layer with { Start = Math.Max(0, length - Math.Max(1, layer.End - layer.Start)), End = length };
+
     public static string KindName(MotionLayerKind kind) => kind switch
     {
         MotionLayerKind.Offset => "Offset",
         MotionLayerKind.Amplitude => "Amplitude",
         MotionLayerKind.Symmetry => "Symmetry",
         MotionLayerKind.Pin => "Pin",
+        MotionLayerKind.Fix => "Fix",
         _ => "Pose",
     };
 
@@ -109,6 +127,52 @@ internal static class MotionEdits
         var index = IndexOf(added, key);
         var layer = added.Motion[index] with { Name = "Pin feet", Pins = [new(PinChains.FootL, Planted: true), new(PinChains.FootR, Planted: true)] };
         return added with { Motion = added.Motion.SetItem(index, layer) };
+    }
+
+    /// <summary>The frames a new Match startup to loop blends over.</summary>
+    public const int DefaultFixLength = 8;
+
+    /// <summary>
+    /// Adds a fix layer holding <paramref name="fix"/>: a match named "Match loop" over the clip's last
+    /// <see cref="DefaultFixLength"/> frames (from frame 0 on a shorter clip) at full blend, or a smooth named
+    /// "Smooth jitter" over the whole clip at half strength. Unchanged with an error when the document has no
+    /// room for another layer.
+    /// </summary>
+    public static TimelineDocument AddFix(TimelineDocument doc, MotionFix fix, out string key, out string? error)
+    {
+        var length = Math.Max(TimelineDocument.MinLength, doc.Length);
+        var match = fix.Kind == MotionFixKind.MatchLoop;
+        var added = Add(doc, MotionLayerKind.Fix, match ? Math.Max(0, length - DefaultFixLength) : 0, length, out key, out error);
+        if (error != null)
+            return doc;
+        var index = IndexOf(added, key);
+        var layer = added.Motion[index] with { Name = match ? "Match loop" : "Smooth jitter", Amount = match ? 1 : .5f, Fix = fix };
+        return added with { Motion = added.Motion.SetItem(index, layer) };
+    }
+
+    /// <summary>
+    /// Sets how many frames the match layer <paramref name="key"/> blends over (at least one): it ends on the
+    /// clip's last frame and starts that many before, or at frame 0.
+    /// </summary>
+    public static TimelineDocument SetFixLength(TimelineDocument doc, string key, int frames)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || doc.Motion[index] is not { Fix.Kind: MotionFixKind.MatchLoop } layer)
+            return doc;
+        var length = Math.Max(TimelineDocument.MinLength, doc.Length);
+        var start = Math.Max(0, length - Math.Max(1, frames));
+        return layer.Start == start && layer.End == length ? doc
+            : doc with { Motion = doc.Motion.SetItem(index, Normalize(layer with { Start = start, End = length })) };
+    }
+
+    /// <summary>Replaces the loop pose the match layer <paramref name="key"/> lands on by <paramref name="loopPose"/>'s.</summary>
+    public static TimelineDocument SetLoopPose(TimelineDocument doc, string key, MotionFix loopPose)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || doc.Motion[index] is not { Fix: { Kind: MotionFixKind.MatchLoop } fix } layer)
+            return doc;
+        var next = layer with { Fix = fix with { LoopFirst = loopPose.LoopFirst, LoopSecond = loopPose.LoopSecond } };
+        return Same(layer, next) ? doc : doc with { Motion = doc.Motion.SetItem(index, next) };
     }
 
     /// <summary>Pins <paramref name="bones"/> in the pin layer <paramref name="key"/>, each once, keyed and holding its turn; bones already pinned stay as they are.</summary>
@@ -234,12 +298,13 @@ internal static class MotionEdits
 
     /// <summary>
     /// Moves a layer and its keys by <paramref name="delta"/> frames, as far as they all stay on the
-    /// timeline and the layer's end stays within the clip (or where it already was past it).
+    /// timeline and the layer's end stays within the clip (or where it already was past it). A match stays
+    /// on the clip's last frame.
     /// </summary>
     public static TimelineDocument Move(TimelineDocument doc, string key, int delta)
     {
         var index = IndexOf(doc, key);
-        if (index < 0 || delta == 0)
+        if (index < 0 || delta == 0 || IsMatch(doc.Motion[index]))
             return doc;
         var layer = doc.Motion[index];
         var low = -layer.Start;
@@ -262,7 +327,8 @@ internal static class MotionEdits
 
     /// <summary>
     /// Drags one end of a layer by <paramref name="delta"/> frames; the other stays put, the layer stays
-    /// a frame long or more and its fades shrink to fit. Keys stay where they are.
+    /// a frame long or more and its fades shrink to fit. Keys stay where they are. A match's end stays on the
+    /// clip's last frame, and its start, from where it is shown, sets its length (<see cref="SetFixLength"/>).
     /// </summary>
     public static TimelineDocument Resize(TimelineDocument doc, string key, bool leftEdge, int delta)
     {
@@ -270,6 +336,8 @@ internal static class MotionEdits
         if (index < 0 || delta == 0)
             return doc;
         var layer = doc.Motion[index];
+        if (IsMatch(layer))
+            return leftEdge && Shown(layer, doc.Length) is var shown ? SetFixLength(doc, key, shown.End - shown.Start - delta) : doc;
         var resized = leftEdge
             ? layer with { Start = Math.Clamp(layer.Start + delta, 0, layer.End - 1) }
             : layer with { End = Math.Clamp(layer.End + delta, layer.Start + 1, Math.Max(layer.Start + 1, Limit(doc, layer))) };
@@ -279,12 +347,12 @@ internal static class MotionEdits
 
     /// <summary>
     /// Drags a fade's handle by <paramref name="delta"/> frames: the fade in's handle sits where the fade
-    /// in ends, the fade out's where it begins. Together they never exceed the layer.
+    /// in ends, the fade out's where it begins. Together they never exceed the layer. A match has none.
     /// </summary>
     public static TimelineDocument Fade(TimelineDocument doc, string key, bool fadeIn, int delta)
     {
         var index = IndexOf(doc, key);
-        if (index < 0 || delta == 0)
+        if (index < 0 || delta == 0 || IsMatch(doc.Motion[index]))
             return doc;
         var layer = doc.Motion[index];
         var length = layer.End - layer.Start;
@@ -426,8 +494,8 @@ internal static class MotionEdits
     public static TimelineDocument SetKey(TimelineDocument doc, string key, int frame, string bone, BoneTransform? value, bool? moved = null)
     {
         var index = IndexOf(doc, key);
-        // A symmetry layer copies the other side and never holds keys; a pin layer keys only its keyed pins.
-        if (index < 0 || string.IsNullOrEmpty(bone) || doc.Motion[index].Kind == MotionLayerKind.Symmetry ||
+        // Symmetry and fix layers never hold keys; a pin layer keys only its keyed pins.
+        if (index < 0 || string.IsNullOrEmpty(bone) || doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix ||
             doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted))
             return doc;
         frame = Math.Clamp(frame, 0, TimelineDocument.MaxFrames);
@@ -555,6 +623,12 @@ internal static class MotionEdits
             string key;
             do key = "m" + (next++).ToString(CultureInfo.InvariantCulture);
             while (!keys.Add(key));
+            if (IsMatch(layer))
+            {
+                motion.Add(Normalize(Anchored(layer with { Key = key }, length)));
+                added.Add(key);
+                continue;
+            }
             var start = Math.Clamp(layer.Start, 0, length - 1);
             var end = layer.Start <= 0 && layer.End >= sourceLength ? length : Math.Clamp(layer.End, start + 1, length);
             motion.Add(Normalize(layer with { Key = key, Start = start, End = end }));
@@ -567,10 +641,11 @@ internal static class MotionEdits
     /// <summary>The frames layer drags stick to: every layer's start, end and keys, except <paramref name="except"/>'s.</summary>
     public static IEnumerable<int> SnapFrames(TimelineDocument doc, string? except)
     {
-        foreach (var layer in doc.Motion)
+        foreach (var stored in doc.Motion)
         {
-            if (layer.Key == except)
+            if (stored.Key == except)
                 continue;
+            var layer = Shown(stored, doc.Length);
             yield return layer.Start;
             yield return layer.End;
             foreach (var item in layer.Keys)
@@ -617,15 +692,18 @@ internal static class MotionEdits
         };
     }
 
-    /// <summary>Field-by-field equality, keys, bones and pins compared by content.</summary>
+    /// <summary>Field-by-field equality, keys, bones, pins and the fix's loop pose compared by content.</summary>
     public static bool Same(MotionLayer a, MotionLayer b) =>
         ReferenceEquals(a, b) ||
         a.Key == b.Key && a.Kind == b.Kind && a.Name == b.Name && a.Start == b.Start && a.End == b.End && a.FadeIn == b.FadeIn &&
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
         a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
+        (a.Fix == null ? b.Fix == null
+            : b.Fix != null && a.Fix.Kind == b.Fix.Kind && SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond)) &&
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
-            pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) &&
-            pair.First.Bones.Count == pair.Second.Bones.Count &&
-            pair.First.Bones.All(bone => pair.Second.Bones.TryGetValue(bone.Key, out var other) && other == bone.Value));
+            pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));
+
+    private static bool SameBones(IReadOnlyDictionary<string, BoneTransform>? a, IReadOnlyDictionary<string, BoneTransform>? b) =>
+        a == null ? b == null : b != null && a.Count == b.Count && a.All(bone => b.TryGetValue(bone.Key, out var other) && other == bone.Value);
 }

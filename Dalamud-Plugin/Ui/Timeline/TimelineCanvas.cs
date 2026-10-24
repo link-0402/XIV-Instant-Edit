@@ -21,7 +21,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     private const string MatchMenu = "##timeline-match-menu";
 
     private static readonly string[] LaneGlyphs = [.. TimelineUi.LaneIcons.Select(icon => icon.ToIconString())];
-    // Offset, amplitude and pose layers.
+    // One per layer kind, as TimelineUi.LayerIcons.
     private static readonly string[] LayerGlyphs = [.. TimelineUi.LayerIcons.Select(icon => icon.ToIconString())];
     // A layer's bone rows, folded and unfolded.
     private static readonly string FoldedGlyph = FontAwesomeIcon.CaretRight.ToIconString();
@@ -521,7 +521,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         {
             if (!Widgets.HoverDelay($"layer:{layer.Key}:{hit.Part}:{hit.KeyFrame}:{hit.Bone}"))
                 return;
-            DrawLayerTooltip(layer, hit, readOnly);
+            DrawLayerTooltip(MotionEdits.Shown(layer, current.Document.Length), hit, readOnly);
             return;
         }
         if (hit.Part == TimelinePart.LayerUnfold && hit.Layer is { } folding && Widgets.HoverDelay("layer-unfold:" + folding))
@@ -620,8 +620,11 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         ImGui.TextUnformatted(TimelineWindowViews.LayerContent(layer));
         if (readOnly)
             return;
+        var match = layer.Fix?.Kind == MotionFixKind.MatchLoop;
         ImGui.TextColored(Theme.Hint, hit.Part switch
         {
+            TimelinePart.LayerLeft when match => "Drag to blend over more or fewer frames.",
+            _ when match => "It ends on the clip's last frame.",
             TimelinePart.LayerLeft => "Drag to change where it starts.",
             TimelinePart.LayerRight => "Drag to change where it ends.",
             TimelinePart.LayerFadeIn => "Drag to change how long it fades in.",
@@ -690,6 +693,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                 current.AddPinFeet(skeleton);
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
+            session.LoopPose.DrawAddItems(current, readOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
             ImGui.Separator();
             if (ImGui.MenuItem("Copy all layers", "", false, !current.Document.Motion.IsEmpty))
                 current.CopyLayers();

@@ -89,8 +89,8 @@ internal sealed class TimelineLayout
     /// <summary>How many bone rows the layer at <paramref name="index"/> shows under it: none while it is folded.</summary>
     public int BoneRows(int index) => (index + 1 < layerRows.Length ? layerRows[index + 1] : MotionFirstRow + MotionRows) - layerRows[index] - 1;
 
-    /// <summary>Whether the layer can unfold into bone rows: an offset or pose with keys. Amplitudes have none.</summary>
-    public static bool Unfolds(MotionLayer layer) => layer.Kind != MotionLayerKind.Amplitude && layer.Keys.Any(key => !key.Bones.IsEmpty);
+    /// <summary>Whether the layer can unfold into bone rows: an offset or pose with keys. Amplitudes and fixes have none.</summary>
+    public static bool Unfolds(MotionLayer layer) => layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Fix) && layer.Keys.Any(key => !key.Bones.IsEmpty);
 
     /// <summary>
     /// Lays out <paramref name="doc"/>. <paramref name="visibleLength"/> gives the frames an event

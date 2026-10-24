@@ -63,6 +63,7 @@ internal static class ChangelogCatalog
             Entry("Pose layers blend bones toward poses you key.", 1),
             Entry("Symmetry layers copy one side's motion onto the other, mirrored. Make symmetrical in the Bones window adds one.", 1),
             Entry("Pin layers hold a bone at a spot, feet on the floor or a hand on the chest, and bend the limb to reach it. Pin feet finds where the feet are down and holds them there.", 1),
+            Entry("Fix layers: Match startup to loop blends a startup's end into its loop's first frame over a length you set; Smooth jitter calms small shakes and keeps sharp moves.", 1),
             Entry("The gizmo's Drag mode pulls a bone where you want it and bends the limb above to follow.", 1),
             Entry("The Bones window's crosshairs switch shows no bones, the selected ones, or all of them on your character.", 1),
             Entry("Pick bones on a body map or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),

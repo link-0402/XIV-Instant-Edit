@@ -29,7 +29,11 @@ internal sealed class TimelineSession
         Data = data;
         Framework = framework;
         Log = log;
+        LoopPose = new LoopPoseReader(this);
     }
+
+    /// <summary>The open startup's loop read for Match startup to loop, shared by the Add menus and the layer panel.</summary>
+    public LoopPoseReader LoopPose { get; }
 
     public AnimationEditService? Animations { get; }
     public TimelineCatalog Catalog { get; }

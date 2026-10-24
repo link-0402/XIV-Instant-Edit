@@ -114,6 +114,20 @@ internal static class MotionEditsFixture
               TimelineWindowViews.LayerBonesWarning(Keyed("j_custom") with { Motion = [Keyed("j_custom").Motion[0] with { Enabled = false }] }, clip) == null &&
               TimelineWindowViews.LayerBonesWarning(Keyed("j_custom"), clip with { Resolution = clip.Resolution! with { Standards = [] } }) == null,
             "standard bones, amplitudes, layers turned off and clips without the game's skeleton don't warn");
+
+        // A match moves the loop's bones the clip leaves at rest: an untracked custom bone gets a track.
+        TimelineDocument Matching(BoneTransform custom, ImmutableArray<string> limit = default)
+        {
+            var pose = ImmutableDictionary<string, BoneTransform>.Empty.Add("j_kubi", Rest()).Add(Hand, Turn(5)).Add("j_custom", custom);
+            return Empty() with
+            {
+                Motion = [new("m1", MotionLayerKind.Fix, "Match loop", 92, 100, 0, 0, 1, PoseComponents.Rotation | PoseComponents.Position,
+                    MotionInterpolation.Smooth, limit, Fix: new MotionFix(MotionFixKind.MatchLoop, pose, pose))],
+            };
+        }
+        check(TimelineWindowViews.LayerBonesWarning(Matching(Turn(10)), clip) is { } matchWarning && matchWarning.Contains("j_custom", StringComparison.Ordinal) &&
+              TimelineWindowViews.LayerBonesWarning(Matching(Rest()), clip) == null && TimelineWindowViews.LayerBonesWarning(Matching(Turn(10), [Hand]), clip) == null,
+            "a match warns for a non-standard bone the loop holds off rest, not one at rest or outside its limit");
     }
 
     private static TimelineDocument Empty(int length = 100) => new(length, length, null, [], 1);

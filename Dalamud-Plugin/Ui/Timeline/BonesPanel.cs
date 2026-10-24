@@ -459,6 +459,11 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                         ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
                 }
             }
+            session.LoopPose.DrawAddItems(current, readOnly, (label, enabled) =>
+            {
+                using (ImRaii.Disabled(!enabled))
+                    return ImGui.Button(label);
+            });
             return;
         }
         Widgets.Icon(TimelineUi.LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
@@ -466,7 +471,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, MotionEdits.KindName(layer.Kind));
         ImGui.Spacing();
-        if (layer.Kind == MotionLayerKind.Amplitude)
+        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, false);
         else if (layer.Kind == MotionLayerKind.Symmetry)
         {

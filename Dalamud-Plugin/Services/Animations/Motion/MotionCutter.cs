@@ -353,7 +353,7 @@ internal static class MotionCutter
     }
 
     /// <summary>The rotation vector of a rotation, the short way round: its axis scaled by its angle in radians.</summary>
-    private static Vector3 Log(Quaternion q)
+    internal static Vector3 Log(Quaternion q)
     {
         q = Quaternion.Normalize(q);
         if (q.W < 0)
@@ -365,7 +365,8 @@ internal static class MotionCutter
         return new Vector3(q.X, q.Y, q.Z) * (angle / sin);
     }
 
-    private static Quaternion Exp(Vector3 v)
+    /// <summary>The rotation of a rotation vector: the inverse of <see cref="Log"/>.</summary>
+    internal static Quaternion Exp(Vector3 v)
     {
         var angle = v.Length();
         if (angle < 1e-7f)

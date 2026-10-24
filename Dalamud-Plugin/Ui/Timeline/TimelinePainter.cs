@@ -154,7 +154,7 @@ internal static class TimelinePainter
         var fontSize = ImGui.GetFontSize();
         for (var index = 0; index < layout.LayerCount; index++)
         {
-            var layer = doc.Motion[index];
+            var layer = MotionEdits.Shown(doc.Motion[index], doc.Length);
             var top = min.Y + geometry.RowTop(layout.LayerRow(index));
             if (top + geometry.Row < rowsTop || top > max.Y || layer.End < view.First || layer.Start > view.Last)
                 continue;
@@ -199,7 +199,8 @@ internal static class TimelinePainter
                 var hotKey = hot && hit.Part == TimelinePart.LayerKey && hit.KeyFrame == key.Frame;
                 DrawKeyMark(drawList, shape, x, middle, half, TimelineUi.U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * alpha)));
             }
-            if (selected || hot)
+            // A match has no fades to drag: its blend is its own.
+            if ((selected || hot) && layer.Fix?.Kind != MotionFixKind.MatchLoop)
             {
                 var radius = Theme.Scaled(3);
                 drawList.AddCircleFilled(new Vector2(fadeInX, y0), radius,

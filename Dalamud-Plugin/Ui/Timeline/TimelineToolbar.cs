@@ -128,6 +128,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             current.AddPinFeet(skeleton);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
+        session.LoopPose.DrawAddItems(current, session.ReadOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
         if (session.Source == null)
             return;
         ImGui.Separator();

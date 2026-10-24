@@ -21,7 +21,7 @@ internal static class MotionEvaluator
     /// <summary>The range of an offset key's scale factor, and of a pose key's scale.</summary>
     public const float MinScale = 0.001f, MaxScale = 100;
     // Sample frames come from float seconds; a layer reaching the clip's end must still cover its last sample.
-    private const float FrameTolerance = 1e-3f;
+    internal const float FrameTolerance = 1e-3f;
 
     /// <summary>Whether <paramref name="layer"/> changes anything when applied.</summary>
     public static bool Active(MotionLayer layer) => layer.Enabled && layer.Kind switch
@@ -30,6 +30,8 @@ internal static class MotionEvaluator
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         MotionLayerKind.Symmetry => layer.Amount > 0 && layer.Components != PoseComponents.None && !layer.Bones.IsEmpty,
         MotionLayerKind.Pin => layer.Amount > 0 && layer.Pins.Any(pin => pin.Planted || layer.Keys.Any(key => key.Bones.ContainsKey(pin.Bone))),
+        MotionLayerKind.Fix => layer.Amount > 0 && layer.Fix != null && (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0 &&
+                               (layer.Fix.Kind != MotionFixKind.MatchLoop || layer.Fix.LoopFirst is { IsEmpty: false }),
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -77,14 +79,15 @@ internal static class MotionEvaluator
         return BlendsAtMostFully(layer.Kind) ? Math.Min(1, weight) : weight;
     }
 
-    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry or a pin's pull.</summary>
-    public static bool BlendsAtMostFully(MotionLayerKind kind) => kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin;
+    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's pull or a fix.</summary>
+    public static bool BlendsAtMostFully(MotionLayerKind kind) =>
+        kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix;
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
     {
         if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation) ||
-            layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From))
+            layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From) || layer.Fix is { } read && !Enum.IsDefined(read.Kind))
             throw new InvalidDataException("A bone layer can't be read.");
         var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
         if (layer.Start < 0 || layer.End <= layer.Start || layer.End > TimelineDocument.MaxFrames)
@@ -100,10 +103,22 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} lists a bone twice or a bone without a name.");
         if (layer.Keys.Length > MaxKeys)
             throw new InvalidDataException($"{name} has too many keys.");
-        if (layer.Kind == MotionLayerKind.Symmetry && !layer.Keys.IsEmpty)
+        if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix && !layer.Keys.IsEmpty)
             throw new InvalidDataException($"{name} can't have keys.");
         if (layer.Kind != MotionLayerKind.Pin && !layer.Pins.IsEmpty)
             throw new InvalidDataException($"{name} can't have pins.");
+        if (layer.Kind == MotionLayerKind.Fix && layer.Fix == null)
+            throw new InvalidDataException($"{name} has no fix.");
+        if (layer.Kind != MotionLayerKind.Fix && layer.Fix != null)
+            throw new InvalidDataException($"{name} can't have a fix.");
+        if (layer.Fix is { Kind: MotionFixKind.MatchLoop } match)
+        {
+            if (match.LoopFirst is not { IsEmpty: false } first || match.LoopSecond is not { } second)
+                throw new InvalidDataException($"{name} has no loop pose.");
+            if (first.Count > MaxKeyBones || first.Count != second.Count || first.Any(pair => !second.ContainsKey(pair.Key)) ||
+                first.Concat(second).Any(pair => string.IsNullOrEmpty(pair.Key) || !IsTransform(pair.Value) || !InScale(pair.Value)))
+                throw new InvalidDataException($"{name} has a loop pose that can't be read.");
+        }
         var pinned = new Dictionary<string, MotionPin>(StringComparer.Ordinal);
         foreach (var pin in layer.Pins)
         {
@@ -122,10 +137,9 @@ internal static class MotionEvaluator
                 throw new InvalidDataException($"{name} has a key with too many bones.");
             foreach (var (bone, value) in key.Bones)
             {
-                if (string.IsNullOrEmpty(bone) || value == null || !Finite(value.Position) || !Finite(value.Scale) ||
-                    !float.IsFinite(value.Rotation.LengthSquared()) || value.Rotation.LengthSquared() is < .25f or > 4)
+                if (string.IsNullOrEmpty(bone) || !IsTransform(value))
                     throw new InvalidDataException($"{name} has a key with a value that is not a transform.");
-                if (value.Scale.X is < MinScale or > MaxScale || value.Scale.Y is < MinScale or > MaxScale || value.Scale.Z is < MinScale or > MaxScale)
+                if (!InScale(value))
                     throw new InvalidDataException($"{name} has a key whose scale is out of range.");
                 if (layer.Kind == MotionLayerKind.Pin && (!pinned.TryGetValue(bone, out var pin) || pin.Planted))
                     throw new InvalidDataException($"{name} has a key for a bone it doesn't pin by keys.");
@@ -155,8 +169,9 @@ internal static class MotionEvaluator
     /// <summary>
     /// Applies the active layers to <paramref name="clip"/> in place, in order, each to the motion the
     /// ones before it made, then keeps every bone's rotation on its previous sample's hemisphere.
-    /// On a looping clip, layers covering it wrap their keys round (<see cref="Wraps"/>), and layers reaching
-    /// its end cover its last samples (<see cref="ReachesEnd"/>).
+    /// Match startup to loop fixes apply after every other layer, in their own order, and never to a looping clip. On a looping clip,
+    /// layers covering it wrap their keys round (<see cref="Wraps"/>), and layers reaching its end cover its
+    /// last samples (<see cref="ReachesEnd"/>).
     /// Throws for a layer naming a bone the clip's skeleton does not have.
     /// </summary>
     public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default)
@@ -173,6 +188,8 @@ internal static class MotionEvaluator
                 continue;
             // A pin layer keeps a bone limit it never uses.
             var mask = layer.Kind == MotionLayerKind.Pin ? null : Mask(layer, index);
+            if (layer.Fix?.Kind == MotionFixKind.MatchLoop)
+                continue;
             switch (layer.Kind)
             {
                 case MotionLayerKind.Offset:
@@ -190,8 +207,15 @@ internal static class MotionEvaluator
                 case MotionLayerKind.Pin:
                     ApplyPin(clip, layer, index, WrapOf(layer, loop), end, token);
                     break;
+                case MotionLayerKind.Fix:
+                    MotionFixes.ApplySmooth(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
+                    break;
             }
         }
+        // Matches land last, so no layer after them in the list can undo the landing. A looping clip has no loop to land on.
+        foreach (var layer in layers)
+            if (!clip.Loops && layer.Fix?.Kind == MotionFixKind.MatchLoop && Active(layer))
+                MotionFixes.ApplyMatch(clip, layer, index, end, token);
         Continuity(clip);
     }
 
@@ -462,8 +486,8 @@ internal static class MotionEvaluator
     /// <summary>
     /// One pose with the offset, pose, symmetry and keyed pin layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
-    /// around its average over their section, which one pose does not have; planted pins too, as finding
-    /// where a bone is down takes the whole clip. The Bones window turns
+    /// around its average over their section, which one pose does not have; planted pins and fixes too, as
+    /// finding where a bone is down or what its neighbours do takes the whole clip. The Bones window turns
     /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
     /// unknown. <paramref name="trackedBones"/> are the bones the clip has tracks for, as a decode gives them
@@ -482,7 +506,7 @@ internal static class MotionEvaluator
         for (var at = 0; at < layers.Count; at++)
         {
             var layer = layers[at];
-            if (!Active(layer) || layer.Kind == MotionLayerKind.Amplitude)
+            if (!Active(layer) || layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
                 continue;
             if (layer.Kind == MotionLayerKind.Symmetry)
             {
@@ -819,7 +843,7 @@ internal static class MotionEvaluator
         }
     }
 
-    private static bool Inside(MotionLayer layer, float frame, float end) =>
+    internal static bool Inside(MotionLayer layer, float frame, float end) =>
         frame >= layer.Start - FrameTolerance && (frame <= layer.End + FrameTolerance || ReachesEnd(layer, end));
 
     /// <summary>The bones a layer is limited to, by index; null when it is not limited.</summary>
@@ -871,6 +895,14 @@ internal static class MotionEvaluator
         new($"This animation's skeleton has no bone {AnimationPresentation.BoneName(bone)}.");
 
     private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+
+    /// <summary>Whether a stored value is a transform: finite, its rotation near unit length.</summary>
+    private static bool IsTransform(BoneTransform? value) =>
+        value != null && Finite(value.Position) && Finite(value.Scale) &&
+        float.IsFinite(value.Rotation.LengthSquared()) && value.Rotation.LengthSquared() is >= .25f and <= 4;
+
+    private static bool InScale(BoneTransform value) =>
+        value.Scale.X is >= MinScale and <= MaxScale && value.Scale.Y is >= MinScale and <= MaxScale && value.Scale.Z is >= MinScale and <= MaxScale;
 
     private static Vector3 Divide(Vector3 value, Vector3 by) => new(
         Math.Abs(by.X) < 1e-12f ? value.X : value.X / by.X,

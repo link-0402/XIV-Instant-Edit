@@ -517,6 +517,8 @@ internal sealed class TimelineEditor
             Playhead = hit.KeyFrame;
         var snap = TimelineSnap.Targets(doc, playhead, motion: true, exceptLayer: key);
         gestureLayer = key;
+        // A match is grabbed where it is shown, over the clip's last frames.
+        layer = MotionEdits.Shown(layer, doc.Length);
         switch (hit.Part)
         {
             case TimelinePart.LayerBody:
@@ -1230,6 +1232,42 @@ internal sealed class TimelineEditor
         SelectLayer(key);
         return true;
     }
+
+    /// <summary>Adds a fix layer holding <paramref name="fix"/> (<see cref="MotionEdits.AddFix"/>) as one undo step, and selects it.</summary>
+    public bool AddFix(MotionFix fix)
+    {
+        LastError = null;
+        var next = MotionEdits.AddFix(Document, fix, out var key, out var error);
+        LastError = error;
+        if (error != null || !Commit(next))
+            return false;
+        SelectLayer(key);
+        return true;
+    }
+
+    /// <summary>
+    /// Blend over: sets how many frames the match <paramref name="key"/> blends over, as a field edit's live change
+    /// while one runs, else as one undo step, and selects it.
+    /// </summary>
+    public bool SetFixLength(string key, int frames)
+    {
+        if (!Change(MotionEdits.SetFixLength(Document, key, frames)))
+            return false;
+        SelectLayer(key);
+        return true;
+    }
+
+    /// <summary>Re-read loop: the match <paramref name="key"/> lands on <paramref name="loopPose"/>'s loop pose, as one undo step, and is selected.</summary>
+    public bool SetLoopPose(string key, MotionFix loopPose)
+    {
+        if (!Commit(MotionEdits.SetLoopPose(Document, key, loopPose)))
+            return false;
+        SelectLayer(key);
+        return true;
+    }
+
+    /// <summary>Says why something done off the draw, such as reading a loop, changed nothing, in <see cref="LastError"/>.</summary>
+    public void Refuse(string error) => LastError = error;
 
     /// <summary>
     /// Pin selected: pins <paramref name="bones"/> in the selected pin layer, or with none selected in a new
