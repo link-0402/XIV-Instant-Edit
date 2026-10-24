@@ -123,7 +123,7 @@ internal static class PortValidator
                 $"{subject.DisplayName}: this off hand shares its main hand's variants, so the main hand also loads its materials from v0001."));
 
         if (item.Models.Count == 0)
-            issues.Add(new(Severity.Info, itemTarget,
+            issues.Add(new(Severity.Warning, itemTarget,
                 $"{subject.DisplayName}: no race models — the mod will only replace this {subject.KindLabel.ToLowerInvariant()}'s materials and textures."));
 
         ValidateModels(session, item, gameData, models, issues);
@@ -186,7 +186,7 @@ internal static class PortValidator
             else if (model.UseVariants)
                 ValidateModelVariants(session, item, model, gameData, models, target, who, issues);
             else if (string.IsNullOrWhiteSpace(model.SourcePath) && !subject.MultiRace)
-                issues.Add(new(Severity.Info, target, $"{who}: no model file set — only materials and textures will be replaced."));
+                issues.Add(new(Severity.Warning, target, $"{who}: no model file set — only materials and textures will be replaced."));
             else if (string.IsNullOrWhiteSpace(model.SourcePath))
                 issues.Add(new(Severity.Warning, target, $"{who}: no model file set — this race will be skipped."));
             else if (!File.Exists(model.SourcePath))
