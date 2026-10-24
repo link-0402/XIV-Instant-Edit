@@ -32,6 +32,7 @@ internal static class PoseEditorFixture
         Frames(check);
         Mirrors(check);
         Poses(check);
+        Clipboard(check);
     }
 
     private static Quaternion Q(Vector3 axis, float degrees) => Quaternion.CreateFromAxisAngle(axis, degrees * MathF.PI / 180);
@@ -505,5 +506,49 @@ internal static class PoseEditorFixture
         check(Near(slide.Pose(15)[0].Position, new Vector3(.5f, 0, 0)) && slide.Pose(-5)[0].Position == Vector3.Zero &&
               slide.Pose(1000)[0].Position == Vector3.UnitX && slide.Pose(float.NaN)[0].Position == Vector3.Zero,
             "a clip's pose at a frame is interpolated between samples and held at its ends");
+    }
+
+    /// <summary>Copy pose and Paste pose: a round trip, a mirrored paste swapping the hands, and bones the skeleton lacks.</summary>
+    private static void Clipboard(Action<bool, string> check)
+    {
+        var rig = Rig();
+        var local = Clip().Pose(20);
+        var model = MotionEvaluator.ModelSpace(rig, local);
+        PoseTarget hand = new(Hand, M(local[2].Position + new Vector3(.1f, 0, 0), local[2].Rotation * Q(Vector3.UnitX, 30)), true),
+            twin = new(Twin, M(local[3].Position, local[3].Rotation * Q(Vector3.UnitY, -25)), false);
+        var copy = new PoseCopy(MotionLayerKind.Pose, [hand, twin]);
+        var pose = Doc(MotionLayerKind.Pose);
+        var pasted = PoseEdits.Paste(pose, "m1", 20, copy, false, rig, null, out var none);
+        check(pasted != null && none == 0 && At(pasted, 20, Hand) == hand.Value.ToBone() && At(pasted, 20, Twin) == twin.Value.ToBone() &&
+              pasted.Motion[0].Keys.Single().Moved.SequenceEqual([Hand]),
+            "Paste pose keys the copied bones as they were copied, in one key, keeping whether each sets its position");
+
+        // Mirrored, each hand gets the mirror image of the other's change from the clip's own pose, read in the root's turned frame.
+        var swapped = PoseEdits.Paste(pose, "m1", 20, copy, true, rig, local, out _);
+        var root = model[0].Rotation;
+        var inverse = Quaternion.Inverse(root);
+        Quaternion Change(BoneTransform keyed, int bone) => root * keyed.Rotation * Quaternion.Inverse(root * local[bone].Rotation);
+        check(swapped != null && At(swapped, 20, Twin) is { } toTwin && At(swapped, 20, Hand) is { } toHand &&
+              Degrees(inverse * Change(toTwin, 3) * root, PoseEdits.MirrorRotation(inverse * Change(hand.Value.ToBone(), 2) * root)) < 1e-2f &&
+              Degrees(inverse * Change(toHand, 2) * root, PoseEdits.MirrorRotation(inverse * Change(twin.Value.ToBone(), 3) * root)) < 1e-2f &&
+              swapped.Motion[0].Keys.Single().Moved.SequenceEqual([Twin]),
+            "Paste mirrored swaps the hands, each the mirror image of the other's change, and the twin takes over setting the position");
+
+        var neck = new PoseCopy(MotionLayerKind.Offset, [new(Neck, M(Vector3.Zero, Q(Vector3.UnitY, 20)), false)]);
+        var middle = PoseEdits.Paste(Doc(MotionLayerKind.Offset), "m1", 4, neck, true, rig, local, out _);
+        check(middle != null && At(middle, 4, Neck) is { } turned && Degrees(turned.Rotation, Q(Vector3.UnitY, -20)) < 1e-2f,
+            "a middle bone mirrors onto itself: a turn to one side becomes a turn to the other");
+
+        var foreign = copy with { Bones = [hand, new("j_foo_l", MotionTransform.Identity, false)] };
+        var kept = PoseEdits.Paste(pose, "m1", 20, foreign, false, rig, null, out var skipped);
+        var mirroredSkip = PoseEdits.Paste(pose, "m1", 20, foreign, true, rig, local, out var skippedMirrored);
+        check(kept != null && skipped == 1 && kept.Motion[0].Keys.Single().Bones.Keys.SequenceEqual([Hand]) &&
+              mirroredSkip != null && skippedMirrored == 1 && mirroredSkip.Motion[0].Keys.Single().Bones.Keys.SequenceEqual([Twin]),
+            "bones the skeleton lacks are skipped and counted, the rest still paste");
+
+        var offset = Doc(MotionLayerKind.Offset);
+        check(ReferenceEquals(PoseEdits.Paste(offset, "m1", 20, copy, false, rig, null, out _), offset) &&
+              PoseEdits.Paste(pose, "m1", 20, copy, true, rig, null, out _) == null,
+            "a pose copy never pastes into an offset layer, and a mirrored paste waits for the clip's own pose");
     }
 }

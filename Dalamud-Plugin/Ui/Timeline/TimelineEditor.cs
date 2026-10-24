@@ -1269,6 +1269,9 @@ internal sealed class TimelineEditor
     /// <summary>Says why something done off the draw, such as reading a loop, changed nothing, in <see cref="LastError"/>.</summary>
     public void Refuse(string error) => LastError = error;
 
+    /// <summary>Says what an edit made from a panel left out, in <see cref="LastNotice"/>.</summary>
+    public void Note(string notice) => LastNotice = notice;
+
     /// <summary>
     /// Pin selected: pins <paramref name="bones"/> in the selected pin layer, or with none selected in a new
     /// pin layer over the whole clip, in one undo step, and selects the layer.

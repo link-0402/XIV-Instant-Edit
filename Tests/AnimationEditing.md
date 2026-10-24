@@ -1579,3 +1579,23 @@ jitter calms small shakes. Spec: docs/superpowers/specs/2026-10-24-fix-layer-des
   layers, not the loop. Then, before the loop's skeleton has matched (straight after a reload), Add >
   Match startup to loop: it adds the layer instead of "Couldn't read the loop". The Pose source "Loop's
   first frame, at the end" reads the loop the same way.
+
+## Pose copy and paste (pending)
+
+The Bones panel's Copy pose, Paste pose and Paste mirrored buttons, next to Mirror. The maths is covered
+offline in PoseEditorFixture (Clipboard).
+
+- [ ] 1 Open a dance in the Timeline, add a pose layer, select the left arm group and pause on a frame. Copy
+  pose: the status line says how many bones were copied.
+- [ ] 2 Move the playhead 20 frames on, Paste pose: one key holds the arm as it was copied. Undo once: the
+  whole paste goes.
+- [ ] 3 Paste mirrored at another frame: the right arm takes the mirrored pose, the left arm is untouched.
+  With both arms selected when copying, they swap sides.
+- [ ] 4 On an offset layer, turn the neck to one side, Copy pose, then Paste mirrored at another frame: the
+  neck turns to the other side.
+- [ ] 5 Open another animation, add a pose layer, Paste pose: the copy carries over. Paste into an offset
+  layer: the buttons are disabled, and the tooltip says the copy is from a pose layer.
+- [ ] 6 Copy bones from a skeleton with tail or IVCS bones, paste on one without them: the status line says
+  how many bones were skipped, the rest are keyed.
+- [ ] 7 Move the playhead outside the layer: both paste buttons are disabled with "Move the playhead into the
+  layer."
