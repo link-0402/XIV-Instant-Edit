@@ -154,6 +154,23 @@ internal static unsafe class AnimationSkeleton
         if (index < 0 || index >= doc.Container->Bindings.Length) throw new InvalidDataException("Missing animation binding.");
         return Channels(doc.Container->Bindings[index].ptr);
     }
+    /// <summary>Every binding's channels of a PAP's bytes, in binding order.</summary>
+    public static ImmutableArray<AnimationChannels> InspectAllChannels(byte[] pap)
+    {
+        using var doc = new AnimationNative.Document(new AnimationPap(pap).Havok);
+        var all = ImmutableArray.CreateBuilder<AnimationChannels>(doc.Container->Bindings.Length);
+        for (var i = 0; i < doc.Container->Bindings.Length; i++)
+            all.Add(Channels(doc.Container->Bindings[i].ptr));
+        return all.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Whether every track of <paramref name="a"/> lands on one of a skeleton's <paramref name="bones"/> bones and
+    /// <paramref name="floats"/> float slots. The game samples a track past them into memory beyond the pose, and the
+    /// damage crashes it later in an unrelated call.
+    /// </summary>
+    public static bool FitsSize(AnimationChannels a, int bones, int floats) => a.Bones.All(i => i < bones) && a.Floats.All(i => i < floats);
+
     public static bool Fits(AnimationChannels a, SkeletonDescription s)
     {
         return BindingsFit(a, s) &&

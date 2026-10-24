@@ -4,6 +4,7 @@ using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.Havok.Animation.Animation;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Graphics.Scene;
 using FFXIVClientStructs.Havok.Animation.Rig;
 using InstantEdit.Models;
 
@@ -289,6 +290,28 @@ internal static unsafe class AnimationRuntime
         return new RuntimeAnimationSnapshot(ActorId(actor, player), player.Address, player.ObjectIndex,
             actor->Timeline.TimelineSequencer.TimelineIds.ToArray().ToImmutableArray(),
             bindings.DistinctBy(b => (b.Partial, b.Fingerprint, b.SkeletonResource, b.SkeletonFingerprint)).ToImmutableArray());
+    }
+
+    /// <summary>The bone and float-slot counts of <paramref name="subject"/>'s partial skeleton <paramref name="partial"/>, or null when it has none.</summary>
+    public static (int Bones, int Floats)? PartialSize(IGameObject? subject, int partial)
+    {
+        if (subject is not ICharacter { Address: not 0 } character) return null;
+        var drawObject = ((Character*)character.Address)->GetCharacterBase();
+        if (drawObject == null || drawObject->Skeleton == null) return null;
+        var skeleton = drawObject->Skeleton;
+        if (partial < 0 || partial >= skeleton->PartialSkeletonCount || skeleton->PartialSkeletons == null) return null;
+        var animated = skeleton->PartialSkeletons[partial].GetHavokAnimatedSkeleton(0);
+        if (animated == null || animated->Skeleton == null) return null;
+        return (animated->Skeleton->Bones.Length, animated->Skeleton->FloatSlots.Length);
+    }
+
+    /// <summary>A human character's model race code, such as c0801, or null for any other.</summary>
+    public static string? RaceCode(IGameObject? subject)
+    {
+        if (subject is not ICharacter { Address: not 0 } character) return null;
+        var drawObject = ((Character*)character.Address)->GetCharacterBase();
+        if (drawObject == null || drawObject->GetModelType() != CharacterBase.ModelType.Human) return null;
+        return $"c{((Human*)drawObject)->RaceSexId:D4}";
     }
 
     internal static RuntimeBinding? CaptureBinding(int partial, FFXIVClientStructs.Havok.Animation.Animation.hkaAnimationBinding* binding,

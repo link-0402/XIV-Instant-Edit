@@ -17,6 +17,11 @@ internal static class SkeletonRepairFixture
         check(AnimationSkeleton.Fits(channels, source) && !AnimationSkeleton.Fits(channels, target), "predictive reference channels reject the short live skeleton without sampling");
         check(!AnimationSkeleton.Fits(channels with { ReferenceFloats = 1 }, source), "predictive reference float mismatch is rejected");
         check(!AnimationSkeleton.Fits(channels with { Bones = [0, 0] }, source), "duplicate source bindings cannot be used for matching");
+        // Cute Groove's Side Step on a vanilla c0801 actor (2026-10-24): 153 tracks on bones 1-153 against 106 bones crashed the game.
+        var dance = new AnimationChannels("c0101", Enumerable.Range(1, 153).Select(i => (short)i).ToImmutableArray(), [], [], null, null);
+        check(!AnimationSkeleton.FitsSize(dance, 106, 0) && AnimationSkeleton.FitsSize(dance, 154, 0) &&
+              !AnimationSkeleton.FitsSize(dance with { Bones = [0], Floats = [2] }, 154, 2) && AnimationSkeleton.FitsSize(dance with { Floats = [1] }, 154, 2),
+            "a clip plays on an actor only when every track's bone and float slot is inside the actor's skeleton");
         reject(() => AnimationSkeleton.Validate(S("bad", B("root", -1), B("root", 0))), "duplicate skeleton names are rejected");
         reject(() => AnimationSkeleton.Validate(S("bad", B("root", 0))), "cyclic skeleton ancestry is rejected");
         var retarget = new AnimationRetarget(source, target, channels);

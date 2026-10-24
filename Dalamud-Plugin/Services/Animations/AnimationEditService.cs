@@ -465,6 +465,55 @@ internal sealed partial class AnimationEditService : IDisposable
         if (!restored) throw new IOException("Live offsets changed after this edit. They were retained; automatic restoration was skipped.");
         journal.OffsetsCleared = false; journal.PoseClearOutcome = "Restored"; journal.Message = "Captured live offsets restored."; journals.Save(journal);
     }
+    /// <summary>Why a clip can't be played on a character: it moves bones the character's skeleton lacks.</summary>
+    public const string SkeletonTooSmall = "Your character's skeleton lacks bones this animation moves. Playing it could crash the game.";
+
+    /// <summary>
+    /// <see cref="SkeletonTooSmall"/> when <paramref name="pap"/>'s clip <paramref name="binding"/> has a track past the
+    /// bones or float slots of the character at <paramref name="actor"/>'s partial skeleton <paramref name="partial"/>,
+    /// else null (also when the character or the file can't be read). Framework thread.
+    /// </summary>
+    public string? PlayProblem(ushort actor, int partial, byte[] pap, int binding)
+    {
+        if (AnimationRuntime.PartialSize(objects[actor], partial) is not { } size) return null;
+        try
+        {
+            var all = AnimationSkeleton.InspectAllChannels(pap);
+            return binding >= 0 && binding < all.Length && !AnimationSkeleton.FitsSize(all[binding], size.Bones, size.Floats) ? SkeletonTooSmall : null;
+        }
+        catch (InvalidDataException) { return null; }
+    }
+
+    /// <summary>
+    /// <see cref="SkeletonTooSmall"/> when the body PAP <paramref name="timeline"/> plays on the character at
+    /// <paramref name="actor"/>, as its collection resolves it, has a clip with a track past the character's body skeleton:
+    /// the game would sample it outside the pose. Every clip of the file counts, as they all play on the body skeleton.
+    /// Null when it fits or can't be told: expressions, timelines without a body PAP, files that can't be read.
+    /// </summary>
+    public async Task<string?> PlayProblemAsync(ushort actor, ushort timeline, CancellationToken token)
+    {
+        // shortcut: expressions aren't checked (their faces come from face PAPs the face skeleton plays); add a face check if a face mod ever crashes it.
+        if (catalog.FindAny(timeline) is not { IsExpression: false } entry) return null;
+        var (size, race) = await framework.RunOnFrameworkThread(() => (AnimationRuntime.PartialSize(objects[actor], 0), AnimationRuntime.RaceCode(objects[actor])));
+        if (size is not { } body || race == null) return null;
+        var collection = await penumbra.GetCollectionTargetAsync(actor);
+        if (collection == null) return null;
+        var table = await Task.Run(() => catalog.PapTable, token);
+        foreach (var path in AnimationCatalog.CandidatePapPaths(entry, [$"chara/human/{race}/skeleton/base/b0001/skl_{race}b0001.sklb"], table))
+        {
+            byte[] bytes;
+            try { bytes = (await resources.ReadAsync(collection.Id, path, token)).Bytes; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) { continue; }
+            var fits = await framework.RunOnFrameworkThread(() =>
+            {
+                try { return AnimationSkeleton.InspectAllChannels(bytes).All(channels => AnimationSkeleton.FitsSize(channels, body.Bones, body.Floats)); }
+                catch (InvalidDataException) { return true; }
+            });
+            if (!fits) return SkeletonTooSmall;
+        }
+        return null;
+    }
+
     /// <summary>
     /// The character the capture came from (your own, or a GPose actor) must still be there with the
     /// same collection, and with <paramref name="skeleton"/> the same object and partial skeleton.

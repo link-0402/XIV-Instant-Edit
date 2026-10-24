@@ -29,12 +29,15 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     private (ImmutableArray<AnimationLibraryItem> Library, AnimationLibraryGroup Group, string Search, AnimationLibraryItem[] Rows)? loaderRows;
     // What the loader played and waits for the listener to hear, on which actor and since when.
     private (AnimationLibraryItem Item, ushort Actor, DateTime Since)? loaderWaiting;
+    // The check that the clicked row's animation fits the actor's skeleton, before it plays.
+    private (AnimationLibraryItem Item, ushort Actor, Task<string?> Problem)? loaderChecking;
     private string? loaderMessage;
 
     /// <summary> Stops waiting for what the loader played, and drops its message, when the window closes. </summary>
     public void Reset()
     {
         loaderWaiting = null;
+        loaderChecking = null;
         loaderMessage = null;
     }
     private void EnsureLibrary()
@@ -208,8 +211,9 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     }
 
     /// <summary>
-    /// Plays <paramref name="item"/> on the GPose actor and waits for the listener to hear it. The
-    /// preview and Live end first: they play the open clip on the same actor.
+    /// Plays <paramref name="item"/> on the GPose actor and waits for the listener to hear it, once its
+    /// animation is known to fit the actor's skeleton (<see cref="Poll"/>). The preview and Live end
+    /// first: they play the open clip on the same actor.
     /// </summary>
     private bool PlayFromLoader(AnimationLibraryItem item)
     {
@@ -226,6 +230,16 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
             loaderMessage = "Enter GPose to load an animation.";
             return false;
         }
+        loaderMessage = null;
+        if (session.Animations is not { } service)
+            return Play(item, index);
+        loaderChecking = (item, index, service.PlayProblemAsync(index, item.Timeline, CancellationToken.None));
+        loaderWaiting = (item, index, DateTime.UtcNow);
+        return true;
+    }
+
+    private bool Play(AnimationLibraryItem item, ushort index)
+    {
         bool played;
         try { played = session.Playback.Play(item.Timeline, null, null, item.Face, index); }
         catch (InvalidOperationException e)
@@ -248,7 +262,22 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     /// <summary>Every frame: opens what the loader played once the listener has heard it.</summary>
     public void Poll()
     {
-        if (loaderWaiting is not { } waiting || session.Animations is not { } service)
+        if (loaderChecking is { Problem.IsCompleted: true } checking)
+        {
+            loaderChecking = null;
+            // A check that failed plays it as the game would anyway.
+            var problem = checking.Problem.IsCompletedSuccessfully ? checking.Problem.Result : null;
+            if (checking.Problem.IsFaulted)
+                session.Log.Warning(checking.Problem.Exception!, "Could not check the animation against the skeleton.");
+            if (problem != null)
+            {
+                loaderWaiting = null;
+                loaderMessage = problem;
+            }
+            else if (!Play(checking.Item, checking.Actor))
+                loaderWaiting = null;
+        }
+        if (loaderChecking != null || loaderWaiting is not { } waiting || session.Animations is not { } service)
             return;
         // Another clip may have opened meanwhile, or the actor went back to its own animation.
         AnimationClip? Played(AnimationCapture capture) => capture.Clip.Timeline == waiting.Item.Timeline ? capture.Clip
@@ -281,7 +310,10 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
                 : $"Waiting for {waiting.Item.Name} to play");
             ImGui.SameLine(0, Theme.Gap);
             if (ImGui.SmallButton("Cancel##loader"))
+            {
                 loaderWaiting = null;
+                loaderChecking = null;
+            }
         }
         else if (loaderMessage is { } message)
         {
