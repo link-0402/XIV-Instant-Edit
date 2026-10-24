@@ -191,6 +191,14 @@ internal static class PoseEditorFixture
         check(BoneOverlayModes.Dot(BoneOverlayMode.All, false, true, false) && BoneOverlayModes.Dot(BoneOverlayMode.All, false, false, true) &&
               BoneOverlayModes.Dot(BoneOverlayMode.All, true, false, false) && !BoneOverlayModes.Dot(BoneOverlayMode.All, false, false, false),
             "the full overlay shows the map's bones, the selected ones and the ones the layer changes");
+
+        var still = T(Vector3.Zero, Quaternion.Identity);
+        ImmutableArray<MotionKey> keys = [Key(40, Hand, still), Key(5, Hand, still), Key(20, Hand, still)];
+        check(BoneOverlayModes.GhostFrames(keys, 0) == (null, 5), "before the first key only the next key has a ghost");
+        check(BoneOverlayModes.GhostFrames(keys, 20) == (5, 40), "on a key the ghosts are the keys either side of it");
+        check(BoneOverlayModes.GhostFrames(keys, 25) == (20, 40), "between keys the ghosts are the nearest ones, in any key order");
+        check(BoneOverlayModes.GhostFrames(keys, 40) == (20, null), "on the last key only the key before has a ghost");
+        check(BoneOverlayModes.GhostFrames([], 10) == (null, null), "a layer without keys has no ghosts");
     }
 
     private static void Values(Action<bool, string> check)

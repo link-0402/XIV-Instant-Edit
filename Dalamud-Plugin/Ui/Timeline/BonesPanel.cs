@@ -219,6 +219,12 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 }))
             overlay.OnCharacter = BoneOverlayModes.Next(shown);
         ImGui.SameLine(0, Theme.Scaled(2));
+        if (TimelineUi.Toggle("##bones-ghosts", FontAwesomeIcon.Clone, posing.Ghosts, (posing.Ghosts
+                ? "Onion skins: faint bones show the pose at the layer's key before the playhead (blue) and after it (orange). Click to hide them."
+                : "Show onion skins: faint bones for the pose at the layer's key before and after the playhead.") +
+                "\nThey leave out amplitude and fix layers and planted pins."))
+            posing.Ghosts = !posing.Ghosts;
+        ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", posing.Selection.Count > 0))
             posing.Selection.Clear();
         ImGui.SameLine(0, Theme.Gap);

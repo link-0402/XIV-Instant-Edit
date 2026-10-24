@@ -44,6 +44,9 @@ public sealed partial class TimelineWindow
     // Each bone's dot this frame, by the clip skeleton's bone index.
     private Vector2[] dotAt = [];
     private bool[] dotShown = [];
+    // An onion skin's dots, reused for the key before the playhead and the one after.
+    private Vector2[] ghostAt = [];
+    private bool[] ghostShown = [];
 
     internal BonesOverlay Overlay => overlayWindow;
 
@@ -137,6 +140,12 @@ public sealed partial class TimelineWindow
         }
 
         var primary = selection.Primary is { } chosen && index.TryGetValue(chosen, out var chosenIndex) ? chosenIndex : -1;
+        if (posing.Ghosts && layer != null)
+        {
+            var (before, after) = BoneOverlayModes.GhostFrames(layer.Keys, frame);
+            DrawGhost(skeleton, loaded, current.Document, before, Theme.Info, toClip, viewport);
+            DrawGhost(skeleton, loaded, current.Document, after, Theme.Important, toClip, viewport);
+        }
         DrawOverlayBones(skeleton, layer, frame, animated, primary, hover);
         DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
 
@@ -149,6 +158,41 @@ public sealed partial class TimelineWindow
         ImGui.SetTooltip($"{AnimationPresentation.BoneName(bone)}\n{StateText(StateOf(bone, layer, frame, animated, layerBones), layer)}");
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
             ClickBone(bone, skeleton);
+    }
+
+    /// <summary>
+    /// An onion skin: faint dots and lines in <paramref name="tint"/> for the pose at a key of the selected layer,
+    /// on the bones that have a dot, each joined to the nearest one above it. Drawn before the dots, so under them.
+    /// </summary>
+    private void DrawGhost(SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc, int? frame, Vector4 tint,
+        Matrix4x4 toClip, ImGuiViewportPtr viewport)
+    {
+        if (frame is not { } key || posing.GhostPose(loaded, doc, key) is not { } model || model.Length != dotShown.Length)
+            return;
+        if (ghostAt.Length != dotShown.Length)
+        {
+            ghostAt = new Vector2[dotShown.Length];
+            ghostShown = new bool[dotShown.Length];
+        }
+        for (var b = 0; b < dotShown.Length; b++)
+            ghostShown[b] = dotShown[b] && PoseGizmo.Project(model[b].Position, toClip, viewport.Pos, viewport.Size, out ghostAt[b]);
+        var drawList = ImGui.GetWindowDrawList();
+        var radius = Theme.Scaled(3.5f);
+        var lineColour = ImGui.GetColorU32(Theme.WithAlpha(tint, .3f));
+        var dotColour = ImGui.GetColorU32(Theme.WithAlpha(tint, .45f));
+        for (var b = 0; b < ghostShown.Length; b++)
+        {
+            if (!ghostShown[b])
+                continue;
+            var above = skeleton.Bones[b].Parent;
+            while (above >= 0 && !ghostShown[above])
+                above = skeleton.Bones[above].Parent;
+            if (above >= 0)
+                drawList.AddLine(ghostAt[b], ghostAt[above], lineColour, Theme.Scaled(1.5f));
+        }
+        for (var b = 0; b < ghostShown.Length; b++)
+            if (ghostShown[b])
+                drawList.AddCircleFilled(ghostAt[b], radius, dotColour);
     }
 
     /// <summary>
