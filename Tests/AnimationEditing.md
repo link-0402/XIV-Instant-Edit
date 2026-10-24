@@ -9,7 +9,7 @@ Automated validation on 2026-09-10: all 42 animation checks, both existing .NET
 regression projects, and the Release build with `SkipDistributionPackage=true`
 passed. The Release build had no warnings or errors. The existing regression
 projects reported NU1900 because NuGet vulnerability metadata was unreachable.
-The live-game checks below remain unexecuted.
+The live-game checks below were not run then; XIV Bridge ran most of them from 2026-10-10.
 
 Automated validation on 2026-09-12: all 67 animation checks, ExportContext,
 BlenderStatus/texture, and Changelog regressions passed. The Release build had
@@ -110,9 +110,7 @@ listening status. The exact exception is covered by a regression fixture.
 
 ### Skeleton repair live acceptance (pending)
 
-FFXIV was running during implementation, but the desktop tool refused access:
-`Computer Use was not approved to use ffxiv_dx11`. No live repair or activation
-success is claimed. Reload the development build before these checks:
+Reload the development build before these checks (run through XIV Bridge from 2026-10-10):
 
 - [x] After reloading the plugin, open the supplied startup's timeline and verify Made for
   on the Source page resolves to a 167-bone embedded mapper skeleton. Repair it onto a
@@ -443,8 +441,8 @@ The job journal and staged PAPs are under the plugin's config folder, in
   managed retention; expired backups must produce a clear recovery error.
   Partly checked (XIV Bridge tests/instant-edit/animations/144, 2026-10-10): three in-place edits undo only newest
   first (the oldest refuses with "Undo that edit first."), each undo restores the file and mapping before it, the
-  records and their states are on disk, and an 8-day-old record is dropped. Not checked: the expired-backup error
-  (test 143, which fails, above).
+  records and their states are on disk, and an 8-day-old record is dropped. The expired-backup error is covered by
+  test 143 above. Not checked: the records across a real plugin restart (they were read back from disk).
 
 General keyframe editing, movement/combat animations, other race variants, and
 editing separate companion/weapon rigs are outside this release. Unsupported
@@ -897,7 +895,8 @@ face once at its own length.
   expression ends, until another expression replaces it. Undo last save restores it.
   Partly checked (XIV Bridge tests/instant-edit/animations/203, 2026-10-10), saved into a new mod rather than in place
   (/smile comes from the game's files): the kept smile is still 2.00° at 8.5 s where the plain one is back at 0.01°;
-  /sad replaces it; after Undo it ends again. In place, an expression's save fails (see Panting Face below).
+  /sad replaces it; after Undo it ends again. In-place expression saves failed then; since the fix that backs up
+  the expression's .tmb they work (205, 206). Not checked: a kept smile saved in place (needs a mod's smile).
 - [x] Open Permanent Facial Expressions' smile: the face reads kept, a note says the
   header is endless, and an unchanged save is refused (nothing changed).
   (XIV Bridge tests/instant-edit/animations/204, 2026-10-10: kept, "The file's header gives an endless length (-1). It
@@ -1540,8 +1539,22 @@ Fortitude on Idle 6, option default (pose06_loop).
 - [ ] 6 Edit again: the Pin layers come back with their pins and settings.
 - [ ] 7 Click the Bones window's crosshairs switch three times: the selected bones only (dot icon), all
   bones, then none. Each tooltip matches what GPose shows.
-- [ ] 8 Open Side Step (Cute Groove) and Add, Pin feet: only a few short stretches are held. In GPose the
+- [x] 8 Open Side Step (Cute Groove) and Add, Pin feet: only a few short stretches are held. In GPose the
   feet still shuffle as the dance has them, and nothing pops where a hold lets go.
+  (XIV Bridge tests/instant-edit/animations-pending/338, 2026-10-24, on the NFLB + YAS skeleton: left foot "Held 117-125,
+  622-626, 754-759, 772-775", right "Held 148-157, 706-712, 822-828", 2 % of the samples each; outside the holds the feet
+  follow the dance exactly (0.0 mm) and the largest step is the dance's own; with Live the feet wander as far as without
+  the layer (54.7 and 14.6 cm against 53.0 and 14.8) and no step is bigger.)
+  The first run crashed the game. The dance's PAP binds 153 tracks to bones 1-153 (made on a c0101 skeleton with more
+  bones); 338 played it on the GPose actor with the vanilla c0801 skeleton (106 bones) and LightlessSync unloaded,
+  which otherwise blocks such clips ("limit=106"). The game's sampler wrote past the skeleton's arrays, and the heap
+  damage surfaced in the next Havok allocation, the listener's load of the same PAP (report
+  dalamud_appcrash_20261024_190627_968_26364.log). The file itself is sound: it parses offline with the same
+  definitions and layout as a TikTok PAP that loads. Since then the loader and Preview refuse a clip with a track past
+  the actor's skeleton ("Your character's skeleton lacks bones this animation moves. Playing it could crash the
+  game."), as Live already did: XIV Bridge 346 refuses Side Step on the 106-bone skeleton without playing it and allows
+  it on NFLB + YAS (455 bones). Not checked: Preview's refusal in game (it needs an edit made for a bigger skeleton
+  previewed on a smaller one).
 
 ## IK drag (pending)
 
@@ -1551,12 +1564,24 @@ playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
 - [ ] 1 Open a dance in the Timeline, add an offset layer, select the right hand, Gizmo: Drag. In GPose with
   Live on and paused: drag the hand forward 20 cm. The elbow bends naturally, the hand goes where the
   gizmo is, and the layer gets keys on the upper arm and forearm at the playhead.
-- [ ] 2 Set the layer's amount to 50 %: a drag still puts the hand where the gizmo is.
-- [ ] 3 A pose layer, the left foot: drag it up; the knee bends forward, never backwards.
-- [ ] 4 Drag a hand far beyond the arm's reach: the arm straightens smoothly, nothing snaps or shakes. Then
+  Partly checked (XIV Bridge tests/instant-edit/animations-pending/333, 2026-10-24, Idle pose 3 for a dance): the
+  gizmo's Drag step bends the elbow on its own side, puts the hand on the aim in the evaluator and in game, and keys
+  the upper arm and forearm at the playhead only. Not checked: a real mouse drag (the injected one didn't start the
+  gizmo, as in 244).
+- [x] 2 Set the layer's amount to 50 %: a drag still puts the hand where the gizmo is.
+  (XIV Bridge 334, 2026-10-24: in the evaluator and in game; the keys turn the arm about twice what the bones turn.)
+- [x] 3 A pose layer, the left foot: drag it up; the knee bends forward, never backwards.
+  (XIV Bridge 335, 2026-10-24: up 15 cm, the foot lands on the aim and the knee bends along the toes' direction.)
+- [x] 4 Drag a hand far beyond the arm's reach: the arm straightens smoothly, nothing snaps or shakes. Then
   drag back: the arm stays straight until the gizmo is back within reach, and the hand ends under the gizmo.
+  (XIV Bridge 336, 2026-10-24: 30 cm past reach in 2 cm steps, the hand never passes the reach or jumps and holds still
+  in game; back in, the hand ends under the gizmo where it started.)
 - [ ] 5 Select the waist (j_kosi, right under the body): Drag is disabled with its hint.
-- [ ] 6 Undo once after a drag: the whole drag comes back in one step.
+  Partly checked (XIV Bridge 337, 2026-10-24): the rule disables Drag on j_kosi with "Hips sits right under the body,
+  ...", a Drag kept from the hand acts as Turn there, and a drag step changes nothing. Not checked: the radio's
+  disabled look and its tooltip on screen.
+- [x] 6 Undo once after a drag: the whole drag comes back in one step.
+  (XIV Bridge 333, 2026-10-24: one undo step; one Undo brings the document and the hand in game back.)
 
 ## Fix layer (pending)
 
