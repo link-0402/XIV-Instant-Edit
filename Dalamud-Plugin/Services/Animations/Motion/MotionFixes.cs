@@ -112,9 +112,10 @@ internal static class MotionFixes
     /// Smooth jitter over the layer's span: each sample of <paramref name="bones"/> moves toward a short low-pass of its
     /// neighbours where the samples round it differ from theirs by little (a shake) and stays where one differs by a lot
     /// (a snap or a fast curve), through the layer's fades. The test and the share it gives are taken over neighbours,
-    /// not per sample: game clips are keyed at half the sample rate, so on a fast move every other sample is a key whose
-    /// low-pass lies far off, and a per-sample test smoothed only the ones between, leaving a ripple. Bones that never
-    /// move are left alone, so no track is made from rounding.
+    /// not per sample. Game clips decode at about twice their key rate, the samples between keys halfway between their
+    /// neighbours: a track is smoothed on its keys and the samples between are put back on the line between them, since
+    /// keys lie farther off the low-pass than the samples between and smoothing both apart left a ripple. Bones that
+    /// never move are left alone, so no track is made from rounding.
     /// </summary>
     internal static void ApplySmooth(MotionClip clip, MotionLayer layer, IReadOnlyCollection<int> bones, float loop, float end, CancellationToken token)
     {
@@ -142,6 +143,7 @@ internal static class MotionFixes
         var moveOff = new float[clip.Samples];
         var turnShare = new float[clip.Samples];
         var moveShare = new float[clip.Samples];
+        var keys = new List<int>(clip.Samples);
         foreach (var b in bones)
         {
             token.ThrowIfCancellationRequested();
@@ -161,46 +163,61 @@ internal static class MotionFixes
             }
             if (!turns && !moves)
                 continue;
-            // Every sample's low-pass and how far it lies off it, the span's neighbours included.
+            // The track's keys: every sample but those halfway between their neighbours, which game clips decoding at
+            // twice their key rate put between keys, one at a time after a key so keys stay evenly spaced (a steady
+            // stretch, halfway throughout, keeps every other sample). The keys are smoothed as a track of their own (the
+            // ends always keys, so a loop still wraps by one less than their count) and the samples between go back on the line.
+            keys.Clear();
             for (var i = 0; i < clip.Samples; i++)
+                if (i == 0 || i == clip.Samples - 1 || keys[^1] != i - 1 || !Halfway(rotations, positions, i))
+                    keys.Add(i);
+            var count = keys.Count;
+            var keyRotations = new Quaternion[count];
+            var keyPositions = new Vector3[count];
+            var moved = new bool[count];
+            for (var k = 0; k < count; k++)
+                (keyRotations[k], keyPositions[k]) = (rotations[keys[k]], positions[keys[k]]);
+            // Every key's low-pass and how far it lies off it, the span's neighbours included.
+            for (var k = 0; k < count; k++)
             {
-                var q = rotations[i];
+                var q = keyRotations[k];
                 var back = Quaternion.Inverse(q);
                 Vector3 average = Vector3.Zero, mean = Vector3.Zero;
                 for (var d = -2; d <= 2; d++)
                 {
-                    var (rotation, position) = Neighbour(rotations, positions, i + d, wraps);
+                    var (rotation, position) = Neighbour(keyRotations, keyPositions, k + d, wraps);
                     average += Window[d + 2] * MotionCutter.Log(MotionEvaluator.Align(rotation, q) * back);
                     mean += Window[d + 2] * position;
                 }
-                averages[i] = average / 16;
-                means[i] = mean / 16;
-                turnOff[i] = averages[i].Length();
-                moveOff[i] = Vector3.Distance(means[i], positions[i]);
+                averages[k] = average / 16;
+                means[k] = mean / 16;
+                turnOff[k] = averages[k].Length();
+                moveOff[k] = Vector3.Distance(means[k], keyPositions[k]);
             }
-            // A sample is a shake only if no neighbour lies far off its low-pass...
-            for (var i = 0; i < clip.Samples; i++)
+            // A key is a shake only if no neighbour lies far off its low-pass...
+            for (var k = 0; k < count; k++)
             {
                 float turnMost = 0, moveMost = 0;
                 for (var d = -2; d <= 2; d++)
                 {
-                    var at = Near(i + d, clip.Samples, wraps);
+                    var at = Near(k + d, count, wraps);
                     turnMost = MathF.Max(turnMost, turnOff[at]);
                     moveMost = MathF.Max(moveMost, moveOff[at]);
                 }
-                turnShare[i] = turns ? Smoothing(turnMost, turnLimit) : 0;
-                moveShare[i] = moves ? Smoothing(moveMost, moveLimit) : 0;
+                turnShare[k] = turns ? Smoothing(turnMost, turnLimit) : 0;
+                moveShare[k] = moves ? Smoothing(moveMost, moveLimit) : 0;
             }
-            for (var i = first; i <= last; i++)
+            for (var k = 0; k < count; k++)
             {
-                var share = MotionEvaluator.Fade(layer, clip.Frame(i), end);
+                var i = keys[k];
+                var share = i < first || i > last ? 0 : MotionEvaluator.Fade(layer, clip.Frame(i), end);
                 if (share <= 0)
                     continue;
                 // ...and neighbours move by much the same share, so the hand-over to a kept move adds no ripple.
                 float smoothTurn = 0, smoothMove = 0;
                 for (var d = -2; d <= 2; d++)
                 {
-                    var at = Near(i + d, clip.Samples, wraps);
+                    var at = Near(k + d, count, wraps);
                     smoothTurn += Window[d + 2] * turnShare[at];
                     smoothMove += Window[d + 2] * moveShare[at];
                 }
@@ -208,13 +225,42 @@ internal static class MotionFixes
                 smoothMove *= share / 16;
                 var value = clip.Get(i, b);
                 if (smoothTurn > 0)
-                    value = value with { Rotation = MotionEvaluator.Slerp(value.Rotation, Quaternion.Normalize(MotionCutter.Exp(averages[i]) * rotations[i]), smoothTurn) };
+                    value = value with { Rotation = MotionEvaluator.Slerp(value.Rotation, Quaternion.Normalize(MotionCutter.Exp(averages[k]) * keyRotations[k]), smoothTurn) };
                 if (smoothMove > 0)
-                    value = value with { Position = Vector3.Lerp(value.Position, means[i], smoothMove) };
+                    value = value with { Position = Vector3.Lerp(value.Position, means[k], smoothMove) };
                 clip.Set(i, b, value);
+                moved[k] = smoothTurn > 0 || smoothMove > 0;
+            }
+            // Only between keys that moved: elsewhere the samples between stay as they are, not near halfway made exact.
+            for (var k = 0; k + 1 < count; k++)
+            {
+                if (!moved[k] && !moved[k + 1])
+                    continue;
+                var (from, to) = (keys[k], keys[k + 1]);
+                for (var i = Math.Max(from + 1, first); i < to && i <= last; i++)
+                {
+                    var (before, after, value) = (clip.Get(from, b), clip.Get(to, b), clip.Get(i, b));
+                    var t = (float)(i - from) / (to - from);
+                    if (rotate)
+                        value = value with { Rotation = MotionEvaluator.Slerp(before.Rotation, after.Rotation, t) };
+                    if (move)
+                        value = value with { Position = Vector3.Lerp(before.Position, after.Position, t) };
+                    clip.Set(i, b, value);
+                }
             }
         }
     }
+
+    /// <summary>Whether sample <paramref name="i"/> lies halfway between its neighbours in turn and place, as a sample between keys does.</summary>
+    private static bool Halfway(Quaternion[] rotations, Vector3[] positions, int i)
+    {
+        var halfway = MotionEvaluator.Slerp(rotations[i - 1], rotations[i + 1], .5f);
+        return MathF.Abs(Quaternion.Dot(Quaternion.Normalize(halfway), rotations[i])) >= HalfwayDot &&
+               Vector3.DistanceSquared((positions[i - 1] + positions[i + 1]) / 2, positions[i]) <= HalfwayDistance * HalfwayDistance;
+    }
+
+    // How near halfway a sample between keys sits: within about a sixth of a degree (as near as a float dot tells), a hundredth of a millimetre.
+    private const float HalfwayDot = .999999f, HalfwayDistance = 1e-5f;
 
     /// <summary>Sample <paramref name="at"/>'s index, round a loop as <see cref="Neighbour"/> wraps, else held at the clip's ends.</summary>
     private static int Near(int at, int samples, bool wraps)

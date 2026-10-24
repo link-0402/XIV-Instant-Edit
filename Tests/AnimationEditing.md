@@ -1631,17 +1631,33 @@ then, after its cross-fade, Smooth jitter calms small shakes. Spec: docs/superpo
   the samples beside it are treated alike (fixture: a fast speed-up keeps growing steps, the old code
   failed it). Retest on Red Ranger Pose A's startup: its hand whirls change by well under a degree and
   their half steps stay even.
+  Retested 2026-10-24 (XIV Bridge exec, Release build): the hand whirl is untouched (35.28/35.28,
+  56.71/56.71), but the neighbour fix alone still left ripples where keys don't sit on even samples
+  (n_kataarmor_l: 4 ripples in the clip became 22). Fixed: a track is smoothed on its keys
+  (every sample but those halfway between their neighbours) and the samples between go back on the line.
+  Now 3 ripples against the clip's own 4, roughness of smooth stretches 1.4x (was 5x); the 3 left are
+  skirt and tail bones with real 60 Hz wobble. Fixture: a half-rate swing keeps its samples between keys
+  halfway (the committed code failed it). Still not checked: a real shaky port, and by eye.
 - [ ] 8 Open an idle's startup (such as Idle pose 5 start) with Live on: Live shows the startup and its
   layers, not the loop. Then, before the loop's skeleton has matched (straight after a reload), Add >
   Match startup to loop: it adds the layer instead of "Couldn't read the loop". The Pose source "Loop's
   first frame, at the end" reads the loop the same way.
-- [ ] 9 With the Timeline window open, play /rangerpose1r out of GPose until it loops, then open its
+- [x] 9 With the Timeline window open, play /rangerpose1r out of GPose until it loops, then open its
   startup and Add > Match startup to loop: Game fade reads 10 frames, "Game fade measured in game." shows,
   and the blend is 10 frames. Do the same for Ground sit pose 1 (/groundsit, then /changepose): 20 frames.
   An emote never played says "Game fade not measured yet, so 10 frames."
+  (XIV Bridge, 2026-10-24, Release: both measured, 10 and 20, after two fixes: the watcher
+  first read 9 and 18, seeing the loop's control a frame or two late, and now takes the loop's own time
+  off; and Match couldn't find the measure because these startups took their loop's timeline id, as
+  FindStartup skipped start rows the sheet marks as loops. Ranger lands on the loop's frame 10 exactly,
+  Ground sit on frame 20 within 0.06 deg (from 90). Red Ranger Pose B, loaded in GPose: the hint shows.)
 - [ ] 10 Set Game fade to 20 on Red Ranger Pose A's match: the loop is read again (one undo step), the
   blend grows to 20 and the startup's last frame lands on the loop's frame 20. Play it in game with
   Preview: the hand-off shows no pop, and the end of the fade matches the loop.
+  Partly checked 2026-10-24 (XIV Bridge): the slider re-read the loop (21, then 20), the blend grew from
+  10 to 21, the last frame lands on the loop's frame 20 within 0.06 deg, one undo goes back one read,
+  and "Measured in game: 10 frames." offers Use it. Not checked: the Preview hand-off. Preview plays the
+  startup on its own, and a script couldn't chain it into the loop with Brio open on the actor.
 
 ## Animations from scratch (pending)
 

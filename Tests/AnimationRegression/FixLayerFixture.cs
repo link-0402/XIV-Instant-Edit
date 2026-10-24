@@ -174,6 +174,26 @@ internal static class FixLayerFixture
                 $"smooth adds no ripple to a fast clean move ({speedUp} deg per key squared): it moves little and its steps keep growing");
         }
 
+        // Starts, slows, turns back and settles, keyed every other sample (Red Ranger Pose A's shoulder armour): keys sit
+        // farther off the low-pass than the samples between, so smoothing both apart left steps going up, down, up.
+        float[] keys = [0, 32, 67, 87, 90, 98, 113, 128, 142, 150, 152, 150, 140, 125, 110, 104, 103];
+        var swing = Clip(2 * keys.Length - 1, keys.Length - 1, (i, _) =>
+            [T(Vector3.Zero), T(Vector3.Zero, Q(Vector3.UnitY, i % 2 == 0 ? keys[i / 2] : (keys[i / 2] + keys[i / 2 + 1]) / 2)), T(Vector3.UnitX)]);
+        var swung = Applied(swing, SmoothLayer(.5f, 0, keys.Length - 1));
+        int Ripples(MotionClip c)
+        {
+            float Step(int i) => AboutY(c.Get(i, b1).Rotation) - AboutY(c.Get(i - 1, b1).Rotation);
+            return Enumerable.Range(2, c.Samples - 4).Count(i =>
+            {
+                var (d1, d2, d3) = (Step(i) - Step(i - 1), Step(i + 1) - Step(i), Step(i + 2) - Step(i + 1));
+                return MathF.Min(MathF.Abs(d1), MathF.Min(MathF.Abs(d2), MathF.Abs(d3))) > .5f && MathF.Sign(d1) != MathF.Sign(d2) && MathF.Sign(d2) != MathF.Sign(d3);
+            });
+        }
+        check(Enumerable.Range(0, keys.Length - 1).All(k => Degrees(swung.Get(2 * k + 1, b1).Rotation,
+                  MotionEvaluator.Slerp(swung.Get(2 * k, b1).Rotation, swung.Get(2 * k + 2, b1).Rotation, .5f)) < .01f) &&
+              Ripples(swung) <= Ripples(swing) && !Bits(swung, swing),
+            "smooth on a track keyed at half its rate smooths the keys, keeps the samples between halfway and adds no ripple");
+
         check(Bits(Applied(noisy, SmoothLayer(0, 0, 60)), Applied(noisy)), "smooth zero: strength 0 changes nothing");
         var still = Clip(61, 60, (_, _) => [T(Vector3.Zero), T(new Vector3(.2f, .1f, 0), Q(Vector3.UnitY, 30)), T(Vector3.UnitX)]);
         check(Bits(Applied(still, SmoothLayer(1, 0, 60)), Applied(still)), "smooth zero: a still bone is left as it is");

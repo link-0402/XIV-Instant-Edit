@@ -127,12 +127,14 @@ internal sealed class AnimationCatalog
     /// <summary>
     /// The timeline that plays <paramref name="startupPap"/>, a sibling startup (<see cref="SiblingStartupPath"/>) no emote
     /// names, by the key its path ends with (emote/pose05_start for .../emote/pose05_start.pap). Null when no
-    /// one-shot timeline has that key.
+    /// one-shot timeline, or one whose key ends in "_start", has that key: the sheet marks some startups as loops
+    /// (emote/loop_emot01_start, emote/j_pose01_start), and those took the loop's id.
     /// </summary>
     public Timeline? FindStartup(string startupPap)
     {
         const string pap = ".pap";
-        var keys = startKeys ??= timelines.Values.Concat(others.Values).Where(timeline => !timeline.Loop)
+        var keys = startKeys ??= timelines.Values.Concat(others.Values)
+            .Where(timeline => !timeline.Loop || timeline.Key.EndsWith("_start", StringComparison.Ordinal))
             .GroupBy(timeline => timeline.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.MinBy(timeline => timeline.Id)!, StringComparer.Ordinal);
         if (!startupPap.EndsWith(pap, StringComparison.Ordinal))
