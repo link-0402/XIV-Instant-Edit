@@ -33,6 +33,29 @@ internal static class ModEditingScenarios
         CombiningGroupsDefaultToTheFirstContainer(root);        // glue-5
         GroupIdsWithSlashesRoundTrip();                         // resources-8
         RemoveTakesOnlyTheConfirmedFile(root);                  // resui-5
+        ACopyKeepsTmpFilesTheModUses();
+    }
+
+    private static void ACopyKeepsTmpFilesTheModUses()
+    {
+        using var mod = new TestModFolder()
+            .File("files/real.tmp", [1])
+            .File("files/junk.tmp", [2])
+            .File("files/half.tex.instant-edit-tmp", [3])
+            .Meta($$"""{ "FileVersion": 3, "Name": "Temps", "DefaultData": { "Files": { "{{Tex}}": "files\\real.tmp" } } }""");
+        var target = mod.Path + " (copy)";
+        try
+        {
+            ModEditor.CopyMod(mod.Path, target);
+            Require(File.Exists(Path.Combine(target, "files", "real.tmp")) && !File.Exists(Path.Combine(target, "files", "junk.tmp"))
+                    && !File.Exists(Path.Combine(target, "files", "half.tex.instant-edit-tmp")),
+                "a copy keeps a .tmp file the mod's meta.json points at and leaves out half-written ones");
+        }
+        finally
+        {
+            if (Directory.Exists(target))
+                Directory.Delete(target, recursive: true);
+        }
     }
 
     /// <summary>Red was repointed here at its own copy (its original is textures\shared_d.tex); Blue still uses that original.</summary>

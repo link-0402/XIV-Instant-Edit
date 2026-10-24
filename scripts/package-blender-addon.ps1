@@ -43,7 +43,15 @@ try {
         $resolvedOutput,
         [System.IO.Compression.ZipArchiveMode]::Create)
 
-    $files = Get-ChildItem -LiteralPath $addonRoot -Recurse -File | Where-Object {
+    # Only files git tracks go in, so nothing ignored or untracked (a .venv, editor folders) can ship.
+    $tracked = git -C $repoRoot ls-files -z -- Blender-Addon
+    if ($LASTEXITCODE -ne 0) {
+        throw "git ls-files failed for: $addonRoot"
+    }
+    $files = $tracked.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries) |
+        ForEach-Object { Join-Path $repoRoot $_ } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+        ForEach-Object { Get-Item -LiteralPath $_ } | Where-Object {
         $_.FullName -notmatch '[\\/]__pycache__([\\/]|$)' -and
         $_.FullName -notmatch '[\\/]testing([\\/]|$)' -and
         $_.FullName -notmatch '[\\/]blender_repo([\\/]|$)' -and

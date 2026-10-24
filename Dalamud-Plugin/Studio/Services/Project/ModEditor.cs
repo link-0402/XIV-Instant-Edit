@@ -263,18 +263,20 @@ internal sealed class ModEditor : IDisposable
     /// Copies a mod folder (leaving out half-written files and the meta.json backup), and makes the
     /// copy a mod of its own: a new id and a name that tells it apart.
     /// </summary>
-    private static void CopyMod(string source, string target)
+    internal static void CopyMod(string source, string target)
     {
         if (Directory.Exists(target))
             throw new IOException($"{Path.GetFileName(target)} already exists.");
 
         try
         {
+            // A .tmp file meta.json points at is one of the mod's own files, not a half-written one.
+            var used = CleanUp.PendingCleanup.ReferencedBy(source) ?? [];
             foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
             {
                 var rel = Path.GetRelativePath(source, file);
                 if (rel.EndsWith(".instant-edit-tmp", StringComparison.OrdinalIgnoreCase)
-                    || rel.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+                    || rel.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) && !used.Contains(rel.Replace('\\', '/'))
                     || rel.EndsWith(PenumbraModMeta.BackupSuffix, StringComparison.OrdinalIgnoreCase))
                     continue;
                 var dest = Path.Combine(target, rel);

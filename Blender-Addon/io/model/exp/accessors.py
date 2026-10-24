@@ -2,7 +2,7 @@ import re
 
 import numpy as np
 
-from numpy           import single, byte, ubyte
+from numpy           import single, ubyte
 from bpy.types       import Object
 from numpy.typing    import NDArray
 
@@ -159,7 +159,7 @@ def get_col_attributes(obj: Object, loop_vertices: NDArray, loop_count: int, col
 
         _validate_corner_array(obj, f'colour layer "{layer.name}"', col_arr, loop_count)
         col_arr = col_arr.clip(0.0, 1.0) * 255.0
-        col_arrays.append(col_arr.round().astype(byte))
+        col_arrays.append(col_arr.round().astype(ubyte))
 
     return col_arrays
 

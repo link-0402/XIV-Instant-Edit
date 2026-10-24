@@ -159,19 +159,22 @@ public static class LegacyConversion
     /// <summary>
     /// A character.shpk dye row for characterlegacy.shpk, the reverse of <see cref="DyeToCharacter"/>: base, shine and
     /// glow stay, roughness (bit 5) becomes gloss (bit 3), fields legacy has no bit for are dropped, template t + 1000 is t.
+    /// A template <paramref name="legacyTemplates"/> doesn't list (a Dawntrail-only one) has no legacy match, so the row comes out undyed.
     /// </summary>
-    public static DtDyeRow DyeToLegacyShader(DtDyeRow dye)
+    public static DtDyeRow DyeToLegacyShader(DtDyeRow dye, IReadOnlyList<int>? legacyTemplates = null)
     {
         var converted = (ushort)((dye.Flags & 0b111) | ((dye.Flags & (1 << 5)) != 0 ? 1 << 3 : 0));
         var template = dye.Template is > 1000 and < 2000 ? dye.Template - 1000 : dye.Template;
+        if (legacyTemplates != null && !legacyTemplates.Contains(template))
+            return default;
         return new DtDyeRow(0).WithFlags(converted).WithChannel(dye.Channel).WithTemplate(template);
     }
 
     /// <summary>A copied row's dye as the target's shader reads it, like <see cref="RowForShader"/>.</summary>
-    public static DtDyeRow DyeForShader(DtDyeRow copied, bool fromLegacy, bool toLegacy)
+    public static DtDyeRow DyeForShader(DtDyeRow copied, bool fromLegacy, bool toLegacy, IReadOnlyList<int>? legacyTemplates = null)
         => fromLegacy == toLegacy || copied is { Flags: 0, Template: 0 } ? copied
             : fromLegacy ? DyeToCharacter(copied.Flags, copied.Template, copied.Channel)
-            : DyeToLegacyShader(copied);
+            : DyeToLegacyShader(copied, legacyTemplates);
 
     /// <summary>A 32-row table as characterlegacy.shpk reads it, in character.shpk's layout.</summary>
     public static ColorTable TableToCharacter(ColorTable table)

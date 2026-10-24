@@ -360,7 +360,7 @@ internal sealed partial class MaterialWindow
             return hovered;
         var copied = LegacyConversion.RowForShader(clip.Row, clip.Legacy, legacyShader);
         // A row from a table without dye rows pastes as undyed.
-        var copiedDye = LegacyConversion.DyeForShader(clip.Dye ?? default, clip.Legacy, legacyShader);
+        var copiedDye = LegacyConversion.DyeForShader(clip.Dye ?? default, clip.Legacy, legacyShader, stains?.LegacyTemplates);
         foreach (var (kind, label) in new[] { (PasteKind.All, "Everything"), (PasteKind.Colours, "Colours only"), (PasteKind.Surface, "Surface only") })
             if (ImGui.MenuItem(label))
                 _ = current.Apply(d => PasteRow(d, row, copied, copiedDye, kind, legacyShader), $"Paste onto {name}");

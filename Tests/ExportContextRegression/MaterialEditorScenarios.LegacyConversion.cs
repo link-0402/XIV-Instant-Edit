@@ -94,6 +94,10 @@ internal static partial class MaterialEditorScenarios
         var back = LegacyConversion.DyeForShader(dye, fromLegacy: false, toLegacy: true);
         Require(back.Flags == 0b1111 && back.Template == 205 && back.Channel == 1,
             "a dye pasted from character.shpk onto characterlegacy.shpk takes gloss for roughness and template t - 1000");
+        var dawntrailOnly = new DtDyeRow(0).WithFlags(0b1).WithTemplate(1520).WithChannel(0);
+        Require(LegacyConversion.DyeForShader(dye, false, true, [205]).Template == 205
+                && LegacyConversion.DyeForShader(dawntrailOnly, false, true, [205]) == default,
+            "a template the legacy file has maps back; a Dawntrail-only one pastes undyed instead of naming a template legacy lacks");
         Require(LegacyConversion.DyeForShader(dye, true, true) == dye && LegacyConversion.DyeForShader(default, true, false) == default,
             "dyes paste unchanged between materials of the same kind, and an undyed row stays undyed");
 
