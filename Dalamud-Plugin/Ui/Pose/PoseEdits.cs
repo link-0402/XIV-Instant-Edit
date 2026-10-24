@@ -9,6 +9,9 @@ namespace InstantEdit.Ui.Pose;
 /// <summary>A selected bone with its value in the layer at the playhead and whether its key there sets its position.</summary>
 internal readonly record struct PoseTarget(string Bone, MotionTransform Value, bool Moved);
 
+/// <summary>Bones copied from a layer of <paramref name="Kind"/> at the playhead, each as Key would key it, for Paste pose.</summary>
+internal sealed record PoseCopy(MotionLayerKind Kind, IReadOnlyList<PoseTarget> Bones);
+
 /// <summary>
 /// The Bones window's edits of a layer's keys at the playhead, for every selected bone at once:
 /// values, changes made to all of them, keying, resetting and mirroring to the other side. Pure
@@ -358,14 +361,13 @@ internal static class PoseEdits
         if (MotionEdits.Find(doc, layerKey) is not { Kind: MotionLayerKind.Offset or MotionLayerKind.Pose } layer)
             return doc;
         var index = MotionEvaluator.Index(skeleton);
-        var rest = MotionEvaluator.ModelSpace(skeleton, skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference)).ToArray());
+        var rest = RestModel(skeleton);
         var poses = new Dictionary<int, (MotionTransform[] Local, MotionTransform[] Model)>();
         var mirrored = new List<(string Twin, List<(int Frame, MotionTransform Value, bool Moved)> Keys)>();
         foreach (var (from, to) in pairs)
         {
             if (!index.TryGetValue(from, out var bone) || !index.TryGetValue(to, out var twin))
                 continue;
-            var middle = CommonAncestor(skeleton, bone, twin);
             var keys = new List<(int, MotionTransform, bool)>();
             foreach (var key in layer.Keys)
             {
@@ -377,9 +379,7 @@ internal static class PoseEdits
                         return null;
                     poses[key.Frame] = pose = (local, MotionEvaluator.ModelSpace(skeleton, local));
                 }
-                // How the bone above both sides is turned from rest: the body's middle turns with it.
-                var body = middle < 0 ? Quaternion.Identity
-                    : Quaternion.Normalize(pose.Model[middle].Rotation * Quaternion.Inverse(Quaternion.Normalize(rest[middle].Rotation)));
+                var body = Body(skeleton, pose.Model, rest, bone, twin);
                 var value = MotionTransform.From(stored);
                 var result = layer.Kind == MotionLayerKind.Offset
                     ? MirrorOffset(value, pose.Model[bone].Rotation, pose.Model[twin].Rotation, body)
@@ -399,6 +399,55 @@ internal static class PoseEdits
         }
         return doc;
     }
+
+    /// <summary>
+    /// Keys <paramref name="copy"/>'s bones at <paramref name="frame"/> in a layer of the kind they were copied from,
+    /// as one edit. With <paramref name="mirrored"/> each goes to its twin (a middle bone onto itself), mirrored as
+    /// <see cref="Mirror"/> does: read against the clip's own pose here (<paramref name="local"/>), so a pose key's
+    /// change from that is what mirrors. Null when that pose is unknown. Bones the skeleton lacks, or for a mirrored
+    /// paste whose twin it lacks, are left out and counted in <paramref name="skipped"/>.
+    /// </summary>
+    public static TimelineDocument? Paste(TimelineDocument doc, string layerKey, int frame, PoseCopy copy, bool mirrored,
+        SkeletonDescription skeleton, MotionTransform[]? local, out int skipped)
+    {
+        skipped = 0;
+        if (MotionEdits.Find(doc, layerKey) is not { Kind: MotionLayerKind.Offset or MotionLayerKind.Pose } layer || layer.Kind != copy.Kind)
+            return doc;
+        if (mirrored && (local == null || local.Length != skeleton.Bones.Length))
+            return null;
+        var index = MotionEvaluator.Index(skeleton);
+        MotionTransform[] model = mirrored ? MotionEvaluator.ModelSpace(skeleton, local!) : [], rest = mirrored ? RestModel(skeleton) : [];
+        var pose = layer.Kind == MotionLayerKind.Pose;
+        foreach (var (bone, value, moved) in copy.Bones)
+        {
+            var to = mirrored ? MotionMirror.Twin(bone) ?? bone : bone;
+            var from = -1;
+            if (!index.TryGetValue(to, out var twin) || mirrored && !index.TryGetValue(bone, out from))
+            {
+                skipped++;
+                continue;
+            }
+            var result = value;
+            if (mirrored)
+            {
+                var body = Body(skeleton, model, rest, from, twin);
+                result = pose
+                    ? MirrorPose(value, local![from], ParentRotation(skeleton, model, from), local[twin], ParentRotation(skeleton, model, twin), body)
+                    : MirrorOffset(value, model[from].Rotation, model[twin].Rotation, body);
+            }
+            doc = MotionEdits.SetKey(doc, layerKey, frame, to, result.ToBone(), pose ? moved : null);
+        }
+        return doc;
+    }
+
+    private static MotionTransform[] RestModel(SkeletonDescription skeleton) =>
+        MotionEvaluator.ModelSpace(skeleton, skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference)).ToArray());
+
+    /// <summary>How the bone above both sides is turned from rest in <paramref name="model"/>: the body's middle turns with it.</summary>
+    private static Quaternion Body(SkeletonDescription skeleton, MotionTransform[] model, MotionTransform[] rest, int bone, int twin) =>
+        CommonAncestor(skeleton, bone, twin) is var middle and >= 0
+            ? Quaternion.Normalize(model[middle].Rotation * Quaternion.Inverse(Quaternion.Normalize(rest[middle].Rotation)))
+            : Quaternion.Identity;
 
     /// <summary>The nearest bone above both <paramref name="a"/> and <paramref name="b"/>; -1 when they share none.</summary>
     public static int CommonAncestor(SkeletonDescription skeleton, int a, int b) => MotionMirror.CommonAncestor(skeleton, a, b);

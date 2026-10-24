@@ -31,7 +31,7 @@ internal interface IBonesOverlay
 
 /// <summary>
 /// The selected bones' values in a bone layer at the playhead, shared by the properties panel and the
-/// Bones window: the turn, move and scale fields, Key, Delete key, Reset, Mirror and Clear, the rotation
+/// Bones window: the turn, move and scale fields, Key, Delete key, Reset, Mirror, pose copy and paste and Clear, the rotation
 /// ball and the gizmo's choice, the bone picker and an amplitude's bones. A field's changes until it is
 /// left are one undo step.
 /// </summary>
@@ -44,6 +44,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
     private bool characterAxes;
     // A drag on the rotation ball is running as one undo step.
     private bool ballEditing;
+    // Static so a copied pose carries to another clip and between the panel and the Bones window.
+    private static PoseCopy? poseClipboard;
 
     /// <summary>Whether the ball and the gizmo use the character's axes rather than the primary bone's own.</summary>
     public bool CharacterAxes => characterAxes;
@@ -126,7 +128,18 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         DrawBoneButtons(current, layer, skeleton, loaded, targets, frame, readOnly, inside);
     }
 
-    /// <summary> Key, Delete key, Reset, Mirror and Clear, each for every selected bone at once. </summary>
+    /// <summary> Keys a copied pose at the playhead as one undo step, saying how many bones the skeleton lacks. </summary>
+    private static void Paste(TimelineEditor current, string layer, SkeletonDescription skeleton, PoseCopy copy, int frame, bool mirrored,
+        MotionTransform[]? local)
+    {
+        if (PoseEdits.Paste(current.Document, layer, frame, copy, mirrored, skeleton, local, out var skipped) is not { } pasted)
+            return;
+        current.Commit(pasted);
+        if (skipped > 0)
+            current.Note(skipped == 1 ? "Skipped 1 bone this skeleton lacks." : $"Skipped {skipped} bones this skeleton lacks.");
+    }
+
+    /// <summary> Key, Delete key, Reset, Mirror, Copy pose, Paste pose, Paste mirrored and Clear, each for every selected bone at once. </summary>
     private void DrawBoneButtons(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
         List<PoseTarget> targets, int frame, bool readOnly, bool inside)
     {
@@ -178,6 +191,40 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ImGui.SetTooltip(pairs.Count == 0 ? "Select a bone with keys in this layer and a twin on the other side."
                 : !mirrorReady ? decode.Status
                 : "Give the other side the same edits, mirrored. Replaces what the other side has in this layer.");
+
+        FlowLine("Copy pose");
+        if (ImGui.Button("Copy pose"))
+        {
+            poseClipboard = new PoseCopy(layer.Kind, [.. targets]);
+            current.Note(targets.Count == 1 ? "Copied 1 bone." : $"Copied {targets.Count} bones.");
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(several ? "Copy the selected bones' values at the playhead, to paste in any clip." : "Copy the bone's value at the playhead, to paste in any clip.");
+
+        var copied = poseClipboard is { } copy && copy.Kind == layer.Kind ? copy : null;
+        var noPaste = poseClipboard == null ? "Copy a pose first."
+            : copied == null ? $"The copy is from {(poseClipboard.Kind == MotionLayerKind.Pose ? "a pose" : "an offset")} layer. Paste it into one."
+            : !inside ? "Move the playhead into the layer."
+            : null;
+        FlowLine("Paste pose");
+        using (ImRaii.Disabled(readOnly || noPaste != null))
+        {
+            if (ImGui.Button("Paste pose") && copied != null)
+                Paste(current, layer.Key, skeleton, copied, frame, false, null);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(noPaste ?? "Key the copied bones at the playhead.");
+
+        // Mirroring reads the clip's own pose here, which may still be read.
+        var local = noPaste == null ? posing.MotionPose(loaded, frame)?.Local : null;
+        FlowLine("Paste mirrored");
+        using (ImRaii.Disabled(readOnly || noPaste != null || local == null))
+        {
+            if (ImGui.Button("Paste mirrored") && copied != null && local != null)
+                Paste(current, layer.Key, skeleton, copied, frame, true, local);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(noPaste ?? (local == null ? decode.Status : "Key the copied bones on the other side at the playhead, mirrored."));
 
         FlowLine("Clear");
         using (ImRaii.Disabled(readOnly || !bones.Any(bone => layer.Keys.Any(key => key.Bones.ContainsKey(bone)))))

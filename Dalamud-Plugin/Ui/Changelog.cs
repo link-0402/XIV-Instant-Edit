@@ -70,6 +70,7 @@ internal static class ChangelogCatalog
             Entry("The Bones window's crosshairs switch shows no bones, the selected ones, or all of them on your character.", 1),
             Entry("Onion skins beside it show faint bones for the pose at the layer's keys before and after the playhead.", 1),
             Entry("Pick bones on a body map or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),
+            Entry("Copy pose takes the selected bones at the playhead. Paste it at another frame or in another animation, or paste it mirrored onto the other side.", 1),
             Entry("Key a whole pose from a .pose file (Anamnesis, Ktisis or Brio), your posed character or a frame of another animation.", 1),
             Entry("Saved layers stay editable: Edit again brings them back.", 1),
             Entry("Copy one layer or all of them and paste them into another animation, such as a variant of the same one.", 1),
