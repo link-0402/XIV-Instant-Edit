@@ -169,12 +169,13 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
 
     /// <summary>
     /// The frames playing the playhead's pose the same way (see <see cref="PoseMatches"/>), in the motion as
-    /// the cuts play it; null while the clip plays, during a drag, or before its motion is read. The motion
+    /// the cuts play it; null while the clip plays (the editor's clock, or the playhead following the game in
+    /// Preview, Live or Follow), during a drag, or before its motion is read. The motion
     /// is sampled once per cut and length (<see cref="MotionDecode.OutputMotion"/> keeps it), and searched once per playhead.
     /// </summary>
     public IReadOnlyList<PoseMatch>? Matches(TimelineEditor current)
     {
-        if (current.Playing || current.Gesture != TimelineGesture.None || current.Document.Expression ||
+        if (current.Playing || session.PlayheadFollows || current.Gesture != TimelineGesture.None || current.Document.Expression ||
             session.Source is not { Standalone: false } loaded || decode.DecodedPose(loaded) is not { } decoded)
             return null;
         var motion = decode.OutputMotion(current, decoded);

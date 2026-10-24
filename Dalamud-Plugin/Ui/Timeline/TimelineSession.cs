@@ -48,6 +48,8 @@ internal sealed class TimelineSession
     public TimelineEditor? Editor { get; set; }
     /// <summary>The catalog's lists for the clip's race; null for a clip not made for a player race.</summary>
     public TimelineCatalogKey? CatalogKey { get; set; }
+    /// <summary>Whether the playhead followed the game's play of the clip last frame (Preview, Live or Follow playing).</summary>
+    public bool PlayheadFollows { get; set; }
 
     /// <summary>Files imported for the document, by game path: sounds, effects and the copies a fix or a look makes.</summary>
     public Dictionary<string, TimelineImport> Imports { get; } = new(StringComparer.OrdinalIgnoreCase);

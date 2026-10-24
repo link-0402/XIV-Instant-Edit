@@ -1,5 +1,6 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
@@ -46,10 +47,11 @@ internal sealed class MotionDecode(TimelineSession session)
     /// <summary>Whether the last read failed for <paramref name="loaded"/> as it is now.</summary>
     public bool FailedFor(AnimationTimelineSource loaded) => Error != null && failedKey == KeyOf(session.Fresh(loaded));
 
-    /// <summary>Starts decoding the clip's motion unless this version of it is decoded or being decoded.</summary>
+    /// <summary>Starts decoding the clip's motion unless this version of it is decoded or being decoded, or its skeleton is still being matched.</summary>
     public void Ensure(AnimationTimelineSource loaded)
     {
-        if (session.Animations is not { } service)
+        // A clip whose skeleton is still being matched can't be read yet (back in GPose it is matched again for a moment).
+        if (session.Animations is not { } service || loaded.Clip.Resolution is { State: SkeletonResolutionState.Searching })
             return;
         var key = KeyOf(loaded);
         if (key == DecodedKey && (Decoded != null || task != null) || key == failedKey)

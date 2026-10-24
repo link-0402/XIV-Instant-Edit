@@ -55,6 +55,7 @@ internal static class SoundCutFixture
         var ogg = AudioFixture.SilentVorbis(2, 48000, 20);
         check(ScdAudioCut.Decode(ScdModel.Read(VorbisScd(ogg, 0x2003)).Audio[0]).Seconds > 0 &&
               ScdAudioCut.Decode(ScdModel.Read(VorbisScd(ogg, 0x2002)).Audio[0]).Seconds > 0, "XOR-table and XOR-byte Vorbis decode");
+        check(ScdAudioCut.Decode(ScdModel.Read(LegacyVorbisScd(ogg)).Audio[0]).Seconds > 0, "an old VFXEditor import (the whole Ogg stream as data) decodes");
         reject(() => ScdAudioCut.Apply(LoopedTemplate(), 0, [new TimelineAudioSpan(0.001, 0.001)], pcm), "a sound that loops in its file is refused");
         var hca = ScdModel.Read(pcm);
         BinaryPrimitives.WriteInt32LittleEndian(hca.Audio[0].Header.AsSpan(12), (int)ScdCodec.Hca);
@@ -105,6 +106,24 @@ internal static class SoundCutFixture
         BinaryPrimitives.WriteInt32LittleEndian(audio.Header.AsSpan(24), info.Length + header.Length);
         audio.SubInfo = [.. info, .. header];
         audio.Data = data;
+        return model.Write();
+    }
+
+    /// <summary>
+    /// <paramref name="ogg"/> as old VFXEditor imports store it (the Mega Music Mod songs, 2026-10-24): the whole stream as
+    /// data, behind a sub-info whose seek table field holds the start of a raw Vorbis header ("\x01vorbis").
+    /// </summary>
+    private static byte[] LegacyVorbisScd(byte[] ogg)
+    {
+        var info = new byte[0x40];
+        info[8] = 0x78;
+        "\u0001vorbis"u8.CopyTo(info.AsSpan(16));
+        var model = ScdModel.Read(VorbisScd(ogg, 0x2002));
+        var audio = model.Audio[0];
+        BinaryPrimitives.WriteInt32LittleEndian(audio.Header.AsSpan(0), ogg.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(audio.Header.AsSpan(24), info.Length);
+        audio.SubInfo = info;
+        audio.Data = ogg;
         return model.Write();
     }
 

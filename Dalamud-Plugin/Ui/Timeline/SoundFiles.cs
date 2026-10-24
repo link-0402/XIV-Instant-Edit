@@ -257,7 +257,8 @@ internal sealed class SoundFiles(TimelineSession session)
 
     /// <summary>
     /// Why saving or previewing waits for the sounds across a cut: one still being read, or ones without
-    /// a choice. A sound whose file can't be read plays whole.
+    /// a choice. A sound chosen to be cut waits for its read too: unread, the save would leave it whole.
+    /// A sound whose file can't be read plays whole.
     /// </summary>
     public string? SoundCutMissing(TimelineDocument document)
     {
@@ -270,7 +271,8 @@ internal sealed class SoundFiles(TimelineSession session)
         var undecided = 0;
         foreach (var ev in document.Events)
         {
-            if (ev.Magic != "C063" || ev.Start >= last || document.SoundCuts.ContainsKey(ev.Key) || TimelineSoundKey.Of(ev) is not { } key)
+            var chosen = document.SoundCuts.TryGetValue(ev.Key, out var cut);
+            if (ev.Magic != "C063" || ev.Start >= last || chosen && !cut || TimelineSoundKey.Of(ev) is not { } key)
                 continue;
             var read = SoundFor(key.Path, loaded);
             if (read.Bytes == null)
@@ -279,7 +281,7 @@ internal sealed class SoundFiles(TimelineSession session)
                     return "Reading the sound files.";
                 continue;
             }
-            if (CrossesCut(document, ev, true))
+            if (!chosen && CrossesCut(document, ev, true))
                 undecided++;
         }
         return undecided == 0 ? null : TimelineWindowViews.SoundCutsFooter(undecided);

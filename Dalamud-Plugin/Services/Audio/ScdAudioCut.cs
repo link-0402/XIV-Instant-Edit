@@ -154,9 +154,9 @@ internal static class ScdAudioCut
         var encodeByte = (byte)BinaryPrimitives.ReadInt16LittleEndian(info[2..]);
         var seekTable = BinaryPrimitives.ReadInt32LittleEndian(info[16..]);
         var headerSize = BinaryPrimitives.ReadInt32LittleEndian(info[20..]);
-        // Old VFXEditor imports store a whole Ogg stream behind a header of their own.
+        // Old VFXEditor imports store a whole Ogg stream, from its first page (beginning-of-stream flag), as the data.
         if (seekTable < 0 || headerSize < 0 || 0x20L + seekTable + headerSize > info.Length)
-            throw new InvalidDataException(FormatProblem);
+            return OggReader.IsOgg(audio.Data) && audio.Data.Length > 5 && (audio.Data[5] & 0x02) != 0 ? [.. audio.Data] : throw new InvalidDataException(FormatProblem);
         byte[] ogg = [.. info.Slice(0x20 + seekTable, headerSize), .. audio.Data];
         if (mode == 0x2002 && encodeByte != 0)
             for (var i = 0; i < headerSize; i++)

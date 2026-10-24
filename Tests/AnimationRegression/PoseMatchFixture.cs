@@ -22,7 +22,15 @@ internal static class PoseMatchFixture
         // A slow swing: frames next to a match are as close as it, so each run is one mark, at its closest
         // frame, and the run around the playhead is none.
         var slow = MotionCutFixture.Spin(201, f => 10 * MathF.Sin(2 * MathF.PI * f / 50));
-        check(PoseMatches.Find(slow, 0).Select(m => m.Frame).SequenceEqual([50, 100, 150, 200]), "one mark per run of close frames, none around the playhead");
+        check(PoseMatches.Find(slow, 0).Select(m => m.Frame).SequenceEqual([50, 100, 150]), "one mark per run of close frames, none around the playhead");
+        // The last frame is the first one again on a loop: no mark there for frame 0, nor at 0 for the last frame.
+        check(PoseMatches.Find(slow, 200).Select(m => m.Frame).SequenceEqual([50, 100, 150]) && PoseMatches.Find(slow, 100).Select(m => m.Frame).SequenceEqual([0, 50, 150, 200]),
+            "the ends mark nothing at each other, and are marked from inside");
+        // Slower still, frame 1's run of close frames reaches frame 0, so the end is the playhead's own moment too.
+        var slower = MotionCutFixture.Spin(201, f => 2 * MathF.Sin(2 * MathF.PI * f / 50));
+        check(PoseMatches.Find(slower, 1) is { Count: 3 } nearStart && nearStart.All(m => m.Frame is > 10 and < 190) &&
+              PoseMatches.Find(slower, 199) is { Count: 3 } nearEnd && nearEnd.All(m => m.Frame is > 10 and < 190),
+            "a playhead next to an end marks nothing at the other end");
 
         // Eight bones, one of which comes back 6 degrees off: the mean stays under a degree, the worst bone doesn't.
         var off = Many(101, (f, bone) => 30 * MathF.Sin(2 * MathF.PI * f / 50) + (bone == 7 && f >= 40 ? 6 : 0));

@@ -479,6 +479,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// </summary>
     private void SyncPlayback(TimelineEditor current, AnimationTimelineSource loaded)
     {
+        session.PlayheadFollows = false;
         try
         {
             if (session.Playback.Active && previewFingerprint is { } fingerprint)
@@ -498,6 +499,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                         current.Playhead = TimelineWindowViews.Frames(seconds);
                         lastSeekFrame = current.Playhead;
                         current.Reveal(current.Playhead);
+                        session.PlayheadFollows = true;
                     }
                     RepeatAtEnd(current, fingerprint);
                 }
@@ -511,6 +513,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             {
                 current.Playhead = TimelineWindowViews.Frames(live);
                 lastSeekFrame = current.Playhead;
+                session.PlayheadFollows = true;
             }
         }
         catch (InvalidOperationException e)
@@ -611,6 +614,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         var fresh = session.Fresh(loaded);
         if (!liveStarted && WaitingForDraw())
             return;
+        // Back in GPose the game's replay is observed again and matched for a moment: Live waits for that match.
+        if (fresh.Clip.Resolution is { State: SkeletonResolutionState.Searching })
+            return;
+        // A read that waited for that match starts now.
+        if (decode.DecodedKey == null)
+            decode.Ensure(fresh);
         if (LiveBlocked(current, fresh, PlaybackAvailable(out var reason), reason) is { } blocked)
         {
             StopLive();

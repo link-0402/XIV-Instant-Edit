@@ -31,7 +31,8 @@ internal static class PoseMatches
 
     /// <summary>
     /// The frames that match <paramref name="frame"/>, in order: of each run of matching frames the closest
-    /// one, and none from the run around <paramref name="frame"/> itself. None when the frame is off the clip.
+    /// one, and none from the run around <paramref name="frame"/> itself, nor from the run at the other end when
+    /// that run reaches the first or last frame. None when the frame is off the clip.
     /// </summary>
     public static IReadOnlyList<PoseMatch> Find(MotionClip clip, int frame) => Find(Sample(clip), frame);
 
@@ -65,7 +66,7 @@ internal static class PoseMatches
         for (var f = 0; f <= frames; f++)
             found[f] = f == frame ? new PoseMatch(f, 0, 0) : Compare(poses, f, frame, bones);
 
-        var matches = new List<PoseMatch>();
+        var runs = new List<(int From, int To, PoseMatch Best)>();
         for (var f = 0; f <= frames;)
         {
             if (found[f] == null)
@@ -73,18 +74,17 @@ internal static class PoseMatches
                 f++;
                 continue;
             }
+            var from = f;
             PoseMatch best = found[f]!;
-            var own = false;
             for (; f <= frames && found[f] is { } match; f++)
-            {
-                own |= f == frame;
                 if (match.MeanAngle < best.MeanAngle)
                     best = match;
-            }
-            if (!own)
-                matches.Add(best);
+            runs.Add((from, f - 1, best));
         }
-        return matches;
+        // The first and last frame are one moment of the loop: when the playhead's run reaches one end, the run at
+        // the other end is its own too (keeping the frames between them would keep everything).
+        var own = runs.First(r => r.From <= frame && frame <= r.To);
+        return [.. runs.Where(r => r != own && !(own.From == 0 && r.To == frames) && !(own.To == frames && r.From == 0)).Select(r => r.Best)];
     }
 
     /// <summary>
