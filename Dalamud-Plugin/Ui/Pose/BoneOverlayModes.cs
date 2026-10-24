@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using InstantEdit.Services.Animations.Motion;
+
 namespace InstantEdit.Ui.Pose;
 
 /// <summary>What the Bones window's crosshairs show on the GPose character.</summary>
@@ -31,4 +34,19 @@ internal static class BoneOverlayModes
         BoneOverlayMode.All => selected || placed || changed,
         _ => false,
     };
+
+    /// <summary>The onion skins' frames: the last key before <paramref name="frame"/> and the first after it, null where there is none.</summary>
+    public static (int? Before, int? After) GhostFrames(ImmutableArray<MotionKey> keys, int frame)
+    {
+        // shortcut: no wrap round a loop, the first key's ghost doesn't show before the last; wrap it if users ask.
+        int? before = null, after = null;
+        foreach (var key in keys)
+        {
+            if (key.Frame < frame && (before == null || key.Frame > before))
+                before = key.Frame;
+            else if (key.Frame > frame && (after == null || key.Frame < after))
+                after = key.Frame;
+        }
+        return (before, after);
+    }
 }

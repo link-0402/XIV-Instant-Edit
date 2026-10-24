@@ -44,6 +44,11 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     private (MotionClip Clip, int Frame, MotionTransform[] Local, MotionTransform[] Model)? motionPose;
     // The bones' frames for one document, layer, frame and decode.
     private (TimelineDocument Doc, string Layer, int Frame, MotionClip Clip, BoneFrames Frames)? boneFrames;
+    // The onion skins' poses in model space, apart from motionPose so the gizmo's pose at the playhead stays cached.
+    private readonly List<(TimelineDocument Doc, MotionClip Clip, int Frame, MotionTransform[] Model)> ghostPoses = [];
+
+    /// <summary>The Bones window's onion skins switch: the overlay also shows the pose at the selected layer's keys either side of the playhead.</summary>
+    public bool Ghosts { get; set; }
 
     /// <summary>The selected bones, the primary one first.</summary>
     public PoseSelection Selection => selection;
@@ -438,6 +443,36 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         var model = MotionEvaluator.ModelSpace(clip.Skeleton, local);
         motionPose = (clip, frame, local, model);
         return (local, model);
+    }
+
+    /// <summary>
+    /// The pose at <paramref name="frame"/> with every layer of <paramref name="doc"/> applied, in model space, for an
+    /// onion skin; null while the motion is read, which this starts. Like the gizmo's frames it leaves out amplitudes,
+    /// fixes and planted pins, which take the whole clip. Kept for the last two frames while the document and the decode stay.
+    /// </summary>
+    public MotionTransform[]? GhostPose(AnimationTimelineSource loaded, TimelineDocument doc, int frame)
+    {
+        if (OutputClip(loaded) is not { } clip)
+            return null;
+        foreach (var cached in ghostPoses)
+            if (ReferenceEquals(cached.Doc, doc) && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
+                return cached.Model;
+        var own = clip.Pose(frame);
+        MotionTransform[] local;
+        try
+        {
+            local = MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, frame, LoopFrames(loaded, doc), MotionEnd(loaded, doc), clip.SourceTracks);
+        }
+        catch (InvalidDataException)
+        {
+            // A layer names a bone this skeleton lacks: the clip's own pose still shows.
+            local = own;
+        }
+        var model = MotionEvaluator.ModelSpace(clip.Skeleton, local);
+        if (ghostPoses.Count >= 2)
+            ghostPoses.RemoveAt(0);
+        ghostPoses.Add((doc, clip, frame, model));
+        return model;
     }
 
     /// <summary>

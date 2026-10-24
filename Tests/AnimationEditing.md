@@ -1602,3 +1602,22 @@ Plan: C:\Users\Example\.claude\plans\i-want-to-expand-smooth-allen.md. Test clip
 - [ ] 6 Save to a new mod: the emote plays the new animation in game, breathing included.
 - [ ] 7 Use the clip's motion: the emote's own motion comes back; Ctrl+Z brings the still pose back.
 - [ ] 8 On a Miqo'te or Au Ra, raise Tail to 200%: the tail swings further.
+
+## Onion skins (pending)
+
+The Bones window's onion skins switch, beside the crosshairs, draws faint bones on the GPose character for
+the pose at the selected layer's key before the playhead (blue) and after it (orange).
+
+- [ ] 1 Select an offset or pose layer with three keys, put the playhead between the first two and turn on
+  the switch: blue bones show the first key's pose, orange ones the second's, under the normal dots.
+- [ ] 2 Put the playhead on the middle key: the ghosts are the first and the last key. Before the first key
+  only orange shows; on or past the last only blue.
+- [ ] 3 Scrub across a key: the ghosts jump to the next pair of keys without a hitch.
+- [ ] 4 Turn a bone with the gizmo at the playhead's key: the ghosts stay put; turn one at a ghost's key
+  (playhead there, then step off it): that ghost shows the new pose.
+- [ ] 5 Crosshairs on Selected: ghosts show only for the selected bones. Crosshairs Off: no ghosts.
+- [ ] 6 Select an amplitude or fix layer, or no layer: no ghosts. The switch's tooltip says amplitude and
+  fix layers and planted pins are left out of the ghosts.
+- [ ] 7 The ghosts sit on the character as the normal dots do at those frames (step the playhead to a
+  ghost's key: the dots land on it), also on a racially scaled character.
+- [ ] 8 Close and reopen the Bones window: the switch keeps its state until the plugin reloads.
