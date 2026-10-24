@@ -35,7 +35,10 @@ internal sealed class LoopPoseReader(TimelineSession session)
     public void Read(AnimationTimelineSource loaded, string? layer)
     {
         if (session.Animations is { } service)
-            Read(loaded, layer, token => Task.Run(() => Start(service, loaded.Capture, token), token));
+        {
+            var capture = session.WithLoopMatch(loaded);
+            Read(loaded, layer, token => Task.Run(() => Start(service, capture, token), token));
+        }
     }
 
     internal void Read(AnimationTimelineSource loaded, string? layer, Func<CancellationToken, Task<MotionFix>> read)

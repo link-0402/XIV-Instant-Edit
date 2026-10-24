@@ -23,6 +23,11 @@ internal static class AnimationMatchingFixture
         check(AnimationCatalog.SiblingStartupPath(idlePath) == "chara/human/c0801/animation/a0001/bt_common/emote/pose05_start.pap" &&
               AnimationCatalog.SiblingStartupPath("chara/human/c0801/animation/a0001/bt_common/emote/pose05_start.pap") == null,
             "idle loop paths discover only their sibling startup path");
+        var start = new AnimationCatalog.Timeline(7404, "emote/pose05_start", "Idle", 2, false, [7404], []);
+        var startCatalog = new AnimationCatalog([idle, start]);
+        check(startCatalog.FindStartup("chara/human/c0801/animation/a0001/bt_common/emote/pose05_start.pap")?.Id == 7404 &&
+              startCatalog.FindStartup(idlePath) == null && startCatalog.FindStartup("chara/human/c0801/animation/a0001/bt_common/emote/pose09_start.pap") == null,
+            "a sibling startup finds its own start timeline by key, never the loop's");
         check(AnimationCatalog.CandidatePapPaths(idle, [materialPath, tree[2]]).IsEmpty,
             "idle discovery cannot guess the player race from equipment or material animation paths");
         var standing = idle with { Id = 3, Key = "normal/idle", Family = [3] };

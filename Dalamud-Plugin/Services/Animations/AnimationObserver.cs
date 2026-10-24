@@ -426,7 +426,8 @@ internal sealed class AnimationObserver : IDisposable
                             durations[startupSource.Resource.Hash] = startupDurations;
                         }
                         startup = new AnimationClip(item.Path, entries[0].Name, entries[0].Binding, clip.Partial,
-                            item.Timeline?.Id ?? timeline.Id, clip.SkeletonPath, clip.SkeletonFingerprint, binding.Skeleton,
+                            // A sibling startup plays its own start row; the loop's id would make Play and Live play the loop.
+                            item.Timeline?.Id ?? catalog.FindStartup(item.Path)?.Id ?? timeline.Id, clip.SkeletonPath, clip.SkeletonFingerprint, binding.Skeleton,
                             new(SkeletonResolutionState.Searching, []), startupPrints.GetValueOrDefault(entries[0].Binding, ""),
                             $"{collection.Id}:{startupSource.Resource.Hash}:{startupSource.Resource.ResolvedPath}:{startupIdentity.MappingFingerprint}:{startupIdentity.CanonicalModel}",
                             SourceIdentity: startupIdentity,

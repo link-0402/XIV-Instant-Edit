@@ -120,6 +120,29 @@ internal sealed class AnimationCatalog
     /// listener hears only when the loader plays them, not whenever a character does.
     /// </summary>
     public Timeline? FindAny(ushort id) => timelines.GetValueOrDefault(id) ?? others.GetValueOrDefault(id);
+
+    // Built on first use; two threads building it at once build the same index.
+    private Dictionary<string, Timeline>? startKeys;
+
+    /// <summary>
+    /// The timeline that plays <paramref name="startupPap"/>, a sibling startup (<see cref="SiblingStartupPath"/>) no emote
+    /// names, by the key its path ends with (emote/pose05_start for .../emote/pose05_start.pap). Null when no
+    /// one-shot timeline has that key.
+    /// </summary>
+    public Timeline? FindStartup(string startupPap)
+    {
+        const string pap = ".pap";
+        var keys = startKeys ??= timelines.Values.Concat(others.Values).Where(timeline => !timeline.Loop)
+            .GroupBy(timeline => timeline.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.MinBy(timeline => timeline.Id)!, StringComparer.Ordinal);
+        if (!startupPap.EndsWith(pap, StringComparison.Ordinal))
+            return null;
+        var parts = startupPap[..^pap.Length].Split('/');
+        for (var take = 1; take <= Math.Min(3, parts.Length); take++)
+            if (keys.TryGetValue(string.Join('/', parts[^take..]), out var found))
+                return found;
+        return null;
+    }
     private static ImmutableArray<string> PapKeys(Timeline timeline) => timeline.Key switch
     {
         "normal/idle" => ["resident/idle"],

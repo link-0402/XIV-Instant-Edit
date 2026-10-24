@@ -1575,3 +1575,7 @@ jitter calms small shakes. Spec: docs/superpowers/specs/2026-10-24-fix-layer-des
   leads into a loop".
 - [ ] 7 Add > Smooth jitter on a shaky port: the shakes calm and a sharp move stays sharp. At Strength 0
   nothing changes.
+- [ ] 8 Open an idle's startup (such as Idle pose 5 start) with Live on: Live shows the startup and its
+  layers, not the loop. Then, before the loop's skeleton has matched (straight after a reload), Add >
+  Match startup to loop: it adds the layer instead of "Couldn't read the loop". The Pose source "Loop's
+  first frame, at the end" reads the loop the same way.

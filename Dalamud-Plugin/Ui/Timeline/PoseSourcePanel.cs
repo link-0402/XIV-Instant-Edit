@@ -107,7 +107,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
             }
         }
         if (loaded.Startup && ImGui.MenuItem("Loop's first frame, at the end"))
-            ReadClipPose(loaded.Capture, false, true);
+            ReadClipPose(session.WithLoopMatch(loaded), false, true);
         if (loaded.Startup && ImGui.IsItemHovered())
             ImGui.SetTooltip("Key the loop's first pose at this startup's end, so the startup ends where the loop begins.");
     }

@@ -108,23 +108,39 @@ internal sealed class TimelineSession
     /// <summary><paramref name="current"/> with the clip's latest skeleton match, without the document's motion from Blender (see <see cref="Fresh"/>).</summary>
     public AnimationTimelineSource Matched(AnimationTimelineSource current)
     {
+        var resolution = LatestMatch(current.Capture.Id, current.Clip, current.Startup);
+        return ReferenceEquals(resolution, current.Clip.Resolution) ? current : WithResolution(current, resolution);
+    }
+
+    /// <summary>
+    /// <paramref name="current"/>'s capture with its loop's latest skeleton match, to read the loop while its startup
+    /// is open: the capture kept with the startup holds the loop as it was when the startup opened.
+    /// </summary>
+    public AnimationCapture WithLoopMatch(AnimationTimelineSource current)
+    {
+        var loop = current.Capture.Clip;
+        var resolution = LatestMatch(current.Capture.Id, loop, false);
+        return ReferenceEquals(resolution, loop.Resolution) ? current.Capture : current.Capture with { Clip = loop with { Resolution = resolution } };
+    }
+
+    /// <summary>The listener's latest skeleton match for <paramref name="clip"/>, the loop or startup of capture <paramref name="captureId"/>; its own when there is none.</summary>
+    private SkeletonResolution? LatestMatch(string captureId, AnimationClip clip, bool startup)
+    {
         if (Animations == null)
-            return current;
+            return clip.Resolution;
         foreach (var capture in Animations.Observer.History)
         {
-            if (capture.Id != current.Capture.Id)
+            if (capture.Id != captureId)
                 continue;
-            var clip = current.Startup ? capture.Startup : capture.Clip;
-            if (clip != null && clip.GamePath == current.Clip.GamePath && clip.BindingFingerprint == current.Clip.BindingFingerprint &&
-                clip.SourceContext == current.Clip.SourceContext)
-                return ReferenceEquals(clip.Resolution, current.Clip.Resolution) ? current : WithResolution(current, clip.Resolution);
+            var latest = startup ? capture.Startup : capture.Clip;
+            if (latest != null && latest.GamePath == clip.GamePath && latest.BindingFingerprint == clip.BindingFingerprint &&
+                latest.SourceContext == clip.SourceContext)
+                return latest.Resolution;
             break;
         }
         // The capture shows another file now (the preview copy), so a choice made under Source
         // reaches the timeline through the match kept for its own file.
-        return Animations.Observer.LatestResolution(current.Clip) is { } latest && !ReferenceEquals(latest, current.Clip.Resolution)
-            ? WithResolution(current, latest)
-            : current;
+        return Animations.Observer.LatestResolution(clip) ?? clip.Resolution;
     }
 
     /// <summary><paramref name="current"/> with its clip matched to <paramref name="resolution"/>, in its capture too.</summary>
