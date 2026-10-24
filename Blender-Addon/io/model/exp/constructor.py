@@ -183,6 +183,7 @@ class CreateLOD:
         header.vert_offset[lod_level]      = current_offset
         header.idx_offset[lod_level]       = idx_offset
 
+        active_lod.vertex_data_offset        = current_offset
         active_lod.vertex_buffer_size        = vert_buffer_size
         active_lod.idx_data_offset           = idx_offset
         active_lod.edge_geometry_data_offset = idx_offset

@@ -89,7 +89,7 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
                 current.RemoveSelectedPart();
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(cuts.Parts.Length < 2 ? "Cut the motion first (C at the playhead)." : "Removes this part. What plays after it moves up.");
+            ImGui.SetTooltip(cuts.Parts.Length < 2 ? "Cut the motion first: right-click the clip row, then Cut here." : "Removes this part. What plays after it moves up.");
         ImGui.SameLine(0, Theme.Gap);
         var can = part.Blend || CutEdits.CanBlend(cuts, index);
         using (ImRaii.Disabled(readOnly || !can))
@@ -170,7 +170,7 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
             Widgets.HintWrapped(TimelineWindowViews.JoinBesideBlend);
             return;
         }
-        DrawBlend(current, join, MotionCutter.Window(cuts, index, doc.Length), value => current.SetJoin(index, value));
+        DrawBlend(current, join, MotionCutter.Window(cuts, index, doc.Length), value => current.SetJoin(index, value), session.ReadOnly);
         if (decoded != null)
             Widgets.HintWrapped(TimelineWindowViews.GapText(LoopSeam.Gap(decoded, cuts.Parts[index].To, cuts.Parts[index + 1].From)));
         else
@@ -199,12 +199,12 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
         if (cuts.Seam is { } seam)
         {
             ImGui.Spacing();
-            DrawBlend(current, seam, MotionCutter.Window(cuts, -1, current.Document.Length), value => current.SetSeam(value));
+            DrawBlend(current, seam, MotionCutter.Window(cuts, -1, current.Document.Length), value => current.SetSeam(value), readOnly);
             if (seam.Placement != JoinPlacement.Before)
                 Widgets.HintWrapped(TimelineWindowViews.SeamPlacementNote);
         }
         ImGui.Spacing();
-        DrawEase(current, cuts);
+        DrawEase(current, cuts, readOnly);
         ImGui.Spacing();
         var clean = shown.State == SeamState.Clean;
         using (ImRaii.Disabled(readOnly || !current.Loops || clean))
@@ -226,9 +226,9 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
     }
 
     /// <summary>A blend's length and place, each change one undo step, and the frames it really uses when the parts are too short.</summary>
-    private static void DrawBlend(TimelineEditor current, MotionJoin blend, (double Before, double After) used, Func<MotionJoin, bool> set)
+    private static void DrawBlend(TimelineEditor current, MotionJoin blend, (double Before, double After) used, Func<MotionJoin, bool> set, bool readOnly)
     {
-        var readOnly = current.Gesture != TimelineGesture.None;
+        readOnly |= current.Gesture != TimelineGesture.None;
         using (var facts = ImRaii.Table("##cut-blend", 2, ImGuiTableFlags.SizingFixedFit))
         {
             if (facts.Success)
@@ -269,9 +269,9 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
     }
 
     /// <summary>The loop seam's ease: over how many frames (0 for none) and on which side, each change one undo step.</summary>
-    private static void DrawEase(TimelineEditor current, MotionCuts cuts)
+    private static void DrawEase(TimelineEditor current, MotionCuts cuts, bool readOnly)
     {
-        var readOnly = current.Gesture != TimelineGesture.None;
+        readOnly |= current.Gesture != TimelineGesture.None;
         using var facts = ImRaii.Table("##seam-ease", 2, ImGuiTableFlags.SizingFixedFit);
         if (!facts.Success)
             return;

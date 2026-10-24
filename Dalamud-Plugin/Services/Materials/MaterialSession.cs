@@ -131,29 +131,43 @@ internal sealed class MaterialSession
         return move() ? onEdit(History.Current, Classify(before, History.Current)) : Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Writes the material over the mod's file (backed up, after checking the file is still the one
-    /// opened), or into a new mod named <paramref name="newModName"/> for a game file; then redraws.
-    /// </summary>
-    public async Task<PreviewApplyResult> SaveAsync(PreviewModService previews, string newModName)
+    /// <summary>What a save writes: the document and every file that goes with it, as they are now.</summary>
+    internal sealed record SaveJob(MaterialDocument Doc, byte[] Bytes, IReadOnlyList<(string GamePath, byte[] Bytes)> Added,
+        IReadOnlyList<(PreviewSource Model, byte[] Bytes)> Models);
+
+    /// <summary>Takes what a save writes, on the thread that edits the session.</summary>
+    public SaveJob PrepareSave()
     {
-        var saved = Current;
-        var bytes = saved.Write();
-        var added = NewFilesFor(saved);
-        var models = ModelChangesFor(saved);
-        var result = await previews.WriteAsync(SaveWrites(Source, bytes, added, models), Source.ObjectIndex, newModName, "Material written by XIV Instant Edit.",
-            FallbackModName, "Open the material again").ConfigureAwait(false);
-        if (Source.IsGameData && result.FixMod is { } mod && await previews.ModRootAsync().ConfigureAwait(false) is { Length: > 0 } root)
-            Source = Source.SavedInto(root, mod, PreviewSource.Hash(bytes));
-        else if (!Source.IsGameData)
-            Source = Source with { Sha256 = PreviewSource.Hash(bytes) };
-        foreach (var file in added)
-            newFiles.Remove(file.GamePath);
-        foreach (var (model, _) in models)
-            modelChanges.Remove(PathRules.NormalizeGamePath(model.GamePath));
-        if (ReferenceEquals(History.Current, saved))
-            History.MarkSaved();
-        return result;
+        var doc = Current;
+        return new SaveJob(doc, doc.Write(), NewFilesFor(doc), ModelChangesFor(doc));
+    }
+
+    /// <summary>
+    /// Writes <paramref name="job"/> over the mod's file (backed up, after checking the file is still the
+    /// one opened), or into a new mod named <paramref name="newModName"/> for a game file; then redraws.
+    /// Safe off the session's thread: it touches no session state. Finish runs on the session's thread
+    /// afterwards, so an edit made meanwhile is never marked saved.
+    /// </summary>
+    public async Task<(PreviewApplyResult Result, Action Finish)> SaveAsync(SaveJob job, PreviewModService previews, string newModName)
+    {
+        var source = Source;
+        var result = await previews.WriteAsync(SaveWrites(source, job.Bytes, job.Added, job.Models), source.ObjectIndex, newModName,
+            "Material written by XIV Instant Edit.", FallbackModName, "Open the material again").ConfigureAwait(false);
+        var root = source.IsGameData && result.FixMod != null ? await previews.ModRootAsync().ConfigureAwait(false) : null;
+        return (result, () =>
+        {
+            var hash = PreviewSource.Hash(job.Bytes);
+            if (source.IsGameData && result.FixMod is { } mod && root is { Length: > 0 })
+                Source = source.SavedInto(root, mod, hash);
+            else if (!source.IsGameData)
+                Source = source with { Sha256 = hash };
+            foreach (var file in job.Added)
+                newFiles.Remove(file.GamePath);
+            foreach (var (model, _) in job.Models)
+                modelChanges.Remove(PathRules.NormalizeGamePath(model.GamePath));
+            if (ReferenceEquals(History.Current, job.Doc))
+                History.MarkSaved();
+        });
     }
 
     /// <summary>

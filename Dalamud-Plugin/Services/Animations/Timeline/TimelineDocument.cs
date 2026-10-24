@@ -289,9 +289,12 @@ internal sealed record TimelineDocument(
 
     /// <summary>A motion's length in seconds as whole frames; null when unknown or out of the timeline's range.</summary>
     public static int? MotionFrames(float seconds) =>
-        float.IsFinite(seconds) && Math.Round(seconds * (double)Fps, MidpointRounding.AwayFromZero) is var frames and >= 1 and <= MaxFrames
+        float.IsFinite(seconds) && Frames(seconds) is var frames and >= 1 and <= MaxFrames
             ? (int)frames
             : null;
+
+    /// <summary>Seconds as whole frames: the one rounding every clip length uses, so Live, the seam and the document agree.</summary>
+    public static double Frames(float seconds) => Math.Round(seconds * (double)Fps, MidpointRounding.AwayFromZero);
 }
 
 /// <summary>What an Add creates. Each kind makes one or more events (a prop makes several).</summary>

@@ -106,12 +106,16 @@ internal sealed class TimelineEditor
     private IReadOnlyDictionary<string, int>? boneOrder;
     private int layoutStamp;
     private int builtStamp = -1;
+    // How many parts and joins the document had at its last change.
+    private (int Parts, int Joins) cutCounts;
 
     public TimelineEditor(TimelineDocument document, int capacity = TimelineHistory.DefaultCapacity)
     {
         History = new TimelineHistory(document, capacity);
         History.Changed += OnDocumentChanged;
         loaded = document;
+        var cuts = CutEdits.CutsOf(document);
+        cutCounts = (cuts.Parts.Length, cuts.Joins.Length);
         View = new TimelineView(0, 1, 0);
     }
 
@@ -1549,9 +1553,11 @@ internal sealed class TimelineEditor
                 SelectedBone = null;
             }
         }
-        if (SelectedCut is { Target: not TimelineCutTarget.Seam, Index: var cut } selectedCut &&
-            cut >= (selectedCut.Target == TimelineCutTarget.Part ? CutEdits.CutsOf(doc).Parts.Length : CutEdits.CutsOf(doc).Joins.Length))
+        // Parts and joins are numbered in order, so a cut that comes or goes (an undo, say) moves the numbers: the one selected may be another now.
+        var cuts = CutEdits.CutsOf(doc);
+        if (SelectedCut is { Target: not TimelineCutTarget.Seam } && (cuts.Parts.Length, cuts.Joins.Length) != cutCounts)
             SelectedCut = null;
+        cutCounts = (cuts.Parts.Length, cuts.Joins.Length);
         if (folded.RemoveWhere(key => MotionEdits.Find(doc, key) == null) > 0)
             layoutStamp++;
         if (selected.Count > 0)

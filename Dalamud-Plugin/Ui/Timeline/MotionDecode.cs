@@ -126,7 +126,7 @@ internal sealed class MotionDecode(TimelineSession session)
             return cached.Output;
         try
         {
-            var whole = (int)Math.Round(clip.Duration * TimelineDocument.Fps);
+            var whole = (int)TimelineDocument.Frames(clip.Duration);
             var output = MotionCutter.Apply(clip, doc.Cuts ?? MotionCuts.WholeOf(whole), doc.Length);
             outputMotion = (clip, doc.Cuts, doc.Length, output);
             return output;

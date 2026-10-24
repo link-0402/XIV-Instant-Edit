@@ -821,8 +821,20 @@ def check_ui_icons() -> None:
     require(not unknown, f"every sidebar icon exists in Blender {bpy.app.version_string} (unknown: {unknown})")
 
 
+def check_lod_offsets() -> None:
+    with temporary_scene_data(), tempfile.TemporaryDirectory(prefix="xiv-ie-lods-") as folder:
+        armature = rig()
+        parts = [part(f"0.0 Lod Part{suffix}", armature) for suffix in ("", " LOD1", " LOD2")]
+        bpy.context.scene.xiv_ie_settings.use_lods = True
+        model, _streams, _path = export(parts, folder, "lods")
+        offsets = [(model.lods[i].vertex_data_offset, model.header.vert_offset[i]) for i in range(model.header.lod_count)]
+        require(model.header.lod_count == 3 and offsets[2][1] > 0 and all(lod == header for lod, header in offsets),
+                f"every LOD's own vertex offset matches the file header's ({offsets})")
+
+
 def run() -> None:
     with addon_session(PACKAGE):
+        check_lod_offsets()
         check_vertex_data_tools()
         check_remove_hidden_vertices()
         check_export_requirements()

@@ -32,13 +32,15 @@ internal static class DuplicateFiles
             .ToList();
 
         var files = new List<(string RelPath, string Path, long Size)>();
+        // "tex/a.tex" and "tex/./a.tex" are one file, not two copies.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var relPath in usable)
         {
             try
             {
                 var path = ModPaths.Resolve(folder, relPath);
                 var info = new FileInfo(path);
-                if (info.Exists && info.Length > 0)
+                if (info.Exists && info.Length > 0 && seen.Add(path))
                     files.Add((relPath, path, info.Length));
             }
             catch (ArgumentException) { }
@@ -155,11 +157,20 @@ internal static class DuplicateFiles
                 return new CleanUpResult(0, 0, new[] { "Penumbra didn't take the new mappings, so meta.json was put back." }, 0, 0);
             }
 
-            int pending = 0;
+            // Checked again after the rewiring: a copy some mapping still points at (one the rewiring
+            // missed) stays, as does everything when meta.json can't be read.
+            var used = UsedPaths(folder);
+            int pending = 0, kept = 0;
             long freed = 0;
             foreach (var other in replacement.Keys)
             {
                 var path = ModPaths.Resolve(folder, other);
+                if (used is null || used.Contains(path))
+                {
+                    operation.Forget(other);
+                    kept++;
+                    continue;
+                }
                 var size = File.Exists(path) ? new FileInfo(path).Length : 0;
                 if (await FileRetry.DeleteAsync(path, CancellationToken.None).ConfigureAwait(false))
                 {
@@ -171,13 +182,27 @@ internal static class DuplicateFiles
                 pending++;
             }
             FileRetry.DeleteEmptyDirectories(folder);
-            return new CleanUpResult(replacement.Count, 0, Array.Empty<string>(), pending, freed);
+            return new CleanUpResult(replacement.Count - kept, 0, Array.Empty<string>(), pending, freed);
         }
         finally
         {
             if (keep)
                 operation.Commit();
         }
+    }
+
+    /// <summary>The files on disk the mod's meta.json points at, or null when it can't be read.</summary>
+    private static HashSet<string>? UsedPaths(string folder)
+    {
+        if (PendingCleanup.ReferencedBy(folder) is not { } used)
+            return null;
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var relPath in used)
+        {
+            try { paths.Add(ModPaths.Resolve(folder, relPath)); }
+            catch (ArgumentException) { }
+        }
+        return paths;
     }
 
     private static bool SameBytes(string first, string second)

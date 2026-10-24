@@ -597,8 +597,11 @@ internal sealed class StashView
         ImGui.PushID(id ?? target);
 
         float thumb = ImGui.GetFrameHeight() * 1.6f;
-        if (preview != null && exists)
+        // Only rows on screen load a thumbnail: a folder of thousands would otherwise load them all, every frame.
+        if (preview != null && exists && ImGui.IsRectVisible(new Vector2(thumb)))
             _thumbnails.Draw(new TextureSlot { SourcePath = preview, UseVariants = previewIsFolder }, thumb);
+        else if (preview != null && exists)
+            ImGui.Dummy(new Vector2(thumb));
         else
             Gui.Icon(icon, warn ? Theme.Warn : Theme.Muted);
         ImGui.SameLine();

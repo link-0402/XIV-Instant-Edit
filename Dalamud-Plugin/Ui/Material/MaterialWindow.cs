@@ -685,13 +685,23 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private void Save(MaterialSession current, string modName)
     {
         previewDue = 0;
+        // Taken here, on the thread that edits the session; the worker only writes it.
+        MaterialSession.SaveJob job;
+        try { job = current.PrepareSave(); }
+        catch (Exception ex)
+        {
+            openAfterSave = false;
+            Say(FeedbackSeverity.Error, ex.Message);
+            return;
+        }
         PreviewApplyResult? result = null;
+        Action? finish = null;
         Run(async () =>
         {
             // The saved file is what the character loads next; the temporary preview of it comes down without a redraw of its own.
             await current.DiscardAsync(preview, redraw: false).ConfigureAwait(false);
             await ModWrites.WaitAsync(life.Token).ConfigureAwait(false);
-            try { result = await current.SaveAsync(previewMods, modName).ConfigureAwait(false); }
+            try { (result, finish) = await current.SaveAsync(job, previewMods, modName).ConfigureAwait(false); }
             catch
             {
                 previewAfterFailure = true;
@@ -701,6 +711,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             return result.Warnings.Count == 0 ? null : string.Join(" ", result.Warnings);
         }, warning =>
         {
+            finish?.Invoke();
             previews.Invalidate(current.Source.ActualPath);
             ForgetModels();
             loadedDoc = current.History.Saved;

@@ -1,5 +1,6 @@
 using InstantEdit.Studio;
 using InstantEdit.Studio.Models.Project;
+using InstantEdit.Studio.Services.Check;
 using InstantEdit.Studio.Services.CleanUp;
 using InstantEdit.Studio.Services.Project;
 using Newtonsoft.Json.Linq;
@@ -16,6 +17,38 @@ internal static partial class ModCleanUpScenarios
         RestoringAfterRemovalBringsTheCopiesBack(testRoot);
         RestoreAfterAPendingDeleteBringsTheFileBack(testRoot);
         AFailedReloadAfterDeduplicatingStillLeavesABackup(testRoot);
+        OneFileUnderTwoSpellingsIsNoDuplicate();
+        ALowerCaseCombiningGroupIsRewiredBeforeItsCopyGoes(testRoot);
+    }
+
+    private static void OneFileUnderTwoSpellingsIsNoDuplicate()
+    {
+        using var mod = DuplicateMod(new JObject { ["chara/a.bin"] = "files/a.bin", ["chara/b.bin"] = "files/./a.bin" }, ("files/a.bin", "same"));
+        Require(DuplicateFiles.Scan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>(), CancellationToken.None).Count == 0,
+            "one file reached by two spellings is not two copies, so it is never offered for deletion");
+    }
+
+    private static void ALowerCaseCombiningGroupIsRewiredBeforeItsCopyGoes(string testRoot)
+    {
+        using var mod = new TestModFolder();
+        mod.File("files/a.bin", System.Text.Encoding.UTF8.GetBytes("same"));
+        mod.File("files/b.bin", System.Text.Encoding.UTF8.GetBytes("same"));
+        mod.Meta(new JObject
+        {
+            ["FileVersion"] = 4, ["Name"] = "Duplicates",
+            ["DefaultData"] = new JObject { ["Files"] = new JObject { ["chara/a.bin"] = "files/a.bin" } },
+            ["Groups"] = new JArray(new JObject
+            {
+                ["Name"] = "Both", ["Type"] = "combining", ["Options"] = new JArray(new JObject { ["Name"] = "x" }),
+                ["Containers"] = new JArray(new JObject { ["Files"] = new JObject() },
+                    new JObject { ["Files"] = new JObject { ["chara/b.bin"] = "files/b.bin" } }),
+            }),
+        }.ToString());
+
+        var result = Deduplicate(mod, DuplicateFiles.Scan(PenumbraModMeta.Load(mod.Path), mod.Path, new HashSet<string>(), CancellationToken.None), testRoot);
+        var mappings = CheckModel.Build(PenumbraModMeta.Load(mod.Path), mod.Path).Mappings;
+        Require(result.Changed == 1 && mappings.Count == 2 && mappings.All(m => mod.Exists(m.RelPath)),
+            "a container of a group typed in lower case is pointed at the kept copy, so no mapping is left pointing at a deleted file");
     }
 
     private static TestModFolder DuplicateMod(JObject files, params (string Rel, string Text)[] contents)

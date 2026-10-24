@@ -327,6 +327,14 @@ internal static class CutEditsFixture
               !editor.SetEase(30), "a clip that doesn't loop takes no seam");
         editor.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 0));
         check(editor.Key(TimelineKey.Delete) && editor.Document.Length == 40 && editor.Undo() && editor.Document.Length == 70, "Delete removes a part; undo brings it back");
+        var undoing = new TimelineEditor(Doc(100)) { Loops = false };
+        undoing.Playhead = 60;
+        undoing.Key(TimelineKey.Cut);
+        undoing.Playhead = 30;
+        undoing.Key(TimelineKey.Cut);
+        undoing.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 1));
+        check(undoing.Undo() && undoing.Document.Cuts!.Parts.Length == 2 && undoing.SelectedCut == null,
+            "undoing a cut drops the selected part, whose number now belongs to another part");
         // Q at 50, on the part playing 30 to 70, removes 30 to 50: the events starting at 30 and 45, and the key at 40.
         editor.Playhead = 50;
         check(editor.Key(TimelineKey.RemoveBefore) && editor.Document.Length == 50 && editor.LastRemoval == new CutRemoval(2, 1),

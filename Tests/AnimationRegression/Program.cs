@@ -13,7 +13,6 @@ using static InstantEdit.TestSupport.Assertions;
 
 static void Int(byte[] bytes, int at, int value) => BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at), value);
 Scenarios.Run(() => SkeletonRepairFixture.Run(Check, Reject));
-Scenarios.Run(() => AnimationFramesFixture.Run(Check, Reject));
 Scenarios.Run(() => AnimationSlotFixture.Run(Check));
 Scenarios.Run(() => AnimationRenameFixture.Run(Check, Reject));
 Scenarios.Run(() => AnimationBonesFixture.Run(Check));

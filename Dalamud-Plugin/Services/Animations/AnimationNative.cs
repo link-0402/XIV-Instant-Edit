@@ -403,6 +403,11 @@ internal unsafe sealed class AnimationNative
             if (value->NumFrames is < 1 or > 216001 || value->NumBlocks is < 1 or > 216001 ||
                 value->Data.Length is < 1 or > AnimationPap.MaxFileSize || !float.IsFinite(value->FrameDuration) || value->FrameDuration < 0)
                 throw new InvalidDataException("Invalid spline frame/block data.");
+            // Havok reads every block at these offsets into Data without checking them.
+            if (value->BlockOffsets.Length < value->NumBlocks || a->NumberOfFloatTracks > 0 && value->FloatBlockOffsets.Length < value->NumBlocks)
+                throw new InvalidDataException("Spline block offsets are missing.");
+            ValidateBounds(value->BlockOffsets, value->Data.Length);
+            ValidateBounds(value->FloatBlockOffsets, value->Data.Length);
         }
         else if (a->Type == hkaAnimation.AnimationType.PredictiveCompressedAnimation)
         {
@@ -433,6 +438,12 @@ internal unsafe sealed class AnimationNative
                 throw new InvalidDataException("Invalid quantized frame or channel data.");
         }
         else throw new InvalidDataException($"Unsupported animation encoding: {a->Type}.");
+    }
+
+    private static void ValidateBounds(hkArray<uint> offsets, int length)
+    {
+        for (var i = 0; i < offsets.Length; i++)
+            if (offsets[i] > (uint)length) throw new InvalidDataException("Invalid spline data offsets.");
     }
 
     private static void ValidateOffsets(ReadOnlySpan<int> offsets, int length)

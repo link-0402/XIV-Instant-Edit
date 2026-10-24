@@ -358,12 +358,13 @@ internal sealed class PenumbraModMeta
         return names.Count > 0 ? string.Join(" + ", names) : $"Combination {index}";
     }
 
-    private static ModGroupType ParseType(string? type) => type switch
+    // Without case, as CheckModel reads it.
+    private static ModGroupType ParseType(string? type) => type?.ToLowerInvariant() switch
     {
-        "Single"    => ModGroupType.Single,
-        "Multi"     => ModGroupType.Multi,
-        "Imc"       => ModGroupType.Imc,
-        "Combining" => ModGroupType.Combining,
+        "single"    => ModGroupType.Single,
+        "multi"     => ModGroupType.Multi,
+        "imc"       => ModGroupType.Imc,
+        "combining" => ModGroupType.Combining,
         _           => ModGroupType.Unknown,
     };
 

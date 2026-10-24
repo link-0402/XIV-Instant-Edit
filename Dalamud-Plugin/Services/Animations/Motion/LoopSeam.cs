@@ -105,7 +105,7 @@ internal static class LoopSeam
     }
 
     /// <summary>The clip's length in whole timeline frames.</summary>
-    internal static int Frames(MotionClip clip) => Math.Max(1, (int)Math.Round(clip.Duration * TimelineDocument.Fps));
+    internal static int Frames(MotionClip clip) => Math.Max(1, (int)TimelineDocument.Frames(clip.Duration));
 
     /// <summary>The bones measured: the clip's own tracks, or every bone when it has none recorded.</summary>
     internal static int[] Tracked(MotionClip clip) =>

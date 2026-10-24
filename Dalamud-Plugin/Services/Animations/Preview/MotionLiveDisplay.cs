@@ -231,7 +231,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     }
 
     /// <summary>The clip's own length in timeline frames.</summary>
-    private static int Frames(MotionClip clip) => (int)Math.Round(clip.Duration * TimelineDocument.Fps);
+    private static int Frames(MotionClip clip) => (int)TimelineDocument.Frames(clip.Duration);
 
     /// <summary>Puts every swapped control back; the clip plays its own motion again.</summary>
     public void Stop()

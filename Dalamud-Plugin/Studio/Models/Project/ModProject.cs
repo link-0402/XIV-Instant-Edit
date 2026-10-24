@@ -329,16 +329,22 @@ internal sealed class ModProject
     /// </summary>
     public void Flush()
     {
+        // meta.json failing (read-only, locked) must not keep the set-ups from being saved: its error comes after.
+        Exception? metaError = null;
         if (MetaDirty)
         {
             lock (ModFiles.Gate)
             {
-                RefreshFromDisk();
-                Meta.Save(FolderPath, backupFirst: !CreatedHere);
-                _pendingFields.Clear();
-                MetaDirty    = false;
-                _metaWritten = true;
-                _metaStamp   = MetaStamp();
+                try
+                {
+                    RefreshFromDisk();
+                    Meta.Save(FolderPath, backupFirst: !CreatedHere);
+                    _pendingFields.Clear();
+                    MetaDirty    = false;
+                    _metaWritten = true;
+                    _metaStamp   = MetaStamp();
+                }
+                catch (Exception ex) { metaError = ex; }
             }
         }
 
@@ -351,6 +357,9 @@ internal sealed class ModProject
             SidecarOnDisk = true;
             _ledgerDirty  = false;
         }
+
+        if (metaError != null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(metaError);
     }
 
     /// <summary>True once after meta.json was written, so Penumbra can be told to reload the mod.</summary>
