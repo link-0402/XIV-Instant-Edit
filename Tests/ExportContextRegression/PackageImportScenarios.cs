@@ -37,6 +37,7 @@ internal static class PackageImportScenarios
         ManifestRoundTrips(root);
         LegacyFolderIsScanned(root);
         ReExtractReplacesManifest(root);
+        PackagesExtractedTogetherShareAFolder(root);
 
         StashApplyMapsPurposes(root);
         ExtractionsAreListedNewestFirst(root);
@@ -495,6 +496,38 @@ internal static class PackageImportScenarios
         var third = UnityPackageReader.Extract(second, output, _ => { }, CancellationToken.None);
         Require(third.RootFolder == Path.Combine(output, "again_2") && File.Exists(Path.Combine(output, "again", "mine.txt")),
             "a folder holding someone else's files is left alone and a numbered folder is used");
+    }
+
+    private static void PackagesExtractedTogetherShareAFolder(string root)
+    {
+        // The model and its material in one package, the textures the material names in another.
+        var modelPackage = Path.Combine(root, "outfit.unitypackage");
+        WriteUnityPackage(modelPackage,
+            (GuidModel, "Assets/A/FBX/m.fbx", new byte[] { 9, 9, 9 }, null),
+            (GuidMat, "Assets/A/M/skin.mat", System.Text.Encoding.UTF8.GetBytes(MaterialText("Skin", GuidTex, GuidNormal)), null));
+        var texturePackage = Path.Combine(root, "outfit-textures.unitypackage");
+        WriteUnityPackage(texturePackage,
+            (GuidTex, "Assets/A/Tex/body_d.png", PngBytes, TextureMeta(GuidTex, 0)),
+            (GuidNormal, "Assets/A/Tex/body_n.png", PngBytes, TextureMeta(GuidNormal, 1)),
+            ("66666666666666666666666666666666", "Assets/A/FBX/m.fbx", new byte[] { 1 }, null));
+        var output = Path.Combine(root, "together-out");
+        List<UnityScanResult> Scans() => new[] { modelPackage, texturePackage }.Select(p => UnityPackageReader.Scan(p, _ => { }, CancellationToken.None)).ToList();
+
+        var result = UnityPackageReader.Extract(Scans(), output, _ => { }, CancellationToken.None);
+        Require(result.RootFolder == Path.Combine(output, "outfit"), "packages extracted together go into one folder, named after the first");
+        Require(File.Exists(Path.Combine(result.RootFolder, "A", "Tex", "body_d.png")) && File.ReadAllBytes(Path.Combine(result.RootFolder, "A", "FBX", "m.fbx")).SequenceEqual(new byte[] { 9, 9, 9 }),
+            "both packages' files are written, and where two write the same path the first package's file is kept");
+        Require(result.Skipped == 1, $"the file left out for it is counted (got {result.Skipped})");
+        var manifest = StashManifest.Read(result.RootFolder);
+        Require(manifest != null && manifest.Sources.Count == 2 && manifest.Materials.SingleOrDefault() is { Name: "Skin" } skin
+                && skin.Textures.GetValueOrDefault(TexturePurpose.Diffuse) == "A/Tex/body_d.png" && skin.Textures.GetValueOrDefault(TexturePurpose.Normal) == "A/Tex/body_n.png",
+            "a material in one package is matched with its textures from the other");
+
+        var again = UnityPackageReader.Extract(Scans(), output, _ => { }, CancellationToken.None);
+        Require(again.RootFolder == result.RootFolder, "extracting the same packages together again reuses their folder");
+        var alone = UnityPackageReader.Extract(UnityPackageReader.Scan(modelPackage, _ => { }, CancellationToken.None), output, _ => { }, CancellationToken.None);
+        Require(alone.RootFolder == Path.Combine(output, "outfit_2") && File.Exists(Path.Combine(result.RootFolder, "A", "Tex", "body_d.png")),
+            "one of them extracted alone leaves the shared folder be and uses a numbered one");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

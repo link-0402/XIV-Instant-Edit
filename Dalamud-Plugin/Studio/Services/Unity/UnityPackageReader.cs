@@ -120,14 +120,21 @@ internal static class UnityPackageReader
     /// earlier extraction of the package it would have replaced is kept (see <see cref="Stash.ExtractionFolder"/>).
     /// </summary>
     public static UnityExtraction Extract(UnityScanResult scan, string outputDir, Action<string> progress, CancellationToken ct)
+        => Extract(new[] { scan }, outputDir, progress, ct);
+
+    /// <summary>
+    /// Several packages extracted together, into one folder named after the first, so a material in
+    /// one finds its textures in another. Where two packages write the same path, the first one's file is kept.
+    /// </summary>
+    public static UnityExtraction Extract(IReadOnlyList<UnityScanResult> scans, string outputDir, Action<string> progress, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        var source = Path.GetFullPath(scan.PackagePath);
-        var claim = Stash.ExtractionFolder.Claim(outputDir, PathNormalizer.SafeSegment(scan.PackageName), folder => IsOwnRun(folder, source));
+        var sources = scans.Select(s => Path.GetFullPath(s.PackagePath)).ToList();
+        var claim = Stash.ExtractionFolder.Claim(outputDir, PathNormalizer.SafeSegment(scans[0].PackageName), folder => IsOwnRun(folder, sources));
         bool finished = false;
         try
         {
-            var extraction = Write(scan, claim.Path, progress, ct);
+            var extraction = Write(scans, claim.Path, progress, ct);
             finished = true;
             return extraction;
         }
@@ -138,53 +145,69 @@ internal static class UnityPackageReader
         }
     }
 
-    private static UnityExtraction Write(UnityScanResult scan, string root, Action<string> progress, CancellationToken ct)
+    private static UnityExtraction Write(IReadOnlyList<UnityScanResult> scans, string root, Action<string> progress, CancellationToken ct)
     {
         var result = new UnityExtraction { RootFolder = root };
         var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
-        var targets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var asset in scan.Assets.Where(a => a.Selected && a.Extractable))
-        {
-            var relative = SafeRelative(asset.PackagePath);
-            var target = relative == null ? null : Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
-            if (target == null || !target.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
-            {
-                result.Refused.Add(asset.PackagePath);
-                continue;
-            }
-            targets[asset.Guid] = target;
-        }
-
         var report = new StringBuilder();
-        report.AppendLine($"Extracted from {scan.PackagePath} on {DateTime.Now:yyyy-MM-dd HH:mm}");
-        int done = 0;
+
+        // Per package, GUID → file; a GUID or path an earlier package already writes is left to that one.
+        var targets = scans.Select(_ => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)).ToList();
+        var guids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < scans.Count; i++)
+            foreach (var asset in scans[i].Assets.Where(a => a.Selected && a.Extractable))
+            {
+                var relative = SafeRelative(asset.PackagePath);
+                var target = relative == null ? null : Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+                if (target == null || !target.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Refused.Add(asset.PackagePath);
+                    continue;
+                }
+                if (!guids.Add(asset.Guid))
+                    continue;
+                if (!paths.Add(target))
+                {
+                    result.Skipped++;
+                    report.AppendLine($"skipped  {asset.PackagePath} from {scans[i].PackageName}: an earlier package writes that path");
+                    continue;
+                }
+                targets[i][asset.Guid] = target;
+            }
+
+        report.Insert(0, $"Extracted from {string.Join(", ", scans.Select(s => s.PackagePath))} on {DateTime.Now:yyyy-MM-dd HH:mm}{Environment.NewLine}");
+        int done = 0, total = targets.Sum(t => t.Count);
         try
         {
             Directory.CreateDirectory(root);
-            ForEachEntry(scan.PackagePath, ct, (guid, file, entry) =>
+            for (int i = 0; i < scans.Count; i++)
             {
-                if (file != "asset" || !targets.TryGetValue(guid, out var target) || entry.DataStream == null)
-                    return;
-                progress($"Writing {Path.GetFileName(target)} ({++done} of {targets.Count})");
-                try
+                var wanted = targets[i];
+                ForEachEntry(scans[i].PackagePath, ct, (guid, file, entry) =>
                 {
-                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    // Listed before it is written, so even a half-written file is known to be ours.
-                    result.FileByGuid[guid] = target;
-                    using (var output = File.Create(target))
-                        entry.DataStream.CopyTo(output);
-                    result.WrittenFiles.Add(target);
-                    report.AppendLine($"written  {target}");
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    result.Failed++;
-                    report.AppendLine($"FAILED   {target}: {ex.Message}");
-                    try { File.Delete(target); result.FileByGuid.Remove(guid); }
-                    catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { /* stays listed, so the next run removes it */ }
-                }
-            });
+                    if (file != "asset" || !wanted.TryGetValue(guid, out var target) || entry.DataStream == null)
+                        return;
+                    progress($"Writing {Path.GetFileName(target)} ({++done} of {total})");
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                        // Listed before it is written, so even a half-written file is known to be ours.
+                        result.FileByGuid[guid] = target;
+                        using (var output = File.Create(target))
+                            entry.DataStream.CopyTo(output);
+                        result.WrittenFiles.Add(target);
+                        report.AppendLine($"written  {target}");
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        result.Failed++;
+                        report.AppendLine($"FAILED   {target}: {ex.Message}");
+                        try { File.Delete(target); result.FileByGuid.Remove(guid); }
+                        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { /* stays listed, so the next run removes it */ }
+                    }
+                });
+            }
         }
         finally
         {
@@ -195,7 +218,7 @@ internal static class UnityPackageReader
             try
             {
                 File.WriteAllText(Path.Combine(root, "extract-report.txt"), report.ToString());
-                Stash.StashManifest.ForUnity(scan, result).Write(root);
+                Stash.StashManifest.ForUnity(scans, result).Write(root);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -206,16 +229,16 @@ internal static class UnityPackageReader
     }
 
     /// <summary>
-    /// Whether <paramref name="folder"/> holds nothing but an earlier extraction of <paramref name="source"/>:
-    /// its stash.json names that package and lists every file there. Files someone else put there
-    /// make it another's folder, which is never touched.
+    /// Whether <paramref name="folder"/> holds nothing but an earlier extraction of <paramref name="sources"/>:
+    /// its stash.json names those packages, no more and no fewer, and lists every file there. Files
+    /// someone else put there make it another's folder, which is never touched.
     /// </summary>
-    private static bool IsOwnRun(string folder, string source)
+    private static bool IsOwnRun(string folder, IReadOnlyList<string> sources)
     {
         try
         {
             var manifest = Stash.StashManifest.Read(folder);
-            if (manifest == null || !string.Equals(manifest.Source, source, StringComparison.OrdinalIgnoreCase))
+            if (manifest == null || !manifest.AllSources.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(sources))
                 return false;
             var prefix = Path.TrimEndingDirectorySeparator(folder) + Path.DirectorySeparatorChar;
             var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

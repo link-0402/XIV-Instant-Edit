@@ -24,7 +24,8 @@ namespace InstantEdit.Studio.Windows;
 ///
 /// A scan lists what the package holds; the user unticks what they don't want and extracts the
 /// rest into a folder of its own under the output folder (the cache's package-imports by
-/// default). A Sims package comes out in the layout the material editor consumes (a folder of
+/// default). Several packages of one kind can be listed together; they then share that folder, so a
+/// model and textures shipped apart can be matched. A Sims package comes out in the layout the material editor consumes (a folder of
 /// diffuse swatches, single files for the other roles); a Unity package keeps its project layout.
 /// Either way the window then shows the stash: every extraction, its files by kind and purpose,
 /// each one draggable onto a texture or model tile of the build window or a mod window.
@@ -45,17 +46,25 @@ public sealed class PackageImportWindow : Window, IDisposable
     /// <summary>Whether the stash is shown rather than the import steps.</summary>
     private bool _showStash;
 
+    // Several packages of one kind can be listed at once and are extracted together, into one folder:
+    // _scans/_unityScans hold each package's scan, _scan/_unityScan all of them as one list for the table.
+
     // ── Sims ─────────────────────────────────────────────────────────────────
+    private readonly List<SimsScanResult> _scans = new();
     private SimsScanResult? _scan;
     private SimsPackageInspector.ExtractionResult? _extraction;
 
-    private Task<SimsScanResult>? _scanTask;
+    private Task<List<SimsScanResult>>? _scanTask;
     private Task<SimsPackageInspector.ExtractionResult>? _extractTask;
 
     // ── Unity ────────────────────────────────────────────────────────────────
+    private readonly List<UnityScanResult> _unityScans = new();
     private UnityScanResult? _unityScan;
-    private Task<UnityScanResult>? _unityScanTask;
+    private Task<List<UnityScanResult>>? _unityScanTask;
     private Task<UnityExtraction>? _unityExtractTask;
+
+    /// <summary>The package file each listed asset came from, when more than one package is listed.</summary>
+    private readonly Dictionary<object, string> _packageOf = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>Stops the scan or extraction under way: the Stop button, closing the window, or the plugin going away.</summary>
     private CancellationTokenSource? _cts;
@@ -158,13 +167,14 @@ public sealed class PackageImportWindow : Window, IDisposable
     private FileDropRule? _packageDropRule;
 
     /// <summary>
-    /// What the package field, the list below it and the stash's import button take from a drag: one
-    /// package, which is scanned at once, or folders, which open in the stash.
+    /// What the package field, the list below it and the stash's import button take from a drag:
+    /// packages of one kind, which are scanned at once and extracted together, or folders, which open in the stash.
     /// </summary>
     private FileDropRule PackageDrop => _packageDropRule ??= new FileDropRule(
-        p => p.Files.Count == 1 && p.Folders.Count == 0 && IsPackage(p.Files[0]) ? null
+        p => p.Files.Count > 0 && p.Folders.Count == 0 && p.Files.All(IsPackage)
+               ? (p.Files.All(IsUnity) || !p.Files.Any(IsUnity) ? null : "Drop packages of one kind: all Sims packages or all Unity packages.")
            : p.Folders.Count > 0 && p.Files.Count == 0 ? null
-           : "Drop one .package or .unitypackage file, or folders to open in the stash.",
+           : "Drop .package or .unitypackage files, or folders to open in the stash.",
         dropped =>
         {
             if (dropped.Folders.Count > 0)
@@ -175,8 +185,7 @@ public sealed class PackageImportWindow : Window, IDisposable
             }
             else
             {
-                _packagePath = dropped.Files[0];
-                StartScan();
+                StartScan(dropped.Files, add: false);
             }
         });
 
@@ -274,18 +283,21 @@ public sealed class PackageImportWindow : Window, IDisposable
     private string _extractNoteFolder = string.Empty;
 
     /// <summary>Notes what an extraction did, for the stash bar.</summary>
-    private void NoteExtraction(string folder, int written, int failed, int refused)
+    private void NoteExtraction(string folder, int written, int failed, int refused, int skipped = 0)
     {
         _extractNoteFolder = folder;
-        _extractNoteIsProblem = failed + refused > 0;
+        _extractNoteIsProblem = failed + refused + skipped > 0;
         _extractNote = refused > 0
             ? $"{written} file(s) written, {failed} failed, {refused} refused: their paths lead outside the output folder."
             : $"{written} file(s) written, {failed} failed.";
+        if (skipped > 0)
+            _extractNote += $" {skipped} left out: an earlier package writes the same path.";
     }
 
     private void DrawSource(bool busy)
     {
-        Gui.SectionHeader("1  Package", "Pick a Sims 4 .package or a Unity .unitypackage and scan it. Nothing is written until you extract.");
+        Gui.SectionHeader("1  Package", "Pick a Sims 4 .package or a Unity .unitypackage and scan it. Nothing is written until you extract. " +
+            "Packages dropped together, or added to the list, are extracted into one folder.");
 
         using (Gui.Disabled(busy))
         {
@@ -302,6 +314,13 @@ public sealed class PackageImportWindow : Window, IDisposable
             if (Gui.PrimaryButton(FontAwesomeIcon.Search, "Scan", scanW, "Reads the package and lists what it holds."))
                 StartScan();
 
+            int listed = _scans.Count + _unityScans.Count;
+            if (listed > 1)
+            {
+                Gui.Hint($"{listed} packages listed, extracted together into one folder named after the first");
+                Gui.Tooltip(string.Join("\n", _scans.Select(s => s.PackagePath).Concat(_unityScans.Select(s => s.PackagePath))));
+            }
+
             Gui.Label("Output", "A subfolder named after the package is created here.");
             Gui.PathPicker("PackageOutput", ref _outputDir, "folder the extracted files go into", PathKind.Folder, "",
                 picked => { _outputDir = picked; SaveSettings(); },
@@ -316,7 +335,26 @@ public sealed class PackageImportWindow : Window, IDisposable
             if (Gui.IconTextButton(FontAwesomeIcon.FolderPlus, "Open a folder",
                     "Show a folder of loose files in the stash, such as a VRChat avatar's textures, models and materials. Nothing is written into it."))
                 _stash.BrowseFolder(() => _showStash = true);
+
+            if (_scan != null || _unityScan != null)
+            {
+                ImGui.SameLine();
+                if (Gui.IconTextButton(FontAwesomeIcon.Plus, "Add packages",
+                        "Scan more packages of the same kind into this list. They are extracted together into one folder, so a model and its textures shipped in separate packages end up side by side."))
+                    BrowseMorePackages();
+            }
         }
+    }
+
+    private void BrowseMorePackages()
+    {
+        var filter = _unityScan != null ? "Unity packages{.unitypackage}" : "Sims packages{.package}";
+        var start = Path.GetDirectoryName(_packagePath) is { } dir && Directory.Exists(dir) ? dir : string.Empty;
+        Gui.Dialogs.OpenFileDialog("Add packages", filter, (ok, picked) =>
+        {
+            if (ok && picked.Count > 0 && !Busy)
+                StartScan(picked, add: true);
+        }, 64, start, false);
     }
 
     private void DrawStatus(bool busy)
@@ -456,7 +494,7 @@ public sealed class PackageImportWindow : Window, IDisposable
         ImGui.TextUnformatted(asset.Kind == SimsAssetKind.Mesh
             ? $"GEOM ({asset.LodLabel})"
             : SimsResourceType.Name(asset.Entry.Type));
-        Gui.Tooltip(asset.Entry.KeyString);
+        Gui.Tooltip(_packageOf.TryGetValue(asset, out var from) ? $"{asset.Entry.KeyString}\nFrom {from}" : asset.Entry.KeyString);
 
         // Role
         ImGui.TableNextColumn();
@@ -578,6 +616,8 @@ public sealed class PackageImportWindow : Window, IDisposable
 
         ImGui.TableNextColumn();
         ImGui.TextColored(asset.Extractable ? Theme.Muted : Theme.Faint, asset.PackagePath);
+        if (_packageOf.TryGetValue(asset, out var from))
+            Gui.Tooltip($"From {from}");
 
         ImGui.PopID();
     }
@@ -707,33 +747,115 @@ public sealed class PackageImportWindow : Window, IDisposable
         cfg.Save();
     }
 
-    private void StartScan()
+    private void StartScan() => StartScan(new[] { _packagePath }, add: false);
+
+    /// <summary>Scans <paramref name="paths"/>, one after the other; <paramref name="add"/> lists them below the packages already listed.</summary>
+    private void StartScan(IReadOnlyList<string> paths, bool add)
     {
-        if (string.IsNullOrWhiteSpace(_packagePath) || !File.Exists(_packagePath) || !IsPackage(_packagePath))
+        if (paths.Count == 0 || paths.Any(p => string.IsNullOrWhiteSpace(p) || !File.Exists(p) || !IsPackage(p)))
         {
             _errorMessage = "Pick a .package or .unitypackage file first.";
             return;
         }
+        bool unity = IsUnity(paths[0]);
+        if (paths.Any(p => IsUnity(p) != unity) || add && (_unityScan != null) != unity)
+        {
+            _errorMessage = "Packages extracted together must all be Sims packages or all Unity packages.";
+            return;
+        }
+        var listed = _scans.Select(s => s.PackagePath).Concat(_unityScans.Select(s => s.PackagePath)).Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var list = paths.Where(p => !add || !listed.Contains(Path.GetFullPath(p))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (list.Count == 0)
+        {
+            _status = "Those packages are listed already.";
+            return;
+        }
 
+        if (!add)
+        {
+            _packagePath = list[0];
+            _thumbnails.ForgetMemoryEntries();
+            _scans.Clear();
+            _unityScans.Clear();
+            ShowScans();
+            ClearPicks();
+        }
         SaveSettings();
 
-        _thumbnails.ForgetMemoryEntries();
-        _scan         = null;
-        _unityScan    = null;
         _extraction   = null;
-        ClearPicks();
         _errorMessage = string.Empty;
         _applyMessage = string.Empty;
         _status       = string.Empty;
         _progress     = "Opening package";
         _showStash    = false;
 
-        var path = _packagePath;
         var cancel = NewWork();
-        if (IsUnity(path))
-            _unityScanTask = Task.Run(() => UnityPackageReader.Scan(path, s => _progress = s, cancel), cancel);
+        if (unity)
+            _unityScanTask = Task.Run(() => ScanAll(list, UnityPackageReader.Scan, cancel), cancel);
         else
-            _scanTask = Task.Run(() => SimsPackageInspector.Scan(path, s => _progress = s, cancel), cancel);
+            _scanTask = Task.Run(() => ScanAll(list, SimsPackageInspector.Scan, cancel), cancel);
+    }
+
+    /// <summary>Scans each package in turn, on the worker; the progress line names the package when there are several.</summary>
+    private List<T> ScanAll<T>(List<string> paths, Func<string, Action<string>, CancellationToken, T> scan, CancellationToken cancel)
+    {
+        var scans = new List<T>();
+        for (int i = 0; i < paths.Count; i++)
+        {
+            var prefix = paths.Count > 1 ? $"{Path.GetFileName(paths[i])} ({i + 1} of {paths.Count}): " : string.Empty;
+            scans.Add(scan(paths[i], s => _progress = prefix + s, cancel));
+        }
+        return scans;
+    }
+
+    /// <summary>Lists every scanned package's assets as one table, the first package's first.</summary>
+    private void ShowScans()
+    {
+        _scan = _scans.Count switch
+        {
+            0 => null,
+            1 => _scans[0],
+            _ => new SimsScanResult
+            {
+                PackagePath    = _scans[0].PackagePath,
+                Assets         = _scans.SelectMany(s => s.Assets).ToList(),
+                Warnings       = _scans.SelectMany(s => s.Warnings).ToList(),
+                HasCasPartData = _scans.All(s => s.HasCasPartData),
+                IsHair         = _scans.Any(s => s.IsHair),
+                AvailableLods  = _scans.SelectMany(s => s.AvailableLods).Distinct().Order().ToList(),
+            },
+        };
+
+        _unityScan = null;
+        if (_unityScans.Count == 1)
+            _unityScan = _unityScans[0];
+        else if (_unityScans.Count > 1)
+        {
+            _unityScan = new UnityScanResult { PackagePath = _unityScans[0].PackagePath };
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var scan in _unityScans)
+            {
+                foreach (var asset in scan.Assets)
+                {
+                    if (seen.Add(asset.Guid))
+                        _unityScan.Assets.Add(asset);
+                    else
+                        asset.Selected = false;   // the same asset shipped again: the first package's row stands for it
+                }
+                _unityScan.Materials.AddRange(scan.Materials.Where(m => _unityScan.Materials.All(o => o.Guid != m.Guid)));
+                _unityScan.Prefabs.AddRange(scan.Prefabs.Where(p => _unityScan.Prefabs.All(o => o.Guid != p.Guid)));
+            }
+        }
+
+        _packageOf.Clear();
+        if (_scans.Count > 1)
+            foreach (var scan in _scans)
+                foreach (var asset in scan.Assets)
+                    _packageOf[asset] = Path.GetFileName(scan.PackagePath);
+        if (_unityScans.Count > 1)
+            foreach (var scan in _unityScans)
+                foreach (var asset in scan.Assets)
+                    _packageOf[asset] = Path.GetFileName(scan.PackagePath);
     }
 
     private void StartExtract()
@@ -754,14 +876,23 @@ public sealed class PackageImportWindow : Window, IDisposable
 
         var outputDir = _outputDir;
         var cancel = NewWork();
-        if (_unityScan is { } unity)
+        // Copies: a scan started after Stop must not change the lists under a run still winding down.
+        if (_unityScans.Count > 0)
         {
+            var unity = _unityScans.ToList();
             _unityExtractTask = Task.Run(() => UnityPackageReader.Extract(unity, outputDir, s => _progress = s, cancel), cancel);
         }
-        else if (_scan is { } scan)
+        else if (_scans.Count > 0)
         {
-            _extractTask = Task.Run(() => SimsPackageInspector.Extract(scan, outputDir, s => _progress = s, cancel), cancel);
+            var scans = _scans.ToList();
+            _extractTask = Task.Run(() => SimsPackageInspector.Extract(scans, outputDir, s => _progress = s, cancel), cancel);
         }
+    }
+
+    private string InPackages()
+    {
+        int listed = _scans.Count + _unityScans.Count;
+        return listed > 1 ? $" in {listed} packages" : string.Empty;
     }
 
     private static bool Stopped(Task task)
@@ -777,11 +908,12 @@ public sealed class PackageImportWindow : Window, IDisposable
                 _status = "Stopped.";
             else if (scanTask.IsCompletedSuccessfully)
             {
-                var scan = scanTask.Result;
-                _scan   = scan;
-                _status = $"Found {scan.Meshes.Count()} mesh(es) and {scan.Textures.Count()} texture(s).";
-                if (scan.Warnings.Count > 0)
-                    StudioServices.Log.Information("[Studio] Sims scan warnings for {0}:\n  {1}", scan.PackagePath, string.Join("\n  ", scan.Warnings));
+                _scans.AddRange(scanTask.Result);
+                ShowScans();
+                var scan = _scan!;
+                _status = $"Found {scan.Meshes.Count()} mesh(es) and {scan.Textures.Count()} texture(s){InPackages()}.";
+                foreach (var added in scanTask.Result.Where(s => s.Warnings.Count > 0))
+                    StudioServices.Log.Information("[Studio] Sims scan warnings for {0}:\n  {1}", added.PackagePath, string.Join("\n  ", added.Warnings));
             }
             else
             {
@@ -798,13 +930,14 @@ public sealed class PackageImportWindow : Window, IDisposable
                 _status = "Stopped.";
             else if (unityScanTask.IsCompletedSuccessfully)
             {
-                var scan = unityScanTask.Result;
-                _unityScan = scan;
+                _unityScans.AddRange(unityScanTask.Result);
+                ShowScans();
+                var scan = _unityScan!;
                 _unityTick = 0;
                 _status = $"Found {scan.Assets.Count(a => a.Kind == UnityAssetKind.Texture)} texture(s), " +
-                          $"{scan.Assets.Count(a => a.Kind == UnityAssetKind.Model)} model(s) and {scan.Materials.Count} material(s).";
-                if (scan.Warnings.Count > 0)
-                    StudioServices.Log.Information("[Studio] Unity scan warnings for {0}:\n  {1}", scan.PackagePath, string.Join("\n  ", scan.Warnings));
+                          $"{scan.Assets.Count(a => a.Kind == UnityAssetKind.Model)} model(s) and {scan.Materials.Count} material(s){InPackages()}.";
+                foreach (var added in unityScanTask.Result.Where(s => s.Warnings.Count > 0))
+                    StudioServices.Log.Information("[Studio] Unity scan warnings for {0}:\n  {1}", added.PackagePath, string.Join("\n  ", added.Warnings));
             }
             else
             {
@@ -848,7 +981,7 @@ public sealed class PackageImportWindow : Window, IDisposable
                 _status = $"Done: {result.WrittenFiles.Count} file(s) written, {result.Failed} failed, {result.Refused.Count} refused.";
                 StudioServices.Log.Information("[Studio] Unity extraction: {0} written, {1} failed, {2} refused, into {3}",
                     result.WrittenFiles.Count, result.Failed, result.Refused.Count, result.RootFolder);
-                NoteExtraction(result.RootFolder, result.WrittenFiles.Count, result.Failed, result.Refused.Count);
+                NoteExtraction(result.RootFolder, result.WrittenFiles.Count, result.Failed, result.Refused.Count, result.Skipped);
                 OpenStash(result.RootFolder);
             }
             else

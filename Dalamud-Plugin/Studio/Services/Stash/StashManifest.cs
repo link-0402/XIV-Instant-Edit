@@ -49,6 +49,13 @@ internal sealed class StashManifest
     public int Version { get; set; } = 1;
     public string Source { get; set; } = string.Empty;
 
+    /// <summary>Every package of an extraction made from several at once, <see cref="Source"/> first; empty for one package.</summary>
+    public List<string> Sources { get; set; } = new();
+
+    /// <summary>The packages this extraction came from: <see cref="Sources"/>, or just <see cref="Source"/>.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> AllSources => Sources.Count > 0 ? Sources : new[] { Source };
+
     /// <summary>"unity", "sims", or "folder" for one scanned without a manifest.</summary>
     public string SourceKind { get; set; } = string.Empty;
     public DateTime ExtractedUtc { get; set; }
@@ -274,15 +281,31 @@ internal sealed class StashManifest
         }
     }
 
-    /// <summary>A Unity extraction: textures by the material properties that use them, grouped under materials and prefabs.</summary>
-    public static StashManifest ForUnity(UnityScanResult scan, UnityExtraction extraction)
+    /// <summary>The <see cref="Sources"/> of an extraction from these packages: none for a single one.</summary>
+    public static List<string> SourcesOf(IReadOnlyList<string> packagePaths)
+        => packagePaths.Count > 1 ? packagePaths.Select(p => System.IO.Path.GetFullPath(p)).ToList() : new();
+
+    public static StashManifest ForUnity(UnityScanResult scan, UnityExtraction extraction) => ForUnity(new[] { scan }, extraction);
+
+    /// <summary>
+    /// A Unity extraction: textures by the material properties that use them, grouped under materials and
+    /// prefabs. Several packages are read as one, so a material in one can name a texture of another.
+    /// </summary>
+    public static StashManifest ForUnity(IReadOnlyList<UnityScanResult> scans, UnityExtraction extraction)
     {
         var root = extraction.RootFolder;
-        var manifest = new StashManifest { Source = System.IO.Path.GetFullPath(scan.PackagePath), SourceKind = "unity", ExtractedUtc = DateTime.UtcNow };
+        var manifest = new StashManifest
+        {
+            Source = System.IO.Path.GetFullPath(scans[0].PackagePath), Sources = SourcesOf(scans.Select(s => s.PackagePath).ToList()),
+            SourceKind = "unity", ExtractedUtc = DateTime.UtcNow,
+        };
+        // An asset or material shipped in two packages has the same GUID in both: the first package's is kept.
+        var materials = scans.SelectMany(s => s.Materials).DistinctBy(m => m.Guid, StringComparer.OrdinalIgnoreCase).ToList();
+        var prefabs = scans.SelectMany(s => s.Prefabs).DistinctBy(p => p.Guid, StringComparer.OrdinalIgnoreCase).ToList();
 
         // Texture GUID → (material, property purpose) for every material property that uses it.
         var uses = new Dictionary<string, List<(UnityMaterial Material, TexturePurpose? Purpose)>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var material in scan.Materials)
+        foreach (var material in materials)
             foreach (var (property, texture) in material.Textures)
             {
                 if (!uses.TryGetValue(texture, out var list))
@@ -290,7 +313,7 @@ internal sealed class StashManifest
                 list.Add((material, TexturePurposes.FromUnityProperty(property)));
             }
         var prefabsOf = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var prefab in scan.Prefabs)
+        foreach (var prefab in prefabs)
             foreach (var material in prefab.MaterialGuids)
             {
                 if (!prefabsOf.TryGetValue(material, out var names))
@@ -299,7 +322,7 @@ internal sealed class StashManifest
                     names.Add(prefab.Name);
             }
 
-        var assets = scan.Assets.ToDictionary(a => a.Guid, StringComparer.OrdinalIgnoreCase);
+        var assets = scans.SelectMany(s => s.Assets).DistinctBy(a => a.Guid, StringComparer.OrdinalIgnoreCase).ToDictionary(a => a.Guid, StringComparer.OrdinalIgnoreCase);
         var byName = TexturePurposes.FromFileNames(extraction.FileByGuid.Values.Where(f => KindOf(f) == StashKind.Texture).Select(f => Relative(root, f)));
         foreach (var (guid, file) in extraction.FileByGuid.OrderBy(p => p.Value, StringComparer.OrdinalIgnoreCase))
         {
@@ -319,7 +342,7 @@ internal sealed class StashManifest
             manifest.Entries.Add(entry);
         }
 
-        foreach (var material in scan.Materials)
+        foreach (var material in materials)
         {
             var listed = new StashMaterial { Name = material.Name };
             foreach (var (property, texture) in material.Textures)
@@ -331,11 +354,16 @@ internal sealed class StashManifest
         return manifest;
     }
 
-    /// <summary>A Sims extraction: textures by their CAS part's role, grouped under the CAS part.</summary>
-    public static StashManifest ForSims(string packagePath, SimsPackageInspector.ExtractionResult extraction)
+    public static StashManifest ForSims(string packagePath, SimsPackageInspector.ExtractionResult extraction) => ForSims(new[] { packagePath }, extraction);
+
+    /// <summary>A Sims extraction (of one package or several): textures by their CAS part's role, grouped under the CAS part.</summary>
+    public static StashManifest ForSims(IReadOnlyList<string> packagePaths, SimsPackageInspector.ExtractionResult extraction)
     {
         var root = extraction.RootFolder;
-        var manifest = new StashManifest { Source = System.IO.Path.GetFullPath(packagePath), SourceKind = "sims", ExtractedUtc = DateTime.UtcNow };
+        var manifest = new StashManifest
+        {
+            Source = System.IO.Path.GetFullPath(packagePaths[0]), Sources = SourcesOf(packagePaths), SourceKind = "sims", ExtractedUtc = DateTime.UtcNow,
+        };
         var textures = extraction.Textures.ToDictionary(t => System.IO.Path.GetFullPath(t.File), StringComparer.OrdinalIgnoreCase);
         var parts = new Dictionary<string, StashMaterial>(StringComparer.Ordinal);
 

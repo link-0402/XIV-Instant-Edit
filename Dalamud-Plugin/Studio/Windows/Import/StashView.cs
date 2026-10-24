@@ -362,8 +362,8 @@ internal sealed class StashView
         ImGui.AlignTextToFramePadding();
         Gui.Hint(manifest.SourceKind switch
         {
-            "unity" => "from a Unity package",
-            "sims"  => "from a Sims 4 package",
+            "unity" => manifest.Sources.Count > 1 ? $"from {manifest.Sources.Count} Unity packages" : "from a Unity package",
+            "sims"  => manifest.Sources.Count > 1 ? $"from {manifest.Sources.Count} Sims 4 packages" : "from a Sims 4 package",
             _       => IsOpened(folder) ? "an opened folder; nothing is written into it" : "files in this folder",
         });
         Gui.AlignRight(ImGui.GetFrameHeight());

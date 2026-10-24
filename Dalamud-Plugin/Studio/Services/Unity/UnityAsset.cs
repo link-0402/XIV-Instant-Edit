@@ -84,6 +84,9 @@ internal sealed class UnityExtraction
 
     public int Failed { get; set; }
 
+    /// <summary>Files left out because an earlier package of the same extraction writes that path.</summary>
+    public int Skipped { get; set; }
+
     /// <summary>Package paths that would have landed outside the output folder, so were not written.</summary>
     public List<string> Refused { get; } = new();
 }

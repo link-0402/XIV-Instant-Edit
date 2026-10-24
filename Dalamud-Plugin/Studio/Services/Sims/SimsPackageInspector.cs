@@ -558,15 +558,23 @@ public static class SimsPackageInspector
     /// </summary>
     public static ExtractionResult Extract(SimsScanResult scan, string outputRoot,
         Action<string>? progress = null, CancellationToken cancel = default)
+        => Extract(new[] { scan }, outputRoot, progress, cancel);
+
+    /// <summary>
+    /// Several packages extracted together into one folder named after the first, laid out as for one:
+    /// a mesh package and the package of its swatches then come out side by side.
+    /// </summary>
+    public static ExtractionResult Extract(IReadOnlyList<SimsScanResult> scans, string outputRoot,
+        Action<string>? progress = null, CancellationToken cancel = default)
     {
         cancel.ThrowIfCancellationRequested();
-        var packageName = MakeSafeName(Path.GetFileNameWithoutExtension(scan.PackagePath), "sims_package");
-        var source = Path.GetFullPath(scan.PackagePath);
-        var claim = Stash.ExtractionFolder.Claim(outputRoot, packageName, folder => IsOwnRun(folder, source));
+        var packageName = SafePackageName(scans[0]);
+        var sources = scans.Select(s => Path.GetFullPath(s.PackagePath)).ToList();
+        var claim = Stash.ExtractionFolder.Claim(outputRoot, packageName, folder => IsOwnRun(folder, sources));
         bool finished = false;
         try
         {
-            var extraction = Write(scan, claim.Path, packageName, claim.Numbered, progress, cancel);
+            var extraction = Write(scans, claim.Path, packageName, claim.Numbered, progress, cancel);
             finished = true;
             return extraction;
         }
@@ -577,7 +585,9 @@ public static class SimsPackageInspector
         }
     }
 
-    private static ExtractionResult Write(SimsScanResult scan, string root, string packageName, bool newFolder,
+    private static string SafePackageName(SimsScanResult scan) => MakeSafeName(Path.GetFileNameWithoutExtension(scan.PackagePath), "sims_package");
+
+    private static ExtractionResult Write(IReadOnlyList<SimsScanResult> scans, string root, string packageName, bool newFolder,
         Action<string>? progress, CancellationToken cancel)
     {
         var result = new ExtractionResult
@@ -593,48 +603,55 @@ public static class SimsPackageInspector
             Directory.CreateDirectory(result.DiffuseFolder);
 
             var report = new StringBuilder();
-            report.AppendLine($"Source package: {scan.PackagePath}");
+            foreach (var scan in scans)
+                report.AppendLine($"Source package: {scan.PackagePath}");
             report.AppendLine($"Extracted:      {DateTime.Now:yyyy-MM-dd HH:mm}");
             if (newFolder)
                 report.AppendLine($"Folder:         {packageName} holds other files, so this run went into {Path.GetFileName(root)}.");
-            report.AppendLine();
 
-            using var package = new DbpfPackage(scan.PackagePath);
-
+            // One set of names for every package, so two packages' swatches never overwrite each other.
             var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int extracted = 0, failed = 0;
 
-            var meshes = new Dictionary<SimsAsset, SimsGeomMesh>();
-            var regions = HairRegions(package, scan, meshes, report, cancel);
-
-            foreach (var asset in scan.Assets.Where(a => a.Selected))
+            foreach (var scan in scans)
             {
-                // Stops between files; the manifest (finally, below) still lists what was written.
-                cancel.ThrowIfCancellationRequested();
-                UvRegion? region = regions.TryGetValue(asset.HairStyle, out var cut) ? cut : null;
-                try
+                report.AppendLine();
+                if (scans.Count > 1)
+                    report.AppendLine($"{Path.GetFileName(scan.PackagePath)}:");
+
+                using var package = new DbpfPackage(scan.PackagePath);
+                var meshes = new Dictionary<SimsAsset, SimsGeomMesh>();
+                var regions = HairRegions(package, scan, meshes, report, cancel);
+
+                foreach (var asset in scan.Assets.Where(a => a.Selected))
                 {
-                    if (asset.Kind == SimsAssetKind.Mesh)
-                        ExtractMesh(package, asset, result, packageName, usedNames, report, progress, meshes, region);
-                    else
-                        ExtractTexture(package, asset, result, root, usedNames, report, progress,
-                            asset.HairStyle != SimsAsset.NoHairStyle, region);
-                    extracted++;
-                }
-                catch (Exception ex)
-                {
-                    failed++;
-                    report.AppendLine($"  X failed:  {asset.Entry.KeyString} — {ex.Message}");
+                    // Stops between files; the manifest (finally, below) still lists what was written.
+                    cancel.ThrowIfCancellationRequested();
+                    UvRegion? region = regions.TryGetValue(asset.HairStyle, out var cut) ? cut : null;
+                    try
+                    {
+                        if (asset.Kind == SimsAssetKind.Mesh)
+                            ExtractMesh(package, asset, result, SafePackageName(scan), usedNames, report, progress, meshes, region);
+                        else
+                            ExtractTexture(package, asset, result, root, usedNames, report, progress,
+                                asset.HairStyle != SimsAsset.NoHairStyle, region);
+                        extracted++;
+                    }
+                    catch (Exception ex)
+                    {
+                        failed++;
+                        report.AppendLine($"  X failed:  {asset.Entry.KeyString} — {ex.Message}");
+                    }
                 }
             }
 
             result.Extracted = extracted;
             result.Failed    = failed;
 
-            if (scan.Warnings.Count > 0)
+            foreach (var scan in scans.Where(s => s.Warnings.Count > 0))
             {
                 report.AppendLine();
-                report.AppendLine("Warnings from the scan:");
+                report.AppendLine(scans.Count > 1 ? $"Warnings from the scan of {Path.GetFileName(scan.PackagePath)}:" : "Warnings from the scan:");
                 foreach (var warning in scan.Warnings)
                     report.AppendLine($"  - {warning}");
             }
@@ -649,13 +666,13 @@ public static class SimsPackageInspector
 
             // What the import window's stash lists; owned like the rest, so the next run replaces it.
             var stashPath = Path.Combine(root, Stash.StashManifest.FileName);
-            WriteOwned(result, stashPath, () => Stash.StashManifest.ForSims(scan.PackagePath, result).Write(root));
+            WriteOwned(result, stashPath, () => Stash.StashManifest.ForSims(scans.Select(s => s.PackagePath).ToList(), result).Write(root));
         }
         finally
         {
             // Written whatever happened, so the folder is known to be ours next time. (A run that
             // stops is removed whole by Extract.)
-            WriteManifest(root, scan.PackagePath, result.OwnedFiles);
+            WriteManifest(root, scans.Select(s => s.PackagePath), result.OwnedFiles);
         }
 
         return result;
@@ -671,10 +688,10 @@ public static class SimsPackageInspector
 
     /// <summary>
     /// Whether every file in <paramref name="folder"/> is one an earlier extraction of
-    /// <paramref name="source"/> listed in its manifest. False when the manifest names another
-    /// package or any other file is there.
+    /// <paramref name="sources"/> listed in its manifest. False when the manifest names other
+    /// packages (one more or one fewer included) or any other file is there.
     /// </summary>
-    private static bool IsOwnRun(string folder, string source)
+    private static bool IsOwnRun(string folder, IReadOnlyList<string> sources)
     {
         try
         {
@@ -685,9 +702,10 @@ public static class SimsPackageInspector
             if (File.Exists(manifestPath))
             {
                 var lines = File.ReadAllLines(manifestPath);
-                var from = lines.FirstOrDefault(l => l.StartsWith(ManifestSource, StringComparison.Ordinal));
-                if (from == null ||
-                    !string.Equals(Path.GetFullPath(from[ManifestSource.Length..]), source, StringComparison.OrdinalIgnoreCase))
+                var from = lines.Where(l => l.StartsWith(ManifestSource, StringComparison.Ordinal))
+                                .Select(l => Path.GetFullPath(l[ManifestSource.Length..]))
+                                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!from.SetEquals(sources))
                     return false;
 
                 foreach (var line in lines)
@@ -713,15 +731,12 @@ public static class SimsPackageInspector
         }
     }
 
-    private static void WriteManifest(string root, string packagePath, IEnumerable<string> files)
+    private static void WriteManifest(string root, IEnumerable<string> packagePaths, IEnumerable<string> files)
     {
         try
         {
-            var lines = new List<string>
-            {
-                "# Files Instant Edit wrote here. Extracting the same package again deletes these, and only these.",
-                ManifestSource + Path.GetFullPath(packagePath),
-            };
+            var lines = new List<string> { "# Files Instant Edit wrote here. Extracting the same package again deletes these, and only these." };
+            lines.AddRange(packagePaths.Select(p => ManifestSource + Path.GetFullPath(p)));
             lines.AddRange(files.Select(f => Path.GetRelativePath(root, f)));
             File.WriteAllLines(Path.Combine(root, ManifestName), lines);
         }
