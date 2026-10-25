@@ -48,9 +48,18 @@ internal static class FixLayerFixture
             fades.Record(3135, 3136, 20);
             fades.Record(3135, 3136, 0);
             fades.Record(1, 2, LoopFades.Most + 1);
+            fades.Saving.Wait();
             var again = new LoopFades(temp);
             check(again.Measured(4784, 4785) == 10 && again.Measured(3135, 3136) == 20 && again.Measured(4785, 4784) == null && again.Measured(1, 2) == null,
                 "measured fades are kept by startup and loop, out of range ones dropped");
+
+            // The watch records the row the game played; a capture's startup is the lowest row with that key.
+            Func<ushort, string?> keys = id => id switch { 7404 or 7410 => "emote/pose05_start", 7405 => "emote/pose05_loop", _ => null };
+            var keyed = new LoopFades(temp) { KeyOf = keys };
+            keyed.Record(7410, 7405, 12);
+            keyed.Saving.Wait();
+            check(keyed.Measured(7404, 7405) == 12 && new LoopFades(temp) { KeyOf = keys }.Measured(7404, 7405) == 12 && keyed.Measured(4784, 4785) == 10,
+                "a fade is kept by the timelines' keys, so a sibling startup row finds it; a timeline without one by its id");
             File.WriteAllText(Path.Combine(temp, "LoopFades.json"), "not json");
             string? warned = null;
             check(new LoopFades(temp, message => warned = message).Measured(4784, 4785) == null && warned != null,
@@ -73,6 +82,17 @@ internal static class FixLayerFixture
         // At 8 samples per frame the last pair carries almost none of the gap, so its change is the loop's speed.
         var fine = Applied(Startup(241, 30), layer);
         check(Speed(fine, 8, loop, B1, RotationTolerance, PositionTolerance), "match speed: the last pair moves at the loop's speed per frame");
+
+        // A clip still turning 3 degrees a frame about X at its end into a loop 40 degrees on about Y that turns 2 a frame
+        // about Z: the clip's speed is carried through the gap's turn, else the seam kinks by about the gap times that speed.
+        var turning = Clip(241, 30, (_, f) => [T(Vector3.Zero), T(Vector3.UnitX, Q(Vector3.UnitX, 3 * f)), T(Vector3.UnitY)]);
+        var aim = Q(Vector3.UnitY, 40) * Q(Vector3.UnitX, 90);
+        var far = new MotionFix(MotionFixKind.MatchLoop, ImmutableDictionary.CreateRange(StringComparer.Ordinal, [KeyValuePair.Create(B1, T(Vector3.UnitX, aim))]),
+            ImmutableDictionary.CreateRange(StringComparer.Ordinal, [KeyValuePair.Create(B1, T(Vector3.UnitX, Q(Vector3.UnitZ, 2) * aim))]));
+        var bent = Applied(turning, layer with { Fix = far });
+        var (end, before) = (bent.Get(bent.Samples - 1, Index(B1)).Rotation, bent.Get(bent.Samples - 2, Index(B1)).Rotation);
+        var kink = (MotionCutter.Log(end * Quaternion.Inverse(before)) * 8 - MotionCutter.Log(far.LoopSecond![B1].Rotation * Quaternion.Inverse(aim))).Length() * 180 / MathF.PI;
+        check(Lands(bent, far, B1) && kink < .05f, $"match far: a 40-degree gap on a still-turning clip lands at the loop's speed ({kink:0.###} deg per frame off)");
 
         var half = Applied(plain, layer with { Amount = .5f });
         check(MathF.Abs(Degrees(half.Get(last, Index(B1)).Rotation, loop.LoopFirst![B1].Rotation) - 10) < .1f, "match half: 50% lands halfway");

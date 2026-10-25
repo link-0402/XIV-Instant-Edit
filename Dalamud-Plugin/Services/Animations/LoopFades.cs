@@ -9,7 +9,7 @@ namespace InstantEdit.Services.Animations;
 /// frame 0 this many timeline frames before the startup's end and cross-fades in until then, so the startup's last
 /// frame shows with the loop's frame of that number. The length is the game's own, per startup and loop timeline
 /// (10 on Red Ranger Pose A, 20 on Ground sit pose 1, the same with or without mods), and no file or sheet holds
-/// it. Kept in the config folder by timeline ids.
+/// it. Kept in the config folder by timeline keys (<see cref="KeyOf"/>), which sibling rows of one startup share.
 /// </summary>
 internal sealed class LoopFades
 {
@@ -22,6 +22,13 @@ internal sealed class LoopFades
     private readonly string? path;
     private readonly Action<string>? warn;
     private readonly ConcurrentDictionary<string, int> fades = new(StringComparer.Ordinal);
+    private Task saving = Task.CompletedTask;
+
+    /// <summary>A timeline's catalog key, which names it in the fades; null, or none set, names it by its id.</summary>
+    internal Func<ushort, string?>? KeyOf { get; set; }
+
+    /// <summary>The latest save, done once it has written.</summary>
+    internal Task Saving => saving;
 
     /// <param name="configDirectory">Where the fades are kept; null keeps them in memory only.</param>
     public LoopFades(string? configDirectory, Action<string>? warn = null)
@@ -57,11 +64,16 @@ internal sealed class LoopFades
         fades[key] = frames;
         if (path == null)
             return;
-        try { AnimationJournalStore.WriteAtomic(path, JsonSerializer.SerializeToUtf8Bytes(new SortedDictionary<string, int>(fades, StringComparer.Ordinal))); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new SortedDictionary<string, int>(fades, StringComparer.Ordinal));
+        // Off the framework thread, one save after another so the newest lands last.
+        saving = saving.ContinueWith(_ =>
         {
-            warn?.Invoke("A measured loop fade could not be saved: " + e.Message);
-        }
+            try { AnimationJournalStore.WriteAtomic(path, bytes); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                warn?.Invoke("A measured loop fade could not be saved: " + e.Message);
+            }
+        }, TaskScheduler.Default);
     }
 
     /// <summary>
@@ -76,5 +88,6 @@ internal sealed class LoopFades
         return frames is >= 1 and <= Most ? frames : null;
     }
 
-    private static string Key(ushort startup, ushort loop) => $"{startup}>{loop}";
+    // Ids saved before keys were used never match a keyed timeline again; they stay in the file unused.
+    private string Key(ushort startup, ushort loop) => (KeyOf?.Invoke(startup) ?? startup.ToString()) + ">" + (KeyOf?.Invoke(loop) ?? loop.ToString());
 }

@@ -84,11 +84,14 @@ internal static class MotionFixes
             Vector3 rotationSpeed = Vector3.Zero, positionSpeed = Vector3.Zero;
             if (step > 0)
             {
-                // Speed gaps per timeline frame: the loop's frame 0 to 1 change less the clip's last pair's.
+                // Speed gaps per timeline frame: the loop's frame 0 to 1 change less the clip's last pair's, which the
+                // gap's turn on the left carries round with it, unbent through that turn (see Unbend).
                 var prev = clip.Get(last - 1, b);
                 var prevTurn = Quaternion.Normalize(prev.Rotation);
-                rotationSpeed = MotionCutter.Log(MotionEvaluator.Align(Quaternion.Normalize(next.Rotation), aim) * Quaternion.Inverse(aim)) -
-                                MotionCutter.Log(MotionEvaluator.Align(curTurn, prevTurn) * Quaternion.Inverse(prevTurn)) / step;
+                var landed = rotationGap * layer.Amount;
+                rotationSpeed = Unbend(landed, MotionCutter.Log(MotionEvaluator.Align(Quaternion.Normalize(next.Rotation), aim) * Quaternion.Inverse(aim)) -
+                                               Vector3.Transform(MotionCutter.Log(MotionEvaluator.Align(curTurn, prevTurn) * Quaternion.Inverse(prevTurn)) / step,
+                                                   MotionCutter.Exp(landed)));
                 positionSpeed = next.Position - target.Position - (cur.Position - prev.Position) / step;
             }
             // Every sample from the blend's start through the last, which may sit a fraction past the rounded end.
@@ -106,6 +109,18 @@ internal static class MotionFixes
                 clip.Set(i, b, value);
             }
         }
+    }
+
+    /// <summary>
+    /// The rate of change of a turn vector at <paramref name="turn"/> that turns Exp(turn) at <paramref name="speed"/> (as a
+    /// left change): the inverse left Jacobian. Off the turn's axis the two differ by about a third of the speed at 40 degrees.
+    /// </summary>
+    private static Vector3 Unbend(Vector3 turn, Vector3 speed)
+    {
+        var angle = turn.Length();
+        var cross = Vector3.Cross(turn, speed);
+        var k = angle < .05f ? 1f / 12 : 1 / (angle * angle) - 1 / (2 * angle * MathF.Tan(angle / 2));
+        return speed - cross / 2 + k * Vector3.Cross(turn, cross);
     }
 
     /// <summary>

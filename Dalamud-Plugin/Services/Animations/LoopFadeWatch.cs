@@ -13,8 +13,8 @@ internal sealed unsafe class LoopFadeWatch(LoopFades fades, Func<ushort, ushort,
 {
     private const int MaximumPartials = 16;
     private const int MaximumControls = 256;
-    // How many frames after the slot turns the loop's control may take to show.
-    private const int Patience = 30;
+    // How long (seconds) after the slot turns the loop's control may take to show.
+    private const float Patience = .5f;
     // A control counts as just started below this local time (seconds) and weight: the loop's, seen late when a
     // frame took long (it loads as it starts). Its own time is taken off, so a late look measures the same.
     private const float StartTime = .25f, StartWeight = .5f;
@@ -22,9 +22,12 @@ internal sealed unsafe class LoopFadeWatch(LoopFades fades, Func<ushort, ushort,
     private nint character;
     private ushort slot;
     private (ushort Startup, ushort Loop)? waiting;
-    private int waited;
+    private float waited;
+    // The startup's Havok animation: the heaviest control's at the first look after the slot turned, the only one read after.
+    private nint startup;
 
-    public void Update(IGameObject? subject)
+    /// <param name="delta">Seconds since the last frame.</param>
+    public void Update(IGameObject? subject, float delta)
     {
         if (subject is not ICharacter { Address: not 0 } followed)
         {
@@ -45,15 +48,16 @@ internal sealed unsafe class LoopFadeWatch(LoopFades fades, Func<ushort, ushort,
             slot = now;
             waiting = from != 0 && now != 0 && startsInto(from, now) ? (from, now) : null;
             waited = 0;
+            startup = 0;
         }
         if (waiting is not { } pair)
             return;
-        if (++waited > Patience)
+        if ((waited += delta) > Patience)
         {
             waiting = null;
             return;
         }
-        if (FramesLeft(chara) is { } frames)
+        if (FramesLeft(chara, ref startup) is { } frames)
         {
             fades.Record(pair.Startup, pair.Loop, frames);
             waiting = null;
@@ -61,10 +65,12 @@ internal sealed unsafe class LoopFadeWatch(LoopFades fades, Func<ushort, ushort,
     }
 
     /// <summary>
-    /// Once a control has just started on the main skeleton beside a heavier one, the frames that heavier one (the
-    /// startup) had left when it started; null before.
+    /// Once a control has just started on the main skeleton, the frames the startup's had left when it started; null
+    /// before, or once the startup's control is gone. With no <paramref name="startup"/> yet, the heaviest other control
+    /// is taken as it and its animation kept there. shortcut: an overlay heavier than the startup at that first look
+    /// still wins; tell them apart by slot if one ever does.
     /// </summary>
-    private static int? FramesLeft(Character* chara)
+    private static int? FramesLeft(Character* chara, ref nint startup)
     {
         var drawn = chara->GetCharacterBase();
         if (drawn == null || drawn->Skeleton == null)
@@ -79,16 +85,20 @@ internal sealed unsafe class LoopFadeWatch(LoopFades fades, Func<ushort, ushort,
         catch (InvalidDataException) { return null; }
         float? started = null;
         float heaviest = -1, duration = 0, time = 0;
+        nint found = 0;
         for (var i = 0; i < animated->AnimationControls.Length; i++)
         {
             var control = animated->AnimationControls[i].Value;
             if (control == null || control->Binding.ptr == null || control->Binding.ptr->Animation.ptr == null)
                 continue;
+            var animation = (nint)control->Binding.ptr->Animation.ptr;
             if (control->LocalTime is >= 0 and < StartTime && control->Weight < StartWeight)
                 started = Math.Min(started ?? StartTime, control->LocalTime);
-            else if (control->Weight > heaviest)
-                (heaviest, duration, time) = (control->Weight, control->Binding.ptr->Animation.ptr->Duration, control->LocalTime);
+            else if (startup != 0 ? animation == startup : control->Weight > heaviest)
+                (heaviest, found, duration, time) = (control->Weight, animation, control->Binding.ptr->Animation.ptr->Duration, control->LocalTime);
         }
+        if (startup == 0)
+            startup = found;
         return started is { } since && heaviest > 0 ? LoopFades.FramesLeft(duration, time - since) : null;
     }
 }

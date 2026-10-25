@@ -87,6 +87,7 @@ internal sealed class AnimationObserver : IDisposable
         this.skeletons = skeletons;
         this.log = log;
         LoopFades = loopFades;
+        loopFades.KeyOf = id => catalog.FindAny(id)?.Key;
         fadeWatch = new LoopFadeWatch(loopFades, StartsInto);
     }
 
@@ -193,7 +194,7 @@ internal sealed class AnimationObserver : IDisposable
         var subject = Subject();
         try { stamp = AnimationRuntime.CaptureChangeStamp(subject); }
         catch (Exception e) { log.Debug(e, "Could not capture the animation change stamp."); return; }
-        try { fadeWatch.Update(subject); }
+        try { fadeWatch.Update(subject, (float)framework.UpdateDelta.TotalSeconds); }
         catch (Exception e) { log.Debug(e, "Could not measure a loop fade."); }
         followingGPose = stamp?.ObjectIndex >= 200;
         var current = stamp?.ActorId ?? 0;
