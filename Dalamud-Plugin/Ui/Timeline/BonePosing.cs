@@ -457,22 +457,44 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         foreach (var cached in ghostPoses)
             if (ReferenceEquals(cached.Doc, doc) && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
                 return cached.Model;
-        var own = clip.Pose(frame);
-        MotionTransform[] local;
-        try
-        {
-            local = MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, frame, LoopFrames(loaded, doc), MotionEnd(loaded, doc), clip.SourceTracks);
-        }
-        catch (InvalidDataException)
-        {
-            // A layer names a bone this skeleton lacks: the clip's own pose still shows.
-            local = own;
-        }
-        var model = MotionEvaluator.ModelSpace(clip.Skeleton, local);
+        var model = MotionEvaluator.ModelSpace(clip.Skeleton, Layered(clip, loaded, doc, frame));
         if (ghostPoses.Count >= 2)
             ghostPoses.RemoveAt(0);
         ghostPoses.Add((doc, clip, frame, model));
         return model;
+    }
+
+    /// <summary>
+    /// The local pose at <paramref name="frame"/> with every layer of <paramref name="doc"/> baked in, as Live and the save
+    /// show it, amplitudes, fixes and planted pins included; null while the motion is read, which this starts.
+    /// </summary>
+    public MotionTransform[]? LayeredLocal(AnimationTimelineSource loaded, TimelineDocument doc, int frame)
+    {
+        if (OutputClip(loaded) is not { } clip)
+            return null;
+        try
+        {
+            return BakedBefore(clip, doc.Motion.ToArray()).Pose(frame);
+        }
+        catch (InvalidDataException)
+        {
+            // A layer names a bone this skeleton lacks: the clip's own pose still shows.
+            return clip.Pose(frame);
+        }
+    }
+
+    private MotionTransform[] Layered(MotionClip clip, AnimationTimelineSource loaded, TimelineDocument doc, int frame)
+    {
+        var own = clip.Pose(frame);
+        try
+        {
+            return MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, frame, LoopFrames(loaded, doc), MotionEnd(loaded, doc), clip.SourceTracks);
+        }
+        catch (InvalidDataException)
+        {
+            // A layer names a bone this skeleton lacks: the clip's own pose still shows.
+            return own;
+        }
     }
 
     /// <summary>

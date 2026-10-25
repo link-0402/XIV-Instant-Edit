@@ -251,6 +251,99 @@ internal static class MotionFixes
         }
     }
 
+    /// <summary>
+    /// A hand shape over the clip: each finger bone's local rotation goes to its shape's target by the layer's weight. With
+    /// Keep finger motion, the shape takes the finger's average over the layer's samples instead, and each sample keeps its
+    /// turn from that average. Sides whose hand the skeleton lacks are skipped; positions, scales and other bones are left alone.
+    /// </summary>
+    internal static void ApplyHand(MotionClip clip, MotionLayer layer, float end, CancellationToken token)
+    {
+        if (layer.Fix?.Hand is not { } hand)
+            return;
+        foreach (var targets in Hands(clip.Skeleton, hand))
+        {
+            var offsets = hand.KeepMotion ? Offsets(clip, layer, targets, end, token) : [];
+            for (var i = 0; i < clip.Samples; i++)
+            {
+                if ((i & 63) == 0)
+                    token.ThrowIfCancellationRequested();
+                var weight = MotionEvaluator.Weight(layer, clip.Frame(i), end);
+                if (weight <= 0)
+                    continue;
+                foreach (var (b, target) in targets)
+                {
+                    var value = clip.Get(i, b);
+                    var aim = offsets.TryGetValue(b, out var offset) ? Quaternion.Normalize(offset * Quaternion.Normalize(value.Rotation)) : target;
+                    clip.Set(i, b, value with { Rotation = MotionEvaluator.Slerp(value.Rotation, aim, weight) });
+                }
+            }
+        }
+    }
+
+    /// <summary>A Replace hand shape on one pose at <paramref name="weight"/>, as <see cref="ApplyHand"/> sets a sample.</summary>
+    internal static void ApplyHandAt(SkeletonDescription skeleton, MotionTransform[] pose, MotionLayer layer, float weight)
+    {
+        if (weight <= 0 || layer.Fix?.Hand is not { KeepMotion: false } hand)
+            return;
+        foreach (var targets in Hands(skeleton, hand))
+            foreach (var (b, target) in targets)
+                pose[b] = pose[b] with { Rotation = MotionEvaluator.Slerp(pose[b].Rotation, target, weight) };
+    }
+
+    /// <summary>Each side's finger targets on <paramref name="skeleton"/>, left first; a side without a usable hand gives none.</summary>
+    private static IEnumerable<Dictionary<int, Quaternion>> Hands(SkeletonDescription skeleton, MotionHand hand)
+    {
+        MotionSide[] sides = hand.Side switch
+        {
+            MotionHandSide.Both => [MotionSide.Left, MotionSide.Right],
+            MotionHandSide.Left => [MotionSide.Left],
+            _ => [MotionSide.Right],
+        };
+        foreach (var side in sides)
+            if (HandRig.For(skeleton, side) is { } rig)
+                yield return HandShapes.Targets(skeleton, rig, hand, rig.HasTips && hand.Tips);
+    }
+
+    /// <summary>
+    /// Keep finger motion's change per bone: the one that carries the bone's average over the layer's samples (as an
+    /// amplitude's pivot) onto its target. A bone that holds still has none, so it takes its target exactly, as Replace does.
+    /// </summary>
+    private static Dictionary<int, Quaternion> Offsets(MotionClip clip, MotionLayer layer, Dictionary<int, Quaternion> targets, float end, CancellationToken token)
+    {
+        var offsets = new Dictionary<int, Quaternion>();
+        int first = -1, last = -1;
+        for (var i = 0; i < clip.Samples; i++)
+            if (MotionEvaluator.Inside(layer, clip.Frame(i), end))
+            {
+                if (first < 0) first = i;
+                last = i;
+            }
+        if (first < 0)
+            return offsets;
+        foreach (var (b, target) in targets)
+        {
+            token.ThrowIfCancellationRequested();
+            var reference = Quaternion.Normalize(clip.Get(first, b).Rotation);
+            var sum = Vector4.Zero;
+            for (var i = first; i <= last; i++)
+            {
+                var q = MotionEvaluator.Align(Quaternion.Normalize(clip.Get(i, b).Rotation), reference);
+                sum += new Vector4(q.X, q.Y, q.Z, q.W);
+            }
+            var pivot = sum.LengthSquared() < 1e-12f ? reference : Quaternion.Normalize(new Quaternion(sum.X, sum.Y, sum.Z, sum.W));
+            var inverse = Quaternion.Inverse(pivot);
+            var turns = false;
+            for (var i = first; i <= last && !turns; i++)
+            {
+                var turn = inverse * MotionEvaluator.Align(Quaternion.Normalize(clip.Get(i, b).Rotation), pivot);
+                turns = new Vector3(turn.X, turn.Y, turn.Z).LengthSquared() > 1e-10f;
+            }
+            if (turns)
+                offsets[b] = Quaternion.Normalize(target * inverse);
+        }
+        return offsets;
+    }
+
     /// <summary>Whether sample <paramref name="i"/> lies halfway between its neighbours in turn and place, as a sample between keys does.</summary>
     private static bool Halfway(Quaternion[] rotations, Vector3[] positions, int i)
     {

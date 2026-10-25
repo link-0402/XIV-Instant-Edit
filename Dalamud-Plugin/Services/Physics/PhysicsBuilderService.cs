@@ -1,7 +1,10 @@
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.Previews;
 using InstantEdit.Services.Skeletons;
 
 namespace InstantEdit.Services.Physics;
@@ -396,6 +399,44 @@ internal sealed class PhysicsBuilderService : IDisposable
         var shaped = plus is null ? "your body mod" : "your body mod and Customize+ profile";
         var note = look.Female ? $"Measured standing still with {shaped}, bust size {look.BustSize}." : $"Measured standing still with {shaped}.";
         return new PhysicsBodyMeasure(measured, skeleton, warnings, note, unshaped);
+    }
+
+    /// <summary>
+    /// Whether your character can bend its fingertips: its live skeleton holds each hand's tip bones and a
+    /// drawn model holding that hand's bones is weighted to them. A failure to read is in
+    /// <see cref="HandTipFacts.Problem"/>; this never throws.
+    /// </summary>
+    public async Task<HandTipFacts> ReadHandTipsAsync(CancellationToken token)
+    {
+        try
+        {
+            var (capture, resolved) = await framework.RunOnFrameworkThread(() =>
+            {
+                var (body, problem) = PhysicsLiveReader.ReadBody(objects, clientState.IsGPosing);
+                if (body is null)
+                    throw new IOException(problem ?? "Your character can't be read.");
+                return (body, penumbra.GetResourcePaths((ushort)body.ObjectIndex));
+            }).ConfigureAwait(false);
+            var live = capture.Pose.Keys.ToList();
+            var meshLeft = false;
+            var meshRight = false;
+            foreach (var drawn in capture.Models)
+            {
+                if (PhysicsPaths.ResolveDrawn(resolved, drawn.File, drawn.Slot) is not var (actual, _))
+                    continue;
+                var bytes = await Task.Run(() => ReadModel(actual), token).ConfigureAwait(false);
+                if (bytes is null)
+                    continue;
+                var mesh = await Task.Run(() => ModelMeshReader.Read(bytes, skin: true), token).ConfigureAwait(false);
+                meshLeft |= mesh.Bones.Contains("j_hito_a_l") && HandTipCheck.MeshWeighted(mesh, MotionSide.Left);
+                meshRight |= mesh.Bones.Contains("j_hito_a_r") && HandTipCheck.MeshWeighted(mesh, MotionSide.Right);
+            }
+            return new HandTipFacts(HandTipCheck.SkeletonHas(live, MotionSide.Left), HandTipCheck.SkeletonHas(live, MotionSide.Right), meshLeft, meshRight, null);
+        }
+        catch (Exception e) when (e is IOException or InvalidOperationException or InvalidDataException or NotSupportedException or Dalamud.Plugin.Ipc.Exceptions.IpcError)
+        {
+            return new HandTipFacts(false, false, false, false, e.Message);
+        }
     }
 
     private byte[]? ReadModel(string actual)

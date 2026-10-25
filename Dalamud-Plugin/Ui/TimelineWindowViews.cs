@@ -48,6 +48,8 @@ internal static partial class TimelineWindowViews
     public const string NoLoop = "Only a startup that leads into a loop";
     public const string SmoothJitterName = "Smooth jitter";
     public const string SmoothJitterHint = "Calm small shakes and keep sharp moves.";
+    public const string HandShapeName = "Hand shape";
+    public const string HandShapeHint = "Set a hand's fingers to a shape.";
 
     /// <summary>Whether Pin feet can pin both feet on <paramref name="skeleton"/>; false while it is unknown.</summary>
     public static bool CanPinFeet(SkeletonDescription? skeleton) =>
@@ -153,6 +155,7 @@ internal static partial class TimelineWindowViews
     {
         MotionFixKind.MatchLoop => MatchLoopHint,
         MotionFixKind.SmoothJitter => SmoothJitterHint,
+        MotionFixKind.HandShape => HandShapeHint,
         _ => LayerKindHint(layer.Kind),
     };
 
@@ -237,6 +240,8 @@ internal static partial class TimelineWindowViews
         if (layer.Kind == MotionLayerKind.Symmetry)
             return (layer.From == MotionSide.Left ? "From the left · " : "From the right · ") +
                    (layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones");
+        if (layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand })
+            return hand.Side switch { MotionHandSide.Left => "Left hand", MotionHandSide.Right => "Right hand", _ => "Both hands" };
         var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix;
         var bones = limited
             ? layer.Bones.Length
@@ -505,6 +510,20 @@ internal static partial class TimelineWindowViews
         Vector3.Distance(value.Position, rest.Position) <= 1e-5f &&
         1 - Math.Abs(Quaternion.Dot(Quaternion.Normalize(value.Rotation), Quaternion.Normalize(rest.Rotation))) <= 1e-5f;
 
+    /// <summary>The finger and thumb bones a hand layer turns on the clip's skeleton; none before the skeleton is known.</summary>
+    public static IEnumerable<string> HandBones(MotionHand hand, AnimationClip clip) =>
+        clip.Resolution?.Selected?.Skeleton is { } skeleton
+            ? HandSides(hand.Side).SelectMany(side => HandRig.For(skeleton, side)?.Chains ?? []).SelectMany(chain => chain.Bones).Select(bone => skeleton.Bones[bone].Name)
+            : [];
+
+    /// <summary>The sides a hand layer set to <paramref name="side"/> shapes.</summary>
+    public static MotionSide[] HandSides(MotionHandSide side) => side switch
+    {
+        MotionHandSide.Both => [MotionSide.Left, MotionSide.Right],
+        MotionHandSide.Left => [MotionSide.Left],
+        _ => [MotionSide.Right],
+    };
+
     /// <summary>
     /// The bones a pin layer changes when saved: each pin's bone and the bones it bends, on the clip's
     /// skeleton. None before the skeleton is known, or for a pin the skeleton can't resolve, which applying
@@ -543,6 +562,7 @@ internal static partial class TimelineWindowViews
             var moved = doc.Motion.Where(MotionEvaluator.Active)
                 .SelectMany(layer => layer.Kind switch
                 {
+                    MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, clip),
                     MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip),
                     MotionLayerKind.Pin => PinnedBones(layer, clip),

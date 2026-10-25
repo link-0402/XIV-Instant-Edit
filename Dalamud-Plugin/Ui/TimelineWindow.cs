@@ -158,6 +158,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     /// <summary>Whether the main window keeps the listener running too; the Timeline window leaves it on then.</summary>
     internal void AttachListening(Func<bool> mainWindowListens) => mainListens = mainWindowListens;
 
+    /// <summary>Reads whether the live character has fingertip bones; the plugin sets it once the physics builder exists.</summary>
+    internal Func<CancellationToken, Task<HandTipFacts>>? HandTips { get => session.HandTips; set => session.HandTips = value; }
+
     /// <summary>The Timeline window listens while it is open: the loader and the clip's skeleton choice need it.</summary>
     internal bool Listens => IsOpen;
 

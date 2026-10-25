@@ -23,6 +23,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     private string? selectionLayer;
     // The ease curve handle being dragged: 0 or 1, -1 for none.
     private int easeHandle = -1;
+    private readonly HandShapePanel hands = new(session, posing);
 
     public void Draw(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded)
     {
@@ -63,6 +64,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
 
         // A match ends on the clip's last frame and its blend is its fade: only its length is set.
         var match = layer.Fix?.Kind == MotionFixKind.MatchLoop;
+        var hand = layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } shape } ? shape : null;
         using (var facts = ImRaii.Table("##layer-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
             if (facts.Success)
@@ -84,8 +86,10 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                         FrameField(current, layer, "Fade out", "##layer-fade-out", layer.FadeOut, fade => layer with { FadeOut = fade });
                     }
                     DrawAmount(current, layer);
-                    // A pin holds a spot and a turn, whatever parts are set.
-                    if (layer.Kind != MotionLayerKind.Pin)
+                    // A hand shape turns finger bones only; a pin holds a spot and a turn, whatever parts are set.
+                    if (hand != null)
+                        hands.DrawFields(current, layer, hand);
+                    else if (layer.Kind != MotionLayerKind.Pin)
                         DrawComponents(current, layer);
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle))
                         DrawInterpolation(current, layer);
@@ -110,6 +114,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             ImGui.Spacing();
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
         }
+        else if (hand != null)
+            hands.Draw(current, layer, hand, loaded, skeleton, readOnly);
         else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
         else if (layer.Kind == MotionLayerKind.Symmetry)
@@ -422,6 +428,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 MotionLayerKind.Symmetry => "How far the bones blend toward the other side's motion. Ctrl+click to type.",
                 MotionLayerKind.Pin => "How far the bones go to their pins. Ctrl+click to type.",
                 MotionLayerKind.Fix when smooth => "How big a shake it calms. Ctrl+click to type.",
+                MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.HandShape => "How far the fingers go to the shape. Ctrl+click to type.",
                 MotionLayerKind.Fix => "How far the end goes to the loop's first frame. Ctrl+click to type.",
                 MotionLayerKind.Idle => "How much of the borrowed motion applies, over the shares below. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
@@ -794,7 +801,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     }
 
     /// <summary> A field edit of the layer's own values: begun when the field activates, one undo step when it is left. </summary>
-    private static void TrackLayer(TimelineEditor current, bool changed, MotionLayer? next)
+    internal static void TrackLayer(TimelineEditor current, bool changed, MotionLayer? next)
     {
         if (ImGui.IsItemActivated())
             current.BeginFieldEdit();

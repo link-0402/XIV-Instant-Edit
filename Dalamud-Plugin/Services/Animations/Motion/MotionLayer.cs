@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations.Motion;
@@ -29,7 +30,26 @@ internal enum MotionFixKind : byte
     MatchLoop,
     /// <summary>Smooths small shakes and keeps sharp moves.</summary>
     SmoothJitter,
+    /// <summary>Puts a hand's fingers into a shape (<see cref="MotionHand"/>).</summary>
+    HandShape,
 }
+
+/// <summary>Which hand a hand shape sets. Saved as numbers.</summary>
+internal enum MotionHandSide : byte
+{
+    Left,
+    Right,
+    Both,
+}
+
+/// <summary>
+/// What a hand shape fix sets. <paramref name="Shape"/> is a built-in shape's id or a saved shape's name; a saved
+/// shape's right-hand turns by bone name are in <paramref name="Turns"/> (null for a built-in). <paramref name="Curl"/>
+/// and <paramref name="Spread"/> run from -1 to 1. <paramref name="Tips"/> says the live skeleton and mesh allow
+/// fingertip bends.
+/// </summary>
+internal sealed record MotionHand(MotionHandSide Side, string Shape, float Curl = 0, float Spread = 0, bool KeepMotion = false,
+    bool Tips = false, ImmutableDictionary<string, Quaternion>? Turns = null);
 
 /// <summary>
 /// A fix layer's fix. For <see cref="MotionFixKind.MatchLoop"/>, <paramref name="LoopFirst"/> and
@@ -40,7 +60,7 @@ internal enum MotionFixKind : byte
 /// that many frames before the startup's end, so the startup's last frame shows with the loop's frame of that number,
 /// the one the match lands on. Journals written before it load with 0, the loop's first frame.</param>
 internal sealed record MotionFix(MotionFixKind Kind, ImmutableDictionary<string, BoneTransform>? LoopFirst = null,
-    ImmutableDictionary<string, BoneTransform>? LoopSecond = null, int Fade = 0);
+    ImmutableDictionary<string, BoneTransform>? LoopSecond = null, int Fade = 0, MotionHand? Hand = null);
 
 /// <summary>How readily a planted pin counts its bone as down. Saved as numbers; Normal first, so a missing value reads as Normal.</summary>
 internal enum PinSensitivity : byte

@@ -1746,3 +1746,21 @@ offline in MotionEditsFixture (KeyPicks); these checks are the canvas, the panel
   another animation's pose layer: they carry over. Into an offset layer: the toolbar says they came from a
   Pose layer. After copying an event, Ctrl+V pastes the event again, not the keys.
 - [ ] 8 On a pin layer with a keyed pin, pick two of its keys and drag them: the pins move in time.
+
+## Hand shapes (pending)
+
+A Fix layer that sets a hand's fingers to a shape. The maths is covered offline in HandShapeFixture; these
+checks are the look in game. The built-in angles are first guesses: item 1 tunes them.
+Known limit: a Symmetry layer after a hand layer skips finger pairs the clip doesn't animate; set the hand layer to Both instead.
+
+- [ ] 1 Each built-in shape on a vanilla hand (Relaxed, Flat, Fist, Point, Grip, Cupped, Spread) looks like its
+  name; fingertips stay straight.
+- [ ] 2 The same on a YAS character with a YAS-weighted hand mesh: tips bend, no tip line.
+- [ ] 3 Gloves without tip weights on a YAS skeleton: the line names the model, tips stay straight.
+- [ ] 4 A clip on the vanilla skeleton played on a YAS character: the line names the clip's skeleton.
+- [ ] 5 Fist to Flat with a 10-frame fade opens smoothly in Preview and Live.
+- [ ] 6 Curl and Spread at -100% and +100% stay natural (no backward bends).
+- [ ] 7 Keep finger motion keeps an emote's finger wiggle.
+- [ ] 8 Save hand as shape from the left hand, use it on the right: mirrored correctly; delete it, the layer
+  keeps its look.
+- [ ] 9 IK drag on a clip with a Replace hand layer shows the shape while dragging.

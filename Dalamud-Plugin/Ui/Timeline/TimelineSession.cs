@@ -32,6 +32,9 @@ internal sealed class TimelineSession
         LoopPose = new LoopPoseReader(this);
     }
 
+    /// <summary>Reads whether the live character's skeleton and hand model have fingertip bones; set by the plugin, null without a game.</summary>
+    public Func<CancellationToken, Task<HandTipFacts>>? HandTips { get; set; }
+
     /// <summary>The open startup's loop read for Match startup to loop, shared by the Add menus and the layer panel.</summary>
     public LoopPoseReader LoopPose { get; }
 

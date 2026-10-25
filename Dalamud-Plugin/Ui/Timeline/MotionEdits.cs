@@ -145,7 +145,8 @@ internal static class MotionEdits
     /// <summary>
     /// Adds a fix layer holding <paramref name="fix"/>: a match named "Match loop" over the clip's last
     /// <see cref="DefaultFixLength"/> frames, or its game fade when that is longer (from frame 0 on a shorter clip), at
-    /// full blend, or a smooth named "Smooth jitter" over the whole clip at half strength. Unchanged with an error when
+    /// full blend, a smooth named "Smooth jitter" over the whole clip at half strength, or a hand shape named "Hand shape"
+    /// over the whole clip at full amount, rotation only. Unchanged with an error when
     /// the document has no room for another layer.
     /// </summary>
     public static TimelineDocument AddFix(TimelineDocument doc, MotionFix fix, out string key, out string? error)
@@ -153,11 +154,16 @@ internal static class MotionEdits
         var length = Math.Max(TimelineDocument.MinLength, doc.Length);
         var match = fix.Kind == MotionFixKind.MatchLoop;
         var blend = Math.Max(DefaultFixLength, fix.Fade);
+        var hand = fix.Kind == MotionFixKind.HandShape;
         var added = Add(doc, MotionLayerKind.Fix, match ? Math.Max(0, length - blend) : 0, length, out key, out error);
         if (error != null)
             return doc;
         var index = IndexOf(added, key);
-        var layer = added.Motion[index] with { Name = match ? "Match loop" : "Smooth jitter", Amount = match ? 1 : .5f, Fix = fix };
+        var layer = added.Motion[index] with
+        {
+            Name = match ? "Match loop" : hand ? "Hand shape" : "Smooth jitter", Amount = match || hand ? 1 : .5f, Fix = fix,
+            Components = hand ? PoseComponents.Rotation : added.Motion[index].Components,
+        };
         return added with { Motion = added.Motion.SetItem(index, layer) };
     }
 
@@ -909,11 +915,18 @@ internal static class MotionEdits
         a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
         (a.Fix == null ? b.Fix == null
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade &&
-              SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond)) &&
+              SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&
         SameIdle(a.Idle, b.Idle) &&
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));
+
+    private static bool SameHand(MotionHand? a, MotionHand? b) =>
+        ReferenceEquals(a, b) ||
+        a != null && b != null && a.Side == b.Side && a.Shape == b.Shape && a.Curl.Equals(b.Curl) && a.Spread.Equals(b.Spread) &&
+        a.KeepMotion == b.KeepMotion && a.Tips == b.Tips &&
+        (a.Turns == null ? b.Turns == null : b.Turns != null && a.Turns.Count == b.Turns.Count &&
+            a.Turns.All(bone => b.Turns.TryGetValue(bone.Key, out var other) && other == bone.Value));
 
     private static bool SameIdle(MotionIdle? a, MotionIdle? b) =>
         ReferenceEquals(a, b) ||

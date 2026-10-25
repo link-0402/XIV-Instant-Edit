@@ -33,6 +33,8 @@ internal sealed partial class AnimationEditService : IDisposable
     public AnimationObserver Observer { get; }
     /// <summary>PAP files no character is playing, such as a mod's animations sent from a mod window.</summary>
     public AnimationFiles Files { get; }
+    /// <summary>The hand shapes the user saved from a posed hand.</summary>
+    public HandShapeLibrary HandShapes { get; }
     public bool Busy => !work.IsCompleted;
     public bool CanCancel { get; private set; }
     public string Status { get; private set; } = "Select an animation and the offsets to bake.";
@@ -77,6 +79,7 @@ internal sealed partial class AnimationEditService : IDisposable
         Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log,
             new LoopFades(recoveryRoot, message => log.Warning("{Message}", message)));
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
+        HandShapes = new HandShapeLibrary(recoveryRoot, message => log.Warning("{Message}", message));
         Observer.CharacterChanged += Cancel;
     }
     public void Cancel() { if (CanCancel) cancellation?.Cancel(); }

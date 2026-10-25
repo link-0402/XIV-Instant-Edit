@@ -18,6 +18,9 @@ internal static class MotionEvaluator
     public const int MaxLayers = 64;
     public const int MaxKeys = 4096;
     public const int MaxKeyBones = 4096;
+
+    /// <summary>The longest hand shape name and the most bone turns a saved hand shape holds.</summary>
+    public const int MaxHandShapeName = 40, MaxHandTurns = 32;
     /// <summary>The range of an offset key's scale factor, and of a pose key's scale.</summary>
     public const float MinScale = 0.001f, MaxScale = 100;
     // Sample frames come from float seconds; a layer reaching the clip's end must still cover its last sample.
@@ -30,8 +33,9 @@ internal static class MotionEvaluator
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         MotionLayerKind.Symmetry => layer.Amount > 0 && layer.Components != PoseComponents.None && !layer.Bones.IsEmpty,
         MotionLayerKind.Pin => layer.Amount > 0 && layer.Pins.Any(pin => pin.Planted || layer.Keys.Any(key => key.Bones.ContainsKey(pin.Bone))),
-        MotionLayerKind.Fix => layer.Amount > 0 && layer.Fix != null && (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0 &&
-                               (layer.Fix.Kind != MotionFixKind.MatchLoop || layer.Fix.LoopFirst is { IsEmpty: false }),
+        MotionLayerKind.Fix => layer.Amount > 0 && layer.Fix is { } fix && (fix.Kind == MotionFixKind.HandShape
+            ? fix.Hand != null && layer.Components.HasFlag(PoseComponents.Rotation)
+            : (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0 && (fix.Kind != MotionFixKind.MatchLoop || fix.LoopFirst is { IsEmpty: false })),
         MotionLayerKind.Idle => layer.Amount > 0 && layer.Idle is { } idle && MotionIdles.Moves(idle) &&
                                 (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
@@ -129,6 +133,20 @@ internal static class MotionEvaluator
         }
         if (layer.Fix is { Kind: not MotionFixKind.MatchLoop, Fade: not 0 })
             throw new InvalidDataException($"{name} can't have a game fade.");
+        if (layer.Fix is { Kind: MotionFixKind.HandShape, Hand: null })
+            throw new InvalidDataException($"{name} has no hand.");
+        if (layer.Fix is { Kind: not MotionFixKind.HandShape, Hand: not null })
+            throw new InvalidDataException($"{name} can't have a hand.");
+        if (layer.Fix?.Hand is { } hand)
+        {
+            if (!Enum.IsDefined(hand.Side) || string.IsNullOrEmpty(hand.Shape) || hand.Shape.Length > MaxHandShapeName)
+                throw new InvalidDataException($"{name} has a hand whose side or shape can't be read.");
+            if (!float.IsFinite(hand.Curl) || !float.IsFinite(hand.Spread) || Math.Abs(hand.Curl) > 1 || Math.Abs(hand.Spread) > 1)
+                throw new InvalidDataException($"{name} has a hand curl or spread out of range.");
+            if (hand.Turns is { } turns && (turns.Count > MaxHandTurns || turns.Any(pair => string.IsNullOrEmpty(pair.Key) ||
+                    !float.IsFinite(pair.Value.LengthSquared()) || pair.Value.LengthSquared() < 1e-6f)))
+                throw new InvalidDataException($"{name} has hand turns that can't be read.");
+        }
         var pinned = new Dictionary<string, MotionPin>(StringComparer.Ordinal);
         foreach (var pin in layer.Pins)
         {
@@ -216,6 +234,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Pin:
                     ApplyPin(clip, layer, index, WrapOf(layer, loop), end, token);
+                    break;
+                case MotionLayerKind.Fix when layer.Fix!.Kind == MotionFixKind.HandShape:
+                    MotionFixes.ApplyHand(clip, layer, end, token);
                     break;
                 case MotionLayerKind.Fix:
                     MotionFixes.ApplySmooth(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
@@ -497,10 +518,10 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// One pose with the offset, pose, symmetry and keyed pin layers applied at <paramref name="frame"/>, in order, the way
+    /// One pose with the offset, pose, symmetry, keyed pin and Replace hand shape layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
-    /// around its average over their section, which one pose does not have; planted pins and fixes too, as
-    /// finding where a bone is down or what its neighbours do takes the whole clip. The Bones window turns
+    /// around its average over their section, which one pose does not have, and so is a hand shape keeping finger motion; planted pins
+    /// and the other fixes too, as finding where a bone is down or what its neighbours do takes the whole clip. The Bones window turns
     /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
     /// unknown. <paramref name="trackedBones"/> are the bones the clip has tracks for, as a decode gives them
@@ -519,7 +540,14 @@ internal static class MotionEvaluator
         for (var at = 0; at < layers.Count; at++)
         {
             var layer = layers[at];
-            if (!Active(layer) || layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
+            if (!Active(layer))
+                continue;
+            if (layer.Fix?.Kind == MotionFixKind.HandShape)
+            {
+                MotionFixes.ApplyHandAt(skeleton, pose, layer, Weight(layer, frame, end));
+                continue;
+            }
+            if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
                 continue;
             if (layer.Kind == MotionLayerKind.Symmetry)
             {

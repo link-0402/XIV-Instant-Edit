@@ -93,7 +93,7 @@ internal sealed class LoopPoseReader(TimelineSession session)
 
     /// <summary>
     /// The Add menus' fix items after Pin feet, drawn by <paramref name="item"/> (a menu item or a button, given its label and
-    /// whether it is enabled): Match startup to loop, offered on a startup with a loop, and Smooth jitter.
+    /// whether it is enabled): Match startup to loop, offered on a startup with a loop, Smooth jitter and Hand shape.
     /// </summary>
     public void DrawAddItems(TimelineEditor current, bool readOnly, Func<string, bool, bool> item)
     {
@@ -107,5 +107,9 @@ internal sealed class LoopPoseReader(TimelineSession session)
             current.AddFix(new MotionFix(MotionFixKind.SmoothJitter));
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(TimelineWindowViews.SmoothJitterHint);
+        if (item(TimelineWindowViews.HandShapeName + "###fix-hand", !readOnly))
+            current.AddFix(new MotionFix(MotionFixKind.HandShape, Hand: new MotionHand(MotionHandSide.Right, "relaxed")));
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(TimelineWindowViews.HandShapeHint);
     }
 }

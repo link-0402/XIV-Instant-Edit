@@ -39,6 +39,7 @@ Scenarios.Run(() => PoseEditorFixture.Run(Check, Reject));
 Scenarios.Run(() => SymmetryLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => PinLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => FixLayerFixture.Run(Check, Reject));
+Scenarios.Run(() => HandShapeFixture.Run(Check, Reject));
 Scenarios.Run(() => CompanionClipFixture.Run(Check, Reject));
 Scenarios.Run(() => PoseFileFixture.Run(Check, Reject));
 Scenarios.Run(() => EditAgainFixture.Run(Check));

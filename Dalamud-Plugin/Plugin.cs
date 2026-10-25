@@ -264,6 +264,7 @@ public sealed class Plugin : IDalamudPlugin
         // The physics builder: body physics for your skeleton, previewed through a temporary mod and saved into a mod of its own.
         _physics = new Services.Physics.PhysicsBuilderService(pi, _penumbra.Ipc, _penumbra.Physics, _penumbra.Previews, data, framework, objects, clientState, skeletons, log, _config, SaveConfiguration,
             configDirectory, () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
+        _timelineWindow.HandTips = _physics.ReadHandTipsAsync;
         // In GPose your posed character walks or runs for the builder through the Timeline preview's playback.
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
