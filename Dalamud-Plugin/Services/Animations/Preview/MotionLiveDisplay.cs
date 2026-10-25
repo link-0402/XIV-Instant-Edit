@@ -9,6 +9,7 @@ using FFXIVClientStructs.Havok.Animation.Rig;
 using FFXIVClientStructs.Havok.Common.Base.Container.Array;
 using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 using FFXIVClientStructs.Havok.Common.Base.Types;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
@@ -124,6 +125,10 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public float? SavedDuration { get; init; }
         /// <summary>The decoded motion isn't the file the game plays (a motion from Blender): a copy shows even without edits.</summary>
         public bool BaseDiffers { get; init; }
+        /// <summary>The clip's own skeleton when the decoded motion is a rebuild for another race's; null otherwise.</summary>
+        public SkeletonDescription? PlayedOn { get; init; }
+        /// <summary>With <see cref="PlayedOn"/>, the playing binding's tracks: bones of that skeleton.</summary>
+        public ImmutableArray<short> PlayedTracks { get; init; } = [];
         /// <summary>The edits to show; a new set is built as soon as the last build ends.</summary>
         public Edits Requested { get; set; } = new([], []);
         public Edits Shown { get; set; } = new([], []);
@@ -141,6 +146,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public required short[] Tracks { get; init; }
         /// <summary>For each of <see cref="Tracks"/>, its place among the clip's own tracks, or -1 for one the layers added.</summary>
         public required int[] Sources { get; init; }
+        /// <summary>How many of a rebuild's tracks the clip's own skeleton has no bone for, which the copy leaves out.</summary>
+        public int Missing { get; init; }
         /// <summary>How many bones a skeleton needs for every one of <see cref="Tracks"/>: one past the highest.</summary>
         public required int Bones { get; init; }
         public required int Frames { get; init; }
@@ -181,6 +188,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
 
     public string Error { get; private set; } = string.Empty;
 
+    /// <summary>How many bones of a rebuild the shown copy leaves out, the clip's own skeleton lacking them; 0 without a copy.</summary>
+    public int Unshown => session?.Current?.Missing ?? 0;
+
     /// <summary>
     /// Starts showing <paramref name="layers"/> over <paramref name="decoded"/> on the GPose actor at
     /// <paramref name="actorIndex"/>, wherever it plays the clip: a binding with <paramref name="fingerprint"/>
@@ -189,10 +199,13 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// cut by <paramref name="cuts"/> and played <paramref name="length"/> timeline frames long (0 for
     /// the clip's own), before the layers, as a save cuts it. <paramref name="savedDuration"/> is the
     /// length of the file the game plays when a saved edit gave it another than the decoded motion's.
-    /// <paramref name="baseDiffers"/> says the decoded motion isn't that file's at all (a motion from Blender).
+    /// <paramref name="baseDiffers"/> says the decoded motion isn't that file's at all (a motion from Blender, a rebuild).
+    /// <paramref name="playedOn"/> is the clip's own skeleton when <paramref name="decoded"/> is rebuilt onto another race's, and
+    /// <paramref name="playedTracks"/> the playing binding's tracks on it: copies are handed back to it (see <see cref="LiveConversion"/>).
     /// </summary>
     public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers,
-        ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0, float? savedDuration = null, bool baseDiffers = false)
+        ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0, float? savedDuration = null, bool baseDiffers = false,
+        SkeletonDescription? playedOn = null, ImmutableArray<short> playedTracks = default)
     {
         RequireFrameworkThread();
         Stop();
@@ -206,6 +219,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         {
             ObjectIndex = actor.ObjectIndex, Address = actor.Address, GameObjectId = actor.GameObjectId,
             Fingerprint = fingerprint, Base = decoded, SavedDuration = savedDuration, BaseDiffers = baseDiffers,
+            PlayedOn = playedOn, PlayedTracks = playedTracks.IsDefault ? [] : playedTracks,
             Accepted = alsoAccepted.Append(fingerprint).Where(print => print.Length > 0).ToHashSet(StringComparer.Ordinal),
         };
         // Shown is what the controls hold: the clip's own motion, which a motion from Blender never is.
@@ -271,8 +285,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         evaluationCancel = new CancellationTokenSource();
         var token = evaluationCancel.Token;
         var decoded = current.Base;
+        var (playedOn, playedTracks) = (current.PlayedOn, current.PlayedTracks);
         evaluating = edits;
-        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Cuts, edits.Length, token), token);
+        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Cuts, edits.Length, playedOn, playedTracks, token), token);
     }
 
     private void OnUpdate(IFramework _)
@@ -394,7 +409,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             string print;
             try { print = bindings.BindingFingerprint(binding, skeleton, resource); }
             catch (InvalidDataException) { return; }
-            if (!current.Accepted.Contains(print) || !Fits(binding, current.Base, current.SavedDuration))
+            if (!current.Accepted.Contains(print) ||
+                !Fits(binding, current.Base, current.PlayedOn != null ? current.PlayedTracks : current.Base.SourceTracks, current.SavedDuration))
                 return;
             if (copy.Bones > skeleton->Bones.Length)
             {
@@ -489,17 +505,17 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
 
     /// <summary>
     /// Whether a playing binding is the clip the decode read, or a save of it: the same blend hint,
-    /// float tracks and length (or <paramref name="saved"/>, a saved edit's), and tracks that agree with the
-    /// decoded ones as far as both go (see <see cref="TracksFit"/>).
+    /// float tracks and length (or <paramref name="saved"/>, a saved edit's), and tracks that agree with
+    /// <paramref name="tracks"/> as far as both go (see <see cref="TracksFit"/>): the decoded ones, or a rebuild's playing ones.
     /// </summary>
-    private static bool Fits(hkaAnimationBinding* binding, MotionClip decoded, float? saved)
+    private static bool Fits(hkaAnimationBinding* binding, MotionClip decoded, ImmutableArray<short> tracks, float? saved)
     {
         var animation = binding->Animation.ptr;
         if (animation == null || binding->BlendHint.Storage != decoded.BlendHint ||
             animation->NumberOfFloatTracks != decoded.FloatTracks || !LengthFits(animation->Duration, decoded.Duration, saved))
             return false;
         return TracksFit(new ReadOnlySpan<short>(binding->TransformTrackToBoneIndices.Data, binding->TransformTrackToBoneIndices.Length),
-            decoded.SourceTracks.AsSpan());
+            tracks.AsSpan());
     }
 
     /// <summary>The built copy whose binding <paramref name="binding"/> is, if any.</summary>
@@ -620,10 +636,11 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// <paramref name="layers"/> to it and lays the result out as an interleaved animation's samples: the
     /// clip's own tracks, then a track for every bone the layers moved that had none, encoded with the
     /// clip's blend hint. The <paramref name="excluded"/> bones get no track, as in a saved file that
-    /// leaves them out. Runs off the framework thread.
+    /// leaves them out. With <paramref name="playedOn"/>, the result is handed back to that skeleton, the clip's own,
+    /// with tracks in <paramref name="playedTracks"/>' terms (see <see cref="LiveConversion"/>). Runs off the framework thread.
     /// </summary>
     private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, MotionCuts? cuts,
-        int length, CancellationToken token)
+        int length, SkeletonDescription? playedOn, ImmutableArray<short> playedTracks, CancellationToken token)
     {
         // The motion the layers apply to, and which tells the bones they moved: the clip's own, or as cut.
         var basis = cuts is { Whole: false } || length != 0
@@ -663,8 +680,19 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
                     break;
                 }
         }
+        var missing = 0;
+        var skeleton = decoded.Skeleton;
+        if (playedOn != null)
+        {
+            // The game plays the clip's own binding and converts it for the actor's race: the copy is undone to match.
+            (var onSource, var played, missing) = LiveConversion.Tracks(decoded.Skeleton, playedOn, tracks, playedTracks);
+            tracks = [.. onSource];
+            sources = [.. played];
+            edited = LiveConversion.ToSource(edited, playedOn, playedTracks);
+            skeleton = playedOn;
+        }
         token.ThrowIfCancellationRequested();
-        var references = decoded.Skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference)).ToArray();
+        var references = skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference)).ToArray();
         var arena = new AnimationNative.Arena();
         try
         {
@@ -683,7 +711,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
                 values.AsSpan(0, Math.Min(values.Length, floatCount)).CopyTo(new Span<float>(floats, floatCount));
             return new Built
             {
-                Arena = arena, Tracks = [.. tracks], Sources = [.. sources], Bones = tracks.Count == 0 ? 0 : tracks.Max() + 1,
+                Arena = arena, Tracks = [.. tracks], Sources = [.. sources], Missing = missing, Bones = tracks.Count == 0 ? 0 : tracks.Max() + 1,
                 Frames = edited.Samples, Duration = edited.Duration, FloatTracks = decoded.FloatTracks,
                 Transforms = (nint)transforms, Floats = (nint)floats,
             };

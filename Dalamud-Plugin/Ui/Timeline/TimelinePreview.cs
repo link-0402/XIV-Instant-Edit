@@ -193,6 +193,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
         if (liveWanted)
         {
+            if (session.MotionDisplay?.Unshown is > 0 and var unshown)
+                ImGui.TextColored(Theme.Warning, $"Live can't show {unshown} bones until you save.");
             ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched));
             return;
         }
@@ -714,8 +716,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
                 // Edited again, the game plays the saved file, as long as the edit made it.
                 fresh.BaseMotion != null ? fresh.Clip.Duration : null,
-                // The game plays the clip's own file; a motion from Blender shows only in a copy.
-                baseDiffers: current.Document.Replacement != null))
+                // The game plays the clip's own file; a motion from Blender or a rebuild shows only in a copy.
+                baseDiffers: current.Document.Replacement != null || fresh.Rebuild != null,
+                playedOn: fresh.Rebuild != null ? fresh.Clip.Resolution!.Selected!.Skeleton : null,
+                playedTracks: fresh.Rebuild != null ? fresh.Clip.Resolution!.TrackBones : default))
         {
             liveDecoded = decoded;
             return true;

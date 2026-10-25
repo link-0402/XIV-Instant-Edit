@@ -1,6 +1,8 @@
 using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
@@ -15,6 +17,38 @@ internal static class RaceRebuildFixture
         ActorRace(check);
         RaceTarget(check);
         DecodeKey(check);
+        LiveHandBack(check);
+    }
+
+    private static void LiveHandBack(Action<bool, string> check)
+    {
+        static SkeletonBone B(string name, short parent, Vector3 position, Quaternion? rotation = null) =>
+            new(name, parent, 0, new(position, rotation ?? Quaternion.Identity, Vector3.One));
+        var source = new SkeletonDescription("skeleton", "c0101", [B("n_root", -1, Vector3.Zero), B("n_hara", 0, new(0, 1.07677f, 0)),
+            B("j_kosi", 1, Vector3.Zero), B("j_asi_a_l", 2, new(0.1f, 0, 0))], [], [], []);
+        var rebuilt = new SkeletonDescription("skeleton", "c0801", [B("n_root", -1, Vector3.Zero), B("n_hara", 0, new(0, 0.99885f, 0)),
+            B("j_kosi", 1, Vector3.Zero), B("j_asi_a_l", 2, new(0.09f, 0, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 7.2f * MathF.PI / 180)),
+            B("iv_ko_c_l", 2, Vector3.Zero)], [], [], []);
+        var clip = new MotionClip(rebuilt, 1f / 30, 2) { SourceTracks = [1, 3, 4], BlendHint = 0, Loops = true };
+        for (var s = 0; s < clip.Samples; s++)
+        {
+            for (var b = 0; b < clip.Bones; b++)
+                clip.Set(s, b, MotionTransform.From(rebuilt.Bones[b].Reference));
+            clip.Set(s, 1, clip.Get(s, 1) with { Position = new(0.01f, 0.95f, 0.02f) });
+            clip.Set(s, 3, clip.Get(s, 3) with { Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitX, MathF.PI / 6) });
+        }
+
+        check(Math.Abs(LiveConversion.HipsRatio(rebuilt, source) - 0.92764f) < 1e-5f, "the hips ratio is the race's n_hara rest height over the clip's");
+        var back = LiveConversion.ToSource(clip, source, [1, 3]);
+        check(Vector3.Distance(back.Get(0, 1).Position, new Vector3(0.01f, 0.95f, 0.02f) / 0.92764f) < 1e-5f,
+            "the hips are divided by the ratio, so the game's scaling gives the rebuilt value");
+        check(back.Get(0, 3).Rotation == clip.Get(0, 3).Rotation && back.Get(0, 3).Position == new Vector3(0.1f, 0, 0),
+            "rotations are copied, other translations sit at the clip's own rest");
+        check(back.Skeleton == source && back.SourceTracks.SequenceEqual([(short)1, (short)3]) && back.Loops && back.Duration == clip.Duration &&
+              back.Samples == clip.Samples, "the copy is on the clip's skeleton with its playing tracks");
+        var (tracks, sources, missing) = LiveConversion.Tracks(rebuilt, source, [3, 1, 4], [1, 3]);
+        check(tracks.SequenceEqual([(short)3, (short)1]) && sources.SequenceEqual([1, 0]) && missing == 1, "missing bones are counted and dropped");
+        check(LiveConversion.HipsRatio(rebuilt, source with { Bones = [B("n_root", -1, Vector3.Zero)] }) == 1, "no n_hara: no scaling");
     }
 
     /// <summary>A c0101 clip on the IVCS rig played by a c0801 character, with c0801's game and IVCS standards.</summary>
