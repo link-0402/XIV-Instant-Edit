@@ -71,32 +71,47 @@ internal sealed class TimelineSession
     public byte[]? ImportBytes(string gamePath) =>
         Imports.TryGetValue(gamePath, out var import) && import.Files.TryGetValue(gamePath, out var bytes) ? bytes : null;
 
-    /// <summary>The skeleton the open clip was made for; null while it is unknown or nothing is open.</summary>
-    public SkeletonDescription? SourceSkeleton() => Source is { } source ? Fresh(source).Clip.Resolution?.Selected?.Skeleton : null;
+    /// <summary>The open clip's rebuild for the character's race, chosen in the save footer; null keeps its race.</summary>
+    public RaceRebuild? Rebuild { get; set; }
+
+    /// <summary>
+    /// The skeleton <paramref name="loaded"/>'s motion is edited on: its rebuild's, else the one it was made for;
+    /// null while it is unknown.
+    /// </summary>
+    public SkeletonDescription? EditingSkeleton(AnimationTimelineSource loaded)
+    {
+        var fresh = Fresh(loaded);
+        return fresh.Rebuild?.Target.Skeleton ?? fresh.Clip.Resolution?.Selected?.Skeleton;
+    }
+
+    /// <summary>The open clip's <see cref="EditingSkeleton(AnimationTimelineSource)"/>; null while nothing is open.</summary>
+    public SkeletonDescription? EditingSkeleton() => Source is { } source ? EditingSkeleton(source) : null;
 
     /// <summary>
     /// The source with the clip's latest skeleton match: choosing a skeleton under Source after
     /// opening the timeline must still allow a length change. Only a capture of the same file counts:
     /// the Live preview plays a copy under the same capture, and its match knows no choice. The
     /// capture gets the match too, since saves, face edits and reloads send it. With a motion from Blender in
-    /// the document, that motion is the source's base motion.
+    /// the document, that motion is the source's base motion; with a <see cref="Rebuild"/>, the source carries it.
     /// </summary>
     public AnimationTimelineSource Fresh(AnimationTimelineSource current)
     {
         // A motion from Blender in the document is the motion everything edits, previews and saves. The
-        // same source and motion give the same instance, so per-frame callers don't churn.
+        // same source, motion and rebuild give the same instance, so per-frame callers don't churn.
         var matched = Matched(current);
         var replacement = Editor?.Document.Replacement;
-        if (replacement == null)
+        var rebuild = Rebuild;
+        if (replacement == null && rebuild == null)
             return matched;
-        if (freshCache is { } cached && ReferenceEquals(cached.Source, matched) && ReferenceEquals(cached.Replacement, replacement))
+        if (freshCache is { } cached && ReferenceEquals(cached.Source, matched) && ReferenceEquals(cached.Replacement, replacement) &&
+            cached.Rebuild == rebuild)
             return cached.Result;
-        var result = matched.WithReplacement(replacement);
-        freshCache = (matched, replacement, result);
+        var result = matched.WithReplacement(replacement) with { Rebuild = rebuild };
+        freshCache = (matched, replacement, rebuild, result);
         return result;
     }
 
-    private (AnimationTimelineSource Source, MotionReplacement Replacement, AnimationTimelineSource Result)? freshCache;
+    private (AnimationTimelineSource Source, MotionReplacement? Replacement, RaceRebuild? Rebuild, AnimationTimelineSource Result)? freshCache;
 
     /// <summary>
     /// Every frame: keeps the open clip's latest skeleton match in <see cref="Source"/>. A motion from Blender

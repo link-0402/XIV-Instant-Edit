@@ -779,7 +779,8 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
     internal static (string? Model, ImmutableArray<StandardSkeleton> Standards) ActorStandards(string? actorPath, string? clipModel,
         IEnumerable<SkeletonCandidate> candidates, IEnumerable<SkeletonCandidate> mapped, IReadOnlySet<string>? posing)
     {
-        if (actorPath == null || ModelFromPath(actorPath) is not { } model || model == clipModel) return (null, []);
+        // A clip whose header and path name no human race is never offered a human rebuild.
+        if (clipModel == null || actorPath == null || ModelFromPath(actorPath) is not { } model || model == clipModel) return (null, []);
         var game = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && c.Source.Resource.GamePath == actorPath)?.Skeleton;
         return (model, Standards(game, mapped, actorPath, posing));
     }

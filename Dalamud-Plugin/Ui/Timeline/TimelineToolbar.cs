@@ -122,7 +122,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind) + " Covers the whole clip; drag its ends to narrow it.");
         }
-        var skeleton = session.SourceSkeleton();
+        var skeleton = session.EditingSkeleton();
         var feet = TimelineWindowViews.CanPinFeet(skeleton);
         if (ImGui.MenuItem(TimelineWindowViews.PinFeetName, "", false, feet))
             current.AddPinFeet(skeleton);

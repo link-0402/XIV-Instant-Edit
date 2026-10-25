@@ -91,17 +91,19 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
     /// <summary>
     /// Samples the clip's motion on its source skeleton into owned memory, on the grid a bake of it
     /// samples, with its float tracks: the unedited motion the bone panels and the live GPose display
-    /// apply layers to. Nothing is written.
+    /// apply layers to. With <paramref name="rebuild"/>, on that race's standard instead, retargeted as a save
+    /// rebuilds it. Nothing is written.
     /// </summary>
     public async Task<MotionClip> DecodeAsync(byte[] source, byte[] skeleton, AnimationClip clip, AnimationCapture capture,
-        string workDirectory, Action<string> status, CancellationToken token, Action validateRuntime)
+        string workDirectory, Action<string> status, CancellationToken token, Action validateRuntime, RaceRebuild? rebuild = null)
     {
         native.EnsureAvailable();
         Session? session = null;
         var motionPath = Path.Combine(workDirectory, Guid.NewGuid().ToString("N") + ".motion");
-        // A timeline edit with nothing to change: the source's own length on the source's own skeleton.
+        // A timeline edit with nothing to change: the source's own length on the source's own skeleton, or the rebuild's.
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "", false,
-            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline);
+            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+            RepairTarget: rebuild?.Target.Standard, RepairModel: rebuild?.Model);
         try
         {
             session = await framework.RunOnFrameworkThread(() =>

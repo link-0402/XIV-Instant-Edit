@@ -687,7 +687,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                 if (ImGui.IsItemHovered())
                     ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
             }
-            var skeleton = session.SourceSkeleton();
+            var skeleton = session.EditingSkeleton();
             var feet = TimelineWindowViews.CanPinFeet(skeleton);
             if (ImGui.MenuItem(TimelineWindowViews.PinFeetName, "", false, !readOnly && feet))
                 current.AddPinFeet(skeleton);

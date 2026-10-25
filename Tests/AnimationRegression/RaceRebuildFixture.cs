@@ -2,6 +2,7 @@ using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// Rebuilding a clip borrowed from another race for the character's own race: which race
@@ -13,9 +14,11 @@ internal static class RaceRebuildFixture
     {
         ActorRace(check);
         RaceTarget(check);
+        DecodeKey(check);
     }
 
-    private static void RaceTarget(Action<bool, string> check)
+    /// <summary>A c0101 clip on the IVCS rig played by a c0801 character, with c0801's game and IVCS standards.</summary>
+    private static (AnimationClip Clip, StandardSkeleton ActorVanilla, StandardSkeleton ActorIvcs, StandardSkeleton OwnIvcs) Borrowed()
     {
         static SkeletonDescription S(string fingerprint, params string[] names) => new("skeleton", fingerprint,
             [.. names.Select((name, i) => new SkeletonBone(name, (short)(i == 0 ? -1 : 0), 0, new(Vector3.Zero, Quaternion.Identity, Vector3.One)))], [], [], []);
@@ -30,6 +33,26 @@ internal static class RaceRebuildFixture
             Resolution: new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, TrackBones: [2, 6],
                 Standards: [new(SkeletonStandard.Vanilla, AnimationBonesFixture.Rigs.Game, "c0101 game"), ownIvcs],
                 ActorModel: "c0801", ActorStandards: [actorVanilla, actorIvcs]));
+        return (clip, actorVanilla, actorIvcs, ownIvcs);
+    }
+
+    private static void DecodeKey(Action<bool, string> check)
+    {
+        var (clip, _, actorIvcs, _) = Borrowed();
+        var source = TimelineToolsFixture.Source(clip, new TimelineDocument(30, 30, null, [], 1));
+        var plain = MotionDecode.KeyOf(source);
+        var rebuilt = MotionDecode.KeyOf(source with { Rebuild = new("c0801", actorIvcs) });
+        check(plain != rebuilt && MotionDecode.ClipPart(plain) != MotionDecode.ClipPart(rebuilt),
+            "a rebuild is another decode, and Live starts again on it");
+        // j_kosi and iv_ko_c_l sit at 2 and 4 in the c0801 IVCS skeleton.
+        check(AnimationBones.TracksOn(clip, AnimationBonesFixture.Rigs.Ivcs).SequenceEqual(clip.Resolution!.TrackBones) &&
+              AnimationBones.TracksOn(clip, actorIvcs.Skeleton).SequenceEqual([(short)2, (short)4]),
+            "tracks on the editing skeleton follow the bones' names");
+    }
+
+    private static void RaceTarget(Action<bool, string> check)
+    {
+        var (clip, actorVanilla, actorIvcs, ownIvcs) = Borrowed();
 
         check(AnimationBones.Standard(clip, SkeletonStandard.Ivcs, "c0801") == actorIvcs &&
               AnimationBones.Standard(clip, SkeletonStandard.Ivcs) == ownIvcs && AnimationBones.Standard(clip, SkeletonStandard.Ivcs, "c1101") == null,
@@ -84,6 +107,8 @@ internal static class RaceRebuildFixture
             "a clip of another race gets the character's race and its standards");
         check(AnimationSkeletonIndex.ActorStandards(c0801, "c0801", [game, yas], [yas], null) is (null, { IsEmpty: true }),
             "header names the actor's race: no rebuild");
+        check(AnimationSkeletonIndex.ActorStandards(c0801, null, [game, yas], [yas], null) is (null, { IsEmpty: true }),
+            "a clip naming no human race: no rebuild");
         check(AnimationSkeletonIndex.ActorStandards(null, "c0101", [game], [], null).Model == null, "no single base skeleton: no race");
         check(AnimationSkeletonIndex.ActorStandards(c0801, "c0101", [yas], [yas], null) is { Model: "c0801", Standards.IsEmpty: true },
             "without the race's game skeleton the race is known but has no standards");

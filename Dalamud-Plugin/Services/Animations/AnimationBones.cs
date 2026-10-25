@@ -23,6 +23,20 @@ internal static class AnimationBones
         return [.. resolution.TrackBones.Where(i => i >= 0 && i < bones.Length).Distinct().Order().Select(i => bones[i].Name)];
     }
 
+    /// <summary>
+    /// The bone in <paramref name="skeleton"/> each of the clip's transform tracks drives, in track order: its own
+    /// track bones on its source skeleton, else found by name, tracks whose bone it lacks left out.
+    /// </summary>
+    public static ImmutableArray<short> TracksOn(AnimationClip clip, SkeletonDescription skeleton)
+    {
+        if (clip.Resolution is not { Selected: { } selected } resolution) return [];
+        if (selected.Skeleton.Fingerprint == skeleton.Fingerprint) return resolution.TrackBones;
+        var bones = selected.Skeleton.Bones;
+        var index = new Dictionary<string, short>(StringComparer.Ordinal);
+        for (var i = 0; i < skeleton.Bones.Length; i++) index.TryAdd(skeleton.Bones[i].Name, (short)i);
+        return [.. resolution.TrackBones.Where(i => i >= 0 && i < bones.Length && index.ContainsKey(bones[i].Name)).Select(i => index[bones[i].Name])];
+    }
+
     /// <summary>Why a clip cannot be rebaked without these bones, or null when it can.</summary>
     public static string? Problem(AnimationClip clip, IReadOnlyCollection<string> excluded)
     {

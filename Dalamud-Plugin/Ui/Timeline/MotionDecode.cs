@@ -37,9 +37,10 @@ internal sealed class MotionDecode(TimelineSession session)
     /// <summary>A read is running.</summary>
     public bool Reading => task != null;
 
-    /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on and the motion layers apply to.</summary>
+    /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on, the rebuild's skeleton and the motion layers apply to.</summary>
     public static string KeyOf(AnimationTimelineSource loaded) =>
-        $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|{loaded.BaseHash}";
+        $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|" +
+        $"{loaded.Rebuild?.Target.Skeleton.Fingerprint}|{loaded.BaseHash}";
 
     /// <summary>A <see cref="KeyOf"/> without the motion layers apply to (its last part): the same clip on the same skeleton.</summary>
     public static string ClipPart(string key) => key[..key.LastIndexOf('|')];

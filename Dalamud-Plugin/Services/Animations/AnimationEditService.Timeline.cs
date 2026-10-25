@@ -313,8 +313,8 @@ internal sealed partial class AnimationEditService
     internal AnimationNative Native => native;
 
     /// <summary>
-    /// Decodes the motion of the clip <paramref name="source"/> holds on the skeleton it was made for:
-    /// the unedited motion bone layers apply to, for the live GPose display and the bone panels.
+    /// Decodes the motion of the clip <paramref name="source"/> holds on the skeleton it was made for, or on
+    /// its rebuild's: the unedited motion bone layers apply to, for the live GPose display and the bone panels.
     /// Nothing in game changes.
     /// </summary>
     public async Task<MotionClip> DecodeMotionAsync(AnimationTimelineSource source, Action<string> status, CancellationToken token)
@@ -326,7 +326,7 @@ internal sealed partial class AnimationEditService
         var skeleton = (await resources.ReadSkeletonAsync(source.Capture.CollectionId, selected.Source, token)).Bytes;
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit motion", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
-        try { return await baker.DecodeAsync(source.MotionSource, skeleton, source.MotionClip, source.Capture, work, status, token, () => { }); }
+        try { return await baker.DecodeAsync(source.MotionSource, skeleton, source.MotionClip, source.Capture, work, status, token, () => { }, source.Rebuild); }
         finally
         {
             try { Directory.Delete(work, true); } catch (IOException) { }
