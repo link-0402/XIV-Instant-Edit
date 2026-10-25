@@ -472,18 +472,25 @@ internal sealed partial class AnimationEditService : IDisposable
     /// <summary>Why a clip can't be played on a character: it moves bones the character's skeleton lacks.</summary>
     public const string SkeletonTooSmall = "Your character's skeleton lacks bones this animation moves. Playing it could crash the game.";
 
+    /// <summary>A save's result when <see cref="SkeletonTooSmall"/> holds for the capture's character: saved all the same, as the mod may be meant for others.</summary>
+    public const string SavedSkeletonTooSmall = "Saved. Your character's skeleton lacks bones this animation moves: playing it on this character could crash the game.";
+
     /// <summary>
-    /// <see cref="SkeletonTooSmall"/> when <paramref name="pap"/>'s clip <paramref name="binding"/> has a track past the
-    /// bones or float slots of the character at <paramref name="actor"/>'s partial skeleton <paramref name="partial"/>,
-    /// else null (also when the character or the file can't be read). Framework thread.
+    /// <see cref="SkeletonTooSmall"/> when <paramref name="pap"/>'s clip of binding fingerprint <paramref name="fingerprint"/> has a
+    /// track past the bones or float slots of the character at <paramref name="actor"/>'s partial skeleton <paramref name="partial"/>,
+    /// another problem when the file has no such clip, else null (also when the character or the file can't be read). Framework thread.
     /// </summary>
-    public string? PlayProblem(ushort actor, int partial, byte[] pap, int binding)
+    public string? PlayProblem(ushort actor, int partial, byte[] pap, string fingerprint)
     {
         if (AnimationRuntime.PartialSize(objects[actor], partial) is not { } size) return null;
         try
         {
-            var all = AnimationSkeleton.InspectAllChannels(pap);
-            return binding >= 0 && binding < all.Length && !AnimationSkeleton.FitsSize(all[binding], size.Bones, size.Floats) ? SkeletonTooSmall : null;
+            return AnimationSkeleton.PapFitsSize(pap, size.Bones, size.Floats, fingerprint) switch
+            {
+                false => SkeletonTooSmall,
+                null => "The edited clip is missing from the built file.",
+                true => null,
+            };
         }
         catch (InvalidDataException) { return null; }
     }
@@ -496,7 +503,8 @@ internal sealed partial class AnimationEditService : IDisposable
     /// </summary>
     public async Task<string?> PlayProblemAsync(ushort actor, ushort timeline, CancellationToken token)
     {
-        // shortcut: expressions aren't checked (their faces come from face PAPs the face skeleton plays); add a face check if a face mod ever crashes it.
+        // shortcut: only bt_common body PAPs of LoadType 0/2 timelines on human characters with a collection are checked, never
+        // expressions (their faces come from face PAPs the face skeleton plays); widen it if another kind of mod ever crashes the game.
         if (catalog.FindAny(timeline) is not { IsExpression: false } entry) return null;
         var (size, race) = await framework.RunOnFrameworkThread(() => (AnimationRuntime.PartialSize(objects[actor], 0), AnimationRuntime.RaceCode(objects[actor])));
         if (size is not { } body || race == null) return null;
@@ -510,7 +518,7 @@ internal sealed partial class AnimationEditService : IDisposable
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) { continue; }
             var fits = await framework.RunOnFrameworkThread(() =>
             {
-                try { return AnimationSkeleton.InspectAllChannels(bytes).All(channels => AnimationSkeleton.FitsSize(channels, body.Bones, body.Floats)); }
+                try { return AnimationSkeleton.PapFitsSize(bytes, body.Bones, body.Floats) != false; }
                 catch (InvalidDataException) { return true; }
             });
             if (!fits) return SkeletonTooSmall;

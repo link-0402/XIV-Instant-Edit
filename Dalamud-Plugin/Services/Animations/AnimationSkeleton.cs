@@ -154,22 +154,50 @@ internal static unsafe class AnimationSkeleton
         if (index < 0 || index >= doc.Container->Bindings.Length) throw new InvalidDataException("Missing animation binding.");
         return Channels(doc.Container->Bindings[index].ptr);
     }
-    /// <summary>Every binding's channels of a PAP's bytes, in binding order.</summary>
-    public static ImmutableArray<AnimationChannels> InspectAllChannels(byte[] pap)
+    /// <summary>
+    /// Whether every one of <paramref name="tracks"/> tracks lands on one of a skeleton's <paramref name="count"/> bones or
+    /// float slots; an empty <paramref name="map"/> is Havok's implicit one, track i on channel i. The game samples a track
+    /// past them into memory beyond the pose, and the damage crashes it later in an unrelated call.
+    /// </summary>
+    public static bool TracksFit(ReadOnlySpan<short> map, int tracks, int count)
     {
-        using var doc = new AnimationNative.Document(new AnimationPap(pap).Havok);
-        var all = ImmutableArray.CreateBuilder<AnimationChannels>(doc.Container->Bindings.Length);
-        for (var i = 0; i < doc.Container->Bindings.Length; i++)
-            all.Add(Channels(doc.Container->Bindings[i].ptr));
-        return all.MoveToImmutable();
+        if (map.IsEmpty) return tracks <= count;
+        foreach (var i in map)
+            if (i >= count) return false;
+        return true;
+    }
+
+    /// <summary>Whether every track of <paramref name="b"/> lands on one of <paramref name="bones"/> bones and <paramref name="floats"/> float slots.</summary>
+    public static bool FitsSize(hkaAnimationBinding* b, int bones, int floats)
+    {
+        _ = AnimationNative.Fingerprint(b); // Checks all buffers before reading them.
+        var a = b->Animation.ptr;
+        return TracksFit(new ReadOnlySpan<short>(b->TransformTrackToBoneIndices.Data, b->TransformTrackToBoneIndices.Length), a->NumberOfTransformTracks, bones) &&
+            TracksFit(new ReadOnlySpan<short>(b->FloatTrackToFloatSlotIndices.Data, b->FloatTrackToFloatSlotIndices.Length), a->NumberOfFloatTracks, floats);
     }
 
     /// <summary>
-    /// Whether every track of <paramref name="a"/> lands on one of a skeleton's <paramref name="bones"/> bones and
-    /// <paramref name="floats"/> float slots. The game samples a track past them into memory beyond the pose, and the
-    /// damage crashes it later in an unrelated call.
+    /// Whether the clips of a PAP's bytes fit a skeleton of <paramref name="bones"/> bones and <paramref name="floats"/> float
+    /// slots: every clip, or with <paramref name="fingerprint"/> the clip of that binding fingerprint, null when the file has none.
+    /// A binding that can't be read is skipped. Framework thread.
     /// </summary>
-    public static bool FitsSize(AnimationChannels a, int bones, int floats) => a.Bones.All(i => i < bones) && a.Floats.All(i => i < floats);
+    public static bool? PapFitsSize(byte[] pap, int bones, int floats, string? fingerprint = null)
+    {
+        using var doc = new AnimationNative.Document(new AnimationPap(pap).Havok);
+        var found = fingerprint == null;
+        for (var i = 0; i < doc.Container->Bindings.Length; i++)
+        {
+            var b = doc.Container->Bindings[i].ptr;
+            try
+            {
+                if (fingerprint != null && AnimationNative.Fingerprint(b) != fingerprint) continue;
+                found = true;
+                if (!FitsSize(b, bones, floats)) return false;
+            }
+            catch (InvalidDataException) { }
+        }
+        return found ? true : null;
+    }
 
     public static bool Fits(AnimationChannels a, SkeletonDescription s)
     {

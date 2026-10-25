@@ -323,7 +323,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         {
             // A clip moving bones the actor lacks (an edit made for a bigger skeleton) is never handed to the game.
             if (!target.Standalone &&
-                await session.Framework.RunOnFrameworkThread(() => service.PlayProblem(index, clip.Partial, built.Bytes, clip.BindingIndex)) is { } problem)
+                await session.Framework.RunOnFrameworkThread(() => service.PlayProblem(index, clip.Partial, built.Bytes, built.BindingFingerprint)) is { } problem)
                 throw new InvalidOperationException(problem);
             var baseFiles = added.SetItem(built.GamePath, built.Bytes);
             await session.Preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundRedirects), token);

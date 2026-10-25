@@ -477,6 +477,9 @@ internal sealed partial class AnimationEditService
             }
             var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
                 journals.DirectoryFor(request.Id), token);
+            // Warned of, not refused: the saved mod may be meant for characters with a bigger skeleton.
+            var tooSmall = !source.Standalone && await framework.RunOnFrameworkThread(() =>
+                PlayProblem(capture.ActorIndex, source.Clip.Partial, built.Bytes, built.BindingFingerprint)) == SkeletonTooSmall;
             var (files, reused, owners, copies) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, token);
             var outputs = AnimationBakeRules.WithCompanion(ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes),
                 manifest, source.Resource, companion);
@@ -520,7 +523,8 @@ internal sealed partial class AnimationEditService
                 await framework.RunOnFrameworkThread(() => Observer.UpdateSources(capture.Id, updated));
             }
             journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-            journal.Message = AnimationBakeRules.NewMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
+            journal.Message = tooSmall ? SavedSkeletonTooSmall
+                : AnimationBakeRules.NewMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
             journals.Save(journal); Status = journal.Message;
         }, request.Id, source.Clip);
         return request.Id;

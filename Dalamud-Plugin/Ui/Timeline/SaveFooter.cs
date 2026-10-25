@@ -133,6 +133,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)
             Widgets.Banner("##timeline-save-error", FeedbackSeverity.Error, saveError);
+        else if (saveMessage == AnimationEditService.SavedSkeletonTooSmall)
+            Widgets.Banner("##timeline-save-warning", FeedbackSeverity.Warning, saveMessage);
         else if (texts.PastEndWarning != null)
             ImGui.TextColored(Theme.Warning, "⚠ " + texts.PastEndWarning);
         else if (texts.LayerBonesWarning != null)
@@ -170,7 +172,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                     service.Cancel();
             }
         }
-        else if (saveMessage != null)
+        else if (saveMessage != null && saveMessage != AnimationEditService.SavedSkeletonTooSmall)
         {
             ImGui.SameLine(0, Theme.Scaled(16));
             ImGui.AlignTextToFramePadding();
@@ -309,7 +311,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                 lastSaveId = job;
                 // The saved file is on the standard skeleton now; another repair would change nothing.
                 repairTarget = null;
-                saveMessage = destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
+                saveMessage = result.Message == AnimationEditService.SavedSkeletonTooSmall ? result.Message
+                    : destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
                 // A sound saved in place is another file now; read it again.
                 reload(false);
             }
