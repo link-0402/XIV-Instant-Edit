@@ -38,8 +38,8 @@ internal static class HandShapeFixture
         var clip = new AnimationClip("chara/a.pap", "loop", 0, 0, 1, "s.sklb",
             Resolution: new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, TrackBones: [.. Enumerable.Range(0, skeleton.Bones.Length).Select(b => (short)b)]));
         var doc = new TimelineDocument(40, 40, null, [], 1) with { Motion = [layer] };
-        check(TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_naka_b_r"] }, clip, null) is { } problem && problem.StartsWith("Bone layers move", StringComparison.Ordinal) &&
-              TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_te_r"] }, clip, null) == null,
+        check(TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_naka_b_r"] }, clip, clip.Resolution?.Selected?.Skeleton, null) is { } problem && problem.StartsWith("Bone layers move", StringComparison.Ordinal) &&
+              TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_te_r"] }, clip, clip.Resolution?.Selected?.Skeleton, null) == null,
             "hand views: a finger bone left out of the save stops it while a hand layer shapes that hand, the wrist doesn't");
     }
 

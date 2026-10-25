@@ -340,19 +340,19 @@ internal static class TimelineToolsFixture
         var game = new SkeletonDescription("game", "game", [.. Rig.Bones.Take(4)], [], [], []);
         var clip = Clip(Rig, new StandardSkeleton(SkeletonStandard.Vanilla, game, "game"));
         var doc = new TimelineDocument(30, 30, null, [], 1);
-        check(TimelineWindowViews.BonesProblem(doc, clip, null) == null &&
-              TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_kubi"] }, clip, null) == null,
+        check(TimelineWindowViews.BonesProblem(doc, clip, clip.Resolution?.Selected?.Skeleton, null) == null &&
+              TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_kubi"] }, clip, clip.Resolution?.Selected?.Skeleton, null) == null,
             "an animated bone can be left out of a save");
-        check(TimelineWindowViews.BonesProblem(doc with { ExcludedBones = [.. Rig.Bones.Select(b => b.Name)] }, clip, null) == "Keep at least one bone animated.",
+        check(TimelineWindowViews.BonesProblem(doc with { ExcludedBones = [.. Rig.Bones.Select(b => b.Name)] }, clip, clip.Resolution?.Selected?.Skeleton, null) == "Keep at least one bone animated.",
             "leaving out every bone is refused");
-        check(TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_kubi"], Motion = [Layer("j_kubi")] }, clip, null) is { } moved &&
-              moved.Contains("j_kubi") && TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_kubi"], Motion = [Layer("j_kosi")] }, clip, null) == null,
+        check(TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_kubi"], Motion = [Layer("j_kubi")] }, clip, clip.Resolution?.Selected?.Skeleton, null) is { } moved &&
+              moved.Contains("j_kubi") && TimelineWindowViews.BonesProblem(doc with { ExcludedBones = ["j_kubi"], Motion = [Layer("j_kosi")] }, clip, clip.Resolution?.Selected?.Skeleton, null) == null,
             "a bone layer on an unticked bone blocks the save, one on another bone doesn't");
-        check(TimelineWindowViews.BonesProblem(doc, clip, SkeletonStandard.Vanilla) == null &&
-              TimelineWindowViews.BonesProblem(doc, clip, SkeletonStandard.Ivcs) is { } missing && missing.Contains("IVCS"),
+        check(TimelineWindowViews.BonesProblem(doc, clip, clip.Resolution?.Selected?.Skeleton, SkeletonStandard.Vanilla) == null &&
+              TimelineWindowViews.BonesProblem(doc, clip, clip.Resolution?.Selected?.Skeleton, SkeletonStandard.Ivcs) is { } missing && missing.Contains("IVCS"),
             "a repair onto a standard that was found can save; one that wasn't found can't");
         var already = Clip(game, new StandardSkeleton(SkeletonStandard.Vanilla, game, "game"));
-        check(TimelineWindowViews.BonesProblem(doc, already, SkeletonStandard.Vanilla) is { } same && same.Contains("already"),
+        check(TimelineWindowViews.BonesProblem(doc, already, already.Resolution?.Selected?.Skeleton, SkeletonStandard.Vanilla) is { } same && same.Contains("already"),
             "a repair onto the skeleton the clip was already made for changes nothing and is refused");
     }
 }

@@ -223,10 +223,10 @@ internal static class PinLayerFixture
             Resolution: new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, TrackBones: [.. Enumerable.Range(0, game.Bones.Length).Select(b => (short)b)],
                 Standards: [new StandardSkeleton(SkeletonStandard.Vanilla, game, "game")]));
         var tailPin = new TimelineDocument(100, 100, null, [], 1) with { Motion = [PinLayer([new("j_custom_c", Planted: true)])] };
-        check(TimelineWindowViews.PinnedBones(tailPin.Motion[0], clip).Order().SequenceEqual(new[] { "j_custom_a", "j_custom_b", "j_custom_c" }) &&
-              TimelineWindowViews.LayerBonesWarning(tailPin, clip) is { } warning && warning.Contains("j_custom_b", StringComparison.Ordinal),
+        check(TimelineWindowViews.PinnedBones(tailPin.Motion[0], clip.Resolution?.Selected?.Skeleton).Order().SequenceEqual(new[] { "j_custom_a", "j_custom_b", "j_custom_c" }) &&
+              TimelineWindowViews.LayerBonesWarning(tailPin, clip, clip.Resolution?.Selected?.Skeleton) is { } warning && warning.Contains("j_custom_b", StringComparison.Ordinal),
             "a pin bending bones outside the standard skeletons warns like a keyed layer");
-        check(TimelineWindowViews.BonesProblem(tailPin with { ExcludedBones = ["j_custom_b"] }, clip with { Resolution = clip.Resolution! with { TrackBones = [.. Enumerable.Range(0, made.Bones.Length).Select(b => (short)b)] } }, null) is { } problem &&
+        check(TimelineWindowViews.BonesProblem(tailPin with { ExcludedBones = ["j_custom_b"] }, clip with { Resolution = clip.Resolution! with { TrackBones = [.. Enumerable.Range(0, made.Bones.Length).Select(b => (short)b)] } }, clip.Resolution?.Selected?.Skeleton, null) is { } problem &&
               problem.Contains("j_custom_b", StringComparison.Ordinal), "a pin bending a bone left out of the save refuses to save");
     }
 

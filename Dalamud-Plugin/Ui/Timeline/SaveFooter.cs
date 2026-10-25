@@ -128,7 +128,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var problem = TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
                           destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, clip.Resolution,
                           AnimationBakeRules.ChangesMotion(doc, repair))
-                      ?? (loaded.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, repair));
+                      ?? (loaded.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, session.EditingSkeleton(loaded), repair));
         if (problem != null)
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)

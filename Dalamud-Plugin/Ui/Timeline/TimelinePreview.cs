@@ -194,7 +194,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         if (liveWanted)
         {
             if (session.MotionDisplay?.Unshown is > 0 and var unshown)
-                ImGui.TextColored(Theme.Warning, $"Live can't show {unshown} bones until you save.");
+                ImGui.TextColored(Theme.Warning, TimelineWindowViews.LiveUnshown(unshown));
             ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched));
             return;
         }

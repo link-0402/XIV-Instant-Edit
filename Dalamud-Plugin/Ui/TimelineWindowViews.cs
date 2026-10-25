@@ -173,11 +173,13 @@ internal static partial class TimelineWindowViews
     /// <summary>
     /// A warning when the active bone layers move bones outside the IVCS + YAS layout that the clip
     /// doesn't animate already: saving gives them tracks at indices other players' skeletons may lack,
-    /// and sync plugins refuse such files. Null when none do, or before the game's skeleton is known.
+    /// and sync plugins refuse such files. Null when none do, or before the game's skeleton is known. The layers
+    /// are read on <paramref name="skeleton"/>, the editing skeleton, and the game's skeleton is <paramref name="model"/>'s
+    /// (null: the clip's own race).
     /// </summary>
-    public static string? LayerBonesWarning(TimelineDocument doc, AnimationClip clip)
+    public static string? LayerBonesWarning(TimelineDocument doc, AnimationClip clip, SkeletonDescription? skeleton, string? model = null)
     {
-        if (!doc.MotionChanged || AnimationBones.Standard(clip, SkeletonStandard.Vanilla) is not { } game)
+        if (!doc.MotionChanged || AnimationBones.Standard(clip, SkeletonStandard.Vanilla, model) is not { } game)
             return null;
         var vanilla = game.Skeleton.Bones.Select(bone => bone.Name).ToHashSet(StringComparer.Ordinal);
         var animated = AnimationBones.Animated(clip).ToHashSet(StringComparer.Ordinal);
@@ -187,7 +189,7 @@ internal static partial class TimelineWindowViews
             // A match gives tracks to the loop's bones it moves off rest.
             if (MotionEdits.IsMatch(layer))
             {
-                moved.UnionWith(MatchedBones(layer, clip));
+                moved.UnionWith(MatchedBones(layer, clip, skeleton));
                 continue;
             }
             // An amplitude only scales motion that is there, so it never adds a track; a smooth only calms it.
@@ -196,12 +198,12 @@ internal static partial class TimelineWindowViews
             // A symmetry gives tracks to the bones it copies onto, as the bake finds them; a pin to the bones it bends.
             if (layer.Kind == MotionLayerKind.Symmetry)
             {
-                moved.UnionWith(CopiedBones(doc, layer, clip));
+                moved.UnionWith(CopiedBones(doc, layer, clip, skeleton));
                 continue;
             }
             if (layer.Kind == MotionLayerKind.Pin)
             {
-                moved.UnionWith(PinnedBones(layer, clip));
+                moved.UnionWith(PinnedBones(layer, skeleton));
                 continue;
             }
             if (layer.Kind == MotionLayerKind.Idle)
@@ -474,16 +476,16 @@ internal static partial class TimelineWindowViews
 
     /// <summary>
     /// The bones a symmetry layer in <paramref name="doc"/> copies onto when saved, as the bake finds them:
-    /// pairs the clip tracks or an earlier layer moves. None before the clip's skeleton is known, or for a
-    /// picked bone the skeleton lacks, which applying the layer reports.
+    /// pairs the clip tracks or an earlier layer moves, on <paramref name="skeleton"/>, the editing skeleton. None
+    /// before it is known, or for a picked bone the skeleton lacks, which applying the layer reports.
     /// </summary>
-    private static IEnumerable<string> CopiedBones(TimelineDocument doc, MotionLayer layer, AnimationClip clip)
+    private static IEnumerable<string> CopiedBones(TimelineDocument doc, MotionLayer layer, AnimationClip clip, SkeletonDescription? skeleton)
     {
-        if (clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+        if (skeleton == null)
             return [];
         try
         {
-            var moving = MotionSymmetry.Animated(skeleton, clip.Resolution.TrackBones, doc.Motion, doc.Motion.IndexOf(layer));
+            var moving = MotionSymmetry.Animated(skeleton, AnimationBones.TracksOn(clip, skeleton), doc.Motion, doc.Motion.IndexOf(layer));
             return [.. MotionSymmetry.Plan(skeleton, layer, moving).Pairs.Select(pair => skeleton.Bones[pair.Target].Name)];
         }
         catch (InvalidDataException)
@@ -493,12 +495,12 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
-    /// The bones a match can move off rest when saved: the loop's within the layer's limit that the clip's skeleton
-    /// has and the loop holds away from their rest pose. None before the skeleton is known.
+    /// The bones a match can move off rest when saved: the loop's within the layer's limit that <paramref name="skeleton"/>,
+    /// the editing skeleton, has and the loop holds away from their rest pose. None before the skeleton is known.
     /// </summary>
-    public static IEnumerable<string> MatchedBones(MotionLayer layer, AnimationClip clip)
+    public static IEnumerable<string> MatchedBones(MotionLayer layer, AnimationClip clip, SkeletonDescription? skeleton)
     {
-        if (layer.Fix is not { LoopFirst: { } first, LoopSecond: { } second } || clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+        if (layer.Fix is not { LoopFirst: { } first, LoopSecond: { } second } || skeleton == null)
             return [];
         return skeleton.Bones.Where(bone => (layer.Bones.IsEmpty || layer.Bones.Contains(bone.Name)) &&
                 first.TryGetValue(bone.Name, out var at) && second.TryGetValue(bone.Name, out var next) &&
@@ -511,9 +513,9 @@ internal static partial class TimelineWindowViews
         Vector3.Distance(value.Position, rest.Position) <= 1e-5f &&
         1 - Math.Abs(Quaternion.Dot(Quaternion.Normalize(value.Rotation), Quaternion.Normalize(rest.Rotation))) <= 1e-5f;
 
-    /// <summary>The finger and thumb bones a hand layer turns on the clip's skeleton; none before the skeleton is known.</summary>
-    public static IEnumerable<string> HandBones(MotionHand hand, AnimationClip clip) =>
-        clip.Resolution?.Selected?.Skeleton is { } skeleton
+    /// <summary>The finger and thumb bones a hand layer turns on <paramref name="skeleton"/>; none before the skeleton is known.</summary>
+    public static IEnumerable<string> HandBones(MotionHand hand, SkeletonDescription? skeleton) =>
+        skeleton != null
             ? HandSides(hand.Side).SelectMany(side => HandRig.For(skeleton, side)?.Chains ?? []).SelectMany(chain => chain.Bones).Select(bone => skeleton.Bones[bone].Name)
             : [];
 
@@ -526,13 +528,13 @@ internal static partial class TimelineWindowViews
     };
 
     /// <summary>
-    /// The bones a pin layer changes when saved: each pin's bone and the bones it bends, on the clip's
-    /// skeleton. None before the skeleton is known, or for a pin the skeleton can't resolve, which applying
+    /// The bones a pin layer changes when saved: each pin's bone and the bones it bends, on <paramref name="skeleton"/>,
+    /// the editing skeleton. None before the skeleton is known, or for a pin the skeleton can't resolve, which applying
     /// the layer reports.
     /// </summary>
-    public static IEnumerable<string> PinnedBones(MotionLayer layer, AnimationClip clip)
+    public static IEnumerable<string> PinnedBones(MotionLayer layer, SkeletonDescription? skeleton)
     {
-        if (clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+        if (skeleton == null)
             return [];
         var names = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var pin in PinChains.Acting(layer))
@@ -550,9 +552,10 @@ internal static partial class TimelineWindowViews
     /// <summary>
     /// What stops saving with <paramref name="doc"/>'s bones left out and a repair onto <paramref name="repair"/>,
     /// as the old rebakes refused them; null when nothing does. Bone layers on a bone left out would be lost,
-    /// and a repair onto the skeleton the clip was already made for changes nothing.
+    /// and a repair onto the skeleton the clip was already made for changes nothing. The layers are read on
+    /// <paramref name="editing"/>, the editing skeleton; the repair's standard is <paramref name="model"/>'s (null: the clip's own race).
     /// </summary>
-    public static string? BonesProblem(TimelineDocument doc, AnimationClip clip, SkeletonStandard? repair)
+    public static string? BonesProblem(TimelineDocument doc, AnimationClip clip, SkeletonDescription? editing, SkeletonStandard? repair, string? model = null)
     {
         var excluded = doc.ExcludedBones;
         if (AnimationBones.Problem(clip, excluded) is { } exclusion)
@@ -563,10 +566,10 @@ internal static partial class TimelineWindowViews
             var moved = doc.Motion.Where(MotionEvaluator.Active)
                 .SelectMany(layer => layer.Kind switch
                 {
-                    MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, clip),
+                    MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, editing),
                     MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.AsEnumerable(),
-                    MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip),
-                    MotionLayerKind.Pin => PinnedBones(layer, clip),
+                    MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
+                    MotionLayerKind.Pin => PinnedBones(layer, editing),
                     MotionLayerKind.Idle => MotionIdles.Moved(layer),
                     _ => layer.Keys.SelectMany(key => key.Bones.Keys),
                 })
@@ -578,11 +581,12 @@ internal static partial class TimelineWindowViews
         if (repair is not { } target)
             return null;
         var name = AnimationBones.StandardName(target);
-        if (AnimationBones.Plan(clip, target, excluded) is not { } plan)
+        if (AnimationBones.Plan(clip, target, excluded, model) is not { } plan)
             return $"No {name} skeleton was found for this animation's model.";
         if (plan.Kept.IsEmpty)
             return $"None of the bones this animation moves are on the {name} skeleton.";
-        if (excluded.IsEmpty && clip.Resolution?.Selected?.Skeleton.Fingerprint == plan.Target.Skeleton.Fingerprint)
+        // With a rebuild the editing skeleton is the target itself, and the save still changes the race.
+        if (model == null && excluded.IsEmpty && editing?.Fingerprint == plan.Target.Skeleton.Fingerprint)
             return $"The animation was already made for the {name} skeleton. Choose Keep its own.";
         return null;
     }
@@ -857,6 +861,10 @@ internal static partial class TimelineWindowViews
     public static string LiveHint(bool retimed) => retimed
         ? "Live shows the motion. Sounds and effects keep their old timing until Preview."
         : "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too.";
+
+    /// <summary>The warning while Live plays a rebuilt clip: how many of its bones the clip's own skeleton lacks.</summary>
+    public static string LiveUnshown(int bones) =>
+        bones == 1 ? "Live can't show 1 bone until you save." : $"Live can't show {bones} bones until you save.";
 
     /// <summary>A loop that slows to a stop at its end: over how many frames.</summary>
     public static string StallText(int frames) => $"The motion holds still before the loop starts again (last {frames} frames).";

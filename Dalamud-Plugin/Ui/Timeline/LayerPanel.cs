@@ -28,7 +28,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     public void Draw(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded)
     {
         var readOnly = session.ReadOnly;
-        var skeleton = session.Fresh(loaded).Clip.Resolution?.Selected?.Skeleton;
+        var skeleton = session.EditingSkeleton(loaded);
         if (skeleton != null)
         {
             posing.KeepSelection(skeleton);

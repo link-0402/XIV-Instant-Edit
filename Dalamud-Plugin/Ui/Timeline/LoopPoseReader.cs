@@ -24,12 +24,13 @@ internal sealed class LoopPoseReader(TimelineSession session)
 
     /// <summary>
     /// Decodes <paramref name="capture"/>'s loop and takes its frames <paramref name="fade"/> and one after: the frame the game
-    /// shows as the startup ends, that many frames into its cross-fade (<see cref="MotionFixes.LoopPose"/>).
+    /// shows as the startup ends, that many frames into its cross-fade (<see cref="MotionFixes.LoopPose"/>). With the
+    /// startup's <paramref name="rebuild"/>, the loop is decoded on the same skeleton.
     /// </summary>
-    public static async Task<MotionFix> Start(AnimationEditService service, AnimationCapture capture, int fade, CancellationToken token)
+    public static async Task<MotionFix> Start(AnimationEditService service, AnimationCapture capture, int fade, RaceRebuild? rebuild, CancellationToken token)
     {
         var loaded = await service.LoadTimelineAsync(capture, false, token).ConfigureAwait(false);
-        var clip = await service.DecodeMotionAsync(loaded, _ => { }, token).ConfigureAwait(false);
+        var clip = await service.DecodeMotionAsync(loaded with { Rebuild = rebuild }, _ => { }, token).ConfigureAwait(false);
         var pose = MotionFixes.LoopPose(clip, fade);
         return pose.LoopFirst is { IsEmpty: false } ? pose : throw new InvalidDataException("It has no bones.");
     }
@@ -48,7 +49,8 @@ internal sealed class LoopPoseReader(TimelineSession session)
         {
             var capture = session.WithLoopMatch(loaded);
             var frames = fade ?? MeasuredFade(loaded) ?? LoopFades.Default;
-            Read(loaded, layer, token => Task.Run(() => Start(service, capture, frames, token), token));
+            var rebuild = session.Rebuild;
+            Read(loaded, layer, token => Task.Run(() => Start(service, capture, frames, rebuild, token), token));
         }
     }
 

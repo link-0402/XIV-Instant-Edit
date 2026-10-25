@@ -1,9 +1,11 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
@@ -18,6 +20,7 @@ internal static class RaceRebuildFixture
         RaceTarget(check);
         DecodeKey(check);
         LiveHandBack(check);
+        EditingProblems(check);
     }
 
     private static void LiveHandBack(Action<bool, string> check)
@@ -49,6 +52,34 @@ internal static class RaceRebuildFixture
         var (tracks, sources, missing) = LiveConversion.Tracks(rebuilt, source, [3, 1, 4], [1, 3]);
         check(tracks.SequenceEqual([(short)3, (short)1]) && sources.SequenceEqual([1, 0]) && missing == 1, "missing bones are counted and dropped");
         check(LiveConversion.HipsRatio(rebuilt, source with { Bones = [B("n_root", -1, Vector3.Zero)] }) == 1, "no n_hara: no scaling");
+        check(LiveConversion.HipsRatio(rebuilt with { Bones = [B("n_root", -1, Vector3.Zero), B("n_hara", 0, Vector3.Zero)] }, source) == 1,
+            "a rebuilt n_hara at height 0: no scaling, so the hand-back never divides by 0");
+        check(TimelineWindowViews.LiveUnshown(1) == "Live can't show 1 bone until you save." &&
+              TimelineWindowViews.LiveUnshown(3) == "Live can't show 3 bones until you save.", "the Live line counts bones in words");
+    }
+
+    private static void EditingProblems(Action<bool, string> check)
+    {
+        var (clip, _, actorIvcs, _) = Borrowed();
+        var doc = new TimelineDocument(30, 30, null, [], 1);
+        check(TimelineWindowViews.BonesProblem(doc, clip, actorIvcs.Skeleton, SkeletonStandard.Ivcs, "c0801") == null,
+            "a rebuild onto the character's race is never the skeleton the clip was already made for");
+        check(TimelineWindowViews.BonesProblem(doc, clip, actorIvcs.Skeleton, SkeletonStandard.Ivcs, "c1101") is { } none && none.StartsWith("No IVCS", StringComparison.Ordinal),
+            "the repair's standard is looked up for the race given");
+
+        // Refused before the service touches anything, so a bare instance is enough.
+        var service = (AnimationEditService)RuntimeHelpers.GetUninitializedObject(typeof(AnimationEditService));
+        var source = TimelineToolsFixture.Source(clip, doc) with { Rebuild = new("c0801", actorIvcs) };
+        static string? Refusal(Func<Task> run)
+        {
+            try { run().GetAwaiter().GetResult(); return null; }
+            catch (InvalidOperationException e) { return e.Message; }
+        }
+        check(Refusal(() => service.ReplaceMotionAsync(source, null!, null!, doc, _ => { }, default)) ==
+                  "A motion from Blender can't go onto a rebuilt clip yet. Choose Keep its own first." &&
+              Refusal(() => service.HoldStillAsync(source, null!, 0, 30, _ => { }, default)) ==
+                  "A still pose can't go onto a rebuilt clip yet. Choose Keep its own first.",
+            "Motion from Blender and Still pose refuse while a rebuild is on");
     }
 
     /// <summary>A c0101 clip on the IVCS rig played by a c0801 character, with c0801's game and IVCS standards.</summary>

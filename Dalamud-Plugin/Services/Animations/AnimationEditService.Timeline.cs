@@ -344,6 +344,8 @@ internal sealed partial class AnimationEditService
         TimelineDocument document, Action<string> status, CancellationToken token)
     {
         if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
+        // shortcut: the bake writes on the clip's own skeleton, not the rebuild's; teach ReplaceAsync the target to lift this.
+        if (source.Rebuild != null) throw new InvalidOperationException("A motion from Blender can't go onto a rebuilt clip yet. Choose Keep its own first.");
         var clip = source.Clip;
         if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
             throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
@@ -362,6 +364,7 @@ internal sealed partial class AnimationEditService
         Action<string> status, CancellationToken token)
     {
         if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
+        if (source.Rebuild != null) throw new InvalidOperationException("A still pose can't go onto a rebuilt clip yet. Choose Keep its own first.");
         if (source.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
             throw new InvalidOperationException(source.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
         status("Holding the pose");

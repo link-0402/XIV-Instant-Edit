@@ -591,7 +591,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             for (var f = 0; f < frames; f++)
                 for (var t = 0; t < floatSlots.Length; t++)
                     floats[f * floatSlots.Length + t] = rawFloats[f][floatSlots[t]];
-            // A decode never retargets, so the source's tracks are the decoded skeleton's bones.
+            // Without a rebuild the source's tracks are the decoded skeleton's bones; a rebuild's retarget maps them onto its standard.
             var clip = new MotionClip(targetDescription, duration, frames, floats, floatSlots.Length)
             {
                 SourceTracks = retarget == null ? [.. sourceTracks] : [.. retarget.MapTracks(sourceTracks)],

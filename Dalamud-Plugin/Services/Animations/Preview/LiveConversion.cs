@@ -14,12 +14,12 @@ internal static class LiveConversion
 {
     private const string Hips = "n_hara";
 
-    /// <summary><c>n_hara</c>'s rest height on <paramref name="rebuilt"/> over <paramref name="source"/>'s; 1 when either lacks it or the source's is 0.</summary>
+    /// <summary><c>n_hara</c>'s rest height on <paramref name="rebuilt"/> over <paramref name="source"/>'s; 1 when either lacks it or either height is 0.</summary>
     public static float HipsRatio(SkeletonDescription rebuilt, SkeletonDescription source)
     {
         var to = rebuilt.Bones.FirstOrDefault(bone => bone.Name == Hips);
         var from = source.Bones.FirstOrDefault(bone => bone.Name == Hips);
-        return to == null || from == null || from.Reference.Position.Y == 0 ? 1 : to.Reference.Position.Y / from.Reference.Position.Y;
+        return to == null || from == null || to.Reference.Position.Y == 0 || from.Reference.Position.Y == 0 ? 1 : to.Reference.Position.Y / from.Reference.Position.Y;
     }
 
     /// <summary>

@@ -119,7 +119,7 @@ internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
             LivePoseMessage("The timeline is busy. Try again.", true);
             return false;
         }
-        if (session.Fresh(loaded).Clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+        if (session.EditingSkeleton(loaded) is not { } skeleton)
         {
             LivePoseMessage("Choose the skeleton this animation was made for under Source first.", true);
             return false;

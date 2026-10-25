@@ -60,7 +60,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             return;
         }
         var fresh = session.Fresh(loaded);
-        if (fresh.Clip.Resolution?.Selected?.Skeleton is not { } skeleton)
+        if (session.EditingSkeleton(loaded) is not { } skeleton)
         {
             if (fresh.Clip.Resolution is { State: SkeletonResolutionState.Ambiguous, Candidates.Length: > 0 } open)
             {

@@ -90,7 +90,7 @@ public sealed partial class TimelineWindow
             return;
         }
         var clip = Fresh(loaded).Clip;
-        if (clip.Resolution?.Selected?.Skeleton is not { } skeleton || OverlayActor() is not { } actor || !ReadActorPose(actor) ||
+        if (session.EditingSkeleton(loaded) is not { } skeleton || OverlayActor() is not { } actor || !ReadActorPose(actor) ||
             GameCamera.Read() is not { } camera)
         {
             EndGizmo(true);

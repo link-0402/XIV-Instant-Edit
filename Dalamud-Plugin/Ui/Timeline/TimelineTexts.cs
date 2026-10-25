@@ -40,7 +40,8 @@ internal sealed class TimelineTexts(TimelineSession session)
         LengthText = TimelineWindowViews.LengthText(doc);
         HeaderNote = TimelineWindowViews.HeaderNote(doc);
         PastEndWarning = TimelineWindowViews.PastEndWarning(doc);
-        LayerBonesWarning = session.Source is not { } source ? null : TimelineWindowViews.LayerBonesWarning(doc, session.Fresh(source).Clip);
+        LayerBonesWarning = session.Source is not { } source ? null : TimelineWindowViews.LayerBonesWarning(doc, session.Fresh(source).Clip,
+            session.EditingSkeleton(source), session.Rebuild?.Model);
         EffectProblems = session.Source?.EffectProblems(doc) ?? [];
         EffectWarning = TimelineWindowViews.EffectLoopWarning(EffectProblems);
         EffectCopies = TimelineEffectCheck.Copies(EffectProblems);

@@ -64,12 +64,12 @@ internal static class MotionEditsFixture
             Resolution: new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, TrackBones: [1, 2],
                 Standards: [new StandardSkeleton(SkeletonStandard.Vanilla, game, "game")]));
         var copying = MotionEdits.AddSymmetry(Empty(30), ["j_custom_l"], MotionSide.Left, out _, out _);
-        check(TimelineWindowViews.LayerBonesWarning(copying, clip) is { } warning && warning.Contains("j_custom_r", StringComparison.Ordinal),
+        check(TimelineWindowViews.LayerBonesWarning(copying, clip, clip.Resolution?.Selected?.Skeleton) is { } warning && warning.Contains("j_custom_r", StringComparison.Ordinal),
             "a symmetry layer giving a non-standard bone a track warns like a keyed one");
         // Both custom bones tracked, so leaving the right one out is itself allowed.
         var bothTracked = clip with { Resolution = clip.Resolution! with { TrackBones = [1, 2, 3] } };
-        check(TimelineWindowViews.BonesProblem(Empty(30) with { ExcludedBones = ["j_custom_r"] }, bothTracked, null) == null &&
-              TimelineWindowViews.BonesProblem(copying with { ExcludedBones = ["j_custom_r"] }, bothTracked, null) is { } problem &&
+        check(TimelineWindowViews.BonesProblem(Empty(30) with { ExcludedBones = ["j_custom_r"] }, bothTracked, bothTracked.Resolution?.Selected?.Skeleton, null) == null &&
+              TimelineWindowViews.BonesProblem(copying with { ExcludedBones = ["j_custom_r"] }, bothTracked, bothTracked.Resolution?.Selected?.Skeleton, null) is { } problem &&
               problem.StartsWith("Bone layers move", StringComparison.Ordinal) && problem.Contains("j_custom_r", StringComparison.Ordinal),
             "a symmetry layer copying onto a bone left out of the save refuses to save, as a keyed layer does");
         check(!MotionEdits.Same(copying.Motion[0], copying.Motion[0] with { From = MotionSide.Right }),
@@ -108,12 +108,12 @@ internal static class MotionEditsFixture
                 kind == MotionLayerKind.Amplitude ? [bone] : [],
                 kind == MotionLayerKind.Amplitude ? [] : [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add(bone, Turn(10)))])],
         };
-        check(TimelineWindowViews.LayerBonesWarning(Keyed("j_custom"), clip) is { } warning && warning.Contains("j_custom", StringComparison.Ordinal),
+        check(TimelineWindowViews.LayerBonesWarning(Keyed("j_custom"), clip, clip.Resolution?.Selected?.Skeleton) is { } warning && warning.Contains("j_custom", StringComparison.Ordinal),
             "layers moving a bone outside IVCS + YAS that the clip doesn't animate warn that sync plugins can refuse the file");
-        check(TimelineWindowViews.LayerBonesWarning(Keyed("iv_ko_c_l"), clip) == null && TimelineWindowViews.LayerBonesWarning(Keyed("j_kubi"), clip) == null &&
-              TimelineWindowViews.LayerBonesWarning(Keyed("j_custom", MotionLayerKind.Amplitude), clip) == null &&
-              TimelineWindowViews.LayerBonesWarning(Keyed("j_custom") with { Motion = [Keyed("j_custom").Motion[0] with { Enabled = false }] }, clip) == null &&
-              TimelineWindowViews.LayerBonesWarning(Keyed("j_custom"), clip with { Resolution = clip.Resolution! with { Standards = [] } }) == null,
+        check(TimelineWindowViews.LayerBonesWarning(Keyed("iv_ko_c_l"), clip, clip.Resolution?.Selected?.Skeleton) == null && TimelineWindowViews.LayerBonesWarning(Keyed("j_kubi"), clip, clip.Resolution?.Selected?.Skeleton) == null &&
+              TimelineWindowViews.LayerBonesWarning(Keyed("j_custom", MotionLayerKind.Amplitude), clip, clip.Resolution?.Selected?.Skeleton) == null &&
+              TimelineWindowViews.LayerBonesWarning(Keyed("j_custom") with { Motion = [Keyed("j_custom").Motion[0] with { Enabled = false }] }, clip, clip.Resolution?.Selected?.Skeleton) == null &&
+              TimelineWindowViews.LayerBonesWarning(Keyed("j_custom"), clip with { Resolution = clip.Resolution! with { Standards = [] } }, clip.Resolution?.Selected?.Skeleton) == null,
             "standard bones, amplitudes, layers turned off and clips without the game's skeleton don't warn");
 
         // A match moves the loop's bones the clip leaves at rest: an untracked custom bone gets a track.
@@ -126,8 +126,8 @@ internal static class MotionEditsFixture
                     MotionInterpolation.Smooth, limit, Fix: new MotionFix(MotionFixKind.MatchLoop, pose, pose))],
             };
         }
-        check(TimelineWindowViews.LayerBonesWarning(Matching(Turn(10)), clip) is { } matchWarning && matchWarning.Contains("j_custom", StringComparison.Ordinal) &&
-              TimelineWindowViews.LayerBonesWarning(Matching(Rest()), clip) == null && TimelineWindowViews.LayerBonesWarning(Matching(Turn(10), [Hand]), clip) == null,
+        check(TimelineWindowViews.LayerBonesWarning(Matching(Turn(10)), clip, clip.Resolution?.Selected?.Skeleton) is { } matchWarning && matchWarning.Contains("j_custom", StringComparison.Ordinal) &&
+              TimelineWindowViews.LayerBonesWarning(Matching(Rest()), clip, clip.Resolution?.Selected?.Skeleton) == null && TimelineWindowViews.LayerBonesWarning(Matching(Turn(10), [Hand]), clip, clip.Resolution?.Selected?.Skeleton) == null,
             "a match warns for a non-standard bone the loop holds off rest, not one at rest or outside its limit");
     }
 

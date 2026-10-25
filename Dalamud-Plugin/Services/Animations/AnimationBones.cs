@@ -25,7 +25,8 @@ internal static class AnimationBones
 
     /// <summary>
     /// The bone in <paramref name="skeleton"/> each of the clip's transform tracks drives, in track order: its own
-    /// track bones on its source skeleton, else found by name, tracks whose bone it lacks left out.
+    /// track bones on its source skeleton, else found by name, tracks whose bone it lacks left out. With some
+    /// left out, the result is no longer indexed by track: use it as a set of bones.
     /// </summary>
     public static ImmutableArray<short> TracksOn(AnimationClip clip, SkeletonDescription skeleton)
     {
