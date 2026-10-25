@@ -47,11 +47,17 @@ internal sealed record SkeletonResolution(SkeletonResolutionState State, Immutab
     ImmutableArray<short> TrackBones = default,
     // The standard skeletons found for the clip's model, smallest first; skeleton
     // repair retargets onto one of them. Older resolutions load with none.
-    ImmutableArray<StandardSkeleton> Standards = default)
+    ImmutableArray<StandardSkeleton> Standards = default,
+    // The character's race when the clip is another race's (e.g. "c0801"), and that race's
+    // standard skeletons, smallest first. Older resolutions load with none.
+    string? ActorModel = null, ImmutableArray<StandardSkeleton> ActorStandards = default)
 {
     public ImmutableArray<short> TrackBones { get; init; } = TrackBones.IsDefault ? [] : TrackBones;
     public ImmutableArray<StandardSkeleton> Standards { get; init; } = Standards.IsDefault ? [] : Standards;
+    public ImmutableArray<StandardSkeleton> ActorStandards { get; init; } = ActorStandards.IsDefault ? [] : ActorStandards;
 }
+/// <summary>The race a borrowed clip is rebuilt for and the standard skeleton it is rebuilt onto.</summary>
+internal sealed record RaceRebuild(string Model, StandardSkeleton Target);
 internal sealed record PoseBoneId(string Name, int Partial, int Slot = 0);
 internal sealed record PoseIk(bool Enabled, int Type, bool EnforceConstraints, int Depth, int Iterations,
     int First, int Second, int End, Vector3 Axis);

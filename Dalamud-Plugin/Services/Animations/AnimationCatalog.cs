@@ -213,13 +213,16 @@ internal sealed class AnimationCatalog
 
     private static string Loaded(string path, PapLoadTable? table) => table?.Resolve(path) ?? path;
 
-    /// <summary>The race of the one base skeleton among loaded paths, the race that requests body PAPs.</summary>
-    private static string? BaseRace(IEnumerable<string> paths)
+    /// <summary>The one base skeleton path among loaded paths, the character's own; null for none or several.</summary>
+    internal static string? BaseSkeleton(IEnumerable<string> paths)
     {
-        var races = paths.Select(p => p.Split('/')).Where(p => p.Length == 7 && p[0] == "chara" && p[1] == "human" &&
-            p[3] == "skeleton" && p[4] == "base" && p[6].EndsWith(".sklb", StringComparison.Ordinal)).Select(p => p[2]).Distinct().ToArray();
-        return races.Length == 1 ? races[0] : null;
+        var bases = paths.Where(path => path.Split('/') is { Length: 7 } p && p[0] == "chara" && p[1] == "human" &&
+            p[3] == "skeleton" && p[4] == "base" && p[6].EndsWith(".sklb", StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToArray();
+        return bases.Length == 1 ? bases[0] : null;
     }
+
+    /// <summary>The race of the one base skeleton among loaded paths, the race that requests body PAPs.</summary>
+    private static string? BaseRace(IEnumerable<string> paths) => BaseSkeleton(paths)?.Split('/')[2];
 
     public static string? PapPath(Timeline timeline, string selectedPap, IEnumerable<string> known, PapLoadTable? table = null)
     {

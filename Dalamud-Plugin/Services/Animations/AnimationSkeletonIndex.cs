@@ -759,9 +759,27 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
             entry.Sources.Select(s => new SkeletonCandidate(s, entry.Skeleton, 0, "")))).ToArray();
         // Every file of a library skeleton, not only the one a candidate names, can show it is a posing variant.
         var posing = PosingSkeletons(mapped.Concat(candidates));
+        var (actorModel, actorStandards) = ActorStandards(AnimationCatalog.BaseSkeleton(loaded), papModel ?? ModelFromPath(expected),
+            candidates, mapped, posing);
         // Keep which bones the clip animates; the selected source names them.
         return Rank(channels, candidates, baseline, expected, manual, sourceIdentity, posing) with
-            { TrackBones = channels.Bones, Standards = Standards(baseline, mapped, expected, posing) };
+        {
+            TrackBones = channels.Bones, Standards = Standards(baseline, mapped, expected, posing),
+            ActorModel = actorModel, ActorStandards = actorStandards,
+        };
+    }
+
+    /// <summary>
+    /// The character's race and its standard skeletons when the clip is another race's: none
+    /// when the character's base skeleton is unknown or of the clip's race. The clip's race is
+    /// its header's, since the game converts a borrowed clip by the header.
+    /// </summary>
+    internal static (string? Model, ImmutableArray<StandardSkeleton> Standards) ActorStandards(string? actorPath, string? clipModel,
+        IEnumerable<SkeletonCandidate> candidates, IEnumerable<SkeletonCandidate> mapped, IReadOnlySet<string>? posing)
+    {
+        if (actorPath == null || ModelFromPath(actorPath) is not { } model || model == clipModel) return (null, []);
+        var game = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && c.Source.Resource.GamePath == actorPath)?.Skeleton;
+        return (model, Standards(game, mapped, actorPath, posing));
     }
 
     /// <summary>
