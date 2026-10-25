@@ -66,7 +66,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
     private bool customShader;
 
     private sealed record Opened(MaterialSource Source, MaterialDocument Document, Guid? Collection, bool CustomShader, IModFileCopies? Copies,
-        IReadOnlyList<PreviewSource> Models);
+        IReadOnlyList<PreviewSource> Models, bool Restored = false);
 
     /// <param name="slot">The window's number; window 0 keeps the first window's id (and its saved place).</param>
     internal MaterialWindow(int slot, PreviewModService previewMods, MaterialPreviewService preview, PenumbraIpc penumbra, PreviewService previews,
@@ -147,7 +147,8 @@ internal sealed partial class MaterialWindow : Window, IDisposable
             return;
         }
         // Unsaved edits stay; a clean session reads its file again, which another tool or a save elsewhere may have changed.
-        if (session is { History.Dirty: true } && SameFile(session.Source, row) && opening == null)
+        // A job in flight may be writing that file (a restore reads it again itself).
+        if (session != null && (session.History.Dirty || working != null) && SameFile(session.Source, row) && opening == null)
         {
             this.copies = copies ?? this.copies;
             return;
@@ -193,7 +194,7 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         opening = Task.Run(async () =>
         {
             var bytes = await File.ReadAllBytesAsync(source.ActualPath, life.Token).ConfigureAwait(false);
-            return await ReadAsync(source with { Sha256 = PreviewSource.Hash(bytes) }, bytes, from, models).ConfigureAwait(false);
+            return (await ReadAsync(source with { Sha256 = PreviewSource.Hash(bytes) }, bytes, from, models).ConfigureAwait(false)) with { Restored = true };
         });
     }
 
@@ -414,8 +415,15 @@ internal sealed partial class MaterialWindow : Window, IDisposable
         var old = session;
         var reload = old != null && string.Equals(old.Source.ActualPath, opened.Source.ActualPath, StringComparison.OrdinalIgnoreCase)
                      && string.Equals(old.Source.GamePath, opened.Source.GamePath, StringComparison.OrdinalIgnoreCase);
-        // A re-read file replaces what a preview still shows of the old one.
-        if (old != null && (!reload || old.PreviewShown))
+        // Edits made while the file was read again stay; only a restore puts the file over them.
+        if (reload && old!.History.Dirty && !opened.Restored)
+        {
+            copies = opened.Copies;
+            Say(FeedbackSeverity.Info, "Kept your edits. The file wasn't read again.");
+            return;
+        }
+        // A re-read file replaces what a preview still shows (or a job in flight is about to show) of the old one.
+        if (old != null && (!reload || old.PreviewShown || working != null))
             DiscardAfterWork(old, opened.Source.FileName);
         if (!reload)
             RestoreLive();

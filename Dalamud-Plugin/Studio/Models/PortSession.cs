@@ -630,6 +630,17 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             }
             mat.Textures.AddRange(same);
         }
+        // Add alpha and From diffuse belong to one shader's normal (see TextureSlotEditor); the build applies them on any.
+        foreach (var slot in mat.Textures)
+        {
+            if (preset.Shader != ShaderType.Hair)
+                slot.UseAlphaOverlay = false;
+            if (preset.Shader != ShaderType.Character && slot.UseDiffuseNormal)
+            {
+                (slot.SourcePath, slot.NormalSourcePath) = (slot.NormalSourcePath, string.Empty);
+                slot.UseDiffuseNormal = false;
+            }
+        }
         ApplyTextureDefaults(mat, added);
         MarkDirty();
     }
@@ -756,7 +767,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         {
             if (added == null || added.Contains(slot))
                 slot.Compression = TextureCompression.Auto;
-            if (material.ShaderType != ShaderType.Hair || !string.IsNullOrWhiteSpace(slot.SourcePath))
+            if (material.ShaderType != ShaderType.Hair || !string.IsNullOrWhiteSpace(slot.SourcePath) || slot.UseWhiteDummy || slot.IsShared)
                 continue;
             var start = slot.Type switch
             {
