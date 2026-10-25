@@ -43,8 +43,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     // ReleaseUpdates could hold gigabytes on a long clip.
     private const int ReplacedUpdates = 30;
     // Edits that keep changing (a drag) build a new copy at most this often, in milliseconds after the
-    // last build ended; the latest edits always build in the end.
-    private const long BuildInterval = 100;
+    // last build ended; the latest edits always build in the end. A short clip builds about every frame,
+    // a long one less often, so the copies a drag replaces stay at a few tens of MB.
+    private static long BuildInterval(long copyBytes) => Math.Clamp(copyBytes / 100_000, 16, 100);
     // The message when a copy has a track for a bone the actor's skeleton lacks.
     private const string SkeletonMismatch = "Your character's skeleton doesn't have every bone these layers move.";
 
@@ -60,8 +61,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     private Task<Built?>? evaluation;
     private CancellationTokenSource? evaluationCancel;
     private Edits evaluating;
-    // When the last build ended (Environment.TickCount64).
-    private long builtAt;
+    // When the last build ended (Environment.TickCount64), and the size of its samples.
+    private long builtAt, builtBytes;
     private long updates;
     private bool disposed;
 
@@ -264,7 +265,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             return;
         }
         // Each update tries again until the interval has passed.
-        if (Environment.TickCount64 - builtAt < BuildInterval)
+        if (Environment.TickCount64 - builtAt < BuildInterval(builtBytes))
             return;
         evaluationCancel?.Dispose();
         evaluationCancel = new CancellationTokenSource();
@@ -331,6 +332,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             return;
         }
         var copy = done.Result!;
+        builtBytes = (long)copy.Frames * copy.Tracks.Length * sizeof(hkQsTransformf);
         if (session is not { } current)
         {
             copy.ReleasedAt = updates;

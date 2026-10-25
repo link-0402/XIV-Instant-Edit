@@ -518,6 +518,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         editor.MotionPacks = session.Catalog.Data.MotionPacks;
         editor.BoneOrder = source.Clip.Resolution?.Selected?.Skeleton is { } skeleton ? BoneTree(skeleton).Index : null;
 
+        timelinePreview.Dragging = OverlayDragging;
         timelinePreview.Update(editor, source);
         CheckGizmo();
         toolbar.Draw(editor);

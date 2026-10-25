@@ -100,6 +100,30 @@ internal static class PinLayerFixture
               Vector3.Distance(Landed(far), soft) < .001f,
             "a drag beyond reach keys finite turns and the hand falls short on the line to the aim");
 
+        // A long drag: the hand circles three times and the elbow only bends, the forearm never rolls about its own length.
+        // Solved from where the drag began, the arm is back as it was once the hand is, its shoulder unrolled.
+        foreach (var fromStart in new[] { false, true })
+        {
+            var circledDoc = Doc(BoneLayer(MotionLayerKind.Pose, 1));
+            var straightRoll = true;
+            MotionTransform[] circledPose = before;
+            for (var step = 1; step <= 360; step++)
+            {
+                var angle = step * 3 * MathF.PI / 180;
+                var aim = hand + new Vector3(.12f * (MathF.Cos(angle) - 1), .12f * MathF.Sin(angle), .06f * MathF.Sin(2 * angle));
+                var layerNow = Keyed(circledDoc);
+                circledDoc = PoseEdits.Reach(circledDoc, layerNow, 0, body, before, MotionEvaluator.ApplyAt(body, before, [layerNow], 0), "j_te_l", aim, 1,
+                    start: fromStart ? before : null);
+                circledPose = MotionEvaluator.ApplyAt(body, before, [Keyed(circledDoc)], 0);
+                straightRoll &= Vector3.Distance(MotionEvaluator.ModelSpace(body, circledPose)[HandL].Position, aim) < .001f &&
+                                Math.Abs(Roll(Quaternion.Inverse(before[ForearmL].Rotation) * circledPose[ForearmL].Rotation, Vector3.UnitX)) < 1;
+            }
+            check(straightRoll, $"a long drag{(fromStart ? " from its start" : "")} lands the hand each frame and never rolls the forearm about its length");
+            if (fromStart)
+                check(Degrees(circledPose[UpperArmL].Rotation, before[UpperArmL].Rotation) < .1f && Degrees(circledPose[ForearmL].Rotation, before[ForearmL].Rotation) < .1f,
+                    "a drag from its start that brings the hand back leaves the arm as it was");
+        }
+
         // Nothing to key.
         var unchanged = Doc(pose);
         check(ReferenceEquals(PoseEdits.Reach(unchanged, pose, 0, body, before, before, "j_te_l", hand, 1), unchanged), "a drag that doesn't move the hand keys nothing");
@@ -534,6 +558,11 @@ internal static class PinLayerFixture
               PinPlanting.Find(Drift(.06f), 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty, "strict holds less than normal, loose more");
         // A dance's shuffle: 10 cm/s along the floor isn't down at any sensitivity.
         check(PinPlanting.Find(Drift(.10f), 60, 0, 119, false, PinSensitivity.Loose, 6, 8, 8).Stretches.IsEmpty, "a foot gliding at a dance's pace isn't held");
+        // A ported dance's foot (Cheer On: Blue) never stops: 3 cm in and out and 1.5 cm up with each bounce, up to 12 cm/s, but always in one spot.
+        var wiggle = BonePath(i => new Vector3(.015f * MathF.Sin(2 * MathF.PI * i / 46), .0075f * (1 + MathF.Cos(2 * MathF.PI * i / 46)), 0));
+        check(PinPlanting.Find(wiggle, 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches is [{ First: 0, Last: 119 } held] &&
+              Math.Abs(held.Held.Position.X) < .004f && PinPlanting.Find(wiggle, 60, 0, 119, false, PinSensitivity.Strict, 6, 8, 8).Stretches.IsEmpty,
+            "a foot wiggling in one spot is held there, at its middle, unless strict");
         // Jitter that cancels over the window (2 cm every other sample) reads still there: the jolt check is what keeps it from being held.
         var shaking = BonePath(i => new Vector3(i % 2 == 0 ? .02f : 0, 0, 0));
         check(PinPlanting.Find(shaking, 60, 0, 119, false, PinSensitivity.Normal, 6, 8, 8).Stretches.IsEmpty, "a foot shaking from sample to sample isn't held");
@@ -836,6 +865,14 @@ internal static class PinLayerFixture
     }
 
     private static Quaternion Q(Vector3 axis, float degrees) => Quaternion.CreateFromAxisAngle(axis, degrees * MathF.PI / 180);
+
+    /// <summary>The twist of <paramref name="q"/> about the unit <paramref name="axis"/>, in degrees.</summary>
+    private static float Roll(Quaternion q, Vector3 axis)
+    {
+        q = Quaternion.Normalize(q.W < 0 ? -q : q);
+        var along = Vector3.Dot(new Vector3(q.X, q.Y, q.Z), axis);
+        return 2 * MathF.Atan2(along, q.W) * 180 / MathF.PI;
+    }
 
     private static float Degrees(Quaternion a, Quaternion b) =>
         2 * MathF.Acos(Math.Clamp(Math.Abs(Quaternion.Dot(Quaternion.Normalize(a), Quaternion.Normalize(b))), 0, 1)) * 180 / MathF.PI;

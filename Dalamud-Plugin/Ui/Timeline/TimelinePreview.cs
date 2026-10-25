@@ -95,6 +95,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         return stop;
     }
 
+    /// <summary>A gizmo drag runs: Live builds every few frames, which the status doesn't flash for.</summary>
+    public bool Dragging { get; set; }
+
     /// <summary> Every frame: the playhead and the pose together, Live's layers, and the looks and sounds shown. </summary>
     public void Update(TimelineEditor current, AnimationTimelineSource loaded)
     {
@@ -167,7 +170,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, service.Status);
         }
-        else if (liveWanted && (decode.Reading || session.MotionDisplay?.Building == true || liveDrawWait != null))
+        else if (liveWanted && (decode.Reading || session.MotionDisplay?.Building == true && !Dragging || liveDrawWait != null))
         {
             ImGui.SameLine(0, Theme.Scaled(12));
             Widgets.Spinner();

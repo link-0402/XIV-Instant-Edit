@@ -122,6 +122,13 @@ internal static class PinPlanting
     private const float JoltFactor = 4;
 
     /// <summary>
+    /// A bone that never stops but stays within the speed limit times this many seconds (and turns within the turn limit times it)
+    /// for that long is down too: a ported dance's feet wiggling 3-4 cm with every bounce, at 5-15 cm/s, never read still over the
+    /// window, but over this long their net speed is under the limit, which a glide's isn't.
+    /// </summary>
+    private const float SpotSeconds = 1.5f;
+
+    /// <summary>
     /// <paramref name="path"/> with each stretch's held spot brought in, near where it was, until it lies
     /// within <paramref name="limits"/>[i] of <paramref name="roots"/>[i] (both in the pin's space) at every
     /// sample i of the stretch: a held spot is an average, so a limb the motion has straight may not reach
@@ -213,6 +220,8 @@ internal static class PinPlanting
         if (wraps)
             window = Math.Max(1, Math.Min(window, (count - 2) / 2));
 
+        var spots = Spots(path, first, last, (int)Math.Ceiling(SpotSeconds * sampleRate), speedLimit * SpotSeconds, turnLimit * SpotSeconds);
+
         // Runs of samples that are down.
         var down = new bool[count];
         var runs = new List<(int First, int Last)>();
@@ -221,7 +230,7 @@ internal static class PinPlanting
         {
             var (backSpeed, backTurn) = Side(path, i, i - window, first, last, wraps, sampleRate);
             var (aheadSpeed, aheadTurn) = Side(path, i, i + window, first, last, wraps, sampleRate);
-            var still = backSpeed < speedLimit && backTurn < turnLimit || aheadSpeed < speedLimit && aheadTurn < turnLimit;
+            var still = backSpeed < speedLimit && backTurn < turnLimit || aheadSpeed < speedLimit && aheadTurn < turnLimit || spots[i];
             // A jolt to the next sample (the last: from the one before, or round the loop to sample 1) that the window would average away.
             var (jolt, joltTurn) = Side(path, i, i < last || wraps ? i + 1 : i - 1, first, last, wraps, sampleRate);
             down[i] = still && jolt < JoltFactor * speedLimit && joltTurn < JoltFactor * turnLimit && (heights.IsEmpty ? path[i].Position.Y : heights[i]) - lowest < heightLimit;
@@ -308,6 +317,41 @@ internal static class PinPlanting
             }
         var rotation = sum.LengthSquared() < 1e-12f ? reference : Quaternion.Normalize(new Quaternion(sum.X, sum.Y, sum.Z, sum.W));
         return new MotionTransform(position / count, rotation, Vector3.One);
+    }
+
+    /// <summary>
+    /// The samples from <paramref name="first"/> to <paramref name="last"/> in runs of at least <paramref name="length"/> where the bone
+    /// stays in a box <paramref name="size"/> across (corner to corner) and within <paramref name="turn"/> degrees of the run's first turn.
+    /// Greedy, left to right. shortcut: a spot over a loop's seam counts only where each side is long enough on its own; unroll the loop if that bites.
+    /// </summary>
+    private static bool[] Spots(ReadOnlySpan<MotionTransform> path, int first, int last, int length, float size, float turn)
+    {
+        var spots = new bool[path.Length];
+        var start = first;
+        while (start + length - 1 <= last)
+        {
+            var low = path[start].Position;
+            var high = low;
+            var end = start;
+            while (end < last)
+            {
+                var next = path[end + 1];
+                var nextLow = Vector3.Min(low, next.Position);
+                var nextHigh = Vector3.Max(high, next.Position);
+                if ((nextHigh - nextLow).Length() > size || Degrees(next.Rotation, path[start].Rotation) > turn)
+                    break;
+                (low, high) = (nextLow, nextHigh);
+                end++;
+            }
+            if (end - start + 1 < length)
+            {
+                start++;
+                continue;
+            }
+            Array.Fill(spots, true, start, end - start + 1);
+            start = end + 1;
+        }
+        return spots;
     }
 
     /// <summary>Speed and turn speed from sample <paramref name="i"/> to <paramref name="to"/>, cut at the range's ends or round the loop; none to read gives the most.</summary>

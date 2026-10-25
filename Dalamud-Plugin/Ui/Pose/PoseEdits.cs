@@ -174,14 +174,17 @@ internal static class PoseEdits
     /// Returns <paramref name="doc"/> unchanged when nothing can bend, the weight is under MinFollowWeight, or no rotation changes.
     /// <paramref name="layer"/> must be the layer as <paramref name="doc"/> holds it: values are read from it, keys written to the doc.
     /// A key never turns a bone a half turn or more, so a layer at a low weight bends the chain only as far as it can carry it.
+    /// A drag passes <paramref name="start"/>, <paramref name="through"/> as it began: every frame solves from there, so where the
+    /// chain ends up depends only on the aim, and turns can't build up in its bones over a long drag.
     /// </summary>
     public static TimelineDocument Reach(TimelineDocument doc, MotionLayer layer, int frame, SkeletonDescription skeleton,
-        ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, string bone, Vector3 aim, float weight, float loop = 0)
+        ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, string bone, Vector3 aim, float weight, float loop = 0,
+        MotionTransform[]? start = null)
     {
         var chain = PinChains.Chain(skeleton, new MotionPin(bone));
         if (chain.Shape == PinChainShape.None || !(weight >= MinFollowWeight))
             return doc;
-        var local = through.ToArray();
+        var local = start?.ToArray() ?? through.ToArray();
         var model = MotionEvaluator.ModelSpace(skeleton, local);
         PinSolver.Reach(skeleton, local, model, chain, aim, PinSolver.RestNormal(skeleton, chain));
         // A key past a half turn reads back the short way round, the opposite turn.

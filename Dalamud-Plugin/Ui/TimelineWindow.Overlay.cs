@@ -37,6 +37,8 @@ public sealed partial class TimelineWindow
     private TimelineEditor? gizmoEditor;
     // Where a Drag aims the bone: kept across the drag so a solve that lands short doesn't move the aim.
     private Vector3? dragAim;
+    // The pose a Drag began on, which each of its frames solves from.
+    private MotionTransform[]? dragFrom;
     // Whether the mouse was over the gizmo's rings or handles last frame: then the gizmo takes the click, not a dot.
     private bool gizmoOver;
     // Where the last drag left the gizmo on a bone, layer and frame, until Live shows the change there.
@@ -323,6 +325,7 @@ public sealed partial class TimelineWindow
             current.BeginFieldEdit();
             gizmoEditor = current;
             dragAim = null;
+            dragFrom = null;
         }
         if (gizmoEditor == null)
             return;
@@ -335,8 +338,9 @@ public sealed partial class TimelineWindow
                 if ((dragAim ?? frames.ThroughPosition(bone)) is { } from)
                 {
                     dragAim = from + move;
+                    dragFrom ??= frames.Through;
                     current.Change(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
-                        from + move, weight, BonePosing.LoopFrames(loaded, current.Document)));
+                        from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom));
                 }
             }
             else if (operation == ImGuizmoOperation.Translate)

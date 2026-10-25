@@ -8,7 +8,8 @@ namespace InstantEdit.Services.Animations.Motion;
 /// sample's local transforms and their model space side by side: it rewrites chain bones' local
 /// rotations and refreshes model space below them, parents before children, as
 /// <see cref="MotionEvaluator.ModelSpace"/> composes it. A limb's turns are the smallest rotations between
-/// a segment's old and new direction, so its bones keep their twist; a chain's even curl turns every bone
+/// a segment's old and new direction, the upper bone also rolled so the mid joint only bends about its own
+/// hinge, so the lower bone keeps its twist; a chain's even curl turns every bone
 /// about one axis, which twists a bent chain's bones a little. Bone lengths come from the pose and never
 /// change. No joint limits: limbs bend in the plane the motion gives them, other chains spread
 /// the bend over their bones. Pure.
@@ -152,6 +153,11 @@ internal static class PinSolver
         // The bend plane is the motion's, read before anything turns, in the upper bone's own space.
         var rootInverse = Quaternion.Inverse(Quaternion.Normalize(model[chain.Root].Rotation));
         var bendNormal = Vector3.Transform(BendNormal(model, chain, restNormal, weight), rootInverse);
+        // The mid joint's own hinge in the upper bone's space, and how far the pose bends it: a straight limb's hinge is noise.
+        var upper = model[chain.Mid].Position - model[chain.Root].Position;
+        var lower = model[chain.End].Position - model[chain.Mid].Position;
+        var hinge = Vector3.Transform(Vector3.Cross(upper, lower), rootInverse);
+        var bent = l1 < Tiny || l2 < Tiny ? 0 : MathF.Acos(Math.Clamp(Vector3.Dot(upper, lower) / (l1 * l2), -1, 1)) * 180 / MathF.PI;
         // Bones above the limb turn only to bring the aim within the limb's reach.
         var above = chain.Bones.AsSpan(0, chain.Bones.Length - 2);
         if (!above.IsEmpty && Vector3.Distance(aim, model[chain.Root].Position) > soft)
@@ -182,6 +188,15 @@ internal static class PinSolver
         var knee = a + l1 * (cos * direction + MathF.Sqrt(1 - cos * cos) * side);
 
         Turn(skeleton, local, model, chain.Root, b - a, knee - a);
+        // The upper bone rolls about itself, the least way, until the hinge lies across the new bend plane: the mid joint then only
+        // bends, and a solve made again from its own result (a drag) never builds up a roll there.
+        var plane = Vector3.Cross(knee - a, target - knee);
+        var carried = Vector3.Transform(hinge, Quaternion.Normalize(model[chain.Root].Rotation));
+        if (plane.Length() > Tiny && carried.Length() > Tiny && bent > 0)
+        {
+            var roll = Between(carried, Vector3.Dot(carried, plane) < 0 ? -plane : plane);
+            Rotate(skeleton, local, model, chain.Root, MotionEvaluator.Pow(roll, AnimationPoseRules.SmoothStep(Math.Clamp(bent / SettleDegrees, 0, 1))));
+        }
         var mid = model[chain.Mid].Position;
         Turn(skeleton, local, model, chain.Mid, model[chain.End].Position - mid, target - mid);
     }
