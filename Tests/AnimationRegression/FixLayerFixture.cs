@@ -369,6 +369,11 @@ internal static class FixLayerFixture
         check(TimelineWindowViews.DragGizmo(match, B1, null) == "This layer doesn't turn bones." && !TimelineLayout.Unfolds(match) &&
               TimelineWindowViews.LayerContent(match) == "Every bone" && TimelineWindowViews.LayerContent(match with { Bones = [B1] }) == "1 bone",
             "a fix layer has no gizmo, no bone rows and lists the bones it is limited to");
+        var smooth = SmoothLayer(1, 0, 30) with { Key = "s1" };
+        var offset = new MotionLayer("o1", MotionLayerKind.Offset, "Offset", 0, 30, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Smooth);
+        check(BonePosing.Earlier([smooth, match, offset], 2) is [var kept] && ReferenceEquals(kept, smooth) && BonePosing.TakesWholeClip([smooth]) &&
+              BonePosing.Earlier([match, offset], 1) is [] && !BonePosing.TakesWholeClip([offset]),
+            "the gizmo's frames bake the whole-clip layers before the posed one, but never a match, which lands after every layer");
     }
 
     /// <summary>The loop read for Match startup to loop and Re-read loop: one at a time, dropped when the clip or the layer goes.</summary>

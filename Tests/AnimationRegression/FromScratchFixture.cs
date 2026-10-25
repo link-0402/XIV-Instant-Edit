@@ -5,6 +5,7 @@ using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui;
+using InstantEdit.Ui.Pose;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
@@ -140,6 +141,10 @@ internal static class FromScratchFixture
             "a bone limit keeps the motion to its bones");
         check(MotionIdles.Moved(Layer(idle with { Balance = 0 })).OrderBy(name => name, StringComparer.Ordinal).SequenceEqual([Back, Tail]),
             "the bones it moves are the borrowed ones with a share");
+        var balanced = Layer(idle with { Balance = 0 });
+        check(PoseEdits.Changes(balanced, Back) && !PoseEdits.Changes(balanced, Skirt) && PoseEdits.Changes(balanced, Skirt, new HashSet<string> { Skirt }) &&
+              !PoseEdits.Changes(balanced, Back, new HashSet<string>()),
+            "an idle layer marks the bones of the set the panels keep for it, else the ones it moves");
     }
 
     private static void Document(Action<bool, string> check, Action<Action, string> reject)

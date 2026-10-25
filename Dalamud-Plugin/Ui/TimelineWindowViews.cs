@@ -82,9 +82,10 @@ internal static partial class TimelineWindowViews
 
     /// <summary>
     /// Why the gizmo can't drag <paramref name="primary"/> in <paramref name="layer"/>, bending the limb above it;
-    /// null when it can, and while <paramref name="skeleton"/> is unknown.
+    /// null when it can, and while <paramref name="skeleton"/> is unknown. <paramref name="index"/> is the skeleton's
+    /// bone index when already made (<see cref="MotionEvaluator.Index"/>), as each frame asks this several times.
     /// </summary>
-    public static string? DragGizmo(MotionLayer layer, string? primary, SkeletonDescription? skeleton)
+    public static string? DragGizmo(MotionLayer layer, string? primary, SkeletonDescription? skeleton, Dictionary<string, int>? index = null)
     {
         if (layer.Kind == MotionLayerKind.Pin)
             return "A pin already holds and bends.";
@@ -93,9 +94,9 @@ internal static partial class TimelineWindowViews
         if (primary == null)
             return "Select a bone to drag.";
         // The overlay never offers a bone the skeleton lacks.
-        if (skeleton == null || !skeleton.Bones.Any(bone => bone.Name == primary))
+        if (skeleton == null || !(index ??= MotionEvaluator.Index(skeleton)).ContainsKey(primary))
             return null;
-        return PinChains.Chain(skeleton, new MotionPin(primary)).Shape == PinChainShape.None
+        return PinChains.Chain(skeleton, index, new MotionPin(primary)).Shape == PinChainShape.None
             ? $"{AnimationPresentation.BoneName(primary)} sits right under the body, so nothing can bend to drag it."
             : null;
     }

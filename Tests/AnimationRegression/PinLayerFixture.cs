@@ -102,6 +102,7 @@ internal static class PinLayerFixture
 
         // A long drag: the hand circles three times and the elbow only bends, the forearm never rolls about its own length.
         // Solved from where the drag began, the arm is back as it was once the hand is, its shoulder unrolled.
+        var armLimb = PoseEdits.Limb(body, "j_te_l");
         foreach (var fromStart in new[] { false, true })
         {
             var circledDoc = Doc(BoneLayer(MotionLayerKind.Pose, 1));
@@ -112,8 +113,9 @@ internal static class PinLayerFixture
                 var angle = step * 3 * MathF.PI / 180;
                 var aim = hand + new Vector3(.12f * (MathF.Cos(angle) - 1), .12f * MathF.Sin(angle), .06f * MathF.Sin(2 * angle));
                 var layerNow = Keyed(circledDoc);
+                // From its start as the gizmo drags: with the limb it found once.
                 circledDoc = PoseEdits.Reach(circledDoc, layerNow, 0, body, before, MotionEvaluator.ApplyAt(body, before, [layerNow], 0), "j_te_l", aim, 1,
-                    start: fromStart ? before : null);
+                    start: fromStart ? before : null, limb: fromStart ? armLimb : null);
                 circledPose = MotionEvaluator.ApplyAt(body, before, [Keyed(circledDoc)], 0);
                 straightRoll &= Vector3.Distance(MotionEvaluator.ModelSpace(body, circledPose)[HandL].Position, aim) < .001f &&
                                 Math.Abs(Roll(Quaternion.Inverse(before[ForearmL].Rotation) * circledPose[ForearmL].Rotation, Vector3.UnitX)) < 1;
@@ -139,7 +141,10 @@ internal static class PinLayerFixture
               TimelineWindowViews.DragGizmo(pose, null, body) == "Select a bone to drag." &&
               TimelineWindowViews.DragGizmo(pose, "j_te_l", body) == null && TimelineWindowViews.DragGizmo(BoneLayer(MotionLayerKind.Offset, 1), "j_te_l", body) == null &&
               TimelineWindowViews.DragGizmo(pose, "j_te_l", null) == null && TimelineWindowViews.DragGizmo(pose, "j_nothing", body) == null &&
-              TimelineWindowViews.DragGizmo(pose, "j_kosi", body) == $"{AnimationPresentation.BoneName("j_kosi")} sits right under the body, so nothing can bend to drag it.",
+              TimelineWindowViews.DragGizmo(pose, "j_kosi", body) == $"{AnimationPresentation.BoneName("j_kosi")} sits right under the body, so nothing can bend to drag it." &&
+              TimelineWindowViews.DragGizmo(pose, "j_kosi", body, MotionEvaluator.Index(body)) != null &&
+              TimelineWindowViews.DragGizmo(pose, "j_te_l", body, MotionEvaluator.Index(body)) == null &&
+              TimelineWindowViews.DragGizmo(pose, "j_nothing", body, MotionEvaluator.Index(body)) == null,
             "Drag needs an offset or pose layer that turns bones and a bone with a limb above it to bend");
     }
 

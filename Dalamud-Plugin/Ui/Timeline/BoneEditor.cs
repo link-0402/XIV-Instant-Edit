@@ -183,8 +183,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         FlowLine("Mirror");
         using (ImRaii.Disabled(readOnly || pairs.Count == 0 || !mirrorReady))
         {
-            if (ImGui.Button("Mirror") && decode.Decoded is { } clip &&
-                PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton, at => clip.Pose(at)) is { } mirrored)
+            // The motion as the document cuts or stretches it, as Paste mirrored reads it.
+            if (ImGui.Button("Mirror") && PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton, at => posing.MotionPose(loaded, at)?.Local) is { } mirrored)
                 current.Commit(mirrored);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -547,7 +547,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         var actor = ActorRotation() ?? Quaternion.Identity;
         var several = turned.Count > 1;
         // A drag forces the character's axes, so the ball shows them too, as the axes line says.
-        var drag = overlay.Shown && overlay.Gizmo == GizmoMode.Drag && TimelineWindowViews.DragGizmo(layer, posing.Selection.Primary, skeleton) == null;
+        var drag = overlay.Shown && overlay.Gizmo == GizmoMode.Drag &&
+                   TimelineWindowViews.DragGizmo(layer, posing.Selection.Primary, skeleton, posing.BoneTree(skeleton).Index) == null;
         var character = characterAxes || several || drag;
         // The primary bone as the layers turn it, in character space.
         Quaternion? bone = frames is { } known ? Quaternion.Normalize(known.Space(primary.Bone) * Quaternion.Normalize(primary.Value.Rotation)) : null;
@@ -606,7 +607,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         var (turns, moves) = layer.Kind == MotionLayerKind.Pin
             ? (posing.Selection.Primary is { } primary && MotionEdits.PinIndex(layer, primary) is var at and >= 0 && layer.Pins[at].HoldTurn, true)
             : (layer.Components.HasFlag(PoseComponents.Rotation), layer.Components.HasFlag(PoseComponents.Position));
-        var dragHint = TimelineWindowViews.DragGizmo(layer, posing.Selection.Primary, skeleton);
+        var dragHint = TimelineWindowViews.DragGizmo(layer, posing.Selection.Primary, skeleton, posing.BoneTree(skeleton).Index);
         // Drag kept from a layer where it could drag reads as Turn here.
         var drag = overlay.Gizmo == GizmoMode.Drag && dragHint == null;
         var move = !drag && moves && (overlay.Gizmo == GizmoMode.Move || !turns);

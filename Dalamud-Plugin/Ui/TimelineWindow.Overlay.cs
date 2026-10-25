@@ -39,6 +39,8 @@ public sealed partial class TimelineWindow
     private Vector3? dragAim;
     // The pose a Drag began on, which each of its frames solves from.
     private MotionTransform[]? dragFrom;
+    // The limb a Drag bends, found once per drag.
+    private (PinChain Chain, Vector3 RestNormal)? dragLimb;
     // Whether the mouse was over the gizmo's rings or handles last frame: then the gizmo takes the click, not a dot.
     private bool gizmoOver;
     // Where the last drag left the gizmo on a bone, layer and frame, until Live shows the change there.
@@ -142,11 +144,11 @@ public sealed partial class TimelineWindow
         }
 
         var primary = selection.Primary is { } chosen && index.TryGetValue(chosen, out var chosenIndex) ? chosenIndex : -1;
-        if (posing.Ghosts && layer != null)
+        if (posing.Ghosts && layer != null && posing.GhostPose(loaded, current.Document, frame) is { } playhead)
         {
             var (before, after) = BoneOverlayModes.GhostFrames(layer.Keys, frame);
-            DrawGhost(skeleton, loaded, current.Document, before, Theme.Info, toClip, viewport);
-            DrawGhost(skeleton, loaded, current.Document, after, Theme.Important, toClip, viewport);
+            DrawGhost(skeleton, loaded, current.Document, before, playhead, Theme.Info, toClip, viewport);
+            DrawGhost(skeleton, loaded, current.Document, after, playhead, Theme.Important, toClip, viewport);
         }
         DrawOverlayBones(skeleton, layer, frame, animated, primary, hover);
         DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
@@ -165,11 +167,13 @@ public sealed partial class TimelineWindow
     /// <summary>
     /// An onion skin: faint dots and lines in <paramref name="tint"/> for the pose at a key of the selected layer,
     /// on the bones that have a dot, each joined to the nearest one above it. Drawn before the dots, so under them.
+    /// Each sits off its dot by how far the bone is from where it is at the playhead (<paramref name="playhead"/>), so
+    /// the character's own scaling and physics carry the ghost too.
     /// </summary>
-    private void DrawGhost(SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc, int? frame, Vector4 tint,
-        Matrix4x4 toClip, ImGuiViewportPtr viewport)
+    private void DrawGhost(SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc, int? frame, MotionTransform[] playhead,
+        Vector4 tint, Matrix4x4 toClip, ImGuiViewportPtr viewport)
     {
-        if (frame is not { } key || posing.GhostPose(loaded, doc, key) is not { } model || model.Length != dotShown.Length)
+        if (frame is not { } key || posing.GhostPose(loaded, doc, key) is not { } model || model.Length != dotShown.Length || playhead.Length != model.Length)
             return;
         if (ghostAt.Length != dotShown.Length)
         {
@@ -177,7 +181,8 @@ public sealed partial class TimelineWindow
             ghostShown = new bool[dotShown.Length];
         }
         for (var b = 0; b < dotShown.Length; b++)
-            ghostShown[b] = dotShown[b] && PoseGizmo.Project(model[b].Position, toClip, viewport.Pos, viewport.Size, out ghostAt[b]);
+            ghostShown[b] = dotShown[b] && actorPose.Index.TryGetValue(skeleton.Bones[b].Name, out var at) &&
+                            PoseGizmo.Project(actorPose.Positions[at] + model[b].Position - playhead[b].Position, toClip, viewport.Pos, viewport.Size, out ghostAt[b]);
         var drawList = ImGui.GetWindowDrawList();
         var radius = Theme.Scaled(3.5f);
         var lineColour = ImGui.GetColorU32(Theme.WithAlpha(tint, .3f));
@@ -326,6 +331,7 @@ public sealed partial class TimelineWindow
             gizmoEditor = current;
             dragAim = null;
             dragFrom = null;
+            dragLimb = null;
         }
         if (gizmoEditor == null)
             return;
@@ -339,8 +345,9 @@ public sealed partial class TimelineWindow
                 {
                     dragAim = from + move;
                     dragFrom ??= frames.Through;
+                    dragLimb ??= PoseEdits.Limb(skeleton, bone);
                     current.Change(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
-                        from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom));
+                        from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb));
                 }
             }
             else if (operation == ImGuizmoOperation.Translate)
@@ -407,7 +414,7 @@ public sealed partial class TimelineWindow
 
     /// <summary>Whether the gizmo drags the primary bone in <paramref name="layer"/>: Drag chosen and able to; else a kept Drag acts as Turn.</summary>
     private bool Drags(MotionLayer layer, SkeletonDescription skeleton) =>
-        gizmoMode == GizmoMode.Drag && TimelineWindowViews.DragGizmo(layer, selection.Primary, skeleton) == null;
+        gizmoMode == GizmoMode.Drag && TimelineWindowViews.DragGizmo(layer, selection.Primary, skeleton, BoneTree(skeleton).Index) == null;
 
     /// <summary>
     /// Ends a gizmo drag: its changes become one undo step in the editor it began in. An abandoned drag,

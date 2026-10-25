@@ -38,13 +38,13 @@ internal static class PoseEdits
 
     /// <summary>
     /// Whether any key of the layer has <paramref name="bone"/>, or for an amplitude or a fix whether it is limited to
-    /// it. A symmetry's or a pin's bones come from the skeleton (<paramref name="changed"/>, see BonePosing.BonesOf).
+    /// it. A symmetry's or a pin's bones come from the skeleton, an idle's from what it moves (<paramref name="changed"/>, see BonePosing.BonesOf).
     /// </summary>
     public static bool Changes(MotionLayer layer, string bone, IReadOnlySet<string>? changed = null) => layer.Kind switch
     {
         MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.Contains(bone),
         MotionLayerKind.Symmetry or MotionLayerKind.Pin => changed?.Contains(bone) == true,
-        MotionLayerKind.Idle => MotionIdles.Moved(layer).Contains(bone),
+        MotionLayerKind.Idle => changed?.Contains(bone) ?? MotionIdles.Moved(layer).Contains(bone),
         _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),
     };
 
@@ -175,18 +175,19 @@ internal static class PoseEdits
     /// <paramref name="layer"/> must be the layer as <paramref name="doc"/> holds it: values are read from it, keys written to the doc.
     /// A key never turns a bone a half turn or more, so a layer at a low weight bends the chain only as far as it can carry it.
     /// A drag passes <paramref name="start"/>, <paramref name="through"/> as it began: every frame solves from there, so where the
-    /// chain ends up depends only on the aim, and turns can't build up in its bones over a long drag.
+    /// chain ends up depends only on the aim, and turns can't build up in its bones over a long drag. It may also pass
+    /// <paramref name="limb"/>, <see cref="Limb"/> for <paramref name="bone"/>, so its frames don't find the chain again.
     /// </summary>
     public static TimelineDocument Reach(TimelineDocument doc, MotionLayer layer, int frame, SkeletonDescription skeleton,
         ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, string bone, Vector3 aim, float weight, float loop = 0,
-        MotionTransform[]? start = null)
+        MotionTransform[]? start = null, (PinChain Chain, Vector3 RestNormal)? limb = null)
     {
-        var chain = PinChains.Chain(skeleton, new MotionPin(bone));
+        var (chain, normal) = limb ?? Limb(skeleton, bone);
         if (chain.Shape == PinChainShape.None || !(weight >= MinFollowWeight))
             return doc;
         var local = start?.ToArray() ?? through.ToArray();
         var model = MotionEvaluator.ModelSpace(skeleton, local);
-        PinSolver.Reach(skeleton, local, model, chain, aim, PinSolver.RestNormal(skeleton, chain));
+        PinSolver.Reach(skeleton, local, model, chain, aim, normal);
         // A key past a half turn reads back the short way round, the opposite turn.
         var most = weight * 179 * MathF.PI / 180;
         foreach (var b in chain.Bones)
@@ -209,6 +210,13 @@ internal static class PoseEdits
             doc = MotionEdits.SetKey(doc, layer.Key, frame, name, value.ToBone());
         }
         return doc;
+    }
+
+    /// <summary>The chain <see cref="Reach"/> bends to move <paramref name="bone"/>, and its bend's side at rest.</summary>
+    public static (PinChain Chain, Vector3 RestNormal) Limb(SkeletonDescription skeleton, string bone)
+    {
+        var chain = PinChains.Chain(skeleton, new MotionPin(bone));
+        return (chain, PinSolver.RestNormal(skeleton, chain));
     }
 
     /// <summary>The least weight a layer needs at the playhead for the gizmo to change its keys: below it the bone barely moves.</summary>

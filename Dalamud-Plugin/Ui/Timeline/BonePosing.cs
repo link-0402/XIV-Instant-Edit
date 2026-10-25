@@ -36,6 +36,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         HashSet<string> Bones)? symmetryTargets;
     // The selected pin layer's pinned and bent bones on the skeleton they were found on.
     private (MotionLayer Layer, SkeletonDescription Skeleton, LayerBoneSets Bones)? pinBones;
+    // The selected idle layer's moved bones.
+    private (MotionLayer Layer, LayerBoneSets Bones)? idleBones;
     // A pin layer's planted facts by bone, for what they depend on: the layers before it, its pins and range, and the decoded motion.
     private (string Layer, MotionLayer[] Before, ImmutableArray<MotionPin> Pins, int Start, int End, MotionClip Clip, IReadOnlyDictionary<string, string> Facts)? plantedFacts;
     // The motion with some layers baked over the whole clip, or why it can't be, for those layers and the clip.
@@ -110,8 +112,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     }
 
     /// <summary>
-    /// The bones a symmetry or pin layer marks on the map, the list and the character, by name: a pin's
-    /// pinned bones and the bones it bends; the bones a symmetry copies onto. Null for other layers, whose
+    /// The bones a symmetry, pin or idle layer marks on the map, the list and the character, by name: a pin's
+    /// pinned bones and the bones it bends; the bones a symmetry copies onto; the bones an idle moves. Null for other layers, whose
     /// keys say what they change. Kept while the layer stays.
     /// </summary>
     public LayerBoneSets? BonesOf(MotionLayer? layer, SkeletonDescription skeleton)
@@ -126,6 +128,11 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
                 var bones = LayerBones(layer, skeleton);
                 pinBones = (layer, skeleton, bones);
                 return bones;
+            case MotionLayerKind.Idle:
+                if (idleBones is { } idle && ReferenceEquals(idle.Layer, layer))
+                    return idle.Bones;
+                idleBones = (layer, new LayerBoneSets(EmptySet, MotionIdles.Moved(layer).ToHashSet(StringComparer.Ordinal)));
+                return idleBones.Value.Bones;
             default:
                 return null;
         }
@@ -329,14 +336,15 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         {
             var loop = LoopFrames(loaded, doc);
             var end = MotionEnd(loaded, doc);
-            var earlier = doc.Motion.Take(at).ToArray();
-            // One pose leaves out amplitudes, fixes and planted pins, which take the whole clip: a pin's spots then come
-            // from the bake, so Pin here and the gizmo key the bone where Live has it.
-            before = layer.Kind == MotionLayerKind.Pin && OutputClip(loaded) is { } output && earlier.Any(other => MotionEvaluator.Active(other) &&
-                         (other.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix || other.Kind == MotionLayerKind.Pin && other.Pins.Any(pin => pin.Planted)))
+            var earlier = Earlier(doc.Motion, at);
+            // One pose leaves out amplitudes, fixes and planted pins, which take the whole clip: the frames then start from
+            // the bake, so the panels and the gizmo key the bone where Live has it.
+            before = TakesWholeClip(earlier) && OutputClip(loaded) is { } output
                 ? BakedBefore(output, earlier).Pose(frame)
                 : MotionEvaluator.ApplyAt(skeleton, own.Local, earlier, frame, loop, end, clip.SourceTracks);
-            through = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion.Take(at + 1).ToArray(), frame, loop, end, clip.SourceTracks);
+            // Alone is enough: the layer posed here is never a symmetry, the one kind that reads the layers before it.
+            through = MotionEvaluator.ApplyAt(skeleton, before, [layer], frame, loop, end, clip.SourceTracks);
+            // shortcut: after leaves out whole-clip layers, so Space's parent turn may be off by them; bake it if a second bake per frame is cheap.
             after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end, clip.SourceTracks);
         }
         catch (InvalidDataException)
@@ -350,6 +358,17 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         boneFrames = (doc, layer.Key, frame, clip, frames);
         return frames;
     }
+
+    /// <summary>
+    /// The layers before the one at <paramref name="at"/>, as they apply to it: all but Match startup to loop fixes,
+    /// which land after every layer.
+    /// </summary>
+    public static MotionLayer[] Earlier(IReadOnlyList<MotionLayer> motion, int at) =>
+        [.. motion.Take(at).Where(layer => layer.Fix?.Kind != MotionFixKind.MatchLoop)];
+
+    /// <summary>Whether any of <paramref name="layers"/> takes the whole clip, which one pose leaves out: an amplitude, a fix or a planted pin.</summary>
+    public static bool TakesWholeClip(IEnumerable<MotionLayer> layers) => layers.Any(layer => MotionEvaluator.Active(layer) &&
+        (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix || layer.Kind == MotionLayerKind.Pin && layer.Pins.Any(pin => pin.Planted)));
 
     /// <summary>The bones the decoded clip has tracks for, when it was decoded on <paramref name="skeleton"/>; empty while unknown.</summary>
     public IReadOnlyCollection<short> DecodedTracks(SkeletonDescription skeleton) =>
@@ -365,7 +384,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     {
         if (OutputClip(loaded) is not { } clip)
             return null;
-        var before = doc.Motion.Take(Math.Max(0, MotionEdits.IndexOf(doc, layer.Key))).ToArray();
+        var before = Earlier(doc.Motion, Math.Max(0, MotionEdits.IndexOf(doc, layer.Key)));
         if (plantedFacts is { } cached && cached.Layer == layer.Key && ReferenceEquals(cached.Clip, clip) &&
             // Through a drag the last facts stand, so dragging the layer's edges doesn't work them out again every frame.
             (session.Editor is { Gesture: not TimelineGesture.None } ||
@@ -448,7 +467,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// <summary>
     /// The pose at <paramref name="frame"/> with every layer of <paramref name="doc"/> applied, in model space, for an
     /// onion skin; null while the motion is read, which this starts. Like the gizmo's frames it leaves out amplitudes,
-    /// fixes and planted pins, which take the whole clip. Kept for the last two frames while the document and the decode stay.
+    /// fixes and planted pins, which take the whole clip. Kept for the last three frames (the playhead and the keys either side)
+    /// while the document and the decode stay.
     /// </summary>
     public MotionTransform[]? GhostPose(AnimationTimelineSource loaded, TimelineDocument doc, int frame)
     {
@@ -458,7 +478,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             if (ReferenceEquals(cached.Doc, doc) && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
                 return cached.Model;
         var model = MotionEvaluator.ModelSpace(clip.Skeleton, Layered(clip, loaded, doc, frame));
-        if (ghostPoses.Count >= 2)
+        if (ghostPoses.Count >= 3)
             ghostPoses.RemoveAt(0);
         ghostPoses.Add((doc, clip, frame, model));
         return model;
