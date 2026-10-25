@@ -1,5 +1,7 @@
+using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Timeline;
 
 /// <summary>
 /// Rebuilding a clip borrowed from another race for the character's own race: which race
@@ -10,6 +12,62 @@ internal static class RaceRebuildFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         ActorRace(check);
+        RaceTarget(check);
+    }
+
+    private static void RaceTarget(Action<bool, string> check)
+    {
+        static SkeletonDescription S(string fingerprint, params string[] names) => new("skeleton", fingerprint,
+            [.. names.Select((name, i) => new SkeletonBone(name, (short)(i == 0 ? -1 : 0), 0, new(Vector3.Zero, Quaternion.Identity, Vector3.One)))], [], [], []);
+        var actorVanilla = new StandardSkeleton(SkeletonStandard.Vanilla, S("c0801", "n_root", "n_hara", "j_kosi", "j_sebo_a"), "c0801 game");
+        var actorIvcs = new StandardSkeleton(SkeletonStandard.Ivcs, S("c0801 ivcs", "n_root", "n_hara", "j_kosi", "j_sebo_a", "iv_ko_c_l"), "c0801 IVCS");
+        var ownIvcs = new StandardSkeleton(SkeletonStandard.Ivcs, AnimationBonesFixture.Rigs.Ivcs, "c0101 IVCS");
+        var resource = new AnimationResource("chara/test.pap", "chara/test.pap", "hash");
+        var candidate = new SkeletonCandidate(new(SkeletonSourceKind.Mod, resource), AnimationBonesFixture.Rigs.Ivcs, 0, "");
+        // Track bones 2 and 6 of the IVCS rig: j_kosi and iv_ko_c_l.
+        var clip = new AnimationClip("chara/human/c0101/animation/a0001/bt_common/emote/cheer.pap", "loop", 0, 0, 42,
+            "chara/human/c0101/skeleton/base/b0001/skl_c0101b0001.sklb",
+            Resolution: new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, TrackBones: [2, 6],
+                Standards: [new(SkeletonStandard.Vanilla, AnimationBonesFixture.Rigs.Game, "c0101 game"), ownIvcs],
+                ActorModel: "c0801", ActorStandards: [actorVanilla, actorIvcs]));
+
+        check(AnimationBones.Standard(clip, SkeletonStandard.Ivcs, "c0801") == actorIvcs &&
+              AnimationBones.Standard(clip, SkeletonStandard.Ivcs) == ownIvcs && AnimationBones.Standard(clip, SkeletonStandard.Ivcs, "c1101") == null,
+            "a standard is looked up for the race asked");
+        check(AnimationBones.DefaultRebuild(clip, "c0101", []) == SkeletonStandard.Ivcs, "the smallest standard of the target race holding the moved bones");
+        check(AnimationBones.DefaultRebuild(clip, "c0101", ["iv_ko_c_l"]) == SkeletonStandard.Vanilla, "excluded bones don't count");
+        check(AnimationBones.DefaultRebuild(clip with { Resolution = clip.Resolution! with { ActorModel = null, ActorStandards = [] } }, "c0101", []) == null,
+            "none when the races agree");
+        check(AnimationBones.DefaultRebuild(clip, "c0801", []) == null && AnimationBones.RebuildNote(clip, "c0801", [], false) == null &&
+              AnimationBones.RebuildRace(clip, "c0801") == null,
+            "a file already saved for the race offers no rebuild");
+        check(AnimationBones.DefaultRebuild(clip with { Resolution = clip.Resolution! with { ActorStandards = [actorVanilla] } }, "c0101", []) == null,
+            "none when no standard holds them");
+        var lacks = AnimationPresentation.BoneName("iv_ko_c_l");
+        check(AnimationBones.RebuildNote(clip, "c0101", [], true) == "Rebuilt for Miqo'te (Female): your character's skeleton." &&
+              AnimationBones.RebuildNote(clip with { Resolution = clip.Resolution! with { ActorStandards = [actorVanilla] } }, "c0101", [], false) ==
+                  $"Can't rebuild for Miqo'te (Female): its skeletons lack {lacks}." &&
+              AnimationBones.RebuildNote(clip with { Resolution = clip.Resolution! with { ActorStandards = [] } }, "c0101", [], false) ==
+                  "Can't rebuild for Miqo'te (Female): its skeleton wasn't found." &&
+              AnimationBones.RebuildNote(clip, "c0101", [], false) == null,
+            "the line under the footer says what was rebuilt, or why it can't be");
+
+        var doc = new TimelineDocument(30, 30, null, [], 1);
+        var source = TimelineToolsFixture.Source(clip, doc);
+        var request = AnimationEditService.TimelineRequest(source, doc, AnimationDestination.InPlace, "Mod");
+        var chosen = AnimationEditService.TimelineRequest(source with { Rebuild = new RaceRebuild("c0801", actorIvcs) }, doc,
+            AnimationDestination.InPlace, "Mod", SkeletonStandard.Vanilla);
+        var expression = AnimationEditService.TimelineRequest(TimelineToolsFixture.Source(clip, doc, -1) with { Rebuild = new RaceRebuild("c0801", actorIvcs) },
+            doc, AnimationDestination.InPlace, "Mod");
+        check(chosen is { RepairTarget: SkeletonStandard.Ivcs, RepairModel: "c0801" } && request is { RepairTarget: null, RepairModel: null } &&
+              expression is { RepairTarget: null, RepairModel: null },
+            "a save rebuilds onto the chosen race's standard; an expression never does");
+        var rebuilt = request with { RepairTarget = SkeletonStandard.Ivcs, RepairModel = "c0801" };
+        check(AnimationBakeRules.RepairedModel(rebuilt, clip, new AnimationPap(TimelineToolsFixture.Pap(101))) == 801, "a rebuild names the target race in the header");
+        var compact = AnimationCommitService.RecoveryRequest(rebuilt).Capture.Clip.Resolution!;
+        check(compact.ActorStandards.Single() == actorIvcs && compact.Standards.IsEmpty, "a journal keeps the standard it rebuilt onto");
+        var own = AnimationCommitService.RecoveryRequest(rebuilt with { RepairModel = null }).Capture.Clip.Resolution!;
+        check(own.Standards.Single() == ownIvcs && own.ActorStandards.IsEmpty, "a repair onto the clip's own race keeps only that standard");
     }
 
     private static void ActorRace(Action<bool, string> check)

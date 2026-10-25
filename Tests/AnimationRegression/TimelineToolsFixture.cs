@@ -223,7 +223,7 @@ internal static class TimelineToolsFixture
                 TrackBones: [.. Enumerable.Range(0, skeleton.Bones.Length).Select(i => (short)i)], Standards: [.. standards]));
     }
 
-    private static AnimationTimelineSource Source(AnimationClip clip, TimelineDocument doc, int entry = 0)
+    internal static AnimationTimelineSource Source(AnimationClip clip, TimelineDocument doc, int entry = 0)
     {
         var capture = new AnimationCapture("a", 7, 1, Collection, "Test", "Dance", clip, null, [clip.GamePath],
             [new AnimationResource(clip.GamePath, "dance.pap", "hash")], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""),
@@ -284,7 +284,7 @@ internal static class TimelineToolsFixture
     }
 
     // A PAP envelope around no motion: one entry per binding, the header naming the model and its type.
-    private static byte[] Pap(ushort model, byte type = 0, int bindings = 1)
+    internal static byte[] Pap(ushort model, byte type = 0, int bindings = 1)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);

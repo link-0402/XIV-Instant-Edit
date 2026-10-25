@@ -84,11 +84,12 @@ internal static class AnimationBakeRules
     /// a second time: every bone shortened by the races' ratio, a warped body and head (measured in game
     /// 2026-10-19). Null when the header stays: no repair, a clip naming no human race, or the same race.
     /// The header names the race of every animation in the file, so a file holding others the repair
-    /// leaves on the old race is refused: one of the two would play warped.
+    /// leaves on the old race is refused: one of the two would play warped. A rebuild for another race
+    /// (<see cref="AnimationBakeRequest.RepairModel"/>) names that race.
     /// </summary>
     public static ushort? RepairedModel(AnimationBakeRequest request, AnimationClip clip, AnimationPap pap)
     {
-        if (!Repairs(request) || pap.ModelType != 0 || AnimationSkeletonIndex.ModelFromPath(clip.SkeletonPath) is not { } race ||
+        if (!Repairs(request) || pap.ModelType != 0 || (request.RepairModel ?? AnimationSkeletonIndex.ModelFromPath(clip.SkeletonPath)) is not { } race ||
             !ushort.TryParse(race.AsSpan(1), out var model) || model == pap.ModelId)
             return null;
         var startup = request.IncludeStartup && request.Capture.Startup is { } start && start.GamePath == clip.GamePath ? start.BindingIndex : -1;

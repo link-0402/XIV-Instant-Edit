@@ -160,7 +160,9 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             Resolution = resolution with
             {
                 Candidates = resolution.Selected is { } selected ? [selected] : [],
-                Standards = [.. resolution.Standards.Where(s => s.Standard == request.RepairTarget)],
+                // A rebuild for another race retargets onto that race's standard, never the clip's own.
+                Standards = request.RepairModel != null ? [] : [.. resolution.Standards.Where(s => s.Standard == request.RepairTarget)],
+                ActorStandards = request.RepairModel != null ? [.. resolution.ActorStandards.Where(s => s.Standard == request.RepairTarget)] : [],
             },
         } : clip;
         return request with { Capture = request.Capture with { Clip = Compact(request.Capture.Clip),

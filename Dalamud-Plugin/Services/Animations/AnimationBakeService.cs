@@ -262,7 +262,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 // save repairs too when it names a standard.
                 var repairing = AnimationBakeRules.Repairs(request);
                 targetDescription = repairing
-                    ? (request.RepairTarget is { } standard ? AnimationBones.Standard(clip, standard)?.Skeleton : null)
+                    ? (request.RepairTarget is { } standard ? AnimationBones.Standard(clip, standard, request.RepairModel)?.Skeleton : null)
                         ?? throw new InvalidDataException("The skeleton to repair onto was not found. Refresh the capture.")
                     : sourceDescription;
                 AnimationSkeleton.Validate(targetDescription);

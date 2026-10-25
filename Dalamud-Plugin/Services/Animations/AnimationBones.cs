@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 using InstantEdit.Models;
+using InstantEdit.Studio.Models;
 
 namespace InstantEdit.Services.Animations;
 
@@ -67,8 +68,62 @@ internal static class AnimationBones
         _ => "Vanilla",
     };
 
-    public static StandardSkeleton? Standard(AnimationClip clip, SkeletonStandard standard)
-        => clip.Resolution?.Standards.FirstOrDefault(s => s.Standard == standard);
+    /// <summary>
+    /// The standard's skeleton for the clip's own race, or with <paramref name="model"/> for that
+    /// race: only the character's race (see <see cref="SkeletonResolution.ActorModel"/>) has any.
+    /// </summary>
+    public static StandardSkeleton? Standard(AnimationClip clip, SkeletonStandard standard, string? model = null)
+        => (model == null ? clip.Resolution?.Standards : model == clip.Resolution?.ActorModel ? clip.Resolution?.ActorStandards : null)
+            ?.FirstOrDefault(s => s.Standard == standard);
+
+    /// <summary>A race code for people: "Miqo'te (Female)" for "c0801".</summary>
+    public static string RaceName(string model) => ushort.TryParse(model.AsSpan(1), out var code) ? RaceInfo.NameOf(code) : model;
+
+    /// <summary>
+    /// The race a save can rebuild the clip for: the character's, when the clip is another race's
+    /// and its file (<paramref name="fileModel"/>, the race its PAP header names) wasn't saved for it already.
+    /// </summary>
+    public static string? RebuildRace(AnimationClip clip, string? fileModel)
+        => clip.Resolution?.ActorModel is { } actor && actor != fileModel ? actor : null;
+
+    private static string[] Kept(AnimationClip clip, IReadOnlyCollection<string> excluded)
+    {
+        var set = excluded.ToHashSet(StringComparer.Ordinal);
+        return [.. Animated(clip).Where(name => !set.Contains(name))];
+    }
+
+    private static bool Holds(StandardSkeleton standard, IEnumerable<string> bones)
+        => standard.Skeleton.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal).IsSupersetOf(bones);
+
+    /// <summary>
+    /// The standard a rebuild picks unless you choose: the smallest of the character's race whose
+    /// skeleton has every bone kept. Null without a race to rebuild for or when none has them.
+    /// </summary>
+    public static SkeletonStandard? DefaultRebuild(AnimationClip clip, string? fileModel, IReadOnlyCollection<string> excluded)
+    {
+        if (RebuildRace(clip, fileModel) == null) return null;
+        var kept = Kept(clip, excluded);
+        return clip.Resolution!.ActorStandards.OrderBy(s => s.Standard).FirstOrDefault(s => Holds(s, kept))?.Standard;
+    }
+
+    /// <summary>
+    /// The line under the save footer: what the save rebuilds for, or why it can't. Null without a
+    /// race to rebuild for, or when it can and isn't <paramref name="rebuilding"/>.
+    /// </summary>
+    public static string? RebuildNote(AnimationClip clip, string? fileModel, IReadOnlyCollection<string> excluded, bool rebuilding)
+    {
+        if (RebuildRace(clip, fileModel) is not { } model) return null;
+        var race = RaceName(model);
+        if (rebuilding) return $"Rebuilt for {race}: your character's skeleton.";
+        var standards = clip.Resolution!.ActorStandards;
+        if (standards.IsEmpty) return $"Can't rebuild for {race}: its skeleton wasn't found.";
+        if (DefaultRebuild(clip, fileModel, excluded) != null) return null;
+        // Each standard extends the one before it, so the largest lacks what they all lack.
+        var largest = standards.MaxBy(s => s.Standard)!.Skeleton.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal);
+        var lacking = Kept(clip, excluded).Where(name => !largest.Contains(name)).ToArray();
+        return $"Can't rebuild for {race}: its skeletons lack {string.Join(", ", lacking.Take(3).Select(AnimationPresentation.BoneName))}" +
+               (lacking.Length > 3 ? $" and {lacking.Length - 3} more" : "") + ".";
+    }
 
     /// <summary>
     /// Whether a bone belongs to a standard's groups: the game's own bones, then IVCS's
@@ -136,9 +191,9 @@ internal static class AnimationBones
     /// ones it lacks and leaves out, and the highest bone index the output binds. Null when
     /// the standard's skeleton was not found.
     /// </summary>
-    public static RepairPlan? Plan(AnimationClip clip, SkeletonStandard standard, IReadOnlyCollection<string> excluded)
+    public static RepairPlan? Plan(AnimationClip clip, SkeletonStandard standard, IReadOnlyCollection<string> excluded, string? model = null)
     {
-        if (Standard(clip, standard) is not { } target) return null;
+        if (Standard(clip, standard, model) is not { } target) return null;
         var index = target.Skeleton.Bones.Select((bone, i) => (bone.Name, i)).ToDictionary(b => b.Name, b => b.i, StringComparer.Ordinal);
         var set = excluded.ToHashSet(StringComparer.Ordinal);
         var bones = Animated(clip).Where(name => !set.Contains(name)).ToArray();

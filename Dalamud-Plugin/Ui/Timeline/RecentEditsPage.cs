@@ -39,6 +39,8 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
             ? $"skeleton repair onto {AnimationBones.StandardName(target)}"
             : "skeleton repair",
         AnimationOperation.ExcludeBones => "bone exclusion",
+        AnimationOperation.EditTimeline when request is { RepairTarget: { } target, RepairModel: { } model } =>
+            $"timeline edit, rebuilt for {AnimationBones.RaceName(model)} on {AnimationBones.StandardName(target)}",
         AnimationOperation.EditTimeline => request.RepairTarget is { } repaired
             ? $"timeline edit, repaired onto {AnimationBones.StandardName(repaired)}"
             : "timeline edit",

@@ -759,7 +759,9 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
             entry.Sources.Select(s => new SkeletonCandidate(s, entry.Skeleton, 0, "")))).ToArray();
         // Every file of a library skeleton, not only the one a candidate names, can show it is a posing variant.
         var posing = PosingSkeletons(mapped.Concat(candidates));
-        var (actorModel, actorStandards) = ActorStandards(AnimationCatalog.BaseSkeleton(loaded), papModel ?? ModelFromPath(expected),
+        // Only body clips are rebuilt for the character's race; face and hair clips keep theirs.
+        var actorBase = expected.Contains("/skeleton/base/", StringComparison.Ordinal) ? AnimationCatalog.BaseSkeleton(loaded) : null;
+        var (actorModel, actorStandards) = ActorStandards(actorBase, papModel ?? ModelFromPath(expected),
             candidates, mapped, posing);
         // Keep which bones the clip animates; the selected source names them.
         return Rank(channels, candidates, baseline, expected, manual, sourceIdentity, posing) with

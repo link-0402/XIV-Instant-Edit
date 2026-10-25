@@ -53,6 +53,15 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     /// <summary>The hash of <see cref="BaseMotion"/>.</summary>
     public string? BaseHash { get; init; }
 
+    /// <summary>
+    /// The race the loaded file's PAP header names, such as "c0101"; null for a header naming no
+    /// human race and for an expression.
+    /// </summary>
+    public string? FileModel { get; init; }
+
+    /// <summary>The race and standard skeleton a save rebuilds the borrowed clip onto; null keeps its race.</summary>
+    public RaceRebuild? Rebuild { get; init; }
+
     /// <summary>The PAP whose motion the layers apply to: <see cref="BaseMotion"/>, else the file's own.</summary>
     public byte[] MotionSource => BaseMotion ?? Pap;
 
@@ -91,6 +100,7 @@ internal sealed partial class AnimationEditService
             return await LoadExpressionTimelineAsync(capture, clip, expression.GamePath, token);
         var (resource, bytes) = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
         var pap = new AnimationPap(bytes);
+        var fileModel = pap.ModelType == 0 ? AnimationSkeletonIndex.ModelCode(pap.ModelId) : null;
         var entry = pap.EntryIndex(clip.Name, clip.BindingIndex);
         var tmb = pap.TimelineBytes(entry);
         // What the loaded file's clip is called by fingerprint, and how long its motion lasts: after a save the game may play
@@ -107,10 +117,10 @@ internal sealed partial class AnimationEditService
         }
         catch (InvalidDataException error)
         {
-            return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message);
+            return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message) { FileModel = fileModel };
         }
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
-            await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint };
+            await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint, FileModel = fileModel };
     }
 
     /// <summary>
@@ -519,16 +529,18 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// The request saving <paramref name="document"/> makes. <paramref name="cutSounds"/> are the copies its
     /// sounds were cut into with the motion and what each was cut from, which Edit again plays again.
+    /// The source's <see cref="AnimationTimelineSource.Rebuild"/>, when set, is the repair instead of <paramref name="repair"/>.
     /// </summary>
     internal static AnimationBakeRequest TimelineRequest(AnimationTimelineSource source, TimelineDocument document,
         AnimationDestination destination, string modName, SkeletonStandard? repair = null, IReadOnlyDictionary<string, string>? cutSounds = null)
         => new(Guid.NewGuid(), source.Capture, destination, modName, false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
             AnimationOperation.EditTimeline,
             ExcludedBones: source.Standalone ? [] : document.ExcludedBones,
-            RepairTarget: source.Standalone ? null : repair,
+            RepairTarget: source.Standalone ? null : source.Rebuild?.Target.Standard ?? repair,
             Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),
                 document.MotionChanged ? document.Motion : [], Cuts: SavedCuts(document),
-                CutSounds: cutSounds is { Count: > 0 } ? cutSounds.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase) : null));
+                CutSounds: cutSounds is { Count: > 0 } ? cutSounds.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase) : null),
+            RepairModel: source.Standalone ? null : source.Rebuild?.Model);
 
     /// <summary>
     /// The cut list a save records: the document's when it cuts, and for a stretch a whole one of the
@@ -550,8 +562,9 @@ internal sealed partial class AnimationEditService
         var clip = source.Clip;
         if (AnimationBones.Problem(clip, request.ExcludedBones) is { } exclusion)
             throw new InvalidDataException(exclusion);
-        if (request.RepairTarget is { } target && AnimationBones.Standard(clip, target) == null)
-            throw new InvalidOperationException($"No {AnimationBones.StandardName(target)} skeleton was found for this animation.");
+        if (request.RepairTarget is { } target && AnimationBones.Standard(clip, target, request.RepairModel) == null)
+            throw new InvalidOperationException($"No {AnimationBones.StandardName(target)} skeleton was found for " +
+                (request.RepairModel is { } model ? $"{AnimationBones.RaceName(model)}." : "this animation."));
     }
 
     /// <summary>
@@ -678,7 +691,7 @@ internal sealed partial class AnimationEditService
                     ? "Choose the skeleton this animation was made for before changing its length."
                     : "Choose the skeleton this animation was made for before changing its motion."));
             // Layers on bones the standard lacks would be lost without a word.
-            if (document.MotionChanged && request.RepairTarget is { } target && AnimationBones.Standard(clip, target) is { } standard)
+            if (document.MotionChanged && request.RepairTarget is { } target && AnimationBones.Standard(clip, target, request.RepairModel) is { } standard)
                 MotionEvaluator.CheckBones(document.Motion, standard.Skeleton);
             await resources.CheckSkeletonsAsync(request.Capture, [clip], token);
             var skeleton = (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes;
