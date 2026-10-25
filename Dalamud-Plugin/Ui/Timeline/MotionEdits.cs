@@ -478,10 +478,14 @@ internal static class MotionEdits
     public static ImmutableArray<KeyPick> Picks(MotionLayer layer, IEnumerable<KeyPick> picks)
     {
         var all = picks.ToHashSet();
-        var whole = all.Where(pick => pick.Bone == null && KeyIndex(layer, pick.Frame) >= 0).Select(pick => pick.Frame).ToHashSet();
+        // A box over a key on every frame picks thousands: one lookup per pick, not a scan of the keys.
+        var keys = new Dictionary<int, int>();
+        for (var index = 0; index < layer.Keys.Length; index++)
+            keys.TryAdd(layer.Keys[index].Frame, index);
+        var whole = all.Where(pick => pick.Bone == null && keys.ContainsKey(pick.Frame)).Select(pick => pick.Frame).ToHashSet();
         return [.. all.Where(pick => pick.Bone == null
                 ? whole.Contains(pick.Frame)
-                : !whole.Contains(pick.Frame) && KeyIndex(layer, pick.Frame) is var at and >= 0 && layer.Keys[at].Bones.ContainsKey(pick.Bone))
+                : !whole.Contains(pick.Frame) && keys.TryGetValue(pick.Frame, out var at) && layer.Keys[at].Bones.ContainsKey(pick.Bone))
             .OrderBy(pick => pick.Frame).ThenBy(pick => pick.Bone, StringComparer.Ordinal)];
     }
 
@@ -627,15 +631,19 @@ internal static class MotionEdits
         return doc;
     }
 
-    /// <summary>Each key's bones that <paramref name="picks"/> leave where they are, by frame.</summary>
+    /// <summary>Each key's bones that <paramref name="picks"/> leave where they are, by frame; keys they take whole are left out.</summary>
     private static Dictionary<int, HashSet<string>> LeftBehind(MotionLayer layer, ImmutableArray<KeyPick> picks)
     {
+        var whole = picks.Where(pick => pick.Bone == null).Select(pick => pick.Frame).ToHashSet();
         var left = new Dictionary<int, HashSet<string>>();
         foreach (var item in layer.Keys)
-            left[item.Frame] = picks.Contains(new KeyPick(item.Frame)) ? [] : item.Bones.Keys.ToHashSet(StringComparer.Ordinal);
+            left[item.Frame] = whole.Contains(item.Frame) ? [] : item.Bones.Keys.ToHashSet(StringComparer.Ordinal);
         foreach (var pick in picks)
             if (pick.Bone != null)
                 left[pick.Frame].Remove(pick.Bone);
+        foreach (var (frame, bones) in left)
+            if (bones.Count == 0)
+                left.Remove(frame);
         return left;
     }
 

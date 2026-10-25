@@ -499,6 +499,19 @@ internal static class MotionEditsFixture
         editor.Undo();
         check(Frames(editor.Document).SequenceEqual([34, 48, 74]) && editor.SelectedKeys.All(pick => MotionEdits.KeyIndex(editor.Document.Motion[0], pick.Frame) >= 0),
             "undo brings the keys back and drops picks of keys it took away");
+        Click(34, 6);
+        Click(48, 6, ctrl: true);
+        Click(74, 6, ctrl: true);
+        editor.BeginFieldEdit();
+        editor.SpreadKeys(1);
+        editor.EndFieldEdit();
+        Click(48, 6, ctrl: true);
+        editor.BeginFieldEdit();
+        editor.SpreadKeys(20);
+        editor.EndFieldEdit();
+        check(Frames(editor.Document).SequenceEqual([34, 48, 54]) && editor.SelectedKeys.SetEquals([new KeyPick(34), new KeyPick(54)]) &&
+              editor.PickedKeys.Frames.Count == 2,
+            "after a refused spread, the next field edit spreads the picks as they are now");
 
         var boxed = new TimelineEditor(doc);
         boxed.SetWidth(440);
@@ -507,6 +520,7 @@ internal static class MotionEditsFixture
         boxed.Drag(45, row: 8);
         check(boxed.KeyBox is { FirstRow: 7, LastRow: 8 } && boxed.SelectedKeys.SetEquals([new KeyPick(30, Hand), new KeyPick(30, Arm), new KeyPick(40, Arm)]),
             "the box picks the bones' values inside it");
+        check(boxed.PickedKeys.Picks.Length == 3 && boxed.PickedKeys.Frames.SetEquals([30, 40]), "picked bone values count by frame");
         boxed.Drag(55, row: 6);
         boxed.Release();
         check(boxed.SelectedKeys.SetEquals([new KeyPick(30), new KeyPick(40), new KeyPick(50)]) && boxed.History.UndoCount == 0 && boxed.KeyBox == null,
@@ -516,6 +530,20 @@ internal static class MotionEditsFixture
         check(boxed.Key(TimelineKey.Paste) && Frames(boxed.Document).SequenceEqual([30, 40, 50, 70, 80, 90]) &&
               boxed.SelectedKeys.SetEquals([new KeyPick(70), new KeyPick(80), new KeyPick(90)]),
             "Ctrl+V pastes them at the playhead and picks the copies");
+        boxed.Press(boxed.HitTest(Geometry, At(50, 9)), ctrl: true);
+        boxed.Drag(60, row: 9);
+        check(boxed is { Gesture: TimelineGesture.KeyBox, SelectedLayer: "m2" }, "a Ctrl box on another layer's bar selects that layer");
+        boxed.Cancel();
+        check(boxed is { SelectedLayer: "m1", SelectedKey: 70 } && boxed.SelectedKeys.SetEquals([new KeyPick(70), new KeyPick(80), new KeyPick(90)]),
+            "Escape during that box goes back to the layer and picks before it");
+
+        var copying = Editor();
+        copying.SelectAll();
+        copying.Key(TimelineKey.Copy);
+        copying.SelectLayer("m1", 30);
+        copying.Key(TimelineKey.Copy);
+        copying.ClearSelection();
+        check(!copying.Key(TimelineKey.Paste) && copying.Document.Events.Length == 1, "after copying keys, Ctrl+V doesn't paste an event copied before");
     }
 
     private static void Gestures(Action<bool, string> check)

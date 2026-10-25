@@ -625,12 +625,12 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     /// </summary>
     private static void DrawSpread(TimelineEditor current, MotionLayer layer)
     {
-        var picks = MotionEdits.Picks(layer, current.SelectedKeys);
-        if (picks.Length < 2 || picks[^1].Frame == picks[0].Frame)
+        var (picks, picked) = current.PickedKeys;
+        if (picked.Count < 2)
             return;
         ImGui.Spacing();
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, $"{picks.Length} picked · Spread over");
+        ImGui.TextColored(Theme.Muted, $"{picked.Count} picked · Spread over");
         ImGui.SameLine(0, Theme.Gap);
         var frames = picks[^1].Frame - picks[0].Frame;
         ImGui.SetNextItemWidth(Theme.Scaled(90));
@@ -660,12 +660,13 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             ImGui.TextColored(Theme.Hint, layer.Kind == MotionLayerKind.Pin ? "None yet. Pin here adds one." : "None yet. Set a bone's value to add one.");
             return;
         }
+        var picked = current.PickedKeys.Frames;
         foreach (var key in layer.Keys)
         {
             ImGui.SameLine(0, Theme.Scaled(4));
             if (ImGui.GetContentRegionAvail().X < Theme.Scaled(48))
                 ImGui.NewLine();
-            var chosen = current.SelectedKeys.Any(pick => pick.Frame == key.Frame);
+            var chosen = picked.Contains(key.Frame);
             using var colour = ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, chosen);
             if (ImGui.SmallButton($"{TimelineText.Seconds(key.Frame)}##key-{key.Frame}"))
             {

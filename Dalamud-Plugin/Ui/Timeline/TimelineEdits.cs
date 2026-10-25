@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Globalization;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
@@ -115,7 +116,7 @@ internal static class TimelineEdits
 
     /// <summary>
     /// Changes the length to <paramref name="frames"/>, clamped to the editor's limits. Motion clips
-    /// that lasted the whole old length (give or take a frame) last the new one. With
+    /// and bone layers that lasted the whole old length (give or take a frame) last the new one. With
     /// <paramref name="scaleEvents"/> every start and every non-zero duration scales with the length
     /// (rounded half away from zero), and a start that played before still plays; without it nothing
     /// else moves. Durations past <see cref="TimelineDocument.MaxFrames"/> mean "until the end" in
@@ -163,7 +164,13 @@ internal static class TimelineEdits
             if (start != ev.Start || duration != ev.Duration)
                 events[index] = ev with { Start = start, Duration = duration };
         }
-        return doc with { Length = length, Events = events.ToImmutable() };
+        var next = doc with { Length = length, Events = events.ToImmutable() };
+        // Bone layers that lasted to the end (a still pose, an idle) last to the new one, keys where they were. A match follows
+        // the end by itself.
+        foreach (var layer in doc.Motion)
+            if (layer.End != length && layer.Start < length && !MotionEdits.IsMatch(layer) && MotionEvaluator.ReachesEnd(layer, old))
+                next = MotionEdits.Replace(next, layer with { End = length });
+        return next;
     }
 
     /// <summary>Events that start at or after the end of the clip's motion. Vanilla has none.</summary>

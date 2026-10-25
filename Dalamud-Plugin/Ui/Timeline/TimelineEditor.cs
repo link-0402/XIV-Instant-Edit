@@ -104,6 +104,8 @@ internal sealed class TimelineEditor
     // The picks a group key drag or a key box began with, the primary pick a plain click narrows to on release, and the
     // rows the box spans (from its pressed row to the last one under the pointer).
     private ImmutableArray<KeyPick> gesturePicks = [];
+    // The layer, picks and primary pick before a key box, which Escape goes back to.
+    private (string? Layer, ImmutableArray<KeyPick> Picks, KeyPick? Primary) boxBefore = (null, [], null);
     private KeyPick? collapseToPick;
     private int boxRow;
     private int boxLastRow;
@@ -282,6 +284,26 @@ internal sealed class TimelineEditor
     /// a row's range, a box on the layer's rows those inside. They move, spread, delete and copy together.
     /// </summary>
     public IReadOnlySet<KeyPick> SelectedKeys => keyPicks;
+
+    // PickedKeys for the document it was built on; cleared wherever keyPicks changes.
+    private (TimelineDocument Doc, ImmutableArray<KeyPick> Picks, HashSet<int> Frames)? picked;
+
+    /// <summary>
+    /// <see cref="SelectedKeys"/> still in the selected layer, by frame then bone (see <see cref="MotionEdits.Picks"/>), and their
+    /// frames: built once per change of the picks or the document, as the canvas and the panel draw them every frame.
+    /// </summary>
+    public (ImmutableArray<KeyPick> Picks, IReadOnlySet<int> Frames) PickedKeys
+    {
+        get
+        {
+            if (picked is not { } cache || !ReferenceEquals(cache.Doc, Document))
+            {
+                ImmutableArray<KeyPick> picks = SelectedLayerValue is { } layer ? MotionEdits.Picks(layer, keyPicks) : [];
+                picked = cache = (Document, picks, picks.Select(pick => pick.Frame).ToHashSet());
+            }
+            return (cache.Picks, cache.Frames);
+        }
+    }
 
     /// <summary>Whether the selected layer's key at <paramref name="frame"/> is picked whole, or with <paramref name="bone"/> that bone's value in it.</summary>
     public bool IsPicked(string layer, int frame, string? bone = null) => SelectedLayer == layer && keyPicks.Contains(new KeyPick(frame, bone));
@@ -552,7 +574,8 @@ internal sealed class TimelineEditor
     private void PressBox(TimelineHit hit, string key, bool adding)
     {
         var keep = adding && SelectedLayer == key;
-        gesturePicks = keep ? [.. keyPicks] : [];
+        boxBefore = (SelectedLayer, [.. keyPicks], SelectedKey is { } frame ? new KeyPick(frame, SelectedBone) : null);
+        gesturePicks = keep ? boxBefore.Picks : [];
         if (!keep && hit.Part is TimelinePart.BoneLane or TimelinePart.LayerBody)
             SelectLayer(key);
         else if (!keep && !adding)
@@ -820,8 +843,16 @@ internal sealed class TimelineEditor
             History.Cancel();
         if (gesture is TimelineGesture.LayerKey or TimelineGesture.BoneKey)
             PickOnly(gestureKeyFrame, gestureBone);
-        if (gesture is TimelineGesture.LayerKeys or TimelineGesture.KeyBox)
-            SetPicks(gesturePicks, gesture == TimelineGesture.LayerKeys ? new KeyPick(gestureKeyFrame, gestureBone) : null);
+        if (gesture == TimelineGesture.LayerKeys)
+            SetPicks(gesturePicks, new KeyPick(gestureKeyFrame, gestureBone));
+        if (gesture == TimelineGesture.KeyBox && boxBefore.Layer is { } boxLayer)
+        {
+            if (SelectedLayer != boxLayer)
+                SelectLayer(boxLayer);
+            SetPicks(boxBefore.Picks, boxBefore.Primary);
+        }
+        else if (gesture == TimelineGesture.KeyBox && SelectedLayer != null)
+            ClearLayerSelection();
         if (gesture != TimelineGesture.None)
             Playhead = playheadAtPress;
         EndGesture();
@@ -1181,6 +1212,8 @@ internal sealed class TimelineEditor
     /// <summary>A properties field became active: its changes until <see cref="EndFieldEdit"/> make one undo step.</summary>
     public void BeginFieldEdit()
     {
+        // A spread that changed nothing leaves the document as it was, but the picks may have changed since.
+        spreadFrom = null;
         if (gesture == TimelineGesture.None)
             History.Begin();
     }
@@ -1485,8 +1518,9 @@ internal sealed class TimelineEditor
         SelectedKey = at >= 0 ? keyFrame : null;
         SelectedBone = at >= 0 && bone != null && layer.Keys[at].Bones.ContainsKey(bone) ? bone : null;
         keyPicks.Clear();
-        if (SelectedKey is { } picked)
-            keyPicks.Add(new KeyPick(picked, SelectedBone));
+        picked = null;
+        if (SelectedKey is { } first)
+            keyPicks.Add(new KeyPick(first, SelectedBone));
     }
 
     /// <summary>The selected layer's key at <paramref name="frame"/> (with <paramref name="bone"/>, that bone's value) as the only pick.</summary>
@@ -1495,6 +1529,7 @@ internal sealed class TimelineEditor
         SelectedKey = frame;
         SelectedBone = bone;
         keyPicks.Clear();
+        picked = null;
         keyPicks.Add(new KeyPick(frame, bone));
     }
 
@@ -1506,6 +1541,7 @@ internal sealed class TimelineEditor
     {
         var kept = MotionEdits.Find(doc ?? Document, SelectedLayer) is { } layer ? MotionEdits.Picks(layer, picks) : [];
         keyPicks.Clear();
+        picked = null;
         keyPicks.UnionWith(kept);
         KeyPick? main = primary is { } wanted && keyPicks.Contains(wanted) ? wanted : kept.IsEmpty ? null : kept[0];
         SelectedKey = main?.Frame;
@@ -1535,7 +1571,7 @@ internal sealed class TimelineEditor
         SetPicks(picks, primary);
     }
 
-    // Static so keys carry to another animation, as copied layers do; an event copy clears them, so Ctrl+V pastes the last copy.
+    // Static so keys carry to another animation, as copied layers do; an event copy clears them and they clear it, so Ctrl+V pastes the last copy.
     private static KeyCopy? keyClipboard;
 
     public static bool CanPasteKeys => keyClipboard != null;
@@ -1546,6 +1582,7 @@ internal sealed class TimelineEditor
         if (SelectedLayer is not { } key || MotionEdits.CopyKeys(Document, key, keyPicks) is not { } copy)
             return false;
         keyClipboard = copy;
+        clipboard = [];
         return true;
     }
 
@@ -1583,7 +1620,7 @@ internal sealed class TimelineEditor
         if (SelectedLayer is not { } key)
             return false;
         var from = History.GestureStart ?? Document;
-        if (!ReferenceEquals(from, spreadFrom))
+        if (!History.InGesture || !ReferenceEquals(from, spreadFrom))
         {
             spreadFrom = from;
             spreadPicks = MotionEdits.Find(from, key) is { } layer ? MotionEdits.Picks(layer, keyPicks) : [];
@@ -1691,6 +1728,7 @@ internal sealed class TimelineEditor
         SelectedKey = null;
         SelectedBone = null;
         keyPicks.Clear();
+        picked = null;
         SelectedCut = null;
     }
 
@@ -1816,6 +1854,7 @@ internal sealed class TimelineEditor
         gestureLayer = null;
         gestureBone = null;
         gesturePicks = [];
+        boxBefore = (null, [], null);
         collapseToPick = null;
         boxFrame = float.NaN;
     }

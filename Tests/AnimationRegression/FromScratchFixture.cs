@@ -162,6 +162,18 @@ internal static class FromScratchFixture
         var face = new TimelineEditor(new TimelineDocument(150, 150, null, [], 1) { Expression = true });
         check(!face.HoldStill(still) && face.Document.Replacement == null, "an expression's timeline has no motion to hold");
 
+        // The still pose's layer and an idle a frame short of the end follow a length change; a layer ending earlier stays.
+        editor.HoldStill(still);
+        var pose = editor.Document.Motion[0].Key;
+        var scratch = MotionEdits.SetKey(editor.Document, pose, 0, Back, T(Vector3.Zero));
+        scratch = MotionEdits.Add(scratch, MotionLayerKind.Idle, 0, 99, out var breath, out _);
+        scratch = MotionEdits.Add(scratch, MotionLayerKind.Offset, 10, 50, out var early, out _);
+        var doubled = TimelineEdits.SetLength(scratch, 200, false);
+        var halved = TimelineEdits.SetLength(doubled, 50, false);
+        check(MotionEdits.Find(doubled, pose) is { End: 200, Keys: [{ Frame: 0 }] } && MotionEdits.Find(doubled, breath)?.End == 200 &&
+              MotionEdits.Find(doubled, early)?.End == 50 && MotionEdits.Find(halved, pose)?.End == 50 && MotionEdits.Find(halved, early)?.End == 50,
+            "layers that last to the end last to a new length, keys where they were; a layer ending earlier stays");
+
         var idle = MotionIdles.Borrow(Donor(), "Idle");
         var layer = Layer(idle);
         check(!MotionEdits.Same(layer, layer with { Idle = idle with { Spine = .6f } }) && MotionEdits.Same(layer, layer with { Idle = idle with { } }),

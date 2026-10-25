@@ -152,6 +152,7 @@ internal static class TimelinePainter
         var rounding = Theme.Scaled(3);
         var line = Math.Max(1, MathF.Floor(Theme.Scale));
         var fontSize = ImGui.GetFontSize();
+        var pickedFrames = current.PickedKeys.Frames;
         for (var index = 0; index < layout.LayerCount; index++)
         {
             var layer = MotionEdits.Shown(doc.Motion[index], doc.Length);
@@ -192,7 +193,7 @@ internal static class TimelinePainter
                     continue;
                 var shape = KeyShapeOf(layer, key);
                 // A whole picked key gets a full ring, a key with only bones picked a faint one.
-                if (selected && (current.IsPicked(layer.Key, key.Frame) || current.SelectedKeys.Any(pick => pick.Frame == key.Frame)))
+                if (selected && pickedFrames.Contains(key.Frame))
                     DrawKeyMark(drawList, shape, x, middle, half + Theme.Scaled(2),
                         TimelineUi.U32(current.IsPicked(layer.Key, key.Frame) ? Theme.Accent : Theme.WithAlpha(Theme.Accent, .45f)));
                 // A key outside the layer still shapes the curve but never applies on its own.
