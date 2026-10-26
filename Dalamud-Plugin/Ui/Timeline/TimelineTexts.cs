@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
@@ -11,6 +12,8 @@ namespace InstantEdit.Ui.Timeline;
 internal sealed class TimelineTexts(TimelineSession session)
 {
     private TimelineDocument? labelDocument;
+    // The rebuild the texts were made with: the layer bones warning names its skeleton's bones.
+    private RaceRebuild? labelRebuild;
 
     /// <summary>Each event's label, in the document's order.</summary>
     public string[] Labels { get; private set; } = [];
@@ -28,10 +31,10 @@ internal sealed class TimelineTexts(TimelineSession session)
     /// <summary> Makes the texts again for the next document drawn, as after a clip is read. </summary>
     public void Forget() => labelDocument = null;
 
-    /// <summary> Labels, the past-end warning, the length texts and the effect problems, rebuilt only when the document changes. </summary>
+    /// <summary> Labels, the past-end warning, the length texts and the effect problems, rebuilt only when the document or the session's rebuild changes. </summary>
     public void Refresh(TimelineDocument doc)
     {
-        if (ReferenceEquals(labelDocument, doc))
+        if (ReferenceEquals(labelDocument, doc) && labelRebuild == session.Rebuild)
             return;
         var events = doc.Events.IsDefault ? [] : doc.Events;
         Labels = new string[events.Length];
@@ -47,6 +50,7 @@ internal sealed class TimelineTexts(TimelineSession session)
         EffectCopies = TimelineEffectCheck.Copies(EffectProblems);
         EffectEvents = EffectProblems.Select(p => p.Key).Distinct(StringComparer.Ordinal).Count();
         labelDocument = doc;
+        labelRebuild = session.Rebuild;
     }
 
     /// <summary> <paramref name="ev"/>'s label: the cached one while <paramref name="doc"/> is the one the labels were made for. </summary>

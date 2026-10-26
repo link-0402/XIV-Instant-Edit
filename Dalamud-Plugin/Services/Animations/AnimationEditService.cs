@@ -86,6 +86,8 @@ internal sealed partial class AnimationEditService : IDisposable
 
     /// <summary>The skeleton library saved in the cache folder, which source skeletons are matched from.</summary>
     public SkeletonLibraryStatus SkeletonLibrary => skeletons.Status;
+    /// <summary>The game's PAP load table, read on first use; null when the game's file can't be read.</summary>
+    internal PapLoadTable? PapTable => catalog.PapTable;
     public DateTime? SavedSkeletonLibraryUtc() => skeletons.SavedLibraryUtc();
 
     /// <summary>Builds the skeleton library again, then matches every listed animation to a skeleton again.</summary>

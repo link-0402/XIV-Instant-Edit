@@ -5,6 +5,7 @@ using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Studio.Models;
 using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
@@ -21,6 +22,26 @@ internal static class RaceRebuildFixture
         DecodeKey(check);
         LiveHandBack(check);
         EditingProblems(check);
+        BorrowedBy(check);
+    }
+
+    private static void BorrowedBy(Action<bool, string> check)
+    {
+        // c0801 and c0201 borrow c0101's loop; c0101 and c1101 have no record, so each plays its own.
+        PapLoadTableFixture.Remap Lent() => new(101, 1, 0);
+        PapLoadTableFixture.Remap Own(uint race) => new(race, 1, 0);
+        var table = new PapLoadTable(PapLoadTableFixture.Table(["bt_common"], [(0, "emote_sp/sp10_loop")],
+            [new(801, 1, 0, [0]), new(201, 1, 1, [0])], [Lent(), Own(801), Own(801), Own(801), Lent(), Own(201), Own(201), Own(201)]));
+        var path = "chara/human/c0101/animation/a0001/bt_common/emote_sp/sp10_loop.pap";
+        check(table.PlayedBy(path, [101, 201, 801, 1101]).SequenceEqual<ushort>([101, 201, 801]), "the races that load this file");
+        check(table.PlayedBy("chara/monster/m0001/animation/a0001/bt_common/emote_sp/sp10_loop.pap", [101, 801]).IsEmpty,
+            "a path outside the human layout is played by no race");
+        check(AnimationBakeRules.BorrowNote([801], 801) == null, "no note when only the character's race plays it");
+        check(AnimationBakeRules.BorrowNote([101, 201, 801], 801) ==
+              $"{RaceInfo.NameOf(101)} and {RaceInfo.NameOf(201)} play it converted from {RaceInfo.NameOf(801)}." &&
+              AnimationBakeRules.BorrowNote([101, 201, 801, 1101], 801) ==
+              $"{RaceInfo.NameOf(101)}, {RaceInfo.NameOf(201)} and {RaceInfo.NameOf(1101)} play it converted from {RaceInfo.NameOf(801)}.",
+            "the others that play the file are named");
     }
 
     private static void LiveHandBack(Action<bool, string> check)

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using System.Numerics;
 using System.Text;
 
@@ -96,6 +97,18 @@ internal sealed class PapLoadTable
         if (owner >> 16 != 0 || (owner & 0xFFFF) > 9999) return path;
         return $"chara/human/c{owner:D4}/animation/a{BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(at + 4)):D4}/" +
             $"{Text(folderStart, BinaryPrimitives.ReadUInt16LittleEndian(file.AsSpan(at + 6)))}/{name}.pap";
+    }
+
+    /// <summary>
+    /// The races among <paramref name="races"/> whose request for <paramref name="path"/>'s file under their
+    /// own race code loads <paramref name="path"/>, in the order given; none for a path outside the human layout.
+    /// </summary>
+    public ImmutableArray<ushort> PlayedBy(string path, IEnumerable<ushort> races)
+    {
+        var parts = path.Split('/', 4);
+        if (parts.Length != 4 || parts[0] != "chara" || parts[1] != "human" || !Code(parts[2], 'c', out _))
+            return [];
+        return [.. races.Where(race => string.Equals(Resolve($"chara/human/c{race:D4}/{parts[3]}"), path, StringComparison.Ordinal))];
     }
 
     private static bool Code(string text, char prefix, out ushort value)

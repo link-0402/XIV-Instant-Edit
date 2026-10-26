@@ -3,6 +3,7 @@ using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Studio.Models;
 
 namespace InstantEdit.Services.Animations;
 
@@ -41,6 +42,18 @@ internal static class AnimationBakeRules
 
     /// <summary>The save footer's line when <see cref="CompanionClip"/> brings the other clip; <paramref name="startup"/> is whether the startup is edited.</summary>
     public static string CompanionNote(bool startup) => startup ? "Its loop goes into the new mod too." : "Its startup goes into the new mod too.";
+
+    /// <summary>
+    /// The save footer's line for a rebuild: the other races that play the file (<paramref name="playedBy"/>)
+    /// and now get it converted from <paramref name="actor"/>'s race. Null when no other race plays it.
+    /// </summary>
+    public static string? BorrowNote(IReadOnlyList<ushort> playedBy, ushort actor)
+    {
+        var others = playedBy.Where(race => race != actor).Select(RaceInfo.NameOf).ToArray();
+        if (others.Length == 0) return null;
+        var names = others.Length == 1 ? others[0] : string.Join(", ", others[..^1]) + " and " + others[^1];
+        return $"{names} play it converted from {RaceInfo.NameOf(actor)}.";
+    }
 
     /// <summary>
     /// <paramref name="outputs"/> with <paramref name="companion"/>'s file as the save read it (in

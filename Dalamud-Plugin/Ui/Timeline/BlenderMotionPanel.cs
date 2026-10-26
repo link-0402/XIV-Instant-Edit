@@ -63,10 +63,12 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
             Send(current);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(problem ?? "Send the motion as it plays now, with its cuts and bone layers.");
-        if (ImGui.MenuItem("Motion from Blender", "", false, problem == null && sending == null && reading == null))
+        // ReplaceMotionAsync refuses a rebuilt clip only after Blender's motion was read.
+        var rebuilt = session.Rebuild != null ? "Choose Keep its own under Skeleton first. A motion from Blender can't go onto a rebuilt clip yet." : null;
+        if (ImGui.MenuItem("Motion from Blender", "", false, (problem ?? rebuilt) == null && sending == null && reading == null))
             Read(current);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(problem ?? "Use the armature's animation in Blender as this clip's motion.");
+            ImGui.SetTooltip(problem ?? rebuilt ?? "Use the armature's animation in Blender as this clip's motion.");
     }
 
     /// <summary>Why the motion can't go to Blender or come back now; null when it can.</summary>
@@ -125,6 +127,8 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
             return "An expression has no motion.";
         if (reading != null)
             return "Wait for the motion being read.";
+        if (session.Rebuild != null)
+            return "Choose Keep its own under Skeleton first. A still pose can't go onto a rebuilt clip yet.";
         return decode.DecodedPose(loaded) == null ? "The motion is still being read." : null;
     }
 

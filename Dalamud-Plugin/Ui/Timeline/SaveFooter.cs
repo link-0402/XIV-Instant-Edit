@@ -37,8 +37,13 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private (string Clip, byte[] Bytes, string Fingerprint, string Hash)? motionBase;
     // Layers to put back once the clip is read again: after a save as saved, after an undo as unsaved edits.
     private (string Clip, ImmutableArray<MotionLayer> Layers, int NextKey, bool Unsaved)? motionCarry;
-    // The standard skeleton the next save repairs onto; null keeps the clip's own.
+    // The standard skeleton the next save repairs onto; null keeps the clip's own. A rebuild for the
+    // character's race lives in the session (TimelineSession.Rebuild).
     private SkeletonStandard? repairTarget;
+    // The clip whose automatic rebuild pick has run, so a choice made afterwards stays.
+    private string? rebuildDecided;
+    // The rebuild's line naming the other races that play the file, for the clip path and race it was made for.
+    private (string Path, string Model, string? Note)? borrowNote;
     // Whether the clip's file can be written over in place.
     private bool canReplace;
 
@@ -46,8 +51,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     public AnimationDestination Destination => destination;
     /// <summary>The new mod's name, as typed.</summary>
     public string ModName => modName;
-    /// <summary>The standard skeleton the next save repairs onto; null keeps the clip's own.</summary>
-    public SkeletonStandard? RepairTarget => repairTarget;
+    /// <summary>The standard skeleton the next save repairs or rebuilds onto; null keeps the clip's own.</summary>
+    public SkeletonStandard? RepairTarget => session.Rebuild?.Target.Standard ?? repairTarget;
     /// <summary>A save or an undo runs, or waits for the service's result.</summary>
     public bool Working => saveTask != null || pendingSaveId != null || undoPending;
     /// <summary>The document must not change: a save with its sound check or question, or an undo, runs.</summary>
@@ -68,6 +73,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             saveMessage = null;
             lastSaveId = null;
             repairTarget = null;
+            session.Rebuild = null;
+            rebuildDecided = null;
         }
         if (editAgain && loaded.BaseMotion != null)
         {
@@ -102,6 +109,18 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
 
     public void Draw(TimelineEditor current, AnimationTimelineSource loaded)
     {
+        var doc = current.Document;
+        var clip = session.Fresh(loaded).Clip;
+        // Once per clip, when its match is in: a clip borrowed from another race is rebuilt for the character's.
+        if (rebuildDecided != TimelineSession.ClipKey(loaded) && !loaded.Standalone && clip.Resolution is { State: SkeletonResolutionState.Matched } resolution)
+        {
+            rebuildDecided = TimelineSession.ClipKey(loaded);
+            if (AnimationBones.DefaultRebuild(clip, loaded.FileModel, doc.ExcludedBones) is { } standard && resolution.ActorModel is { } actor)
+            {
+                session.Rebuild = new(actor, AnimationBones.Standard(clip, standard, actor)!);
+                repairTarget = null;
+            }
+        }
         ImGui.Separator();
         if (ImGui.RadioButton("Create new mod", destination == AnimationDestination.NewMod))
             destination = AnimationDestination.NewMod;
@@ -121,14 +140,12 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (!loaded.Standalone)
             DrawRepairChoice(loaded);
 
-        var doc = current.Document;
         texts.Refresh(doc);
-        var clip = session.Fresh(loaded).Clip;
-        var repair = loaded.Standalone ? null : repairTarget;
+        var repair = loaded.Standalone ? null : RepairTarget;
         var problem = TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
                           destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, clip.Resolution,
                           AnimationBakeRules.ChangesMotion(doc, repair))
-                      ?? (loaded.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, session.EditingSkeleton(loaded), repair));
+                      ?? (loaded.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, session.EditingSkeleton(loaded), repair, session.Rebuild?.Model));
         if (problem != null)
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)
@@ -195,7 +212,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             return "Undoing the last save.";
         if (loading())
             return "Reading the timeline.";
-        if (!current.Dirty && repairTarget == null)
+        if (!current.Dirty && RepairTarget == null)
             return "Nothing changed since the last save.";
         if (current.Gesture != TimelineGesture.None)
             return "Finish the drag first.";
@@ -217,7 +234,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var target = session.Fresh(loaded);
         var place = destination;
         var name = modName.Trim();
-        var repair = target.Standalone ? null : repairTarget;
+        var repair = target.Standalone ? null : RepairTarget;
         // Effect looks are saved as copies of their effects, packaged like imports. Sound changes and
         // pins go into copies too, or over the mod's own sound files where BeginSave allowed it.
         TimelineDocument saved;
@@ -309,8 +326,10 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             {
                 session.Editor?.MarkSaved();
                 lastSaveId = job;
-                // The saved file is on the standard skeleton now; another repair would change nothing.
+                // The saved file is on the standard skeleton now; another repair would change nothing. A rebuilt
+                // file's header names the character's race, so it offers no rebuild either.
                 repairTarget = null;
+                session.Rebuild = null;
                 saveMessage = result.Message == AnimationEditService.SavedSkeletonTooSmall ? result.Message
                     : destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
                 // A sound saved in place is another file now; read it again.
@@ -434,7 +453,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                 jobClip = session.Source is { } shown ? TimelineSession.ClipKey(shown) : null;
                 // The layers stay, as unsaved edits on the motion they apply to; layers keyed in cut or
                 // stretched frames don't fit the file the undo brings back.
-                if (session.Source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, repairTarget))
+                if (session.Source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, RepairTarget))
                     motionCarry = (TimelineSession.ClipKey(session.Source), current.Document.Motion, current.Document.NextMotionKey, true);
                 timelinePreview.Stop();
                 service.Undo(journal);
@@ -448,31 +467,43 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     }
 
     /// <summary>
-    /// The save footer's skeleton choice: keep the clip's own, or repair it onto a standard skeleton so
-    /// every bone sits at the index other players' skeletons and sync plugins expect.
+    /// The save footer's skeleton choice: keep the clip's own, repair it onto a standard skeleton so
+    /// every bone sits at the index other players' skeletons and sync plugins expect, or, for a clip
+    /// borrowed from another race, rebuild it onto a standard skeleton of the character's race.
     /// </summary>
     private void DrawRepairChoice(AnimationTimelineSource loaded)
     {
         var clip = session.Fresh(loaded).Clip;
         if (repairTarget is { } chosen && AnimationBones.Standard(clip, chosen) is null)
             repairTarget = null;
+        var race = AnimationBones.RebuildRace(clip, loaded.FileModel);
+        // The match can change under the choice: a skeleton chosen under Source, another character.
+        if (session.Rebuild is { } rebuild)
+            session.Rebuild = race != rebuild.Model || AnimationBones.Standard(clip, rebuild.Target.Standard, race) is not { } now ? null
+                : now == rebuild.Target ? rebuild : rebuild with { Target = now };
+        var excluded = session.Editor?.Document.ExcludedBones ?? [];
+        // A rebuild is offered only onto the character's standards that hold every kept bone.
+        IEnumerable<Choice> Rebuilds() => race == null ? [] : clip.Resolution!.ActorStandards
+            .Where(s => AnimationBones.Plan(clip, s.Standard, excluded, race) is { Dropped.IsEmpty: true })
+            .Select(s => new Choice(s.Standard, race));
+        var current = session.Rebuild is { } shown ? new Choice(shown.Target.Standard, shown.Model) : new Choice(repairTarget, null);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Skeleton");
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.SetNextItemWidth(Theme.Scaled(170));
+        ImGui.SetNextItemWidth(Theme.Scaled(race != null ? 300 : 170));
         using (ImRaii.Disabled(session.ReadOnly))
-        using (var combo = ImRaii.Combo("##repair", repairTarget is { } target ? "Repair onto " + AnimationBones.StandardName(target) : "Keep its own"))
+        using (var combo = ImRaii.Combo("##repair", current.Name))
         {
             if (combo.Success)
             {
-                if (ImGui.Selectable("Keep its own", repairTarget == null))
-                    repairTarget = null;
+                if (ImGui.Selectable("Keep its own", current == new Choice(null, null)))
+                    Choose(clip, new(null, null));
                 foreach (var standard in Enum.GetValues<SkeletonStandard>())
                 {
                     var found = AnimationBones.Standard(clip, standard);
-                    if (ImGui.Selectable("Repair onto " + AnimationBones.StandardName(standard), repairTarget == standard,
+                    if (ImGui.Selectable("Repair onto " + AnimationBones.StandardName(standard), current == new Choice(standard, null),
                             found is null ? ImGuiSelectableFlags.Disabled : ImGuiSelectableFlags.None))
-                        repairTarget = standard;
+                        Choose(clip, new(standard, null));
                     if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                         ImGui.SetTooltip(found is not null
                             ? $"{found.Skeleton.Bones.Length} bones, from {found.Origin}"
@@ -480,18 +511,26 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                                 ? "The game's own skeleton for this model was not found."
                                 : $"No {AnimationBones.StandardName(standard)} skeleton for this model is in the skeleton library.");
                 }
+                foreach (var entry in Rebuilds())
+                {
+                    if (ImGui.Selectable(entry.Name, current == entry))
+                        Choose(clip, entry);
+                    if (ImGui.IsItemHovered() && AnimationBones.Standard(clip, entry.Standard!.Value, entry.Model) is { } target)
+                        ImGui.SetTooltip($"{target.Skeleton.Bones.Length} bones, from {target.Origin}");
+                }
             }
             else if (ComboWheel.Steps() is var steps and not 0)
             {
-                // "Keep its own" (null), then the standards this model has; the greyed-out ones are skipped.
-                SkeletonStandard?[] targets = [null, .. Enum.GetValues<SkeletonStandard>().Where(standard => AnimationBones.Standard(clip, standard) is not null)];
-                repairTarget = ComboWheel.Pick(targets, repairTarget, steps);
+                // "Keep its own", the standards this model has (the greyed-out ones are skipped), then the rebuilds.
+                Choice[] targets = [new(null, null), .. Enum.GetValues<SkeletonStandard>().Where(standard => AnimationBones.Standard(clip, standard) is not null)
+                    .Select(standard => new Choice(standard, null)), .. Rebuilds()];
+                Choose(clip, ComboWheel.Pick(targets, current, steps));
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Repair moves every bone to the index other players' skeletons use, whatever your skeleton mod adds.\n" +
                              "Only bones the animation moves are written.");
-        if (repairTarget is { } repair && AnimationBones.Plan(clip, repair, session.Editor?.Document.ExcludedBones ?? []) is { } plan)
+        if (RepairTarget is { } repair && AnimationBones.Plan(clip, repair, excluded, session.Rebuild?.Model) is { } plan)
         {
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
@@ -503,5 +542,39 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                                  string.Join(", ", plan.Dropped.Take(8).Select(AnimationPresentation.BoneName)) +
                                  (plan.Dropped.Length > 8 ? $" and {plan.Dropped.Length - 8} more." : "."));
         }
+        if (AnimationBones.RebuildNote(clip, loaded.FileModel, excluded, session.Rebuild != null) is { } note)
+        {
+            using var wrap = ImRaii.TextWrapPos(0f);
+            ImGui.TextColored(Theme.Muted, note);
+        }
+        if (session.Rebuild is not { } rebuilding)
+            return;
+        // The PAP load table is read once per clip and race, not every frame.
+        if (borrowNote is not { } borrow || borrow.Path != clip.GamePath || borrow.Model != rebuilding.Model)
+            borrowNote = borrow = (clip.GamePath, rebuilding.Model,
+                session.Animations?.PapTable is { } table && ushort.TryParse(rebuilding.Model.AsSpan(1), out var actor)
+                    ? AnimationBakeRules.BorrowNote(table.PlayedBy(clip.GamePath, Studio.Models.RaceInfo.PlayableCodes), actor)
+                    : null);
+        if (borrow.Note is { } others)
+            Widgets.HintWrapped(others);
+    }
+
+    /// <summary>One entry of the skeleton choice: keep (no standard), repair onto a standard, or with a race's model rebuild onto its standard.</summary>
+    private sealed record Choice(SkeletonStandard? Standard, string? Model)
+    {
+        public string Name => this switch
+        {
+            { Standard: { } standard, Model: { } model } => $"Rebuild for {AnimationBones.RaceName(model)}, {AnimationBones.StandardName(standard)}",
+            { Standard: { } standard } => "Repair onto " + AnimationBones.StandardName(standard),
+            _ => "Keep its own",
+        };
+    }
+
+    /// <summary>Takes a skeleton choice: a rebuild goes into the session, a repair or keep clears it.</summary>
+    private void Choose(AnimationClip clip, Choice choice)
+    {
+        session.Rebuild = choice is { Standard: { } standard, Model: { } model } && AnimationBones.Standard(clip, standard, model) is { } target
+            ? new(model, target) : null;
+        repairTarget = choice.Model == null ? choice.Standard : null;
     }
 }
