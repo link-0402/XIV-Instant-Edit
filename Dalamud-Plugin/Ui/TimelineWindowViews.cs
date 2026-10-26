@@ -51,7 +51,7 @@ internal static partial class TimelineWindowViews
     public const string HandShapeName = "Hand shape";
     public const string HandShapeHint = "Set a hand's fingers to a shape.";
     public const string ResetRootName = "Reset root turn";
-    public const string ResetRootHint = "Turn the root bone back to rest on the ticked axes, for poses with a turn baked into it.";
+    public const string ResetRootHint = "Turn the character back to face forward on the ticked axes, for poses with a turn baked into them.";
 
     /// <summary>A root reset's axis checkboxes, in order, with what turning about each does.</summary>
     public static readonly ImmutableArray<(MotionAxes Axis, string Label, string Tip)> ResetAxes =

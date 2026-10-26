@@ -266,6 +266,74 @@ internal static class FixLayerFixture
         check(Degrees(MotionFixes.ResetTurn(rest * Q(Vector3.UnitY, 30), rest, MotionAxes.Y), rest) < RotationTolerance &&
               MotionFixes.ResetTurn(turned, rest, MotionAxes.None) == Quaternion.Normalize(turned),
             "reset root: the turn is measured from the root's rest, and no axes change nothing");
+
+        BodyTurn(check);
+    }
+
+    /// <summary>
+    /// A turn baked under the root, as saved poses have it: the root and n_hara at rest, the hips and spine turned 72 and 74
+    /// degrees and swaying 5 degrees against each other, the hips on a tilted rest.
+    /// </summary>
+    private static void BodyTurn(Action<bool, string> check)
+    {
+        var rig = new SkeletonDescription("body-rig", "body-rig-fingerprint",
+        [
+            new("n_root", -1, 0, T(Vector3.Zero)), new("n_hara", 0, 0, T(Vector3.UnitY)),
+            new("j_kosi", 1, 0, T(Vector3.Zero, Q(Vector3.UnitX, -90))), new("j_sebo_a", 1, 0, T(Vector3.Zero)),
+            new("j_asi_a_l", 2, 0, T(Vector3.UnitX)),
+        ], [], [], []);
+        var hips = Q(Vector3.UnitX, -90);
+        float Sway(float f) => 5 * MathF.Sin(f / 30 * 2 * MathF.PI);
+        BoneTransform[] Pose(float turn, float f) =>
+        [
+            T(Vector3.Zero), T(new Vector3(.1f, 1, 0)),
+            T(Vector3.Zero, Q(Vector3.UnitY, turn - 1 + Sway(f)) * hips * Q(Vector3.UnitY, 8)),
+            T(Vector3.Zero, Q(Vector3.UnitY, turn + 1 - Sway(f))), T(Vector3.UnitX, Q(Vector3.UnitX, f)),
+        ];
+        MotionClip Made(float turn)
+        {
+            var poses = Enumerable.Range(0, 31).Select(i => Pose(turn, i)).ToArray();
+            var made = MotionClip.FromPoses(rig, 30f / TimelineDocument.Fps, poses);
+            var clip = new MotionClip(rig, made.Duration, made.Samples);
+            clip.CopyFrom(made);
+            return clip;
+        }
+        MotionClip Reset(MotionClip source, MotionAxes axes, float amount = 1)
+        {
+            var clip = source.Clone();
+            MotionEvaluator.Apply(clip, [ResetLayer(axes, amount, 0, 30)]);
+            return clip;
+        }
+        // Each bone's turn about Y in character space, from its rest there.
+        float Facing(MotionClip clip, int i, int b)
+        {
+            Quaternion model = Quaternion.Identity, rest = Quaternion.Identity;
+            for (var at = b; at >= 0; at = rig.Bones[at].Parent)
+            {
+                model = clip.Get(i, at).Rotation * model;
+                rest = rig.Bones[at].Reference.Rotation * rest;
+            }
+            var turn = model * Quaternion.Inverse(rest);
+            var twist = Quaternion.Normalize(new Quaternion(0, turn.Y, 0, turn.W));
+            var degrees = 2 * MathF.Atan2(twist.Y, twist.W) * 180 / MathF.PI;
+            return degrees > 180 ? degrees - 360 : degrees < -180 ? degrees + 360 : degrees;
+        }
+
+        var turned = Made(72);
+        var reset = Reset(turned, MotionAxes.All);
+        var facing = Enumerable.Range(0, reset.Samples).Select(i => (Facing(reset, i, 2) + Facing(reset, i, 3)) / 2).ToArray();
+        var sway = Enumerable.Range(0, reset.Samples).All(i => MathF.Abs(Facing(reset, i, 2) - Facing(reset, i, 3) - (Facing(turned, i, 2) - Facing(turned, i, 3))) < RotationTolerance);
+        check(facing.All(f => MathF.Abs(f) < .5f) && sway,
+            "reset root: a turn under the root comes out of the hips and spine together, and their sway stays");
+        var hara = reset.Get(10, 1);
+        check(Enumerable.Range(0, reset.Samples).All(i => reset.Get(i, 0) == turned.Get(i, 0)) &&
+              Enumerable.Range(2, 3).All(b => Enumerable.Range(0, reset.Samples).All(i => reset.Get(i, b) == turned.Get(i, b))) &&
+              Vector3.Distance(hara.Position, Vector3.Transform(new Vector3(.1f, 1, 0), Q(Vector3.UnitY, -72))) < 1e-3f,
+            "reset root: the body bone turns back, its spot with it, and the root and the bones below are left as they are");
+        check(MathF.Abs((Facing(Reset(turned, MotionAxes.Y, .5f), 10, 2) + Facing(Reset(turned, MotionAxes.Y, .5f), 10, 3)) / 2 - 36) < .5f,
+            "reset root: the amount blends the body's turn back");
+        check(Bits(Reset(turned, MotionAxes.X | MotionAxes.Z), turned) && Bits(Reset(Made(0), MotionAxes.All), Made(0)),
+            "reset root: no Y leaves the body's facing, and a body already facing forward isn't touched");
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)

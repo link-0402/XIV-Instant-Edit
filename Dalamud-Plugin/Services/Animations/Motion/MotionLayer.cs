@@ -32,7 +32,7 @@ internal enum MotionFixKind : byte
     SmoothJitter,
     /// <summary>Puts a hand's fingers into a shape (<see cref="MotionHand"/>).</summary>
     HandShape,
-    /// <summary>Turns the root bone back to its rest on the picked axes (<see cref="MotionFix.Axes"/>).</summary>
+    /// <summary>Turns the root bone back to its rest on the picked axes (<see cref="MotionFix.Axes"/>), and with Y a facing turn baked into the body.</summary>
     ResetRoot,
 }
 

@@ -307,7 +307,8 @@ internal static class MotionFixes
 
     /// <summary>
     /// Reset root turn over the clip: each root bone's rotation goes to <see cref="ResetTurn"/>'s by the layer's weight.
-    /// Samples it wouldn't change are left as they are, so a root at rest gets no track from rounding.
+    /// Samples it wouldn't change are left as they are, so a root at rest gets no track from rounding. With Y ticked, a
+    /// facing turn baked under the root then comes out of the body too (<see cref="ResetBodyFacing"/>).
     /// </summary>
     internal static void ApplyResetRoot(MotionClip clip, MotionLayer layer, float end, CancellationToken token)
     {
@@ -328,9 +329,91 @@ internal static class MotionFixes
                     clip.Set(i, b, value with { Rotation = turned });
             }
         }
+        if (axes.HasFlag(MotionAxes.Y))
+            ResetBodyFacing(clip, layer, end, token);
     }
 
-    /// <summary>A root reset on one pose at <paramref name="weight"/>, as <see cref="ApplyResetRoot"/> sets a sample.</summary>
+    // The bones whose turn about Y from their rest, in character space, is where the body faces.
+    private static readonly string[] FacingBones = ["j_kosi", "j_sebo_a"];
+
+    /// <summary>
+    /// Takes a facing turn out of the body bone (n_hara), for poses saved with the turn under an unanimated root: the
+    /// hips' and lower spine's turn about Y from their rest in character space, averaged over the layer's samples, is
+    /// turned back on the body bone by the layer's weight, its spot with it, so the motion's own sway stays. A skeleton
+    /// without those bones, or a body already facing forward, is left as it is. One pose can't measure it, so Live's
+    /// Bones window (<see cref="ApplyResetRootAt"/>) leaves it to the bake.
+    /// </summary>
+    private static void ResetBodyFacing(MotionClip clip, MotionLayer layer, float end, CancellationToken token)
+    {
+        var skeleton = clip.Skeleton;
+        var index = MotionEvaluator.Index(skeleton);
+        if (!index.TryGetValue(MotionHold.Body, out var body))
+            return;
+        int[] facers = [.. FacingBones.Where(index.ContainsKey).Select(name => index[name]).Where(b => skeleton.Bones[b].Parent == body)];
+        if (facers.Length == 0)
+            return;
+        var restBody = RestModel(skeleton, body);
+        var parent = skeleton.Bones[body].Parent;
+        var sum = Vector4.Zero;
+        Quaternion? first = null;
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            if (!MotionEvaluator.Inside(layer, clip.Frame(i), end))
+                continue;
+            var model = Model(clip, i, body);
+            foreach (var b in facers)
+            {
+                var rest = restBody * skeleton.Bones[b].Reference.Rotation;
+                var turn = Twist(Quaternion.Normalize(model * clip.Get(i, b).Rotation * Quaternion.Inverse(rest)), Vector3.UnitY);
+                first ??= turn;
+                turn = MotionEvaluator.Align(turn, first.Value);
+                sum += new Vector4(turn.X, turn.Y, turn.Z, turn.W);
+            }
+        }
+        if (sum.LengthSquared() < 1e-12f)
+            return;
+        var back = Quaternion.Inverse(Quaternion.Normalize(new Quaternion(sum.X, sum.Y, sum.Z, sum.W)));
+        if (new Vector3(back.X, back.Y, back.Z).LengthSquared() <= 1e-10f)
+            return;
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var weight = MotionEvaluator.Weight(layer, clip.Frame(i), end);
+            if (weight <= 0)
+                continue;
+            // The turn is about the character's up; in the parent's space it turns with the parent.
+            var above = parent >= 0 ? Model(clip, i, parent) : Quaternion.Identity;
+            var local = Quaternion.Normalize(Quaternion.Inverse(above) * MotionEvaluator.Slerp(Quaternion.Identity, back, weight) * above);
+            var value = clip.Get(i, body);
+            clip.Set(i, body, value with
+            {
+                Rotation = Quaternion.Normalize(local * value.Rotation),
+                Position = Vector3.Transform(value.Position, local),
+            });
+        }
+    }
+
+    /// <summary>Bone <paramref name="b"/>'s rotation in character space at sample <paramref name="i"/>.</summary>
+    private static Quaternion Model(MotionClip clip, int i, int b)
+    {
+        var model = Quaternion.Identity;
+        for (var at = b; at >= 0; at = clip.Skeleton.Bones[at].Parent)
+            model = Quaternion.Normalize(clip.Get(i, at).Rotation) * model;
+        return Quaternion.Normalize(model);
+    }
+
+    private static Quaternion RestModel(SkeletonDescription skeleton, int b)
+    {
+        var model = Quaternion.Identity;
+        for (var at = b; at >= 0; at = skeleton.Bones[at].Parent)
+            model = Quaternion.Normalize(skeleton.Bones[at].Reference.Rotation) * model;
+        return Quaternion.Normalize(model);
+    }
+
+    /// <summary>A root reset on one pose at <paramref name="weight"/>, as <see cref="ApplyResetRoot"/> sets a sample; the body's facing needs the clip.</summary>
     internal static void ApplyResetRootAt(SkeletonDescription skeleton, MotionTransform[] pose, MotionLayer layer, float weight)
     {
         if (weight <= 0 || layer.Fix is not { Axes: not MotionAxes.None and var axes })
