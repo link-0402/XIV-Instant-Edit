@@ -146,8 +146,8 @@ internal static class MotionEdits
     /// Adds a fix layer holding <paramref name="fix"/>: a match named "Match loop" over the clip's last
     /// <see cref="DefaultFixLength"/> frames, or its game fade when that is longer (from frame 0 on a shorter clip), at
     /// full blend, a smooth named "Smooth jitter" over the whole clip at half strength, or a hand shape named "Hand shape"
-    /// over the whole clip at full amount, rotation only. Unchanged with an error when
-    /// the document has no room for another layer.
+    /// over the whole clip at full amount, rotation only, or a root reset named "Reset root turn" the same way. Unchanged
+    /// with an error when the document has no room for another layer.
     /// </summary>
     public static TimelineDocument AddFix(TimelineDocument doc, MotionFix fix, out string key, out string? error)
     {
@@ -155,14 +155,15 @@ internal static class MotionEdits
         var match = fix.Kind == MotionFixKind.MatchLoop;
         var blend = Math.Max(DefaultFixLength, fix.Fade);
         var hand = fix.Kind == MotionFixKind.HandShape;
+        var reset = fix.Kind == MotionFixKind.ResetRoot;
         var added = Add(doc, MotionLayerKind.Fix, match ? Math.Max(0, length - blend) : 0, length, out key, out error);
         if (error != null)
             return doc;
         var index = IndexOf(added, key);
         var layer = added.Motion[index] with
         {
-            Name = match ? "Match loop" : hand ? "Hand shape" : "Smooth jitter", Amount = match || hand ? 1 : .5f, Fix = fix,
-            Components = hand ? PoseComponents.Rotation : added.Motion[index].Components,
+            Name = match ? "Match loop" : hand ? "Hand shape" : reset ? "Reset root turn" : "Smooth jitter", Amount = match || hand || reset ? 1 : .5f, Fix = fix,
+            Components = hand || reset ? PoseComponents.Rotation : added.Motion[index].Components,
         };
         return added with { Motion = added.Motion.SetItem(index, layer) };
     }
@@ -922,7 +923,7 @@ internal static class MotionEdits
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
         a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
         (a.Fix == null ? b.Fix == null
-            : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade &&
+            : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade && a.Fix.Axes == b.Fix.Axes &&
               SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&
         SameIdle(a.Idle, b.Idle) &&
         a.Keys.Length == b.Keys.Length &&

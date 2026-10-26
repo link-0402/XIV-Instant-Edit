@@ -33,9 +33,12 @@ internal static class MotionEvaluator
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         MotionLayerKind.Symmetry => layer.Amount > 0 && layer.Components != PoseComponents.None && !layer.Bones.IsEmpty,
         MotionLayerKind.Pin => layer.Amount > 0 && layer.Pins.Any(pin => pin.Planted || layer.Keys.Any(key => key.Bones.ContainsKey(pin.Bone))),
-        MotionLayerKind.Fix => layer.Amount > 0 && layer.Fix is { } fix && (fix.Kind == MotionFixKind.HandShape
-            ? fix.Hand != null && layer.Components.HasFlag(PoseComponents.Rotation)
-            : (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0 && (fix.Kind != MotionFixKind.MatchLoop || fix.LoopFirst is { IsEmpty: false })),
+        MotionLayerKind.Fix => layer.Amount > 0 && layer.Fix is { } fix && fix.Kind switch
+        {
+            MotionFixKind.HandShape => fix.Hand != null && layer.Components.HasFlag(PoseComponents.Rotation),
+            MotionFixKind.ResetRoot => fix.Axes != MotionAxes.None && layer.Components.HasFlag(PoseComponents.Rotation),
+            _ => (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0 && (fix.Kind != MotionFixKind.MatchLoop || fix.LoopFirst is { IsEmpty: false }),
+        },
         MotionLayerKind.Idle => layer.Amount > 0 && layer.Idle is { } idle && MotionIdles.Moves(idle) &&
                                 (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
@@ -93,7 +96,8 @@ internal static class MotionEvaluator
     public static void Validate(MotionLayer layer)
     {
         if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation) ||
-            layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From) || layer.Fix is { } read && !Enum.IsDefined(read.Kind))
+            layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From) ||
+            layer.Fix is { } read && (!Enum.IsDefined(read.Kind) || (read.Axes & ~MotionAxes.All) != 0))
             throw new InvalidDataException("A bone layer can't be read.");
         var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
         if (layer.Start < 0 || layer.End <= layer.Start || layer.End > TimelineDocument.MaxFrames)
@@ -137,6 +141,8 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} has no hand.");
         if (layer.Fix is { Kind: not MotionFixKind.HandShape, Hand: not null })
             throw new InvalidDataException($"{name} can't have a hand.");
+        if (layer.Fix is { Kind: not MotionFixKind.ResetRoot, Axes: not MotionAxes.None })
+            throw new InvalidDataException($"{name} can't have axes.");
         if (layer.Fix?.Hand is { } hand)
         {
             if (!Enum.IsDefined(hand.Side) || string.IsNullOrEmpty(hand.Shape) || hand.Shape.Length > MaxHandShapeName)
@@ -237,6 +243,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Fix when layer.Fix!.Kind == MotionFixKind.HandShape:
                     MotionFixes.ApplyHand(clip, layer, end, token);
+                    break;
+                case MotionLayerKind.Fix when layer.Fix!.Kind == MotionFixKind.ResetRoot:
+                    MotionFixes.ApplyResetRoot(clip, layer, end, token);
                     break;
                 case MotionLayerKind.Fix:
                     MotionFixes.ApplySmooth(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
@@ -518,7 +527,7 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// One pose with the offset, pose, symmetry, keyed pin and Replace hand shape layers applied at <paramref name="frame"/>, in order, the way
+    /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape and root reset layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
     /// around its average over their section, which one pose does not have, and so is a hand shape keeping finger motion; planted pins
     /// and the other fixes too, as finding where a bone is down or what its neighbours do takes the whole clip. The Bones window turns
@@ -545,6 +554,11 @@ internal static class MotionEvaluator
             if (layer.Fix?.Kind == MotionFixKind.HandShape)
             {
                 MotionFixes.ApplyHandAt(skeleton, pose, layer, Weight(layer, frame, end));
+                continue;
+            }
+            if (layer.Fix?.Kind == MotionFixKind.ResetRoot)
+            {
+                MotionFixes.ApplyResetRootAt(skeleton, pose, layer, Weight(layer, frame, end));
                 continue;
             }
             if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)

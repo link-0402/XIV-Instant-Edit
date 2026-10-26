@@ -21,6 +21,7 @@ internal static class FixLayerFixture
     {
         Match(check);
         Smooth(check);
+        ResetRoot(check);
         Validation(check, reject);
         Journals(check);
         Edits(check);
@@ -227,6 +228,46 @@ internal static class FixLayerFixture
             "smooth wraps: on a loop the first sample is smoothed with the last ones");
     }
 
+    private static void ResetRoot(Action<bool, string> check)
+    {
+        // The root faces 90 degrees round and tilts 20 forward; b1 turns a degree a frame.
+        var turned = Q(Vector3.UnitY, 90) * Q(Vector3.UnitX, 20);
+        var plain = Clip(31, 30, (_, f) => [T(Vector3.Zero, turned), T(Vector3.UnitX, Q(Vector3.UnitY, f)), T(Vector3.UnitY)]);
+        var root = Index("n_root");
+        var unedited = Applied(plain);
+        var all = Applied(plain, ResetLayer(MotionAxes.All, 1, 0, 30));
+        check(Enumerable.Range(0, all.Samples).All(i => Degrees(all.Get(i, root).Rotation, Quaternion.Identity) < RotationTolerance) &&
+              Track(all, B1).SequenceEqual(Track(unedited, B1)) && Track(all, B2).SequenceEqual(Track(unedited, B2)),
+            "reset root: all axes put the root back at rest and leave the other bones as they are");
+
+        var facing = Applied(plain, ResetLayer(MotionAxes.Y, 1, 0, 30)).Get(10, root).Rotation;
+        check(Vector3.Distance(Vector3.Transform(Vector3.UnitY, facing), Vector3.Transform(Vector3.UnitY, turned)) < 1e-4f &&
+              MathF.Abs(Degrees(facing, Quaternion.Identity) - 20) < RotationTolerance,
+            "reset root: Y alone takes out the facing and keeps the tilt");
+        var upright = Applied(plain, ResetLayer(MotionAxes.X | MotionAxes.Z, 1, 0, 30)).Get(10, root).Rotation;
+        check(Vector3.Distance(Vector3.Transform(Vector3.UnitY, upright), Vector3.UnitY) < 1e-4f && Degrees(upright, Quaternion.Identity) > 80,
+            "reset root: X and Z stand it upright and keep the facing");
+
+        var half = Applied(plain, ResetLayer(MotionAxes.All, .5f, 0, 30)).Get(10, root).Rotation;
+        var partly = Applied(plain, ResetLayer(MotionAxes.All, 1, 20, 30));
+        check(MathF.Abs(Degrees(half, Quaternion.Identity) - Degrees(turned, Quaternion.Identity) / 2) < RotationTolerance &&
+              Before(partly, unedited, 20) && Degrees(partly.Get(25, root).Rotation, Quaternion.Identity) < RotationTolerance,
+            "reset root: the amount blends it and samples before the layer are unchanged");
+
+        var still = Clip(31, 30, (_, f) => [T(Vector3.Zero), T(Vector3.UnitX, Q(Vector3.UnitY, f)), T(Vector3.UnitY)]);
+        check(Bits(Applied(still, ResetLayer(MotionAxes.All, 1, 0, 30)), Applied(still)), "reset root: a root already at rest isn't touched");
+
+        var layers = new[] { ResetLayer(MotionAxes.Y, 1, 0, 30) };
+        var pose = Enumerable.Range(0, plain.Bones).Select(b => plain.Get(10, b)).ToArray();
+        check(Near(MotionEvaluator.ApplyAt(Rig(), pose, layers, 10)[root], Applied(plain, layers).Get(10, root), 1e-5f),
+            "reset root: one pose resets as the clip does, so Live shows what is saved");
+
+        var rest = Q(Vector3.UnitX, -90);
+        check(Degrees(MotionFixes.ResetTurn(rest * Q(Vector3.UnitY, 30), rest, MotionAxes.Y), rest) < RotationTolerance &&
+              MotionFixes.ResetTurn(turned, rest, MotionAxes.None) == Quaternion.Normalize(turned),
+            "reset root: the turn is measured from the root's rest, and no axes change nothing");
+    }
+
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
     {
         var match = MatchLayer(Loop());
@@ -254,6 +295,13 @@ internal static class FixLayerFixture
         check(MotionEvaluator.Active(match) && MotionEvaluator.Active(SmoothLayer(.5f, 0, 30)) && !MotionEvaluator.Active(SmoothLayer(0, 0, 30)) &&
               !MotionEvaluator.Active(match with { Fix = null }) && !MotionEvaluator.Active(match with { Components = PoseComponents.Scale }),
             "a fix layer is active with a fix, an amount and a rotation or position to change");
+        MotionEvaluator.Validate(ResetLayer(MotionAxes.None, 1, 0, 30));
+        reject(() => MotionEvaluator.Validate(SmoothLayer(.5f, 0, 30) with { Fix = new MotionFix(MotionFixKind.SmoothJitter, Axes: MotionAxes.Y) }),
+            "a smooth with axes is refused");
+        reject(() => MotionEvaluator.Validate(ResetLayer((MotionAxes)8, 1, 0, 30)), "a reset with an unknown axis is refused");
+        check(MotionEvaluator.Active(ResetLayer(MotionAxes.Y, 1, 0, 30)) && !MotionEvaluator.Active(ResetLayer(MotionAxes.None, 1, 0, 30)) &&
+              !MotionEvaluator.Active(ResetLayer(MotionAxes.Y, 1, 0, 30) with { Components = PoseComponents.Position }),
+            "a reset is active with an axis and its turn to change");
     }
 
     private static void Journals(Action<bool, string> check)
@@ -268,14 +316,15 @@ internal static class FixLayerFixture
                 new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
             var match = MatchLayer(Loop() with { Fade = 20 });
             var smooth = SmoothLayer(.5f, 0, 30) with { Key = "m2" };
+            var reset = ResetLayer(MotionAxes.X | MotionAxes.Z, 1, 0, 30) with { Key = "m3" };
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
                 ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
-                Timeline: new AnimationTimelineEdit(true, 0, null, [match, smooth]));
+                Timeline: new AnimationTimelineEdit(true, 0, null, [match, smooth, reset]));
             new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });
             var loaded = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion;
-            check(loaded.Length == 2 && MotionEdits.Same(loaded[0], match) && MotionEdits.Same(loaded[1], smooth) &&
-                  loaded[0].Fix!.LoopFirst![B1] == match.Fix!.LoopFirst![B1] && loaded[0].Fix!.Fade == 20,
-                "a journal keeps both fixes, the loop pose and the game fade");
+            check(loaded.Length == 3 && MotionEdits.Same(loaded[0], match) && MotionEdits.Same(loaded[1], smooth) && MotionEdits.Same(loaded[2], reset) &&
+                  loaded[0].Fix!.LoopFirst![B1] == match.Fix!.LoopFirst![B1] && loaded[0].Fix!.Fade == 20 && loaded[2].Fix!.Axes == (MotionAxes.X | MotionAxes.Z),
+                "a journal keeps the fixes, the loop pose, the game fade and a reset's axes");
             var noFade = JsonNode.Parse(File.ReadAllText(Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json")))!.AsObject();
             check(noFade["Request"]!["Timeline"]!["Motion"]![0]!["Fix"]!.AsObject().Remove("Fade"), "a journal stores a match's game fade as Fade");
             File.WriteAllText(Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json"), noFade.ToJsonString());
@@ -294,7 +343,8 @@ internal static class FixLayerFixture
         var a = MatchLayer(Loop());
         check(MotionEdits.Same(a, a with { Fix = Loop() }) && !MotionEdits.Same(a, a with { Fix = Loop(shifted: true) }) &&
               !MotionEdits.Same(a, a with { Fix = new MotionFix(MotionFixKind.SmoothJitter) }) && !MotionEdits.Same(a, a with { Fix = null }) &&
-              !MotionEdits.Same(a, a with { Fix = Loop() with { Fade = 10 } }),
+              !MotionEdits.Same(a, a with { Fix = Loop() with { Fade = 10 } }) &&
+              !MotionEdits.Same(ResetLayer(MotionAxes.Y, 1, 0, 30), ResetLayer(MotionAxes.All, 1, 0, 30)),
             "layers differ by their fix's kind, loop pose and game fade, compared by content");
     }
 
@@ -313,6 +363,9 @@ internal static class FixLayerFixture
         check(error == null && MotionEdits.Find(withSmooth, smoothKey) is
               { Kind: MotionLayerKind.Fix, Name: "Smooth jitter", Start: 0, End: 100, FadeIn: 0, FadeOut: 0, Amount: .5f, Fix.Kind: MotionFixKind.SmoothJitter },
             "Smooth jitter spans the whole clip at half strength");
+        check(MotionEdits.Find(MotionEdits.AddFix(doc, new MotionFix(MotionFixKind.ResetRoot, Axes: MotionAxes.All), out var resetKey, out error), resetKey) is
+              { Name: "Reset root turn", Start: 0, End: 100, Amount: 1, Components: PoseComponents.Rotation, Fix.Axes: MotionAxes.All } && error == null,
+            "Reset root turn spans the whole clip at full blend, turn only");
         check(MotionEdits.Find(MotionEdits.AddFix(doc with { Length = 5 }, Loop(), out var shortKey, out _), shortKey) is { Start: 0, End: 5 },
             "a match on a clip shorter than its blend starts at frame 0");
 
@@ -513,6 +566,10 @@ internal static class FixLayerFixture
     private static MotionLayer SmoothLayer(float amount, int start, int end) =>
         new("m1", MotionLayerKind.Fix, "Smooth jitter", start, end, 0, 0, amount, PoseComponents.Rotation | PoseComponents.Position,
             MotionInterpolation.Smooth, Fix: new MotionFix(MotionFixKind.SmoothJitter));
+
+    private static MotionLayer ResetLayer(MotionAxes axes, float amount, int start, int end) =>
+        new("m1", MotionLayerKind.Fix, "Reset root turn", start, end, 0, 0, amount, PoseComponents.Rotation,
+            MotionInterpolation.Smooth, Fix: new MotionFix(MotionFixKind.ResetRoot, Axes: axes));
 
     /// <summary>
     /// 61 samples over 60 frames: b1 sweeps 30 degrees about Y and 0.1 along X with a 1-degree, 2 mm shake

@@ -305,6 +305,86 @@ internal static class MotionFixes
                 pose[b] = pose[b] with { Rotation = MotionEvaluator.Slerp(pose[b].Rotation, target, weight) };
     }
 
+    /// <summary>
+    /// Reset root turn over the clip: each root bone's rotation goes to <see cref="ResetTurn"/>'s by the layer's weight.
+    /// Samples it wouldn't change are left as they are, so a root at rest gets no track from rounding.
+    /// </summary>
+    internal static void ApplyResetRoot(MotionClip clip, MotionLayer layer, float end, CancellationToken token)
+    {
+        if (layer.Fix is not { Axes: not MotionAxes.None and var axes })
+            return;
+        var roots = Roots(clip.Skeleton);
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var weight = MotionEvaluator.Weight(layer, clip.Frame(i), end);
+            if (weight <= 0)
+                continue;
+            foreach (var b in roots)
+            {
+                var value = clip.Get(i, b);
+                if (Reset(value.Rotation, clip.Skeleton.Bones[b].Reference.Rotation, axes, weight) is { } turned)
+                    clip.Set(i, b, value with { Rotation = turned });
+            }
+        }
+    }
+
+    /// <summary>A root reset on one pose at <paramref name="weight"/>, as <see cref="ApplyResetRoot"/> sets a sample.</summary>
+    internal static void ApplyResetRootAt(SkeletonDescription skeleton, MotionTransform[] pose, MotionLayer layer, float weight)
+    {
+        if (weight <= 0 || layer.Fix is not { Axes: not MotionAxes.None and var axes })
+            return;
+        foreach (var b in Roots(skeleton))
+            if (Reset(pose[b].Rotation, skeleton.Bones[b].Reference.Rotation, axes, weight) is { } turned)
+                pose[b] = pose[b] with { Rotation = turned };
+    }
+
+    /// <summary><paramref name="rotation"/> turned toward its <see cref="ResetTurn"/> by <paramref name="weight"/>; null when that changes nothing.</summary>
+    private static Quaternion? Reset(Quaternion rotation, Quaternion rest, MotionAxes axes, float weight)
+    {
+        rotation = Quaternion.Normalize(rotation);
+        var aim = MotionEvaluator.Align(ResetTurn(rotation, rest, axes), rotation);
+        var off = Quaternion.Inverse(rotation) * aim;
+        return new Vector3(off.X, off.Y, off.Z).LengthSquared() <= 1e-10f ? null : MotionEvaluator.Slerp(rotation, aim, weight);
+    }
+
+    private static int[] Roots(SkeletonDescription skeleton) =>
+        [.. Enumerable.Range(0, skeleton.Bones.Length).Where(b => skeleton.Bones[b].Parent < 0)];
+
+    /// <summary>
+    /// <paramref name="rotation"/> with its turn from <paramref name="rest"/> taken out on <paramref name="axes"/>, by swing and
+    /// twist, so no axis order matters: all three give the rest; two keep only the twist about the third (X and Z keep the facing);
+    /// one takes out the twist about it (Y alone keeps the tilt).
+    /// </summary>
+    internal static Quaternion ResetTurn(Quaternion rotation, Quaternion rest, MotionAxes axes)
+    {
+        rest = Quaternion.Normalize(rest);
+        var turn = Quaternion.Inverse(rest) * Quaternion.Normalize(rotation);
+        var picked = BitOperations.PopCount((uint)(axes & MotionAxes.All));
+        if (picked == 0)
+            return Quaternion.Normalize(rotation);
+        if (picked == 3)
+            return rest;
+        var twist = Twist(turn, Axis(picked == 1 ? axes : MotionAxes.All & ~axes));
+        return Quaternion.Normalize(rest * (picked == 1 ? turn * Quaternion.Inverse(twist) : twist));
+    }
+
+    private static Vector3 Axis(MotionAxes axis) => axis switch
+    {
+        MotionAxes.X => Vector3.UnitX,
+        MotionAxes.Y => Vector3.UnitY,
+        _ => Vector3.UnitZ,
+    };
+
+    /// <summary>The part of <paramref name="q"/> that turns about <paramref name="axis"/>; none when q only swings the axis half round.</summary>
+    private static Quaternion Twist(Quaternion q, Vector3 axis)
+    {
+        var along = Vector3.Dot(new Vector3(q.X, q.Y, q.Z), axis) * axis;
+        var twist = new Quaternion(along, q.W);
+        return twist.LengthSquared() < 1e-12f ? Quaternion.Identity : Quaternion.Normalize(twist);
+    }
+
     /// <summary>Each side's finger targets on <paramref name="skeleton"/>, left first; a side without a usable hand gives none.</summary>
     private static IEnumerable<Dictionary<int, Quaternion>> Hands(SkeletonDescription skeleton, MotionHand hand)
     {

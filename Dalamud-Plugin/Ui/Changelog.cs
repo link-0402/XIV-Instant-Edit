@@ -65,6 +65,7 @@ internal static class ChangelogCatalog
             Entry("Pin layers hold a bone at a spot, feet on the floor or a hand on the chest, and bend the limb to reach it. Pin feet finds where the feet are down and holds them there.", 1),
             Entry("Fix layers: Match startup to loop blends a startup's end into the loop frame the game shows then, after its own cross-fade, measured when you play the emote; Smooth jitter calms small shakes and keeps sharp moves.", 1),
             Entry("Fix layers: Hand shape sets a hand's fingers to a fist, flat hand, point and more, with Curl and Spread sliders, and saves your own shapes.", 1),
+            Entry("Fix layers: Reset root turn takes a turn baked into the root bone back out, on the axes you tick.", 1),
             Entry("Start an animation from scratch: Still pose holds one frame for the whole clip, and a pose layer builds the motion. Key a pose stands bent legs back on the ground.", 1),
             Entry("Idle motion layers borrow breathing and a weight shift from another animation, such as your idle, with a share for the breath, arms, balance and tail.", 1),
             Entry("The gizmo's Drag mode pulls a bone where you want it and bends the limb above to follow.", 1),

@@ -50,6 +50,16 @@ internal static partial class TimelineWindowViews
     public const string SmoothJitterHint = "Calm small shakes and keep sharp moves.";
     public const string HandShapeName = "Hand shape";
     public const string HandShapeHint = "Set a hand's fingers to a shape.";
+    public const string ResetRootName = "Reset root turn";
+    public const string ResetRootHint = "Turn the root bone back to rest on the ticked axes, for poses with a turn baked into it.";
+
+    /// <summary>A root reset's axis checkboxes, in order, with what turning about each does.</summary>
+    public static readonly ImmutableArray<(MotionAxes Axis, string Label, string Tip)> ResetAxes =
+    [
+        (MotionAxes.X, "X", "Tilt forward and back."),
+        (MotionAxes.Y, "Y", "Facing."),
+        (MotionAxes.Z, "Z", "Lean to the sides."),
+    ];
 
     /// <summary>Whether Pin feet can pin both feet on <paramref name="skeleton"/>; false while it is unknown.</summary>
     public static bool CanPinFeet(SkeletonDescription? skeleton) =>
@@ -157,6 +167,7 @@ internal static partial class TimelineWindowViews
         MotionFixKind.MatchLoop => MatchLoopHint,
         MotionFixKind.SmoothJitter => SmoothJitterHint,
         MotionFixKind.HandShape => HandShapeHint,
+        MotionFixKind.ResetRoot => ResetRootHint,
         _ => LayerKindHint(layer.Kind),
     };
 
@@ -245,6 +256,8 @@ internal static partial class TimelineWindowViews
                    (layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones");
         if (layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand })
             return hand.Side switch { MotionHandSide.Left => "Left hand", MotionHandSide.Right => "Right hand", _ => "Both hands" };
+        if (layer.Fix is { Kind: MotionFixKind.ResetRoot, Axes: var axes })
+            return axes == MotionAxes.None ? "Root · no axes" : "Root · " + string.Join(", ", ResetAxes.Where(a => axes.HasFlag(a.Axis)).Select(a => a.Label));
         var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix;
         var bones = limited
             ? layer.Bones.Length
@@ -567,6 +580,8 @@ internal static partial class TimelineWindowViews
                 .SelectMany(layer => layer.Kind switch
                 {
                     MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, editing),
+                    MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot =>
+                        editing?.Bones.Where(bone => bone.Parent < 0).Select(bone => bone.Name) ?? Enumerable.Empty<string>(),
                     MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
                     MotionLayerKind.Pin => PinnedBones(layer, editing),

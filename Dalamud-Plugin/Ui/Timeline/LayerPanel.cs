@@ -65,6 +65,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         // A match ends on the clip's last frame and its blend is its fade: only its length is set.
         var match = layer.Fix?.Kind == MotionFixKind.MatchLoop;
         var hand = layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } shape } ? shape : null;
+        var reset = layer.Fix?.Kind == MotionFixKind.ResetRoot;
         using (var facts = ImRaii.Table("##layer-facts", 2, ImGuiTableFlags.SizingFixedFit))
         {
             if (facts.Success)
@@ -86,9 +87,11 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                         FrameField(current, layer, "Fade out", "##layer-fade-out", layer.FadeOut, fade => layer with { FadeOut = fade });
                     }
                     DrawAmount(current, layer);
-                    // A hand shape turns finger bones only; a pin holds a spot and a turn, whatever parts are set.
+                    // A hand shape turns finger bones only, a root reset the root; a pin holds a spot and a turn, whatever parts are set.
                     if (hand != null)
                         hands.DrawFields(current, layer, hand);
+                    else if (reset)
+                        DrawAxes(current, layer);
                     else if (layer.Kind != MotionLayerKind.Pin)
                         DrawComponents(current, layer);
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle))
@@ -116,6 +119,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         }
         else if (hand != null)
             hands.Draw(current, layer, hand, loaded, skeleton, readOnly);
+        else if (reset)
+            Widgets.MutedWrapped("Changes the root bone only, so the whole body turns with it.");
         else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
         else if (layer.Kind == MotionLayerKind.Symmetry)
@@ -429,6 +434,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 MotionLayerKind.Pin => "How far the bones go to their pins. Ctrl+click to type.",
                 MotionLayerKind.Fix when smooth => "How big a shake it calms. Ctrl+click to type.",
                 MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.HandShape => "How far the fingers go to the shape. Ctrl+click to type.",
+                MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot => "How far the root turns back. Ctrl+click to type.",
                 MotionLayerKind.Fix => "How far the end goes to the loop's first frame. Ctrl+click to type.",
                 MotionLayerKind.Idle => "How much of the borrowed motion applies, over the shares below. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
@@ -449,6 +455,25 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 ImGui.SetTooltip("The side whose motion is copied.");
         }
         ImGui.Spacing();
+    }
+
+    /// <summary> A root reset's axes, one checkbox each; a click is one undo step. </summary>
+    private static void DrawAxes(TimelineEditor current, MotionLayer layer)
+    {
+        TimelineUi.Fact("Axes");
+        var fix = layer.Fix!;
+        var first = true;
+        foreach (var (axis, label, tip) in TimelineWindowViews.ResetAxes)
+        {
+            if (!first)
+                ImGui.SameLine(0, Theme.Scaled(10));
+            first = false;
+            var on = fix.Axes.HasFlag(axis);
+            if (ImGui.Checkbox(label + "##axis-" + label, ref on))
+                current.Commit(MotionEdits.Replace(current.Document, layer with { Fix = fix with { Axes = on ? fix.Axes | axis : fix.Axes & ~axis } }));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(tip);
+        }
     }
 
     private static void DrawComponents(TimelineEditor current, MotionLayer layer)
