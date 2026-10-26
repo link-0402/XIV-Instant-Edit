@@ -1,7 +1,9 @@
-﻿using System.Numerics;
+﻿using System.Buffers.Binary;
+using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.Havok.Animation.Playback.Control.Default;
 
 namespace InstantEdit.Services.Animations.Preview;
@@ -13,8 +15,10 @@ namespace InstantEdit.Services.Animations.Preview;
 /// outside it the class only reads (<see cref="CurrentTime"/>). Scrubbing writes LocalTime on the
 /// live Havok controls holding the clip, found by binding fingerprint rather than control index; it
 /// moves the pose only, so TMB events (sounds, VFX, expressions) fire only during real playback.
-/// No hooks or signatures: everything goes through ClientStructs members. Every call must come from
-/// the framework thread (ImGui draw included), and pointers are looked up again on every call.
+/// No hooks or signatures: everything goes through ClientStructs members, apart from GPose's held
+/// expression records (<see cref="GPoseExpressionRecords"/>), which are paused while a preview plays
+/// on the posed player and put back when it stops. Every call must come from the framework thread
+/// (ImGui draw included), and pointers are looked up again on every call.
 /// </summary>
 internal sealed unsafe class AnimationPlayback : IDisposable
 {
@@ -30,6 +34,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     private const int MaximumControls = 256;
     // ActionTimelineSequencer slots: base, upper body and facial.
     private static readonly uint[] SpeedSlots = [0, 1, 2];
+    private const uint FaceSlot = 2;
     private static readonly TimeSpan DisposeWait = TimeSpan.FromSeconds(2);
     // How close to its duration a clip's time counts as its end (well under one 30 fps frame).
     private const float EndTolerance = .001f;
@@ -64,6 +69,10 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         public bool BodyPlayed { get; set; }
         /// <summary> An expression played on the face, which a stop returns to neutral. </summary>
         public bool FacePlayed { get; set; }
+        /// <summary> The last play was an expression's, on the face slot, rather than a body timeline. </summary>
+        public bool PlayingFace { get; set; }
+        /// <summary> GPose's held expressions this playback paused, by emote field offset, which a stop puts back. </summary>
+        public Dictionary<int, ushort> HeldExpressions { get; } = [];
         public string? Fingerprint { get; set; }
         public bool Paused { get; set; }
         public float Speed { get; set; } = 1;
@@ -184,6 +193,8 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         session.Fingerprint = bindingFingerprint;
         session.Paused = false;
         session.Hold = null;
+        session.PlayingFace = face;
+        PauseHeldExpressions(session);
         if (face)
             session.FacePlayed = true;
         else
@@ -191,6 +202,8 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             session.BodyPlayed = true;
             chara->SetMode(CharacterModes.AnimLock, 0);
             chara->Timeline.BaseOverride = timelineId;
+            // A held expression in the face slot would keep the timeline's own faces from playing.
+            ClearFaceSlot(chara);
         }
         chara->Timeline.TimelineSequencer.PlayTimeline(timelineId);
         if (session.SpeedSet)
@@ -343,6 +356,10 @@ internal sealed unsafe class AnimationPlayback : IDisposable
                 End("The character left. Playback stopped.");
                 return;
             }
+            // An expression picked in GPose's emote list while the preview plays is paused too, and played
+            // after the stop instead of the one before; a body preview takes it off the face again.
+            if (PauseHeldExpressions(session) && !session.PlayingFace)
+                ClearFaceSlot(chara);
             if (session.SpeedSet)
                 Apply(chara, session);
         }
@@ -473,6 +490,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         _session = null;
         if (!restore || !_clientState.IsGPosing)
             return;
+        RestoreHeldExpressions(session);
         var chara = SessionActor(session);
         if (chara == null)
             return;
@@ -557,8 +575,84 @@ internal sealed unsafe class AnimationPlayback : IDisposable
 
     private void End(string status)
     {
+        // The posed player may be gone while GPose goes on; its held expression still plays again.
+        if (_session is { } session && _clientState.IsGPosing)
+            RestoreHeldExpressions(session);
         _session = null;
         Status = status;
+    }
+
+    /// <summary>
+    /// Pauses GPose's held expressions for the posed player (<see cref="GPoseExpressionRecords"/>), keeping each one's
+    /// emote for the stop; a newer pick in the same record replaces it. Other actors have none. True when one was paused.
+    /// </summary>
+    private bool PauseHeldExpressions(Session session)
+    {
+        if (session.ObjectIndex != GPosePlayerIndex || !HeldExpressionRecords(out var start, out var found))
+            return false;
+        var controller = new Span<byte>(start, EventGPoseController.StructSize);
+        var paused = false;
+        foreach (var at in found)
+        {
+            var emote = BinaryPrimitives.ReadUInt16LittleEndian(controller[at..]);
+            if (emote == 0)
+                continue;
+            session.HeldExpressions[at] = emote;
+            BinaryPrimitives.WriteUInt16LittleEndian(controller[at..], 0);
+            paused = true;
+        }
+        return paused;
+    }
+
+    /// <summary> Puts paused expressions back where their record still names the player and nothing was picked since. </summary>
+    private void RestoreHeldExpressions(Session session)
+    {
+        if (session.HeldExpressions.Count == 0)
+            return;
+        try
+        {
+            if (!HeldExpressionRecords(out var start, out var found))
+                return;
+            var controller = new Span<byte>(start, EventGPoseController.StructSize);
+            foreach (var (at, emote) in session.HeldExpressions)
+                if (found.Contains(at) && BinaryPrimitives.ReadUInt16LittleEndian(controller[at..]) == 0)
+                    BinaryPrimitives.WriteUInt16LittleEndian(controller[at..], emote);
+        }
+        catch (Exception e)
+        {
+            _log.Warning(e, "Could not put GPose's held expression back after the animation preview playback.");
+        }
+        finally
+        {
+            session.HeldExpressions.Clear();
+        }
+    }
+
+    /// <summary> GPose's controller and the emote fields of its records naming the local player; false outside GPose. </summary>
+    private bool HeldExpressionRecords(out byte* controller, out List<int> found)
+    {
+        controller = null;
+        found = [];
+        if (!_clientState.IsGPosing || _objects.LocalPlayer is not { Address: not 0 } player)
+            return false;
+        var events = EventFramework.Instance();
+        if (events == null)
+            return false;
+        controller = (byte*)&events->EventSceneModule.EventGPoseController;
+        found = GPoseExpressionRecords.Find(new ReadOnlySpan<byte>(controller, EventGPoseController.StructSize), (ulong)player.Address, player.EntityId);
+        return true;
+    }
+
+    /// <summary> Empties the face slot, and the timeline it falls back to, so nothing holds the face. </summary>
+    private static void ClearFaceSlot(Character* chara)
+    {
+        ref var sequencer = ref chara->Timeline.TimelineSequencer;
+        if (sequencer.GetSchedulerTimeline(FaceSlot) == null && sequencer.TimelineIds[(int)FaceSlot] == 0)
+            return;
+        sequencer.TimelineIds2[(int)FaceSlot] = 0;
+        sequencer.TimelineIds3[(int)FaceSlot] = 0;
+        sequencer.TimelineIds4[(int)FaceSlot] = 0;
+        sequencer.SetSlotTimeline(FaceSlot, 0);
     }
 
     private bool Fail(string error)

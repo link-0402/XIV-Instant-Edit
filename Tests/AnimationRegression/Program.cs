@@ -25,6 +25,7 @@ Scenarios.Run(() => AnimationExportFixture.Rows(Check));
 Scenarios.Run(() => AnimationExportFixture.RecordingScaleCases(Check));
 Scenarios.Run(() => ModelSkeletonFixture.Run(Check, Reject));
 Scenarios.Run(() => AnimationPreviewFixture.Run(Check, Reject));
+Scenarios.Run(() => GPoseExpressionRecordsFixture.Run(Check));
 Scenarios.Run(() => TimelineCatalogFixture.Run(Check, Reject));
 Scenarios.Run(() => AnimationTimelineCommitFixture.Run(Check, Reject));
 Scenarios.Run(() => TmbFileFixture.Run(Check, Reject));
