@@ -106,6 +106,8 @@ internal static class NeckSeamAnalyzer
     private const float TieDistance = 0.00001f;
     /// <summary> Normal-mapped normals smoothed over 1 cm that differ by more than this across the neck show as a seam. </summary>
     private const float NormalMapLimit = 1.5f;
+    /// <summary> Smoothed diffuse colours that differ by more than 1 of 255 show as a seam: a 1.5-of-255 step on smooth skin was visible in game. </summary>
+    internal const float ColourLimit = 1f / 255;
     private const float DensityBand = 0.03f;
     private const int BodyTextureEdge = 1024;
     private static readonly Regex FaceModel = new(@"^chara/human/c(?<race>\d{4})/obj/face/f\d{4}/model/c\d{4}f\d{4}_fac\.mdl$",
@@ -350,12 +352,12 @@ internal static class NeckSeamAnalyzer
         }
         if (channels.Diffuse is { } diffuse)
         {
-            var off = diffuse.MaxDifference > 0.02f;
+            var off = diffuse.MaxDifference > ColourLimit;
             if (off)
                 blend.Add(SkinMaterial.DiffuseSampler);
             findings.Add(new NeckSeamFinding("Skin colour at the seam", Rgb(diffuse.Face), Rgb(diffuse.Body),
                 off ? NeckSeamSeverity.Problem : NeckSeamSeverity.Ok,
-                $"Diffuse colour on both sides of the neck, smoothed over 1 cm; the largest difference along the seam is {diffuse.MaxDifference * 255:0} of 255.",
+                $"Diffuse colour on both sides of the neck, smoothed over 1 cm; the largest difference along the seam is {diffuse.MaxDifference * 255:0.#} of 255.",
                 off ? NeckSeamFixKind.Textures : NeckSeamFixKind.None));
         }
         if (channels.SkinInfluence is { } influence)

@@ -409,6 +409,11 @@ internal static class NeckSeamScenarios
             "neck seam: texture channels that differ at the seam are problems, matching ones are fine");
         Require(report.TexturesToBlend.SetEquals([SkinMaterial.DiffuseSampler, SkinMaterial.MaskSampler]),
             "neck seam: only the textures that differ are marked for blending");
+        var nearMatch = new Dictionary<string, byte[]>(files, StringComparer.OrdinalIgnoreCase) { [F("body_base.tex")] = Texture(172, 142, 122, 255) };
+        var faint = NeckSeamAnalyzer.Analyze(NeckSeamCapture.Capture(roots, path => nearMatch.GetValueOrDefault(path), null).Input);
+        Require(faint.TexturesToBlend.Contains(SkinMaterial.DiffuseSampler) &&
+                faint.Findings.Single(f => f.Title == "Skin colour at the seam").Severity == NeckSeamSeverity.Problem,
+            "neck seam: a colour step of 2 of 255 at the seam is blended, since steps that small show on smooth skin");
         var match = report.Material;
         Require(match.TileScaleOff && match.TileAlphaOff && !match.TileIndexOff && match.Other.Count == 0 && MathF.Abs(match.BodyNormalAlpha - 1) < 0.01f,
             "neck seam: the tile size and strength differ between the materials, the pattern doesn't");
