@@ -24,6 +24,12 @@ def remove_loose_verts(obj: Object) -> None:
     bm.from_mesh(obj.data)
     
     loose_verts = [vert for vert in bm.verts if len(vert.link_faces) == 0]
+    if loose_verts and not bm.faces:
+        # A faceless mesh (a vanilla VFX container whose degenerate triangle the import dropped)
+        # exports as one zero-area triangle on its first vertex, keeping its weights and material.
+        first = loose_verts[0]
+        bm.faces.new((first, bm.verts.new(first.co, first), bm.verts.new(first.co, first)))
+        loose_verts = loose_verts[1:]
     if loose_verts:
         bmesh.ops.delete(bm, geom=loose_verts, context='VERTS')
     
