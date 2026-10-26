@@ -59,6 +59,12 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     /// </summary>
     public string? FileModel { get; init; }
 
+    /// <summary>
+    /// Whether the loaded file's PAP holds an animation other than this clip, its startup included: its header names
+    /// their race too, so the clip can't be rebuilt for another (<see cref="AnimationBakeRules.RepairedModel"/>).
+    /// </summary>
+    public bool HoldsOthers { get; init; }
+
     /// <summary>The race and standard skeleton a save rebuilds the borrowed clip onto; null keeps its race.</summary>
     public RaceRebuild? Rebuild { get; init; }
 
@@ -101,6 +107,7 @@ internal sealed partial class AnimationEditService
         var (resource, bytes) = await resources.ReadAsync(capture.CollectionId, clip.GamePath, token);
         var pap = new AnimationPap(bytes);
         var fileModel = pap.ModelType == 0 ? AnimationSkeletonIndex.ModelCode(pap.ModelId) : null;
+        var holdsOthers = HoldsOthers(pap, clip.BindingIndex);
         var entry = pap.EntryIndex(clip.Name, clip.BindingIndex);
         var tmb = pap.TimelineBytes(entry);
         // What the loaded file's clip is called by fingerprint, and how long its motion lasts: after a save the game may play
@@ -117,11 +124,14 @@ internal sealed partial class AnimationEditService
         }
         catch (InvalidDataException error)
         {
-            return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message) { FileModel = fileModel };
+            return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message) { FileModel = fileModel, HoldsOthers = holdsOthers };
         }
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
-            await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint, FileModel = fileModel };
+            await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint, FileModel = fileModel, HoldsOthers = holdsOthers };
     }
+
+    /// <summary>Whether <paramref name="pap"/> holds an entry bound to another animation than <paramref name="binding"/>.</summary>
+    internal static bool HoldsOthers(AnimationPap pap, int binding) => pap.Entries.Any(entry => entry.Binding != binding);
 
     /// <summary>
     /// <paramref name="clip"/> as long as the file read says its motion lasts (<paramref name="seconds"/>), not as

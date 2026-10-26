@@ -25,15 +25,23 @@ internal sealed class LoopPoseReader(TimelineSession session)
     /// <summary>
     /// Decodes <paramref name="capture"/>'s loop and takes its frames <paramref name="fade"/> and one after: the frame the game
     /// shows as the startup ends, that many frames into its cross-fade (<see cref="MotionFixes.LoopPose"/>). With the
-    /// startup's <paramref name="rebuild"/>, the loop is decoded on the same skeleton.
+    /// startup's <paramref name="rebuild"/>, the loop is decoded on the same skeleton when <see cref="LoopRebuild"/> allows.
     /// </summary>
     public static async Task<MotionFix> Start(AnimationEditService service, AnimationCapture capture, int fade, RaceRebuild? rebuild, CancellationToken token)
     {
         var loaded = await service.LoadTimelineAsync(capture, false, token).ConfigureAwait(false);
-        var clip = await service.DecodeMotionAsync(loaded with { Rebuild = rebuild }, _ => { }, token).ConfigureAwait(false);
+        var clip = await service.DecodeMotionAsync(loaded with { Rebuild = LoopRebuild(loaded, rebuild) }, _ => { }, token).ConfigureAwait(false);
         var pose = MotionFixes.LoopPose(clip, fade);
         return pose.LoopFirst is { IsEmpty: false } ? pose : throw new InvalidDataException("It has no bones.");
     }
+
+    /// <summary>
+    /// The startup's <paramref name="rebuild"/> for reading its <paramref name="loop"/>: only when the loop's file is borrowed
+    /// the same way and the standard is found for it. Null reads the loop as the game plays it, such as one saved rebuilt already.
+    /// </summary>
+    internal static RaceRebuild? LoopRebuild(AnimationTimelineSource loop, RaceRebuild? rebuild) =>
+        rebuild != null && AnimationBones.RebuildRace(loop.Clip, loop.FileModel) == rebuild.Model &&
+        AnimationBones.Standard(loop.Clip, rebuild.Target.Standard, rebuild.Model) != null ? rebuild : null;
 
     /// <summary>The game fade measured for <paramref name="loaded"/>'s startup into its loop, or null when it never played.</summary>
     public int? MeasuredFade(AnimationTimelineSource loaded) =>

@@ -37,12 +37,15 @@ internal sealed class MotionDecode(TimelineSession session)
     /// <summary>A read is running.</summary>
     public bool Reading => task != null;
 
-    /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on, the rebuild's skeleton and the motion layers apply to.</summary>
+    /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on, then the motion layers apply to and the rebuild's skeleton.</summary>
     public static string KeyOf(AnimationTimelineSource loaded) =>
         $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|" +
-        $"{loaded.Rebuild?.Target.Skeleton.Fingerprint}|{loaded.BaseHash}";
+        $"{loaded.BaseHash}~{loaded.Rebuild?.Target.Skeleton.Fingerprint}";
 
-    /// <summary>A <see cref="KeyOf"/> without the motion layers apply to (its last part): the same clip on the same skeleton.</summary>
+    /// <summary>
+    /// A <see cref="KeyOf"/> without its last part, the motion layers apply to and the rebuild's skeleton: the same clip
+    /// played on the same skeleton, so Live reads it again and starts again on it.
+    /// </summary>
     public static string ClipPart(string key) => key[..key.LastIndexOf('|')];
 
     /// <summary>Whether the last read failed for <paramref name="loaded"/> as it is now.</summary>

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using InstantEdit.Models;
@@ -23,6 +24,88 @@ internal static class RaceRebuildFixture
         LiveHandBack(check);
         EditingProblems(check);
         BorrowedBy(check);
+        FooterChoices(check);
+        LayersOverBake(check);
+        LoopAndLive(check);
+    }
+
+    private static MotionLayer Offset(string bone, Vector3 move, bool enabled = true) => new("m1", MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1,
+        PoseComponents.All, MotionInterpolation.Smooth, [],
+        [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add(bone,
+            new BoneTransform(move, Quaternion.CreateFromAxisAngle(Vector3.UnitZ, .5f), Vector3.One)))], enabled);
+
+    private static void FooterChoices(Action<bool, string> check)
+    {
+        var (clip, _, actorIvcs, _) = Borrowed();
+        check(AnimationBones.RebuildName("c0801", SkeletonStandard.Ivcs) == "Rebuild for Miqo'te (Female), IVCS", "the rebuild entry names the race and standard");
+        check(AnimationBones.AutomaticRebuild(clip, "c0101", []) == new RaceRebuild("c0801", actorIvcs) &&
+              AnimationBones.AutomaticRebuild(clip, "c0801", []) == null && AnimationBones.AutomaticRebuild(clip, "c0101", [], holdsOthers: true) == null &&
+              AnimationBones.AutomaticRebuild(clip with { Resolution = clip.Resolution! with { State = SkeletonResolutionState.Searching } }, "c0101", []) == null,
+            "a borrowed clip is rebuilt for you once matched, onto the smallest standard holding its bones");
+        var rebuild = new RaceRebuild("c0801", actorIvcs);
+        var moved = actorIvcs with { Origin = "another IVCS" };
+        check(ReferenceEquals(AnimationBones.CurrentRebuild(clip, "c0101", rebuild), rebuild) &&
+              AnimationBones.CurrentRebuild(clip, "c0101", rebuild with { Target = moved }) == rebuild &&
+              AnimationBones.CurrentRebuild(clip, "c0801", rebuild) == null && AnimationBones.CurrentRebuild(clip, "c0101", rebuild, holdsOthers: true) == null &&
+              AnimationBones.CurrentRebuild(clip with { Resolution = clip.Resolution! with { ActorStandards = [] } }, "c0101", rebuild) == null,
+            "a rebuild follows the match: kept, moved onto the standard found now, or dropped");
+
+        check(AnimationBones.RebuildRace(clip, "c0101", holdsOthers: true) == null && AnimationBones.DefaultRebuild(clip, "c0101", [], holdsOthers: true) == null &&
+              AnimationBones.RebuildNote(clip, "c0101", [], false, holdsOthers: true) == "Can't rebuild for Miqo'te (Female): this file holds other animations." &&
+              AnimationBones.RebuildNote(clip with { Resolution = clip.Resolution! with { ActorStandards = [] } }, "c0101", [], false, holdsOthers: true) ==
+                  "Can't rebuild for Miqo'te (Female): its skeleton wasn't found.",
+            "a file holding other animations offers no rebuild, and says so when one would be possible");
+        check(AnimationEditService.HoldsOthers(new AnimationPap(TimelineToolsFixture.Pap(101, bindings: 2)), 0) &&
+              !AnimationEditService.HoldsOthers(new AnimationPap(TimelineToolsFixture.Pap(101)), 0),
+            "a PAP holds others when an entry binds another animation");
+        check(AnimationBones.RebuildFailedNote("c0801", "A bone is missing.") == "Can't rebuild for Miqo'te (Female): A bone is missing.",
+            "a rebuild whose motion can't be read says why");
+    }
+
+    private static void LayersOverBake(Action<bool, string> check)
+    {
+        var (clip, _, actorIvcs, _) = Borrowed();
+        var empty = new TimelineDocument(30, 30, null, [], 1);
+        var layered = empty with { Motion = [Offset("j_kosi", Vector3.Zero)] };
+        const string note = "Saving bakes the layers in. Undo last save brings them back as unsaved edits.";
+        check(AnimationBakeRules.BakeInNote(layered, SkeletonStandard.Ivcs) == note && AnimationBakeRules.BakeInNote(layered with { ExcludedBones = ["j_kosi"] }, null) == note &&
+              AnimationBakeRules.BakeInNote(layered, null) == null && AnimationBakeRules.BakeInNote(empty, SkeletonStandard.Ivcs) == null &&
+              AnimationBakeRules.BakeInNote(layered with { Length = 60 }, SkeletonStandard.Ivcs) == "Saving bakes the layers in.",
+            "the footer says when a save bakes the layers in, and whether Undo brings them back");
+
+        var source = TimelineToolsFixture.Source(clip, layered) with { Rebuild = new("c0801", actorIvcs) };
+        var rebuilt = AnimationEditService.TimelineRequest(source, layered, AnimationDestination.InPlace, "Mod");
+        var plain = AnimationEditService.TimelineRequest(source with { Rebuild = null }, layered, AnimationDestination.InPlace, "Mod");
+        var excluded = AnimationEditService.TimelineRequest(source with { Rebuild = null }, layered with { ExcludedBones = ["iv_ko_c_l"] }, AnimationDestination.InPlace, "Mod");
+        var stretched = AnimationEditService.TimelineRequest(source, layered with { Length = 60 }, AnimationDestination.InPlace, "Mod");
+        check(AnimationBakeRules.LayersBackAfterUndo(rebuilt).SequenceEqual(layered.Motion) && AnimationBakeRules.LayersBackAfterUndo(excluded).SequenceEqual(layered.Motion) &&
+              AnimationBakeRules.LayersBackAfterUndo(plain).IsEmpty && AnimationBakeRules.LayersBackAfterUndo(stretched).IsEmpty,
+            "undoing a save that baked the layers in brings them back, unless the save retimed them");
+    }
+
+    private static void LoopAndLive(Action<bool, string> check)
+    {
+        var (clip, _, actorIvcs, _) = Borrowed();
+        var loop = TimelineToolsFixture.Source(clip, new TimelineDocument(30, 30, null, [], 1)) with { FileModel = "c0101" };
+        var rebuild = new RaceRebuild("c0801", actorIvcs);
+        check(LoopPoseReader.LoopRebuild(loop, rebuild) == rebuild && LoopPoseReader.LoopRebuild(loop, null) == null &&
+              LoopPoseReader.LoopRebuild(loop with { FileModel = "c0801" }, rebuild) == null &&
+              LoopPoseReader.LoopRebuild(loop with { Clip = clip with { Resolution = clip.Resolution! with { ActorStandards = [] } } }, rebuild) == null,
+            "the loop is read rebuilt only when the game plays it borrowed the same way");
+
+        var doc = new TimelineDocument(30, 30, null, [], 1);
+        var pose = new MotionLayer("m2", MotionLayerKind.Pose, "Pose 1", 0, 30, 0, 0, 1, PoseComponents.All, MotionInterpolation.Smooth, [],
+            [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_kosi", new BoneTransform(Vector3.One, Quaternion.Identity, Vector3.One)), ["j_kosi"])]);
+        check(TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.UnitY)] }) &&
+              TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [pose] }) &&
+              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [pose with { Keys = [pose.Keys[0] with { Moved = [] }] }] }) &&
+              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("n_hara", Vector3.UnitY)] }) &&
+              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.Zero)] }) &&
+              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.UnitY, enabled: false)] }) &&
+              !TimelineWindowViews.LiveRebuiltPositions(doc),
+            "Live says when a rebuilt clip's moves on bones other than the hips show only after the save");
+        check(TimelineWindowViews.LiveRebuiltPositionsNote == "Live shows position changes only on the hips while rebuilt; the others show after you save.",
+            "the Live line for moves it can't show");
     }
 
     private static void BorrowedBy(Action<bool, string> check)
@@ -37,6 +120,8 @@ internal static class RaceRebuildFixture
         check(table.PlayedBy("chara/monster/m0001/animation/a0001/bt_common/emote_sp/sp10_loop.pap", [101, 801]).IsEmpty,
             "a path outside the human layout is played by no race");
         check(AnimationBakeRules.BorrowNote([801], 801) == null, "no note when only the character's race plays it");
+        check(AnimationBakeRules.BorrowNote([101, 801], 801) == $"{RaceInfo.NameOf(101)} plays it converted from {RaceInfo.NameOf(801)}.",
+            "one other race plays it");
         check(AnimationBakeRules.BorrowNote([101, 201, 801], 801) ==
               $"{RaceInfo.NameOf(101)} and {RaceInfo.NameOf(201)} play it converted from {RaceInfo.NameOf(801)}." &&
               AnimationBakeRules.BorrowNote([101, 201, 801, 1101], 801) ==
@@ -128,8 +213,8 @@ internal static class RaceRebuildFixture
         var source = TimelineToolsFixture.Source(clip, new TimelineDocument(30, 30, null, [], 1));
         var plain = MotionDecode.KeyOf(source);
         var rebuilt = MotionDecode.KeyOf(source with { Rebuild = new("c0801", actorIvcs) });
-        check(plain != rebuilt && MotionDecode.ClipPart(plain) != MotionDecode.ClipPart(rebuilt),
-            "a rebuild is another decode, and Live starts again on it");
+        check(plain != rebuilt && MotionDecode.ClipPart(plain) == MotionDecode.ClipPart(rebuilt),
+            "a rebuild is another decode of the same clip, so Live reads it again and starts again on it");
         // j_kosi and iv_ko_c_l sit at 2 and 4 in the c0801 IVCS skeleton.
         check(AnimationBones.TracksOn(clip, AnimationBonesFixture.Rigs.Ivcs).SequenceEqual(clip.Resolution!.TrackBones) &&
               AnimationBones.TracksOn(clip, actorIvcs.Skeleton).SequenceEqual([(short)2, (short)4]),

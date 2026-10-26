@@ -19,7 +19,7 @@ namespace InstantEdit.Ui.Timeline;
 /// <param name="loading">Whether the timeline is being read.</param>
 /// <param name="reload">Reads the open clip again after a save or an undo: true after an undo.</param>
 /// <param name="editAgain">Opens a saved edit again with its layers (Edit again).</param>
-internal sealed class SaveFooter(TimelineSession session, TimelinePreview timelinePreview, EffectLookEditor effectLooks, SoundFiles soundFiles,
+internal sealed class SaveFooter(TimelineSession session, TimelinePreview timelinePreview, MotionDecode decode, EffectLookEditor effectLooks, SoundFiles soundFiles,
     SoundSaveCheck soundSave, TimelineTexts texts, Func<bool> loading, Action<bool> reload, Action<AnimationEditJournal, AnimationCapture> editAgain)
 {
     private AnimationDestination destination = AnimationDestination.NewMod;
@@ -42,6 +42,10 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private SkeletonStandard? repairTarget;
     // The clip whose automatic rebuild pick has run, so a choice made afterwards stays.
     private string? rebuildDecided;
+    // Whether the session's rebuild is the automatic pick, not chosen by hand.
+    private bool rebuildAutomatic;
+    // Why the automatic rebuild went back to Keep its own: its motion couldn't be read on the target.
+    private string? rebuildFailed;
     // The rebuild's line naming the other races that play the file, for the clip path and race it was made for.
     private (string Path, string Model, string? Note)? borrowNote;
     // Whether the clip's file can be written over in place.
@@ -75,6 +79,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             repairTarget = null;
             session.Rebuild = null;
             rebuildDecided = null;
+            rebuildAutomatic = false;
+            rebuildFailed = null;
         }
         if (editAgain && loaded.BaseMotion != null)
         {
@@ -98,10 +104,13 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         motionCarry = null;
     }
 
-    /// <summary> An edit of the open clip is being undone from the Edits page; the clip is read again once it ends. </summary>
-    public void UndoingOpenClip()
+    /// <summary> <paramref name="journal"/>, an edit of the open clip, is being undone from the Edits page; the clip is read again once it ends. </summary>
+    public void UndoingOpenClip(AnimationEditJournal journal)
     {
         jobClip = TimelineSession.ClipKey(session.Source!);
+        // Undoing a rebuild brings the borrowed file back: the rebuild is picked for it again.
+        if (journal.Request.RepairModel != null)
+            rebuildDecided = null;
         undoPending = true;
         saveError = null;
         saveMessage = null;
@@ -111,16 +120,6 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     {
         var doc = current.Document;
         var clip = session.Fresh(loaded).Clip;
-        // Once per clip, when its match is in: a clip borrowed from another race is rebuilt for the character's.
-        if (rebuildDecided != TimelineSession.ClipKey(loaded) && !loaded.Standalone && clip.Resolution is { State: SkeletonResolutionState.Matched } resolution)
-        {
-            rebuildDecided = TimelineSession.ClipKey(loaded);
-            if (AnimationBones.DefaultRebuild(clip, loaded.FileModel, doc.ExcludedBones) is { } standard && resolution.ActorModel is { } actor)
-            {
-                session.Rebuild = new(actor, AnimationBones.Standard(clip, standard, actor)!);
-                repairTarget = null;
-            }
-        }
         ImGui.Separator();
         if (ImGui.RadioButton("Create new mod", destination == AnimationDestination.NewMod))
             destination = AnimationDestination.NewMod;
@@ -138,7 +137,11 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         }
         // An expression's face keeps its own skeleton and every bone.
         if (!loaded.Standalone)
+        {
             DrawRepairChoice(loaded);
+            if (AnimationBakeRules.BakeInNote(doc, RepairTarget) is { } bakeIn)
+                Widgets.HintWrapped(bakeIn);
+        }
 
         texts.Refresh(doc);
         var repair = loaded.Standalone ? null : RepairTarget;
@@ -291,6 +294,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
 
     public void Poll()
     {
+        PickRebuild();
         if (session.Animations is not { } service)
             return;
         if (saveTask is { IsCompleted: true } task)
@@ -330,6 +334,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                 // file's header names the character's race, so it offers no rebuild either.
                 repairTarget = null;
                 session.Rebuild = null;
+                rebuildAutomatic = false;
                 saveMessage = result.Message == AnimationEditService.SavedSkeletonTooSmall ? result.Message
                     : destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
                 // A sound saved in place is another file now; read it again.
@@ -350,9 +355,39 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                 saveError = service.Status;
             else
                 saveMessage = "The last save was undone.";
-            // While this window edits layers on a motion of its own, a file that is again what an earlier
-            // layered edit saved brings that edit's layers back as the saved state, so it matches the file.
-            reload(motionBase?.Clip == TimelineSession.ClipKey(session.Source!));
+            // While this window edits layers on a motion of its own, or brings layers back as unsaved edits, a file
+            // that is again what an earlier layered edit saved brings that edit's layers back as the saved state, so it matches the file.
+            reload(motionBase?.Clip == TimelineSession.ClipKey(session.Source!) || motionCarry is { Unsaved: true });
+        }
+    }
+
+    /// <summary>
+    /// Every frame, before Live: once per clip, when its match is in, a clip borrowed from another race is rebuilt for
+    /// the character's. A rebuild picked that way whose motion can't be read on the target goes back to Keep its own.
+    /// </summary>
+    private void PickRebuild()
+    {
+        // A save, an undo or a read runs: the file the decision is for comes once it ends.
+        if (session.Source is not { Document: not null, Standalone: false } loaded || Working || loading())
+            return;
+        var fresh = session.Fresh(loaded);
+        var key = TimelineSession.ClipKey(loaded);
+        if (rebuildDecided != key && fresh.Clip.Resolution is { State: SkeletonResolutionState.Matched })
+        {
+            rebuildDecided = key;
+            if (AnimationBones.AutomaticRebuild(fresh.Clip, loaded.FileModel, session.Editor?.Document.ExcludedBones ?? [], loaded.HoldsOthers) is { } rebuild)
+            {
+                session.Rebuild = rebuild;
+                repairTarget = null;
+                rebuildAutomatic = true;
+                rebuildFailed = null;
+            }
+        }
+        if (rebuildAutomatic && session.Rebuild is { } picked && decode.FailedFor(loaded))
+        {
+            rebuildFailed = AnimationBones.RebuildFailedNote(picked.Model, decode.Error!);
+            session.Rebuild = null;
+            rebuildAutomatic = false;
         }
     }
 
@@ -452,9 +487,14 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             {
                 jobClip = session.Source is { } shown ? TimelineSession.ClipKey(shown) : null;
                 // The layers stay, as unsaved edits on the motion they apply to; layers keyed in cut or
-                // stretched frames don't fit the file the undo brings back.
-                if (session.Source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, RepairTarget))
+                // stretched frames don't fit the file the undo brings back. A save that baked them in keeps them in its journal.
+                if (session.Source != null && AnimationBakeRules.LayersBackAfterUndo(journal.Request) is { IsEmpty: false } baked)
+                    motionCarry = (TimelineSession.ClipKey(session.Source), baked, current.Document.NextMotionKey, true);
+                else if (session.Source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, RepairTarget))
                     motionCarry = (TimelineSession.ClipKey(session.Source), current.Document.Motion, current.Document.NextMotionKey, true);
+                // Undoing a rebuild brings the borrowed file back: the rebuild is picked for it again.
+                if (journal.Request.RepairModel != null)
+                    rebuildDecided = null;
                 timelinePreview.Stop();
                 service.Undo(journal);
                 undoPending = true;
@@ -476,11 +516,10 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var clip = session.Fresh(loaded).Clip;
         if (repairTarget is { } chosen && AnimationBones.Standard(clip, chosen) is null)
             repairTarget = null;
-        var race = AnimationBones.RebuildRace(clip, loaded.FileModel);
+        var race = AnimationBones.RebuildRace(clip, loaded.FileModel, loaded.HoldsOthers);
         // The match can change under the choice: a skeleton chosen under Source, another character.
         if (session.Rebuild is { } rebuild)
-            session.Rebuild = race != rebuild.Model || AnimationBones.Standard(clip, rebuild.Target.Standard, race) is not { } now ? null
-                : now == rebuild.Target ? rebuild : rebuild with { Target = now };
+            session.Rebuild = AnimationBones.CurrentRebuild(clip, loaded.FileModel, rebuild, loaded.HoldsOthers);
         var excluded = session.Editor?.Document.ExcludedBones ?? [];
         // A rebuild is offered only onto the character's standards that hold every kept bone.
         IEnumerable<Choice> Rebuilds() => race == null ? [] : clip.Resolution!.ActorStandards
@@ -542,7 +581,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                                  string.Join(", ", plan.Dropped.Take(8).Select(AnimationPresentation.BoneName)) +
                                  (plan.Dropped.Length > 8 ? $" and {plan.Dropped.Length - 8} more." : "."));
         }
-        if (AnimationBones.RebuildNote(clip, loaded.FileModel, excluded, session.Rebuild != null) is { } note)
+        if (((session.Rebuild == null ? rebuildFailed : null) ?? AnimationBones.RebuildNote(clip, loaded.FileModel, excluded, session.Rebuild != null, loaded.HoldsOthers)) is { } note)
         {
             using var wrap = ImRaii.TextWrapPos(0f);
             ImGui.TextColored(Theme.Muted, note);
@@ -564,7 +603,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     {
         public string Name => this switch
         {
-            { Standard: { } standard, Model: { } model } => $"Rebuild for {AnimationBones.RaceName(model)}, {AnimationBones.StandardName(standard)}",
+            { Standard: { } standard, Model: { } model } => AnimationBones.RebuildName(model, standard),
             { Standard: { } standard } => "Repair onto " + AnimationBones.StandardName(standard),
             _ => "Keep its own",
         };
@@ -576,5 +615,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         session.Rebuild = choice is { Standard: { } standard, Model: { } model } && AnimationBones.Standard(clip, standard, model) is { } target
             ? new(model, target) : null;
         repairTarget = choice.Model == null ? choice.Standard : null;
+        rebuildAutomatic = false;
+        rebuildFailed = null;
     }
 }

@@ -195,6 +195,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         {
             if (session.MotionDisplay?.Unshown is > 0 and var unshown)
                 ImGui.TextColored(Theme.Warning, TimelineWindowViews.LiveUnshown(unshown));
+            if (session.Fresh(loaded).Rebuild != null && TimelineWindowViews.LiveRebuiltPositions(current.Document))
+                ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveRebuiltPositionsNote);
             ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched));
             return;
         }
@@ -638,7 +640,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         }
         if (decode.DecodedKey is { } decodedKey && decodedKey != MotionDecode.KeyOf(fresh))
         {
-            // Only the motion changed (a motion from Blender put in or taken out): it is read, and the display starts again on it.
+            // Only the motion changed (a motion from Blender put in or taken out, another skeleton choice): it is read, and the display starts again on it.
             if (MotionDecode.ClipPart(decodedKey) == MotionDecode.ClipPart(MotionDecode.KeyOf(fresh)))
                 decode.Ensure(fresh);
             else

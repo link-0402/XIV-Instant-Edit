@@ -97,9 +97,36 @@ internal static class AnimationBones
     /// <summary>
     /// The race a save can rebuild the clip for: the character's, when the clip is another race's
     /// and its file (<paramref name="fileModel"/>, the race its PAP header names) wasn't saved for it already.
+    /// None when the file <paramref name="holdsOthers"/>: its header names their race too, so a rebuild would warp them.
     /// </summary>
-    public static string? RebuildRace(AnimationClip clip, string? fileModel)
+    public static string? RebuildRace(AnimationClip clip, string? fileModel, bool holdsOthers = false)
+        => holdsOthers ? null : ActorRace(clip, fileModel);
+
+    private static string? ActorRace(AnimationClip clip, string? fileModel)
         => clip.Resolution?.ActorModel is { } actor && actor != fileModel ? actor : null;
+
+    /// <summary>The skeleton choice's entry for a rebuild: "Rebuild for Miqo'te (Female), IVCS".</summary>
+    public static string RebuildName(string model, SkeletonStandard standard) => $"Rebuild for {RaceName(model)}, {StandardName(standard)}";
+
+    /// <summary>The line under the save footer when a rebuild picked for you went back to Keep its own: its motion couldn't be read on the target.</summary>
+    public static string RebuildFailedNote(string model, string error) => $"Can't rebuild for {RaceName(model)}: {error}";
+
+    /// <summary>
+    /// The rebuild the save footer picks for you once the clip's match is in: onto the <see cref="DefaultRebuild"/>
+    /// standard of the character's race. Null while it is matched, or without one.
+    /// </summary>
+    public static RaceRebuild? AutomaticRebuild(AnimationClip clip, string? fileModel, IReadOnlyCollection<string> excluded, bool holdsOthers = false)
+        => clip.Resolution is { State: SkeletonResolutionState.Matched, ActorModel: { } actor } &&
+           DefaultRebuild(clip, fileModel, excluded, holdsOthers) is { } standard && Standard(clip, standard, actor) is { } target
+            ? new(actor, target) : null;
+
+    /// <summary>
+    /// <paramref name="rebuild"/> as the clip's match has it now (a skeleton chosen under Source, another character):
+    /// the same, onto the standard found now, or null when its race or standard is gone.
+    /// </summary>
+    public static RaceRebuild? CurrentRebuild(AnimationClip clip, string? fileModel, RaceRebuild rebuild, bool holdsOthers = false)
+        => RebuildRace(clip, fileModel, holdsOthers) is not { } race || race != rebuild.Model || Standard(clip, rebuild.Target.Standard, race) is not { } now ? null
+            : now == rebuild.Target ? rebuild : rebuild with { Target = now };
 
     private static string[] Kept(AnimationClip clip, IReadOnlyCollection<string> excluded)
     {
@@ -114,25 +141,26 @@ internal static class AnimationBones
     /// The standard a rebuild picks unless you choose: the smallest of the character's race whose
     /// skeleton has every bone kept. Null without a race to rebuild for or when none has them.
     /// </summary>
-    public static SkeletonStandard? DefaultRebuild(AnimationClip clip, string? fileModel, IReadOnlyCollection<string> excluded)
+    public static SkeletonStandard? DefaultRebuild(AnimationClip clip, string? fileModel, IReadOnlyCollection<string> excluded, bool holdsOthers = false)
     {
-        if (RebuildRace(clip, fileModel) == null) return null;
+        if (RebuildRace(clip, fileModel, holdsOthers) == null) return null;
         var kept = Kept(clip, excluded);
         return clip.Resolution!.ActorStandards.OrderBy(s => s.Standard).FirstOrDefault(s => Holds(s, kept))?.Standard;
     }
 
     /// <summary>
     /// The line under the save footer: what the save rebuilds for, or why it can't. Null without a
-    /// race to rebuild for, or when it can and isn't <paramref name="rebuilding"/>.
+    /// race to rebuild for, or when it can and isn't <paramref name="rebuilding"/>. A file that
+    /// <paramref name="holdsOthers"/> can't be rebuilt; the line says so when nothing else stops it.
     /// </summary>
-    public static string? RebuildNote(AnimationClip clip, string? fileModel, IReadOnlyCollection<string> excluded, bool rebuilding)
+    public static string? RebuildNote(AnimationClip clip, string? fileModel, IReadOnlyCollection<string> excluded, bool rebuilding, bool holdsOthers = false)
     {
-        if (RebuildRace(clip, fileModel) is not { } model) return null;
+        if (ActorRace(clip, fileModel) is not { } model) return null;
         var race = RaceName(model);
         if (rebuilding) return $"Rebuilt for {race}: your character's skeleton.";
         var standards = clip.Resolution!.ActorStandards;
         if (standards.IsEmpty) return $"Can't rebuild for {race}: its skeleton wasn't found.";
-        if (DefaultRebuild(clip, fileModel, excluded) != null) return null;
+        if (DefaultRebuild(clip, fileModel, excluded) != null) return holdsOthers ? $"Can't rebuild for {race}: this file holds other animations." : null;
         // Each standard extends the one before it, so the largest lacks what they all lack.
         var largest = standards.MaxBy(s => s.Standard)!.Skeleton.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal);
         var lacking = Kept(clip, excluded).Where(name => !largest.Contains(name)).ToArray();

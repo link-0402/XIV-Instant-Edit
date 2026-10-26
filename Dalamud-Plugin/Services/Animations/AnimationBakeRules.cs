@@ -52,7 +52,7 @@ internal static class AnimationBakeRules
         var others = playedBy.Where(race => race != actor).Select(RaceInfo.NameOf).ToArray();
         if (others.Length == 0) return null;
         var names = others.Length == 1 ? others[0] : string.Join(", ", others[..^1]) + " and " + others[^1];
-        return $"{names} play it converted from {RaceInfo.NameOf(actor)}.";
+        return $"{names} {(others.Length == 1 ? "plays" : "play")} it converted from {RaceInfo.NameOf(actor)}.";
     }
 
     /// <summary>
@@ -142,6 +142,24 @@ internal static class AnimationBakeRules
     /// </summary>
     public static bool KeepsLayersOverSave(TimelineDocument document, SkeletonStandard? repair = null) =>
         !BakesLayersIn(document, repair) && !document.Cut && !document.Stretched;
+
+    /// <summary>
+    /// The save footer's line while saving <paramref name="document"/> would bake its bone layers in for good
+    /// (<see cref="BakesLayersIn"/>), and whether Undo last save brings them back (<see cref="LayersBackAfterUndo"/>). Null otherwise.
+    /// </summary>
+    public static string? BakeInNote(TimelineDocument document, SkeletonStandard? repair) =>
+        !document.MotionChanged || !BakesLayersIn(document, repair) ? null
+        : document.Cut || document.Stretched ? "Saving bakes the layers in."
+        : "Saving bakes the layers in. Undo last save brings them back as unsaved edits.";
+
+    /// <summary>
+    /// The bone layers undoing <paramref name="request"/>'s save brings back as unsaved edits, when it baked them in
+    /// for good (bones left out or a repair): its layers, by bone name. None for a save that cut or stretched the
+    /// motion, whose layers are keyed in other frames than the file the undo brings back.
+    /// </summary>
+    public static ImmutableArray<MotionLayer> LayersBackAfterUndo(AnimationBakeRequest request) =>
+        request is { Timeline: { Motion.IsEmpty: false, Cuts: null } edit } && (request.RepairTarget != null || !request.ExcludedBones.IsEmpty)
+            ? edit.Motion : [];
 
     /// <summary>
     /// The length a motion from Blender is written with: the clip's own when the motion's is within a

@@ -126,7 +126,7 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
                 if (open)
                 {
                     timelinePreview.Stop();
-                    saveFooter.UndoingOpenClip();
+                    saveFooter.UndoingOpenClip(journal);
                 }
                 service.Undo(journal);
             }

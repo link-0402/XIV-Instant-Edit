@@ -106,7 +106,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
         properties = new PropertiesPanel(session, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
         soundSave = new SoundSaveCheck(session, soundFiles);
-        saveFooter = new SaveFooter(session, timelinePreview, effectLooks, soundFiles, soundSave, texts, () => reader.Busy,
+        saveFooter = new SaveFooter(session, timelinePreview, decode, effectLooks, soundFiles, soundSave, texts, () => reader.Busy,
             afterUndo =>
             {
                 ForgetSounds();
