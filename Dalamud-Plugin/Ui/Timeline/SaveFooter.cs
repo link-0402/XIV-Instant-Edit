@@ -37,6 +37,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private (string Clip, byte[] Bytes, string Fingerprint, string Hash)? motionBase;
     // Layers to put back once the clip is read again: after a save as saved, after an undo as unsaved edits.
     private (string Clip, ImmutableArray<MotionLayer> Layers, int NextKey, bool Unsaved)? motionCarry;
+    // Whether the last save that baked the layers in did so onto an earlier edit's base, whose layers it carried.
+    private bool bakedOnBase;
     // The standard skeleton the next save repairs onto; null keeps the clip's own. A rebuild for the
     // character's race lives in the session (TimelineSession.Rebuild).
     private SkeletonStandard? repairTarget;
@@ -102,6 +104,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     {
         motionBase = null;
         motionCarry = null;
+        bakedOnBase = false;
     }
 
     /// <summary> <paramref name="journal"/>, an edit of the open clip, is being undone from the Edits page; the clip is read again once it ends. </summary>
@@ -355,9 +358,9 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                 saveError = service.Status;
             else
                 saveMessage = "The last save was undone.";
-            // While this window edits layers on a motion of its own, or brings layers back as unsaved edits, a file
-            // that is again what an earlier layered edit saved brings that edit's layers back as the saved state, so it matches the file.
-            reload(motionBase?.Clip == TimelineSession.ClipKey(session.Source!) || motionCarry is { Unsaved: true });
+            // While this window edits layers on a motion of its own, or brings back layers baked onto one, a file that is
+            // again what an earlier layered edit saved brings that edit's layers back as the saved state, so it matches the file.
+            reload(motionBase?.Clip == TimelineSession.ClipKey(session.Source!) || motionCarry is { Unsaved: true } && bakedOnBase);
         }
     }
 
@@ -403,6 +406,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         // A motion from Blender saved without layers is the saved file's own motion: nothing to carry.
         if (!AnimationBakeRules.KeepsLayersOverSave(document, repair) || document.Replacement != null && document.Motion.IsEmpty)
         {
+            // An undo of a bake onto an earlier edit's base reads that edit back, so its layers come back with these.
+            bakedOnBase = loaded.BaseMotion != null && document.Replacement == null;
             motionBase = null;
             motionCarry = null;
             return;
