@@ -1305,7 +1305,8 @@ public sealed class TextureEditService : IDisposable
         var pixelHeader = TextureFiles.ReadTex(rawPixels);
         if (pixelHeader.Width != width || pixelHeader.Height != height) throw new IOException("Decoded dimensions do not match the exported image.");
         var pixelHash = TextureFiles.PixelHash(rawPixels);
-        if (pixelHash == s.PixelHash)
+        var holdsLastSave = HoldsLastSave(s);
+        if (pixelHash == s.PixelHash && holdsLastSave)
         {
             var mirrored = MirrorWorkingFile(runtime, tga, hash);
             s.Status = (dropped is null ? "Painter texture unchanged" : $"{dropped} is the same as the texture") +
@@ -1313,6 +1314,9 @@ public sealed class TextureEditService : IDisposable
             Persist();
             return ExternalTextureOutcome.Unchanged;
         }
+        // A drop replaces whatever the file holds now (a restored backup, say); the commit backs that up first.
+        // A Painter export still stops at the conflict check, as watched saves do.
+        if (dropped is not null && !holdsLastSave) s.LastCommittedHash = TextureFiles.Hash(TextureFiles.Read(s.TargetFile));
         // Nothing is encoded for a texture that can't be applied now.
         await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         s.Status = dropped is null ? "Converting Painter texture" : $"Converting {dropped}";
@@ -1335,6 +1339,11 @@ public sealed class TextureEditService : IDisposable
         if (!PersistCommit(runtime)) throw new IOException(s.Status);
         return ExternalTextureOutcome.Applied;
     }
+
+    /// <summary> Whether the mod's file still holds the session's last save; a backup restore or another program may have changed it. </summary>
+    private static bool HoldsLastSave(TextureEditSession s)
+        => s.NeedsMod || s.PendingCopy is not null || !File.Exists(s.TargetFile) ||
+           TextureFiles.Hash(TextureFiles.Read(s.TargetFile)) == s.LastCommittedHash;
 
     /// <summary>Scratch folder for dropped images and undone drops, kept out of the watched top level.</summary>
     private const string DropWorkFolder = "drop-work";
