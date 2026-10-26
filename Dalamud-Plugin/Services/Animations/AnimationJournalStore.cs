@@ -142,6 +142,24 @@ internal sealed class AnimationJournalStore
         TextureFiles.EnsureLocalPath(path);
         File.Delete(path);
     }
+    private string AutosavePath => Path.Combine(root, "timeline-autosave.json");
+    /// <summary>The Timeline window's kept unsaved edits; null when there are none.</summary>
+    public TimelineAutosave? LoadAutosave()
+    {
+        var path = AutosavePath;
+        if (!File.Exists(path)) return null;
+        TextureFiles.EnsureLocalPath(path);
+        // It may carry a motion from Blender and imported sounds.
+        if (new FileInfo(path).Length > 512L * 1024 * 1024) throw new InvalidDataException("The kept timeline edits exceed 512 MiB.");
+        return JsonSerializer.Deserialize<TimelineAutosave>(File.ReadAllText(path), Json);
+    }
+    public void SaveAutosave(TimelineAutosave kept) => WriteAtomic(AutosavePath, JsonSerializer.SerializeToUtf8Bytes(kept, Json));
+    public void ClearAutosave()
+    {
+        var path = AutosavePath;
+        TextureFiles.EnsureLocalPath(path);
+        if (File.Exists(path)) File.Delete(path);
+    }
     internal static void WriteAtomic(string path, byte[] data)
     {
         TextureFiles.EnsureLocalPath(path);

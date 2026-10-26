@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Numerics;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Models;
 
@@ -144,6 +145,19 @@ internal sealed record AnimationEditResult(Guid Id, bool Success, string Message
 /// <summary>One guarded, durable LivePose clear operation for the current player.</summary>
 internal sealed record LivePoseOffsetBackup(ulong ActorId, Guid CollectionId, PoseSnapshot Before,
     PoseSnapshot Cleared, DateTime ClearedUtc);
+
+/// <summary>
+/// The Timeline window's unsaved edits of one clip, kept on disk so a plugin reload or a game crash doesn't
+/// lose them. <paramref name="FileHash"/> and <paramref name="BaseHash"/> are the clip's file and the motion
+/// its layers apply to: the edits come back only onto the same ones. The document's sound edits travel in
+/// <paramref name="SoundEdits"/>, since JSON can't key a dictionary by <see cref="TimelineSoundKey"/>.
+/// </summary>
+internal sealed record TimelineAutosave(AnimationCapture Capture, bool Startup, string FileHash, string? BaseHash,
+    TimelineDocument Document, ImmutableArray<(TimelineSoundKey Key, TimelineSoundEdit Edit)> SoundEdits,
+    ImmutableArray<TimelineImport> Imports, DateTime SavedUtc)
+{
+    public TimelineDocument Restored => Document with { SoundEdits = SoundEdits.ToImmutableDictionary(p => p.Key, p => p.Edit) };
+}
 
 /// <summary>Durable transaction state. File and pose recovery both use compare-before-write.</summary>
 internal sealed class AnimationEditJournal

@@ -14,8 +14,10 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// from another file: when the mod maps the original to different files in different options, each
 /// of those gets its own copy. A copy without one is mapped only where the original is the file it was made from.
 /// </summary>
+// shortcut: a kept edit (TimelineAutosave) loses Rebuild, so a restored copy maps only where its original was found; keep the fix's inputs if per-option copies matter.
 internal sealed record TimelineImport(string GamePath, ImmutableDictionary<string, byte[]> Files, float Seconds,
-    ImmutableDictionary<string, string>? Beside = null, ImmutableDictionary<string, Func<byte[], byte[]>>? Rebuild = null);
+    ImmutableDictionary<string, string>? Beside = null,
+    [property: System.Text.Json.Serialization.JsonIgnore] ImmutableDictionary<string, Func<byte[], byte[]>>? Rebuild = null);
 
 /// <summary>
 /// Turns files picked on disk into packaged timeline resources. Each gets a new game path under

@@ -57,6 +57,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineToolbar toolbar;
     private readonly BlenderMotionPanel blenderMotion;
     private readonly BonesWindow bonesWindow;
+    private readonly TimelineAutosaver autosaver;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
@@ -69,6 +70,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private (AnimationCapture Capture, bool Startup)? pendingOpen;
     // The saved edit the pending open brings back (Edit again).
     private AnimationEditJournal? pendingAgain;
+    // The kept edits the clip being read gets back (Restore).
+    private TimelineAutosave? pendingRestore;
     private bool closeConfirmed;
     private float footerHeight;
     private float propertiesWidth;
@@ -122,6 +125,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures, keys);
         session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy || blenderMotion.Working);
+        autosaver = new TimelineAutosaver(session, Restore);
 
         Size = new Vector2(1000, 560);
         SizeCondition = ImGuiCond.FirstUseEver;
@@ -265,6 +269,17 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         Load(capture, edit.Startup, false, journal);
     }
 
+    /// <summary>
+    /// Opens the clip of edits an earlier run kept (<see cref="TimelineAutosaver"/>) with them as unsaved edits. A
+    /// base motion from a layered save comes back as after an undo to it; the file and base must be the same ones.
+    /// </summary>
+    private void Restore(TimelineAutosave kept)
+    {
+        IsOpen = true;
+        Load(kept.Capture, kept.Startup, false, afterUndo: kept.BaseHash != null);
+        pendingRestore = kept;
+    }
+
     public override void OnClose()
     {
         // Closing with unsaved changes asks first; the window stays open until Discard.
@@ -279,6 +294,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         pending = PendingAction.None;
         pendingOpen = null;
         pendingAgain = null;
+        pendingRestore = null;
+        autosaver.Closed();
         loader.Reset();
         livePose.Reset();
         // The listener stays on while the Animations tab still shows it.
@@ -307,6 +324,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         if (disposed)
             return;
         disposed = true;
+        if (source != null)
+            autosaver.Flush(editor);
         keys.Dispose();
         reader.Dispose();
         decode.Forget();
@@ -358,6 +377,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         pending = PendingAction.None;
         pendingOpen = null;
         pendingAgain = null;
+        pendingRestore = null;
+        autosaver.Error = null;
         if (!keepView)
         {
             source = null;
@@ -380,6 +401,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
     private void Apply(AnimationTimelineSource loaded, bool keepView, AnimationEditJournal? again = null, bool afterUndo = false)
     {
+        var restore = pendingRestore;
+        pendingRestore = null;
         var sameClip = source != null && TimelineSession.ClipKey(source) == TimelineSession.ClipKey(loaded);
         // Edit again, or an undo back to a layered edit: the saved layers apply to the motion from before
         // their edit while this clip stays open.
@@ -406,6 +429,11 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             livePose.ForgetNote();
         }
         saveFooter.Loaded(loaded, sameClip, again != null);
+        if (restore != null && (loaded.Document == null || loaded.Resource.Hash != restore.FileHash || loaded.BaseHash != restore.BaseHash))
+        {
+            autosaver.Error = "The animation changed since its edits were kept, so they can't come back onto it.";
+            restore = null;
+        }
         if (loaded.Document is not { } doc)
             return;
         var carried = saveFooter.TakeCarriedLayers(loaded);
@@ -433,6 +461,13 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         // After an undo the layers stay as unsaved edits: one undo step away from the file.
         if (carried is { Unsaved: true } unsaved)
             editor.Commit(unsaved.Document);
+        // Kept edits come back the same way: one undo step away from the file.
+        if (restore != null)
+        {
+            foreach (var import in restore.Imports)
+                session.Imports[import.GamePath] = import with { Files = import.Files.WithComparers(StringComparer.OrdinalIgnoreCase) };
+            editor.Commit(restore.Restored);
+        }
     }
 
     /// <summary>
@@ -471,6 +506,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         // The listener runs while this window is open: the loader and the clip's skeleton choice read it.
         animations.StartObservation();
         PollLoad();
+        autosaver.Poll(editor);
         saveFooter.Poll();
         pickers.PollImport();
         timelinePreview.Poll();
@@ -481,6 +517,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         session.KeepMatch();
 
         DrawPendingBanner();
+        if (pending == PendingAction.None)
+            autosaver.Draw(HasUnsavedChanges || reader.Busy);
         if (source == null)
         {
             DrawNothingOpen();

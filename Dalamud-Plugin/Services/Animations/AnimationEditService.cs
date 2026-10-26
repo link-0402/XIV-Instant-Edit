@@ -45,6 +45,8 @@ internal sealed partial class AnimationEditService : IDisposable
     public bool CanReapplyOffsets => offsetBackup != null;
     /// <summary>How many days edit records are kept (Settings > Cache).</summary>
     public int RecordDays => (int)Math.Round(journals.CurrentRetention.TotalDays);
+    /// <summary>Where the Timeline window keeps its unsaved edits (<see cref="TimelineAutosave"/>).</summary>
+    internal AnimationJournalStore Journals => journals;
     public void StartObservation() => Observer.Start();
     public void StopObservation() => Observer.Stop();
 

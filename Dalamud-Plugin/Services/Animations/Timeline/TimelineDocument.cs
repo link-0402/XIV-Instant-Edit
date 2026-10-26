@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using InstantEdit.Services.Animations.Motion;
 
 namespace InstantEdit.Services.Animations.Timeline;
@@ -143,6 +144,7 @@ internal sealed record TimelineDocument(
     /// Changes to the sounds the events play, by file and sound index (paths in any case). Saving,
     /// previewing and listening write them into the files (<see cref="TimelineSoundEdits"/>).
     /// </summary>
+    [JsonIgnore] // A kept edit (TimelineAutosave) stores them as a list.
     public ImmutableDictionary<TimelineSoundKey, TimelineSoundEdit> SoundEdits
     {
         get => soundEdits;
