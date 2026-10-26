@@ -52,6 +52,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
     // Whether the body is moved so the feet stand on the ground; null until chosen.
     private bool? poseGround;
     private string? poseKeyed;
+    private string? poseLayer;
     private string? lastPoseFolder;
     // The waiting pose made local on one skeleton, for a key frame and a frame of its clip.
     private (PoseSource Source, string Skeleton, int Frame, int ClipFrame, PoseImport Import)? poseImport;
@@ -64,6 +65,13 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         bool readOnly)
     {
         PollPoseSource();
+        // The waiting pose and its note belong to the layer it was picked on.
+        if (poseLayer != layer.Key)
+        {
+            Drop();
+            poseKeyed = null;
+            poseLayer = layer.Key;
+        }
         using (ImRaii.Disabled(readOnly))
         {
             if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.FileImport, "Key a pose", null, null, null, null))
