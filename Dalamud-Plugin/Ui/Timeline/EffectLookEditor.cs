@@ -180,7 +180,7 @@ internal sealed class EffectLookEditor(TimelineSession session)
             ImGui.SetTooltip("Put the effect back as it is.");
     }
 
-    /// <summary> Tint, size, offset and turn: the file's own values until changed. </summary>
+    /// <summary> Tint, the file's own until changed; size, move and turn, changes from the file's own. </summary>
     private void DrawWholeEffect(TimelineEditor current, TimelineEvent ev, TimelineEffectLook look, TimelineEffectEdit edit)
     {
         if (look.Tint is { } fileTint)
@@ -192,10 +192,10 @@ internal sealed class EffectLookEditor(TimelineSession session)
                 SetLook(current, ev, edit with { Tint = Changed(Vector3.Clamp(tint, Vector3.Zero, new Vector3(TimelineEffectEdit.MaxTint)), fileTint) });
             TimelineUi.Tip("Colours the whole effect. Above 1 makes it brighter.");
         }
-        if (look.Size is { } fileSize)
+        if (look.Size != null)
         {
             TimelineUi.Fact("Size");
-            var size = edit.Size ?? fileSize;
+            var size = edit.Size ?? Vector3.One;
             var perAxis = sizePerAxis || size.X != size.Y || size.Y != size.Z;
             var button = ImGui.CalcTextSize("XYZ").X + ImGui.GetStyle().FramePadding.X * 2;
             ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(60), ImGui.GetContentRegionAvail().X - button - Theme.Gap));
@@ -209,7 +209,7 @@ internal sealed class EffectLookEditor(TimelineSession session)
                 size = new Vector3(all);
             }
             if (changed)
-                SetLook(current, ev, edit with { Size = Changed(size, fileSize) });
+                SetLook(current, ev, edit with { Size = Changed(size, Vector3.One) });
             TimelineUi.Tip("Scales the whole effect.");
             ImGui.SameLine(0, Theme.Gap);
             // Back to one value only when the axes agree; otherwise it would flatten them.
@@ -221,26 +221,26 @@ internal sealed class EffectLookEditor(TimelineSession session)
             }
             TimelineUi.Tip(differ ? "The axes differ, so each is set on its own." : perAxis ? "Set all axes together." : "Set each axis on its own.");
         }
-        if (look.Offset is { } fileOffset)
+        if (look.Offset != null)
         {
-            TimelineUi.Fact("Offset");
-            var offset = edit.Offset ?? fileOffset;
+            TimelineUi.Fact("Move");
+            var move = edit.Move ?? Vector3.Zero;
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.DragFloat3("##offset", ref offset, .01f, -TimelineEffectEdit.MaxOffset, TimelineEffectEdit.MaxOffset, "%.2f", ImGuiSliderFlags.AlwaysClamp))
-                SetLook(current, ev, edit with { Offset = Changed(offset, fileOffset) });
+            if (ImGui.DragFloat3("##move", ref move, .01f, -TimelineEffectEdit.MaxMove, TimelineEffectEdit.MaxMove, "%.2f", ImGuiSliderFlags.AlwaysClamp))
+                SetLook(current, ev, edit with { Move = Changed(move, Vector3.Zero) });
             TimelineUi.Tip("Moves the whole effect.");
         }
-        if (look.Turn is { } fileTurn)
+        if (look.Turn != null)
         {
             TimelineUi.Fact("Turn");
             // Stored in radians, shown in degrees.
             const float degrees = 180 / MathF.PI, most = TimelineEffectEdit.MaxTurn * degrees;
-            var turn = (edit.Turn ?? fileTurn) * degrees;
+            var turn = (edit.Turn ?? Vector3.Zero) * degrees;
             ImGui.SetNextItemWidth(-1);
             if (ImGui.DragFloat3("##turn", ref turn, .5f, -most, most, "%.0f°", ImGuiSliderFlags.AlwaysClamp))
             {
                 var radians = Vector3.Clamp(turn / degrees, new Vector3(-TimelineEffectEdit.MaxTurn), new Vector3(TimelineEffectEdit.MaxTurn));
-                SetLook(current, ev, edit with { Turn = Changed(radians, fileTurn) });
+                SetLook(current, ev, edit with { Turn = Changed(radians, Vector3.Zero) });
             }
             TimelineUi.Tip("Turns the whole effect, in degrees.");
         }

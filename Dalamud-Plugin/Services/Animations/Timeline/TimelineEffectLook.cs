@@ -36,21 +36,35 @@ internal sealed record TimelineEffectLook(Vector3? Tint, Vector3? Size, Vector3?
 internal sealed record TimelineEffectBinderPos(int Binder, string Block, Vector3? Constant, int Keys);
 
 /// <summary>
-/// The effect editor's changes to one effect. The whole-effect values replace the file's (null keeps
-/// it); the others scale or shift what the file has, so after a save they start from the saved copy.
-/// Saving or previewing writes them into a copy of the effect (<see cref="TimelineEffectLooks.Bake"/>).
+/// The effect editor's changes to one effect. The tint replaces the file's (null keeps it); the others
+/// scale or shift what the file has, so after a save they start from the saved copy. Saving or
+/// previewing writes them into a copy of the effect (<see cref="TimelineEffectLooks.Bake"/>).
 /// </summary>
 internal sealed record TimelineEffectEdit
 {
-    public const float MaxTint = 4, MinSize = .01f, MaxSize = 20, MaxOffset = 100, MaxTurn = 2 * MathF.PI;
+    public const float MaxTint = 4, MinSize = .01f, MaxSize = 20, MaxMove = 100, MaxTurn = 2 * MathF.PI;
     public const float MaxSaturation = 2, MaxGlow = 4, MaxOpacity = 2, MaxLightRange = 4;
 
     public Vector3? Tint { get; init; }
-    public Vector3? Size { get; init; }
-    public Vector3? Offset { get; init; }
 
-    /// <summary>The whole effect's turn, in radians (shown in degrees).</summary>
+    /// <summary>Scales the whole effect by a factor per axis (1 keeps it). An attached effect can't be scaled.</summary>
+    public Vector3? Size { get; init; }
+
+    /// <summary>
+    /// Moves the whole effect, in metres, from where the file puts it: an attached effect on its
+    /// attach point (its binder's positions), another by its root offset.
+    /// </summary>
+    public Vector3? Move { get; init; }
+
+    /// <summary>Turns the whole effect further, in radians (shown in degrees). An attached effect can't be turned.</summary>
     public Vector3? Turn { get; init; }
+
+    /// <summary>The move, turn and size when they change something: not null, a zero move or turn, or a size of 1.</summary>
+    internal Vector3? Moves => Move is { } move && move != Vector3.Zero ? move : null;
+
+    internal Vector3? Turns => Turn is { } turn && turn != Vector3.Zero ? turn : null;
+
+    internal Vector3? Sizes => Size is { } size && size != Vector3.One ? size : null;
 
     /// <summary>Turns every colour's hue, in degrees.</summary>
     public float Hue { get; init; }
@@ -72,7 +86,7 @@ internal sealed record TimelineEffectEdit
     /// <summary>Scales how far the point lights reach.</summary>
     public float LightRange { get; init; } = 1;
 
-    public bool IsEmpty => Tint == null && Size == null && Offset == null && Turn == null && !Recolors &&
+    public bool IsEmpty => Tint == null && Sizes == null && Moves == null && Turns == null && !Recolors &&
                            Glow == 1 && Opacity == 1 && LightRange == 1;
 
     /// <summary>Whether the colours of the parts change.</summary>
@@ -100,23 +114,32 @@ internal sealed record TimelineEffectEdit
 
     public bool Equals(TimelineEffectEdit? other) =>
         other is not null && (ReferenceEquals(this, other) ||
-            Tint == other.Tint && Size == other.Size && Offset == other.Offset && Turn == other.Turn && Hue == other.Hue &&
+            Tint == other.Tint && Size == other.Size && Move == other.Move && Turn == other.Turn && Hue == other.Hue &&
             Saturation == other.Saturation && Glow == other.Glow && Opacity == other.Opacity && LightRange == other.LightRange &&
             Colors.SequenceEqual(other.Colors));
 
-    public override int GetHashCode() => HashCode.Combine(Tint, Size, Offset, Turn, Hue, Saturation, Glow, HashCode.Combine(Opacity, LightRange, Colors.Length));
+    public override int GetHashCode() => HashCode.Combine(Tint, Size, Move, Turn, Hue, Saturation, Glow, HashCode.Combine(Opacity, LightRange, Colors.Length));
 }
 
 /// <summary>
-/// Reads and changes the look of an effect (AVFX) file in place: the whole-effect tint, size, offset
-/// and turn (root fields), and the colours, brightness and alpha of its parts (curve keys). Only
-/// numbers the file already has change, so the file keeps its layout byte for byte. Layouts follow
-/// VFXEditor: a curve's keys are 16 bytes (frame, type, then three floats; a colour key's are its
-/// RGB, a single value is the third). Surveyed on the 5,095 effects of the mod library (2026-10-07):
-/// every one has the root fields; 4,424 colour their particles; 4,058 have particle brightness.
+/// Reads and changes the look of an effect (AVFX) file: the whole-effect tint, size, offset and turn
+/// (root fields), the colours, brightness and alpha of its parts (curve keys), and where an attached
+/// effect sits on its attach point (its binders' Pos curves). Only numbers the file already has
+/// change, so the file keeps its layout byte for byte, except that a move on an attached effect adds
+/// the position curves or keys it lacks. Layouts follow VFXEditor: a curve's keys are 16 bytes
+/// (frame, type, then three floats; a colour key's are its RGB, a single value is the third).
+/// Surveyed on the 5,095 effects of the mod library (2026-10-07): every one has the root fields;
+/// 4,424 colour their particles; 4,058 have particle brightness.
 /// </summary>
 internal static class TimelineEffectLooks
 {
+    public const string AttachedRefusal = "Turn and size can't change an attached effect";
+    public const string NoPositionRefusal = "This effect can't be moved: its attach point has no position.";
+
+    /// <summary>The curves of a binder position in the order VFXEditor writes them: axis links, the axes, their random parts.</summary>
+    private static readonly string[] PositionOrder = ["ACT", "ACTR", "X", "Y", "Z", "XR", "YR", "ZR"];
+    private const short LinearKey = 1;
+
     private static readonly string[] TintFields = ["RvR", "RvG", "RvB"];
     private static readonly string[] SizeFields = ["RvSx", "RvSy", "RvSz"];
     private static readonly string[] OffsetFields = ["RvPx", "RvPy", "RvPz"];
@@ -229,17 +252,38 @@ internal static class TimelineEffectLooks
     }
 
     /// <summary>
+    /// Why <see cref="Apply"/> would refuse <paramref name="edit"/> on the effect <paramref name="look"/>
+    /// was read from, for the editor to say first; null when it wouldn't. An attached effect can't be
+    /// turned or scaled (its binder has no rotation or scale), and moves only on a binder position.
+    /// </summary>
+    public static string? MoveRefusal(TimelineEffectLook look, TimelineEffectEdit edit) =>
+        Refusal(look.Bound, !look.BinderPositions.IsEmpty, edit);
+
+    private static string? Refusal(bool bound, bool positions, TimelineEffectEdit edit) =>
+        !bound ? null
+        : edit.Turns != null || edit.Sizes != null ? AttachedRefusal
+        : edit.Moves != null && !positions ? NoPositionRefusal
+        : null;
+
+    /// <summary>
     /// <paramref name="avfx"/> with <paramref name="edit"/> written in: the same bytes but for the numbers
-    /// it changes. Values out of the editor's ranges are clamped.
+    /// it changes, and the position curves a move on an attached effect adds. Values out of the
+    /// editor's ranges are clamped. Throws <see cref="InvalidDataException"/> with <see cref="MoveRefusal"/>'s
+    /// text for an edit it can't write.
     /// </summary>
     public static byte[] Apply(byte[] avfx, TimelineEffectEdit edit)
     {
         var layout = Scan(avfx);
+        if (Refusal(layout.Bound, layout.Binders.Count > 0, edit) is { } refusal)
+            throw new InvalidDataException(refusal);
         var output = (byte[])avfx.Clone();
         WriteRoot(output, layout, TintFields, edit.Tint, 0, TimelineEffectEdit.MaxTint);
-        WriteRoot(output, layout, SizeFields, edit.Size, TimelineEffectEdit.MinSize, TimelineEffectEdit.MaxSize);
-        WriteRoot(output, layout, OffsetFields, edit.Offset, -TimelineEffectEdit.MaxOffset, TimelineEffectEdit.MaxOffset);
-        WriteRoot(output, layout, TurnFields, edit.Turn, -TimelineEffectEdit.MaxTurn, TimelineEffectEdit.MaxTurn);
+        if (!layout.Bound)
+        {
+            ChangeRoot(output, layout, SizeFields, edit.Sizes, scale: true, TimelineEffectEdit.MinSize, TimelineEffectEdit.MaxSize);
+            ChangeRoot(output, layout, OffsetFields, edit.Moves, scale: false, -TimelineEffectEdit.MaxMove, TimelineEffectEdit.MaxMove);
+            ChangeRoot(output, layout, TurnFields, edit.Turns, scale: false, -TimelineEffectEdit.MaxTurn, TimelineEffectEdit.MaxTurn);
+        }
         var safe = edit with
         {
             Hue = float.IsFinite(edit.Hue) ? Math.Clamp(edit.Hue, -180, 180) : 0,
@@ -275,7 +319,9 @@ internal static class TimelineEffectLooks
                     Scale(avfx, output, at, range);
                     break;
             }
-        return output;
+        return layout.Bound && edit.Moves is { } move
+            ? MoveBinders(output, Vector3.Clamp(Finite(move), new Vector3(-TimelineEffectEdit.MaxMove), new Vector3(TimelineEffectEdit.MaxMove)))
+            : output;
     }
 
     /// <summary>
@@ -572,6 +618,136 @@ internal static class TimelineEffectLooks
             yield return found.At + i * KeySize;
     }
 
+    /// <summary>Bytes to add at <paramref name="At"/>, and the size fields of the blocks they go into.</summary>
+    private readonly record struct Addition(int At, byte[] Bytes, int[] Sizes);
+
+    /// <summary>
+    /// <paramref name="avfx"/> with <paramref name="move"/> added to the position (Pos) of every binder
+    /// property block: to each key of an axis that has keys, and as one new key, or a new curve, for an
+    /// axis that has none, written as VFXEditor writes them. An axis the move leaves at 0 is not touched.
+    /// Keys change in place, then the new bytes go in and every block around them grows.
+    /// </summary>
+    private static byte[] MoveBinders(byte[] avfx, Vector3 move)
+    {
+        var added = new List<Addition>();
+        foreach (var (name, start, size) in AnimationDependencies.Chunks(avfx, 8, avfx.Length))
+            if (name == "Bind")
+                foreach (var (block, at, count) in AnimationDependencies.Chunks(avfx, start, start + size))
+                    if (BinderBlocks.Contains(block))
+                        foreach (var (field, from, bytes) in AnimationDependencies.Chunks(avfx, at, at + count))
+                            if (field == "Pos")
+                                MovePosition(avfx, from, bytes, move, [4, start - 4, at - 4, from - 4], added);
+        return Grown(avfx, added);
+    }
+
+    /// <summary>A Pos block moved: each axis curve the move changes moved, or a new one put where VFXEditor writes it.</summary>
+    private static void MovePosition(byte[] avfx, int start, int size, Vector3 move, int[] sizes, List<Addition> added)
+    {
+        var curves = AnimationDependencies.Chunks(avfx, start, start + size).ToList();
+        for (var axis = 0; axis < 3; axis++)
+        {
+            var delta = move[axis];
+            if (delta == 0)
+                continue;
+            var name = PositionOrder[2 + axis];
+            var found = false;
+            foreach (var (curve, at, count) in curves)
+                if (curve == name)
+                {
+                    found = true;
+                    MoveCurve(avfx, at, count, delta, [.. sizes, at - 4], added);
+                }
+            if (found)
+                continue;
+            // Before the first curve that comes after it, else last.
+            var place = Array.IndexOf(PositionOrder, name);
+            var next = curves.FindIndex(c => Array.IndexOf(PositionOrder, c.Name) > place);
+            added.Add(new Addition(next < 0 ? start + size : curves[next].Start - 8, Block(name, NewCurve(delta)), sizes));
+        }
+    }
+
+    /// <summary>A curve moved: <paramref name="delta"/> added to each key's value; a curve without keys gets one holding it.</summary>
+    private static void MoveCurve(byte[] avfx, int start, int size, float delta, int[] sizes, List<Addition> added)
+    {
+        var keys = Keys(avfx, start, size).ToList();
+        foreach (var key in keys)
+        {
+            var value = BinaryPrimitives.ReadSingleLittleEndian(avfx.AsSpan(key + 12)) + delta;
+            if (float.IsFinite(value))
+                BinaryPrimitives.WriteSingleLittleEndian(avfx.AsSpan(key + 12), value);
+        }
+        if (keys.Count > 0)
+            return;
+        // The new key goes in front of any data its count leaves out, as the one key the count names.
+        (int At, int Size)? found = null;
+        foreach (var (name, at, bytes) in AnimationDependencies.Chunks(avfx, start, start + size))
+            if (name == "KeyC" && bytes >= 4) BinaryPrimitives.WriteInt32LittleEndian(avfx.AsSpan(at), 1);
+            else if (name == "Keys") found = (at, bytes);
+        added.Add(found is { } block
+            ? new Addition(block.At, NewKey(delta), [.. sizes, block.At - 4])
+            : new Addition(start + size, Block("Keys", NewKey(delta)), sizes));
+    }
+
+    /// <summary><paramref name="avfx"/> with <paramref name="added"/> put in and the size fields around each grown by it.</summary>
+    private static byte[] Grown(byte[] avfx, List<Addition> added)
+    {
+        if (added.Count == 0)
+            return avfx;
+        foreach (var (_, bytes, sizes) in added)
+            foreach (var field in sizes)
+                BinaryPrimitives.WriteInt32LittleEndian(avfx.AsSpan(field), BinaryPrimitives.ReadInt32LittleEndian(avfx.AsSpan(field)) + bytes.Length);
+        var grown = new byte[avfx.Length + added.Sum(a => a.Bytes.Length)];
+        if (grown.Length > AnimationPap.MaxFileSize)
+            throw new InvalidDataException("The effect exceeds the file size limit.");
+        int from = 0, to = 0;
+        foreach (var (at, bytes, _) in added.OrderBy(a => a.At))
+        {
+            avfx.AsSpan(from, at - from).CopyTo(grown.AsSpan(to));
+            to += at - from;
+            bytes.CopyTo(grown, to);
+            to += bytes.Length;
+            from = at;
+        }
+        avfx.AsSpan(from).CopyTo(grown.AsSpan(to));
+        return grown;
+    }
+
+    /// <summary>A block as VFXEditor writes one: its name reversed and zero-padded to four bytes, its size, its payload padded to four.</summary>
+    private static byte[] Block(string name, byte[] payload)
+    {
+        var block = new byte[8 + payload.Length + (-payload.Length & 3)];
+        for (var i = 0; i < name.Length; i++)
+            block[i] = (byte)name[name.Length - 1 - i];
+        BinaryPrimitives.WriteInt32LittleEndian(block.AsSpan(4), payload.Length);
+        payload.CopyTo(block, 8);
+        return block;
+    }
+
+    private static byte[] Leaf(string name, int value)
+    {
+        var payload = new byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(payload, value);
+        return Block(name, payload);
+    }
+
+    /// <summary>
+    /// A curve's contents as VFXEditor writes a new one with a key: the key count, constant pre and post
+    /// behaviour, random type 0, then the key. The library's own binder position curves read the same.
+    /// </summary>
+    private static byte[] NewCurve(float value) =>
+        [.. Leaf("KeyC", 1), .. Leaf("BvPr", 0), .. Leaf("BvPo", 0), .. Leaf("RanT", 0), .. Block("Keys", NewKey(value))];
+
+    /// <summary>A key as VFXEditor adds one: frame 0, linear, then 1, 1 and the value.</summary>
+    private static byte[] NewKey(float value)
+    {
+        var key = new byte[KeySize];
+        BinaryPrimitives.WriteInt16LittleEndian(key.AsSpan(2), LinearKey);
+        BinaryPrimitives.WriteSingleLittleEndian(key.AsSpan(4), 1);
+        BinaryPrimitives.WriteSingleLittleEndian(key.AsSpan(8), 1);
+        BinaryPrimitives.WriteSingleLittleEndian(key.AsSpan(12), value);
+        return key;
+    }
+
     private static Vector3? Root(byte[] avfx, Layout layout, string[] fields)
     {
         var values = new float[3];
@@ -591,6 +767,24 @@ internal static class TimelineEffectLooks
         var clamped = Vector3.Clamp(Finite(wanted), new Vector3(min), new Vector3(max));
         for (var i = 0; i < 3; i++)
             BinaryPrimitives.WriteSingleLittleEndian(output.AsSpan(layout.Root[fields[i]]), clamped[i]);
+    }
+
+    /// <summary>
+    /// The root fields with <paramref name="change"/> added (or, to <paramref name="scale"/>, multiplied)
+    /// on each axis it changes, held to <paramref name="min"/>..<paramref name="max"/>; other axes keep their bytes.
+    /// </summary>
+    private static void ChangeRoot(byte[] output, Layout layout, string[] fields, Vector3? change, bool scale, float min, float max)
+    {
+        if (change is not { } by || Root(output, layout, fields) is not { } value)
+            return;
+        for (var i = 0; i < 3; i++)
+        {
+            if (!float.IsFinite(by[i]) || by[i] == (scale ? 1 : 0))
+                continue;
+            var result = scale ? value[i] * by[i] : value[i] + by[i];
+            if (float.IsFinite(result))
+                BinaryPrimitives.WriteSingleLittleEndian(output.AsSpan(layout.Root[fields[i]]), Math.Clamp(result, min, max));
+        }
     }
 
     private static Vector3 ReadRgb(byte[] avfx, int at) => new(BinaryPrimitives.ReadSingleLittleEndian(avfx.AsSpan(at)),

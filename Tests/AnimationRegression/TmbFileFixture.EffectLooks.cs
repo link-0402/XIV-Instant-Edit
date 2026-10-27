@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Numerics;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
@@ -28,6 +28,7 @@ internal static partial class TmbFileFixture
             "an effect's look reads its root tint, size, offset and turn, and its colours most used first: no white emitter colour, " +
             "simple colours only when used, light colours but none of a blur; it is not on a binder");
         Binders(check);
+        Moving(check);
         var bare = Chunk("AVFX", Chunk("Ver", Ints(1)));
         check(TimelineEffectLooks.Read(bare) is { Tint: null, Size: null, Colors.IsEmpty: true, Glow: false, Opacity: false, LightRange: false } &&
               TimelineEffectLooks.Apply(bare, new TimelineEffectEdit { Tint = Vector3.One, Hue = 90, Glow = 2 }).SequenceEqual(bare),
@@ -44,7 +45,7 @@ internal static partial class TmbFileFixture
 
         var edit = new TimelineEffectEdit
         {
-            Tint = new Vector3(2, 1, 1), Size = new Vector3(.5f), Offset = new Vector3(0, 1, 0), Turn = new Vector3(0, MathF.PI / 2, 0), Hue = 180,
+            Tint = new Vector3(2, 1, 1), Size = new Vector3(.5f), Move = new Vector3(0, 1, 0), Turn = new Vector3(0, MathF.PI / 2, 0), Hue = 180,
             Colors = [(TimelineEffectLooks.Swatch(new Vector3(0, 0, 1)), new Vector3(0, 1, 0))], Glow = 2, Opacity = .5f, LightRange = .5f,
         };
         var edited = TimelineEffectLooks.Apply(effect, edit);
@@ -52,7 +53,7 @@ internal static partial class TmbFileFixture
         check(edited.Length == effect.Length && after.Tint == new Vector3(2, 1, 1) && after.Size == new Vector3(.5f) &&
               after.Offset == new Vector3(0, 1, 0) && after.Turn is { } turn && Vector3.Distance(turn, new Vector3(0, MathF.PI / 2, 0)) < 1e-6f &&
               Found(edited, "RvRy") is [(var turnY, 4)] && Math.Abs(BitConverter.ToSingle(edited, turnY) - MathF.PI / 2) < 1e-6f,
-            "a look writes the whole effect's tint, size, offset and turn, the turn in radians");
+            "a look writes the whole effect's tint, and scales, moves and turns it from its own values, the turn in radians");
         check(TimelineEffectLooks.Read(TimelineEffectLooks.Apply(effect, new TimelineEffectEdit { Turn = new Vector3(10, -10, 1) })).Turn ==
               new Vector3(2 * MathF.PI, -2 * MathF.PI, 1) && TimelineEffectEdit.MaxTurn == 2 * MathF.PI,
             "a turn is held to one full turn either way, in radians");
@@ -107,16 +108,12 @@ internal static partial class TmbFileFixture
     /// </summary>
     private static void Binders(Action<bool, string> check)
     {
-        static byte[] Leaf(string name, int value) => Chunk(name, Ints(value));
-        static byte[] Entry(int binder) =>
-            [.. Leaf("bEna", 1), .. Leaf("StTm", 0), .. Leaf("EdTm", 30), .. Leaf("BdNo", binder), .. Leaf("EfNo", -1), .. Leaf("EmNo", 0), .. Leaf("ClNo", -1)];
-        static byte[] Timeline(int binder, params byte[][] items) => Chunk("TmLn", [.. Leaf("BnNo", binder), .. items.SelectMany(i => Chunk("Item", i))]);
-        static byte[] Axis(string name, params float[] values) => Chunk(name, [
-            .. Leaf("KeyC", values.Length),
-            .. Chunk("Keys", [.. values.SelectMany((v, i) => (byte[])[.. BitConverter.GetBytes((short)(i * 10)), .. BitConverter.GetBytes((short)0), .. Floats(9, 9, v)])]),
-        ]);
-        static byte[] Pos(float[] x, float[] y, float[] z) => Chunk("Pos", [.. Axis("X", x), .. Axis("Y", y), .. Axis("Z", z)]);
-        static byte[] Effect(params byte[][] parts) => Chunk("AVFX", [.. Chunk("Ver", Ints(0x20110913)), .. Chunk("RvRy", Floats(0)), .. parts.SelectMany(p => p)]);
+        static byte[] Leaf(string name, int value) => BinderEffects.Leaf(name, value);
+        static byte[] Entry(int binder) => BinderEffects.Entry(binder);
+        static byte[] Timeline(int binder, params byte[][] items) => BinderEffects.Timeline(binder, items);
+        static byte[] Axis(string name, params float[] values) => BinderEffects.Axis(name, values);
+        static byte[] Pos(float[] x, float[] y, float[] z) => BinderEffects.Pos(x, y, z);
+        static byte[] Effect(params byte[][] parts) => BinderEffects.Effect(parts);
 
         var bound = Effect(Timeline(-1, Entry(0)), Chunk("Bind", [.. Leaf("BnVr", 1), .. Chunk("PrpS", Pos([1], [2], [3]))]));
         check(TimelineEffectLooks.Read(bound) is { Bound: true, BinderPositions: [{ Binder: 0, Block: "PrpS", Constant: { X: 1, Y: 2, Z: 3 }, Keys: 1 }] },
@@ -137,6 +134,236 @@ internal static partial class TmbFileFixture
             Chunk("Bind", Chunk("PrpS", Pos([], [], []))));
         check(TimelineEffectLooks.Read(unbound) is { Bound: false, BinderPositions: [{ Binder: 0, Block: "PrpS", Constant: null, Keys: 0 }] },
             "an effect whose timelines and items name no binder is not bound, though its binders are still read; a position without keys has no constant");
+        var lastItem = Effect(Timeline(-1, Entry(-1), [.. Entry(-1), .. Entry(0)]));
+        check(TimelineEffectLooks.Read(lastItem).Bound,
+            "the last Item of a timeline is the one read: an item added there that names a binder makes the effect bound");
+    }
+
+    /// <summary>
+    /// Move on an effect attached to a binder: added to the keys of its property blocks' Pos curves,
+    /// with a curve (or a key) written in as VFXEditor writes a new one where an axis has none, so
+    /// the file grows by just those. Turn and size can't change an attached effect; an unattached
+    /// effect moves, turns and scales by its root fields.
+    /// </summary>
+    private static void Moving(Action<bool, string> check)
+    {
+        const string attached = "Turn and size can't change an attached effect";
+        const string noPosition = "This effect can't be moved: its attach point has no position.";
+        static byte[] Leaf(string name, int value) => BinderEffects.Leaf(name, value);
+        static string? Thrown(Action action)
+        {
+            try { action(); return null; }
+            catch (InvalidDataException e) { return e.Message; }
+        }
+        var up = new TimelineEffectEdit { Move = new Vector3(0, 1, 0) };
+        var timeline = BinderEffects.Timeline(-1, BinderEffects.Entry(0));
+
+        var bound = BinderEffects.Effect(timeline, Chunk("Bind", [.. Leaf("BnVr", 1), .. Chunk("PrpS", BinderEffects.Pos([1], [2], [3]))]));
+        var lifted = TimelineEffectLooks.Apply(bound, up);
+        var keyY = Keys(bound, "Bind", "PrpS", "Pos", "Y").Single();
+        check(lifted.Length == bound.Length && Values(lifted, "Bind", "PrpS", "Pos", "Y") is [3] &&
+              Values(lifted, "Bind", "PrpS", "Pos", "X") is [1] && Values(lifted, "Bind", "PrpS", "Pos", "Z") is [3] &&
+              Differing(bound, lifted).All(i => i >= keyY + 12 && i < keyY + 16) &&
+              Found(lifted, "RvPy") is [(var rvPy, 4)] && BitConverter.ToSingle(lifted, rvPy) == 0,
+            "a move on an attached effect adds to its binder position's keys, not to its root offset");
+        var moving = BinderEffects.Effect(timeline, Chunk("Bind", Chunk("PrpS", BinderEffects.Pos([1], [2, 4], [3]))));
+        check(TimelineEffectLooks.Apply(moving, up) is var movedKeys && movedKeys.Length == moving.Length &&
+              Values(movedKeys, "Bind", "PrpS", "Pos", "Y") is [3, 5],
+            "a moving binder position moves at every key");
+
+        // No X curve, a Y curve without keys, a Z curve with one key at 0.
+        var sparse = BinderEffects.Effect(timeline,
+            Chunk("Bind", [.. Leaf("BnVr", 1), .. Chunk("PrpS", [.. Leaf("BPID", 3),
+                .. Chunk("Pos", [.. Leaf("ACT", 0), .. Leaf("ACTR", 0), .. BinderEffects.Axis("Y"), .. BinderEffects.Axis("Z", 0)])])]),
+            BinderEffects.Timeline(-1));
+        var placed = TimelineEffectLooks.Apply(sparse, new TimelineEffectEdit { Move = new Vector3(1, 2, 3) });
+        var (oldPos, oldSize) = Found(sparse, "Bind", "PrpS", "Pos").Single();
+        var (newPos, newSize) = Found(placed, "Bind", "PrpS", "Pos").Single();
+        var grown = placed.Length - sparse.Length;
+        int[] sizeFields = [4, Found(sparse, "Bind").Single().At - 4, Found(sparse, "Bind", "PrpS").Single().At - 4, oldPos - 4];
+        check(TimelineEffectLooks.Read(placed) is { BinderPositions: [{ Block: "PrpS", Keys: 1, Constant: { X: 1, Y: 2, Z: 3 } }] } &&
+              grown == 96 && BitConverter.ToInt32(placed, 4) == placed.Length - 8 && newPos == oldPos && newSize == oldSize + grown &&
+              Differing(sparse.AsSpan(0, oldPos).ToArray(), placed.AsSpan(0, oldPos).ToArray()).All(i => sizeFields.Any(f => i >= f && i < f + 4)) &&
+              sizeFields.All(f => BitConverter.ToInt32(placed, f) == BitConverter.ToInt32(sparse, f) + grown) &&
+              sparse.AsSpan(oldPos + oldSize).SequenceEqual(placed.AsSpan(newPos + newSize)),
+            "a binder position without an X curve or Y keys gets them, and only it and the sizes around it change");
+        static byte[] NewKey(float value) => [.. BitConverter.GetBytes((short)0), .. BitConverter.GetBytes((short)1), .. Floats(1, 1, value)];
+        var children = AnimationDependencies.Chunks(placed, newPos, newPos + newSize).ToList();
+        check(children.Select(c => c.Name).SequenceEqual(["ACT", "ACTR", "X", "Y", "Z"]) &&
+              placed.AsSpan(children[2].Start - 8, children[2].Size + 8).SequenceEqual(BinderEffects.NewCurve("X", 1)) &&
+              Found(placed, "Bind", "PrpS", "Pos", "Y", "Keys") is [(var yKeys, 16)] && placed.AsSpan(yKeys, 16).SequenceEqual(NewKey(2)) &&
+              Found(placed, "Bind", "PrpS", "Pos", "Y", "KeyC") is [(var yCount, 4)] && BitConverter.ToInt32(placed, yCount) == 1,
+            "a new axis curve goes in its place among the others and is written as VFXEditor writes one: key count, behaviours, " +
+            "random type, then one linear key at frame 0");
+
+        var noBlocks = BinderEffects.Effect(timeline, Chunk("Bind", Leaf("BnVr", 1)));
+        check(TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(noBlocks), up) == noPosition &&
+              Thrown(() => TimelineEffectLooks.Apply(noBlocks, up)) == noPosition &&
+              TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(bound), up) == null,
+            "an attached effect whose binder has no position can't be moved");
+        var turn = new TimelineEffectEdit { Turn = new Vector3(0, 1, 0) };
+        var size = new TimelineEffectEdit { Size = new Vector3(2) };
+        check(TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(bound), turn) == attached &&
+              TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(bound), size with { Move = up.Move }) == attached &&
+              Thrown(() => TimelineEffectLooks.Apply(bound, turn)) == attached && Thrown(() => TimelineEffectLooks.Apply(bound, size)) == attached &&
+              TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(LookEffect()), turn) == null,
+            "turn and size are refused on an attached effect");
+
+        var effect = LookEffect();
+        var rvPyAt = Found(effect, "RvPy").Single().At;
+        var shifted = TimelineEffectLooks.Apply(effect, up);
+        check(shifted.Length == effect.Length && BitConverter.ToSingle(shifted, rvPyAt) == 1 &&
+              Differing(effect, shifted).All(i => i >= rvPyAt && i < rvPyAt + 4) &&
+              TimelineEffectLooks.Read(TimelineEffectLooks.Apply(shifted, up)).Offset == new Vector3(0, 2, 0),
+            "a move on an unattached effect adds to its root offset, so a moved copy moves on");
+        var still = new TimelineEffectEdit { Move = Vector3.Zero, Turn = Vector3.Zero, Size = Vector3.One };
+        check(TimelineEffectLooks.Apply(bound, new TimelineEffectEdit()).SequenceEqual(bound) && TimelineEffectLooks.Apply(bound, still).SequenceEqual(bound) &&
+              TimelineEffectLooks.Apply(sparse, still).SequenceEqual(sparse) && TimelineEffectLooks.Apply(effect, still).SequenceEqual(effect) &&
+              still.IsEmpty && TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(noBlocks), still) == null,
+            "no move, no turn and a size of 1 change no byte, on an attached effect too");
+        LibraryMoves(check);
+    }
+
+    /// <summary>
+    /// Real effects from 25 sampled mod folders of the library at G:\Penumbra, when it is there: each
+    /// reads, an empty look changes no byte, and a move either is refused for want of a position or
+    /// changes only binder positions (or the root offset). The curves a move adds are laid out as the
+    /// library's own binder position curves are.
+    /// </summary>
+    private static void LibraryMoves(Action<bool, string> check)
+    {
+        const string library = @"G:\Penumbra";
+        if (!Directory.Exists(library))
+        {
+            Console.WriteLine("[SKIP] effect moves: the mod library isn't at G:\\Penumbra");
+            return;
+        }
+        var random = new Random(20261027);
+        var files = Directory.GetDirectories(library).Order(StringComparer.OrdinalIgnoreCase).OrderBy(_ => random.Next())
+            .Select(folder => Directory.GetFiles(folder, "*.avfx", SearchOption.AllDirectories)).Where(f => f.Length > 0).Take(25)
+            .SelectMany(f => f).ToList();
+        var up = new TimelineEffectEdit { Move = new Vector3(0, 1, 0) };
+        int read = 0, refused = 0, moved = 0;
+        var failures = new List<string>();
+        string[]? realCurve = null;
+        foreach (var file in files)
+        {
+            var bytes = File.ReadAllBytes(file);
+            TimelineEffectLook before;
+            try { before = TimelineEffectLooks.Read(bytes); read++; }
+            catch (InvalidDataException e) { failures.Add($"{Path.GetFileName(file)} does not read: {e.Message}"); continue; }
+            if (!TimelineEffectLooks.Apply(bytes, new TimelineEffectEdit()).SequenceEqual(bytes))
+                failures.Add($"{Path.GetFileName(file)} changes with an empty look");
+            byte[] after;
+            try { after = TimelineEffectLooks.Apply(bytes, up); }
+            catch (InvalidDataException e) when (e.Message == "This effect can't be moved: its attach point has no position.") { refused++; continue; }
+            bool movedOnly;
+            try
+            {
+                // Each position still where it was, one metre up: a still one's constant, a moving one's keys.
+                movedOnly = TimelineEffectLooks.Read(after) is var look && OnlyMoved(bytes, 8, bytes.Length, after, 8, after.Length, "") &&
+                            BitConverter.ToInt32(after, 4) == after.Length - 8 &&
+                            (!look.Bound || look.BinderPositions.Length == before.BinderPositions.Length && look.BinderPositions.Zip(before.BinderPositions).All(p =>
+                                p.First.Keys == Math.Max(1, p.Second.Keys) && (p.Second.Keys > 1
+                                    ? p.First.Constant == null
+                                    : p.First.Constant is { } now && Vector3.Distance(now, (p.Second.Constant ?? Vector3.Zero) + Vector3.UnitY) < 1e-5f)));
+            }
+            catch (InvalidDataException) { movedOnly = false; }
+            if (movedOnly)
+                moved++;
+            else
+                failures.Add($"{Path.GetFileName(file)} changes more than its position");
+            // A real binder position curve with a key, X first, else Y or Z: its leaves, in order.
+            foreach (var axis in new[] { "X", "Y", "Z" })
+                if (realCurve == null || axis == "X" && realCurve[0] != "X")
+                    foreach (var curve in Found(bytes, "Bind").SelectMany(b => AnimationDependencies.Chunks(bytes, b.At, b.At + b.Size))
+                                 .Where(p => p.Name.StartsWith("Prp", StringComparison.Ordinal))
+                                 .SelectMany(p => AnimationDependencies.Chunks(bytes, p.Start, p.Start + p.Size)).Where(c => c.Name == "Pos")
+                                 .SelectMany(p => AnimationDependencies.Chunks(bytes, p.Start, p.Start + p.Size)).Where(c => c.Name == axis))
+                    {
+                        var leaves = AnimationDependencies.Chunks(bytes, curve.Start, curve.Start + curve.Size).ToList();
+                        if (leaves.Any(l => l is { Name: "Keys", Size: >= 16 }))
+                        {
+                            realCurve = [axis, .. leaves.Select(l => $"{l.Name}:{(l.Name == "Keys" ? 16 : l.Size)}")];
+                            break;
+                        }
+                    }
+        }
+        foreach (var failure in failures.Take(5))
+            Console.WriteLine("  " + failure);
+        var written = AnimationDependencies.Chunks(BinderEffects.NewCurve("X", 1), 8, 80).Select(l => $"{l.Name}:{l.Size}");
+        check(files.Count > 0 && failures.Count == 0 && read == files.Count && moved + refused == files.Count,
+            $"library effects read, keep every byte with an empty look, and move only their positions ({moved} moved, {refused} refused, {files.Count} in 25 mod folders)");
+        check(realCurve != null && realCurve.Skip(1).SequenceEqual(written),
+            $"a new binder curve has the leaves of the library's own ({realCurve?[0]} curve: {string.Join(", ", realCurve?.Skip(1) ?? [])})");
+    }
+
+    /// <summary>
+    /// Whether <paramref name="b"/> is <paramref name="a"/> with a move written in: the same chunks,
+    /// but for binder position curves and keys added, their key values and counts, and the root offset.
+    /// </summary>
+    private static bool OnlyMoved(byte[] a, int aStart, int aEnd, byte[] b, int bStart, int bEnd, string path)
+    {
+        var axis = System.Text.RegularExpressions.Regex.IsMatch(path, "^/Bind/Prp[S12G]/Pos/[XYZ]$");
+        bool Added(string name) => path.EndsWith("/Pos", StringComparison.Ordinal) && name is "X" or "Y" or "Z" || axis && name == "Keys";
+        var right = AnimationDependencies.Chunks(b, bStart, bEnd).ToList();
+        var next = 0;
+        foreach (var (name, at, size) in AnimationDependencies.Chunks(a, aStart, aEnd))
+        {
+            while (next < right.Count && right[next].Name != name && Added(right[next].Name))
+                next++;
+            if (next == right.Count || right[next].Name != name)
+                return false;
+            var (_, other, otherSize) = right[next++];
+            var inner = path + "/" + name;
+            if (System.Text.RegularExpressions.Regex.IsMatch(inner, "^/Bind(/Prp[S12G](/Pos(/[XYZ])?)?)?$"))
+            {
+                if (!OnlyMoved(a, at, at + size, b, other, other + otherSize, inner))
+                    return false;
+            }
+            else if (axis && name == "Keys")
+            {
+                // Existing keys keep their frame, type and first two floats; a key may be added in front of none.
+                if (otherSize != size && otherSize != size + 16)
+                    return false;
+                var shift = otherSize - size;
+                for (var key = 0; key + 16 <= size; key += 16)
+                    if (!a.AsSpan(at + key, 12).SequenceEqual(b.AsSpan(other + shift + key, 12)))
+                        return false;
+            }
+            else if (!(axis && name == "KeyC" || path == "" && name == "RvPy") && !a.AsSpan(at, size).SequenceEqual(b.AsSpan(other, otherSize)))
+                return false;
+        }
+        return right.Skip(next).All(c => Added(c.Name));
+    }
+
+    /// <summary> Effect files with timelines and binders, built as VFXEditor writes them. </summary>
+    private static class BinderEffects
+    {
+        public static byte[] Leaf(string name, int value) => Chunk(name, Ints(value));
+
+        public static byte[] Entry(int binder) =>
+            [.. Leaf("bEna", 1), .. Leaf("StTm", 0), .. Leaf("EdTm", 30), .. Leaf("BdNo", binder), .. Leaf("EfNo", -1), .. Leaf("EmNo", 0), .. Leaf("ClNo", -1)];
+
+        public static byte[] Timeline(int binder, params byte[][] items) => Chunk("TmLn", [.. Leaf("BnNo", binder), .. items.SelectMany(i => Chunk("Item", i))]);
+
+        /// <summary> A curve whose keys hold junk (9, 9) in the first two floats, so reading the third is checked. </summary>
+        public static byte[] Axis(string name, params float[] values) => Chunk(name, [
+            .. Leaf("KeyC", values.Length),
+            .. Chunk("Keys", [.. values.SelectMany((v, i) => (byte[])[.. BitConverter.GetBytes((short)(i * 10)), .. BitConverter.GetBytes((short)0), .. Floats(9, 9, v)])]),
+        ]);
+
+        public static byte[] Pos(float[] x, float[] y, float[] z) => Chunk("Pos", [.. Axis("X", x), .. Axis("Y", y), .. Axis("Z", z)]);
+
+        public static byte[] Effect(params byte[][] parts) => Chunk("AVFX", [
+            .. Chunk("Ver", Ints(0x20110913)), .. Chunk("RvPx", Floats(0)), .. Chunk("RvPy", Floats(0)), .. Chunk("RvPz", Floats(0)),
+            .. Chunk("RvRy", Floats(0)), .. parts.SelectMany(p => p)]);
+
+        /// <summary> A curve VFXEditor writes when one is added and given a key: count, behaviours, random type, one linear key (1, 1, value). </summary>
+        public static byte[] NewCurve(string name, float value) => Chunk(name, [
+            .. Leaf("KeyC", 1), .. Leaf("BvPr", 0), .. Leaf("BvPo", 0), .. Leaf("RanT", 0),
+            .. Chunk("Keys", [.. BitConverter.GetBytes((short)0), .. BitConverter.GetBytes((short)1), .. Floats(1, 1, value)]),
+        ]);
     }
 
     /// <summary> Looks on timeline events: kept by edits, refused unwritten, and saved as copies. </summary>
