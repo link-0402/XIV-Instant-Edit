@@ -20,6 +20,7 @@ internal static class CloseLoopFixture
         Validation(check, reject);
         Journals(check);
         Apply(check);
+        Edits(check);
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
@@ -166,6 +167,98 @@ internal static class CloseLoopFixture
             check(Gap(wideClosed).MeanAngle < .01f && most <= 175,
                 $"close loop wide {place}: a 170-degree gap closes the short way (turns {most:0.#} degrees at most)");
         }
+    }
+
+    /// <summary>A 100-frame document holding one Close loop layer of <paramref name="place"/>, and the layer's key.</summary>
+    private static TimelineDocument WithClose(JoinPlacement place, out string key) =>
+        MotionEdits.AddFix(new TimelineDocument(100, 100, null, [], 1), new MotionFix(MotionFixKind.CloseLoop, Placement: place), out key, out _);
+
+    private static void Edits(Action<bool, string> check)
+    {
+        var doc = new TimelineDocument(100, 100, null, [], 1);
+        var added = MotionEdits.AddFix(doc, new MotionFix(MotionFixKind.CloseLoop), out var key, out var error);
+        check(error == null && MotionEdits.Find(added, key) is
+              {
+                  Kind: MotionLayerKind.Fix, Name: "Close loop", Start: 92, End: 100, FadeIn: 0, FadeOut: 0, Amount: 1,
+                  Components: PoseComponents.Rotation | PoseComponents.Position, Fix.Placement: JoinPlacement.Centered,
+              },
+            "Close loop spans the clip's last 8 frames at full blend, centered");
+        check(MotionEdits.Find(WithClose(JoinPlacement.After, out var afterAdded), afterAdded) is { Start: 0, End: 8 } &&
+              MotionEdits.Find(WithClose(JoinPlacement.Before, out var beforeAdded), beforeAdded) is { Start: 92, End: 100 },
+            "a Close loop added after places its 8 frames at the start, before at the end");
+        check(MotionEdits.IsAnchored(MotionEdits.Find(added, key)!) && !MotionEdits.IsMatch(MotionEdits.Find(added, key)!) &&
+              MotionEdits.IsAnchored(CloseLayer(JoinPlacement.After, 8) with { Fix = FixLayerFixture.Loop() }) && !MotionEdits.IsAnchored(CloseLayer(JoinPlacement.After, 8) with { Fix = null }),
+            "a Close loop and a Match are anchored; only the Match is a Match");
+
+        var after = MotionEdits.SetFixPlacement(added, key, JoinPlacement.After);
+        check(MotionEdits.Find(after, key) is { Start: 0, End: 8, Fix.Placement: JoinPlacement.After } &&
+              MotionEdits.Find(MotionEdits.SetFixPlacement(after, key, JoinPlacement.Before), key) is { Start: 92, End: 100, Fix.Placement: JoinPlacement.Before } &&
+              MotionEdits.Find(MotionEdits.SetFixPlacement(MotionEdits.SetFixPlacement(after, key, JoinPlacement.Before), key, JoinPlacement.Centered), key) is { Start: 92, End: 100 } &&
+              ReferenceEquals(MotionEdits.SetFixPlacement(added, key, JoinPlacement.Centered), added) && ReferenceEquals(MotionEdits.SetFixPlacement(after, key, JoinPlacement.After), after) &&
+              ReferenceEquals(MotionEdits.SetFixPlacement(added, "nope", JoinPlacement.After), added),
+            "the placement re-anchors the layer's frames and keeps its length; the one it has, or a missing layer, changes nothing");
+        var smoothed = MotionEdits.AddFix(doc, new MotionFix(MotionFixKind.SmoothJitter), out var smoothKey, out _);
+        check(ReferenceEquals(MotionEdits.SetFixPlacement(smoothed, smoothKey, JoinPlacement.After), smoothed), "only a Close loop has a placement to set");
+
+        check(MotionEdits.Find(MotionEdits.SetFixLength(added, key, 12), key) is { Start: 88, End: 100 } &&
+              MotionEdits.Find(MotionEdits.SetFixLength(after, key, 12), key) is { Start: 0, End: 12 } &&
+              MotionEdits.Find(MotionEdits.SetFixLength(after, key, 500), key) is { Start: 0, End: 100 } &&
+              MotionEdits.Find(MotionEdits.SetFixLength(after, key, 0), key) is { Start: 0, End: 1 } &&
+              ReferenceEquals(MotionEdits.SetFixLength(added, key, 8), added) && ReferenceEquals(MotionEdits.SetFixLength(after, key, 8), after),
+            "Blend over sets a Close loop's length from the end its placement anchors to");
+
+        // The canvas: the bar and the fades stay; the edge away from the anchor sets the length.
+        var before = MotionEdits.SetFixPlacement(added, key, JoinPlacement.Before);
+        check(new[] { added, before, after }.All(d => ReferenceEquals(MotionEdits.Move(d, key, -5), d) && ReferenceEquals(MotionEdits.Fade(d, key, true, 3), d) &&
+                  ReferenceEquals(MotionEdits.Fade(d, key, false, -3), d)),
+            "a Close loop's bar and fades don't move");
+        check(new[] { added, before }.All(d => MotionEdits.Find(MotionEdits.Resize(d, key, true, -4), key) is { Start: 88, End: 100 } &&
+                  MotionEdits.Find(MotionEdits.Resize(d, key, true, 3), key) is { Start: 95, End: 100 } && ReferenceEquals(MotionEdits.Resize(d, key, false, 4), d)) &&
+              MotionEdits.Find(MotionEdits.Resize(after, key, false, 4), key) is { Start: 0, End: 12 } &&
+              MotionEdits.Find(MotionEdits.Resize(after, key, false, -3), key) is { Start: 0, End: 5 } && ReferenceEquals(MotionEdits.Resize(after, key, true, -4), after),
+            "dragging a Close loop's edge away from its anchor sets its length by the stored one, the other edge does nothing");
+        check(MotionEdits.Shown(MotionEdits.Find(added, key)!, 100) is { Start: 96, End: 100, FadeIn: 0, FadeOut: 0 } &&
+              MotionEdits.Shown(MotionEdits.Find(before, key)!, 100) is { Start: 92, End: 100 } &&
+              MotionEdits.Shown(MotionEdits.Find(after, key)!, 100) is { Start: 0, End: 8, FadeIn: 0, FadeOut: 0 } &&
+              MotionEdits.Shown(MotionEdits.Find(added, key)!, 50) is { Start: 46, End: 50 } &&
+              MotionEdits.SnapFrames(after, null).SequenceEqual([0, 8]) && MotionEdits.SnapFrames(added, null).SequenceEqual([96, 100]),
+            "a Close loop shows and snaps over the frames it changes on one side");
+
+        // Cuts: the length is kept and the layer follows its placement; a cut at the start doesn't take an after layer.
+        check(CutEdits.RemoveRange(after, 0, 20, out _) is { Length: 80 } cutAfter && MotionEdits.Find(cutAfter, key) is { Start: 0, End: 8 } &&
+              CutEdits.RemoveRange(added, 0, 20, out _) is { Length: 80 } cutCentered && MotionEdits.Find(cutCentered, key) is { Start: 72, End: 80 } &&
+              CutEdits.RemoveRange(added, 5, 100, out _) is { Length: 5 } cutShort && MotionEdits.Find(cutShort, key) is { Start: 0, End: 5 } &&
+              CutEdits.RemoveRange(after, 5, 100, out _) is { Length: 5 } cutShortAfter && MotionEdits.Find(cutShortAfter, key) is { Start: 0, End: 5 },
+            "removing frames keeps a Close loop's length and anchors it by its placement");
+        check(CutEdits.StretchPart(added, 0, 20, out _) is { Length: 120 } stretched && MotionEdits.Find(stretched, key) is { Start: 112, End: 120 } &&
+              CutEdits.StretchPart(after, 0, 20, out _) is { Length: 120 } stretchedAfter && MotionEdits.Find(stretchedAfter, key) is { Start: 0, End: 8 } &&
+              CutEdits.Ripple(added, 95, 10, out _) is { Length: 110 } inserted && MotionEdits.Find(inserted, key) is { Start: 102, End: 110 } &&
+              CutEdits.Ripple(after, 95, 10, out _) is { Length: 110 } insertedAfter && MotionEdits.Find(insertedAfter, key) is { Start: 0, End: 8 },
+            "stretching and inserting frames keep a Close loop's length");
+        check(TimelineEdits.SetLength(added, 120, false) is { Length: 120 } longer && MotionEdits.Find(longer, key) is { Start: 92, End: 100 } &&
+              TimelineEdits.SetLength(after, 120, false) is { Length: 120 } longerAfter && MotionEdits.Find(longerAfter, key) is { Start: 0, End: 8 },
+            "a length change doesn't stretch a Close loop");
+
+        var copied = MotionEdits.Find(added, key)!;
+        var copiedAfter = MotionEdits.Find(after, key)!;
+        check(MotionEdits.Paste(new TimelineDocument(50, 50, null, [], 1), [copied, copiedAfter], 100, out var pasted, out _) is var into &&
+              MotionEdits.Find(into, pasted[0]) is { Start: 42, End: 50 } && MotionEdits.Find(into, pasted[1]) is { Start: 0, End: 8 } &&
+              MotionEdits.Paste(new TimelineDocument(5, 5, null, [], 1), [copied, copiedAfter], 100, out var pastedShort, out _) is var intoShort &&
+              MotionEdits.Find(intoShort, pastedShort[0]) is { Start: 0, End: 5 } && MotionEdits.Find(intoShort, pastedShort[1]) is { Start: 0, End: 5 },
+            "a Close loop pasted anchors by its placement and keeps its length, down to the clip's");
+
+        // The gizmo's frames never bake it: it lands after every layer.
+        check(BonePosing.Earlier([CloseLayer(JoinPlacement.After, 8), Turn()], 1) is [] && BonePosing.Earlier([Turn(), CloseLayer(JoinPlacement.After, 8)], 1) is [var turn] && turn.Kind == MotionLayerKind.Offset,
+            "the gizmo's frames never bake a Close loop");
+
+        var editor = new TimelineEditor(doc);
+        editor.AddFix(new MotionFix(MotionFixKind.CloseLoop));
+        var editorKey = editor.SelectedLayer!;
+        editor.AddFix(new MotionFix(MotionFixKind.SmoothJitter));
+        check(editor.SelectedLayer != editorKey &&editor.SetFixPlacement(editorKey, JoinPlacement.After) && MotionEdits.Find(editor.Document, editorKey) is { Start: 0, End: 8, Fix.Placement: JoinPlacement.After } &&
+              editor.SelectedLayer == editorKey && editor.Undo() && MotionEdits.Find(editor.Document, editorKey) is { Start: 92, End: 100, Fix.Placement: JoinPlacement.Centered } &&
+              !editor.SetFixPlacement(editorKey, JoinPlacement.Centered),
+            "Placement is one undo step that selects the layer; the one it has is no change");
     }
 
     /// <summary>An offset ramping b1 from no turn on frame 10 to 20 degrees about X on frame 30, without fades.</summary>

@@ -165,10 +165,10 @@ internal static class TimelineEdits
                 events[index] = ev with { Start = start, Duration = duration };
         }
         var next = doc with { Length = length, Events = events.ToImmutable() };
-        // Bone layers that lasted to the end (a still pose, an idle) last to the new one, keys where they were. A match follows
-        // the end by itself.
+        // Bone layers that lasted to the end (a still pose, an idle) last to the new one, keys where they were. A match or a
+        // close loop follows the end by itself.
         foreach (var layer in doc.Motion)
-            if (layer.End != length && layer.Start < length && !MotionEdits.IsMatch(layer) && MotionEvaluator.ReachesEnd(layer, old))
+            if (layer.End != length && layer.Start < length && !MotionEdits.IsAnchored(layer) &&MotionEvaluator.ReachesEnd(layer, old))
                 next = MotionEdits.Replace(next, layer with { End = length });
         return next;
     }

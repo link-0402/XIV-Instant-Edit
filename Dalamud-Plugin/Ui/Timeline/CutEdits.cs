@@ -418,8 +418,8 @@ internal static class CutEdits
             for (var i = layers.Count - 1; i >= 0; i--)
             {
                 var layer = layers[i];
-                // A match blends into the clip's last frame, so it stays there with its length, as far as the clip allows.
-                if (MotionEdits.IsMatch(layer))
+                // A match or a close loop is anchored to the clip's ends, so it stays there with its length, as far as the clip allows.
+                if (MotionEdits.IsAnchored(layer))
                 {
                     layers[i] = MotionEdits.Anchored(layer, length);
                     continue;
@@ -457,7 +457,7 @@ internal static class CutEdits
             for (var i = 0; i < layers.Count; i++)
             {
                 var layer = layers[i];
-                if (MotionEdits.IsMatch(layer))
+                if (MotionEdits.IsAnchored(layer))
                 {
                     layers[i] = MotionEdits.Anchored(layer, length);
                     continue;
@@ -512,7 +512,7 @@ internal static class CutEdits
         for (var i = 0; i < layers.Count; i++)
         {
             var layer = layers[i];
-            if (MotionEdits.IsMatch(layer))
+            if (MotionEdits.IsAnchored(layer))
             {
                 layers[i] = MotionEdits.Anchored(layer, length);
                 continue;

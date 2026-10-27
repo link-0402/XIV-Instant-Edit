@@ -360,11 +360,11 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     }
 
     /// <summary>
-    /// The layers before the one at <paramref name="at"/>, as they apply to it: all but Match startup to loop fixes,
-    /// which land after every layer.
+    /// The layers before the one at <paramref name="at"/>, as they apply to it: all but Match startup to loop and Close loop
+    /// fixes, which land after every layer.
     /// </summary>
     public static MotionLayer[] Earlier(IReadOnlyList<MotionLayer> motion, int at) =>
-        [.. motion.Take(at).Where(layer => layer.Fix?.Kind != MotionFixKind.MatchLoop)];
+        [.. motion.Take(at).Where(layer => !MotionEdits.IsAnchored(layer))];
 
     /// <summary>Whether any of <paramref name="layers"/> takes the whole clip, which one pose leaves out: an amplitude, a fix or a planted pin.</summary>
     public static bool TakesWholeClip(IEnumerable<MotionLayer> layers) => layers.Any(layer => MotionEvaluator.Active(layer) &&

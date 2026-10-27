@@ -40,20 +40,41 @@ internal static class MotionEdits
 
     /// <summary>
     /// <paramref name="layer"/> as the timeline draws, grabs and snaps to it on a clip <paramref name="length"/> frames
-    /// long: a match over the frames it blends (<see cref="MotionFixes.MatchSpan"/>), without fades; any other as it is.
+    /// long: a match over the frames it blends (<see cref="MotionFixes.MatchSpan"/>), a close loop over the frames it changes
+    /// on one side (the start's for After, else the end's), without fades; any other as it is.
     /// </summary>
-    public static MotionLayer Shown(MotionLayer layer, int length) =>
-        IsMatch(layer) && MotionFixes.MatchSpan(layer, length) is var (start, end) ? layer with { Start = start, End = end, FadeIn = 0, FadeOut = 0 } : layer;
+    public static MotionLayer Shown(MotionLayer layer, int length)
+    {
+        if (IsMatch(layer) && MotionFixes.MatchSpan(layer, length) is var (matchStart, matchEnd))
+            return layer with { Start = matchStart, End = matchEnd, FadeIn = 0, FadeOut = 0 };
+        if (!IsAnchored(layer))
+            return layer;
+        var (end, start) = MotionFixes.CloseSpans(layer, length);
+        var (from, to) = layer.Fix!.Placement == JoinPlacement.After ? start : end;
+        return layer with { Start = from, End = to, FadeIn = 0, FadeOut = 0 };
+    }
 
     /// <summary>Whether <paramref name="layer"/> is a Match startup to loop, which ends on the clip's last frame.</summary>
     public static bool IsMatch(MotionLayer layer) => layer.Fix?.Kind == MotionFixKind.MatchLoop;
 
     /// <summary>
-    /// A match on a clip <paramref name="length"/> frames long: its blend length kept, at least a frame and at most the clip,
-    /// ending on the last frame. Cuts, stretches and pastes put it there, as its stored frames only carry that length.
+    /// Whether <paramref name="layer"/> is anchored to the clip's ends, its stored frames carrying only its length: a Match
+    /// startup to loop, or a Close loop, which follows its placement (<see cref="Anchored"/>).
     /// </summary>
-    public static MotionLayer Anchored(MotionLayer layer, int length) =>
-        layer with { Start = Math.Max(0, length - Math.Max(1, layer.End - layer.Start)), End = length };
+    public static bool IsAnchored(MotionLayer layer) => layer.Fix?.Kind is MotionFixKind.MatchLoop or MotionFixKind.CloseLoop;
+
+    /// <summary>
+    /// An anchored layer on a clip <paramref name="length"/> frames long: its blend length kept, at least a frame and at most
+    /// the clip, ending on the last frame, or for a Close loop placed After starting on frame 0. Cuts, stretches and pastes
+    /// put it there, as its stored frames only carry that length.
+    /// </summary>
+    public static MotionLayer Anchored(MotionLayer layer, int length)
+    {
+        var frames = Math.Max(1, layer.End - layer.Start);
+        return layer.Fix?.Placement == JoinPlacement.After
+            ? layer with { Start = 0, End = Math.Min(frames, length) }
+            : layer with { Start = Math.Max(0, length - frames), End = length };
+    }
 
     public static string KindName(MotionLayerKind kind) => kind switch
     {
@@ -145,7 +166,8 @@ internal static class MotionEdits
     /// <summary>
     /// Adds a fix layer holding <paramref name="fix"/>: a match named "Match loop" over the clip's last
     /// <see cref="DefaultFixLength"/> frames, or its game fade when that is longer (from frame 0 on a shorter clip), at
-    /// full blend, a smooth named "Smooth jitter" over the whole clip at half strength, or a hand shape named "Hand shape"
+    /// full blend, a close loop named "Close loop" over <see cref="DefaultFixLength"/> frames anchored by its placement
+    /// at full blend, a smooth named "Smooth jitter" over the whole clip at half strength, or a hand shape named "Hand shape"
     /// over the whole clip at full amount, rotation only, or a root reset named "Reset root turn" the same way. Unchanged
     /// with an error when the document has no room for another layer.
     /// </summary>
@@ -153,34 +175,49 @@ internal static class MotionEdits
     {
         var length = Math.Max(TimelineDocument.MinLength, doc.Length);
         var match = fix.Kind == MotionFixKind.MatchLoop;
+        var close = fix.Kind == MotionFixKind.CloseLoop;
         var blend = Math.Max(DefaultFixLength, fix.Fade);
         var hand = fix.Kind == MotionFixKind.HandShape;
         var reset = fix.Kind == MotionFixKind.ResetRoot;
-        var added = Add(doc, MotionLayerKind.Fix, match ? Math.Max(0, length - blend) : 0, length, out key, out error);
+        var added = Add(doc, MotionLayerKind.Fix, match || close ? Math.Max(0, length - blend) : 0, length, out key, out error);
         if (error != null)
             return doc;
         var index = IndexOf(added, key);
         var layer = added.Motion[index] with
         {
-            Name = match ? "Match loop" : hand ? "Hand shape" : reset ? "Reset root turn" : "Smooth jitter", Amount = match || hand || reset ? 1 : .5f, Fix = fix,
+            Name = match ? "Match loop" : close ? "Close loop" : hand ? "Hand shape" : reset ? "Reset root turn" : "Smooth jitter",
+            Amount = match || close || hand || reset ? 1 : .5f, Fix = fix,
             Components = hand || reset ? PoseComponents.Rotation : added.Motion[index].Components,
         };
-        return added with { Motion = added.Motion.SetItem(index, layer) };
+        return added with { Motion = added.Motion.SetItem(index, close ? Anchored(layer, length) : layer) };
     }
 
     /// <summary>
-    /// Sets how many frames the match layer <paramref name="key"/> blends over (at least one): it ends on the
-    /// clip's last frame and starts that many before, or at frame 0.
+    /// Sets how many frames the anchored layer <paramref name="key"/> blends over (at least one): a match ends on the
+    /// clip's last frame and starts that many before, or at frame 0, and a close loop does the same unless it is placed
+    /// After, when it starts on frame 0 and ends that many after.
     /// </summary>
     public static TimelineDocument SetFixLength(TimelineDocument doc, string key, int frames)
     {
         var index = IndexOf(doc, key);
-        if (index < 0 || doc.Motion[index] is not { Fix.Kind: MotionFixKind.MatchLoop } layer)
+        if (index < 0 || doc.Motion[index] is not { } layer || !IsAnchored(layer))
             return doc;
         var length = Math.Max(TimelineDocument.MinLength, doc.Length);
-        var start = Math.Max(0, length - Math.Max(1, frames));
-        return layer.Start == start && layer.End == length ? doc
-            : doc with { Motion = doc.Motion.SetItem(index, Normalize(layer with { Start = start, End = length })) };
+        var next = Anchored(layer with { Start = 0, End = Math.Max(1, frames) }, length);
+        return layer.Start == next.Start && layer.End == next.End ? doc : doc with { Motion = doc.Motion.SetItem(index, Normalize(next)) };
+    }
+
+    /// <summary>
+    /// Sets where the close loop <paramref name="key"/> blends: before the seam, after it or centered on it. It keeps its
+    /// length and its stored frames follow the placement (<see cref="Anchored"/>).
+    /// </summary>
+    public static TimelineDocument SetFixPlacement(TimelineDocument doc, string key, JoinPlacement place)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || doc.Motion[index] is not { Fix: { Kind: MotionFixKind.CloseLoop } fix } layer || fix.Placement == place)
+            return doc;
+        var length = Math.Max(TimelineDocument.MinLength, doc.Length);
+        return doc with { Motion = doc.Motion.SetItem(index, Normalize(Anchored(layer with { Fix = fix with { Placement = place } }, length))) };
     }
 
     /// <summary>
@@ -324,13 +361,13 @@ internal static class MotionEdits
 
     /// <summary>
     /// Moves a layer and its keys by <paramref name="delta"/> frames, as far as they all stay on the
-    /// timeline and the layer's end stays within the clip (or where it already was past it). A match stays
-    /// on the clip's last frame.
+    /// timeline and the layer's end stays within the clip (or where it already was past it). A match or a
+    /// close loop stays where its anchor puts it.
     /// </summary>
     public static TimelineDocument Move(TimelineDocument doc, string key, int delta)
     {
         var index = IndexOf(doc, key);
-        if (index < 0 || delta == 0 || IsMatch(doc.Motion[index]))
+        if (index < 0 || delta == 0 || IsAnchored(doc.Motion[index]))
             return doc;
         var layer = doc.Motion[index];
         var low = -layer.Start;
@@ -354,7 +391,8 @@ internal static class MotionEdits
     /// <summary>
     /// Drags one end of a layer by <paramref name="delta"/> frames; the other stays put, the layer stays
     /// a frame long or more and its fades shrink to fit. Keys stay where they are. A match's end stays on the
-    /// clip's last frame, and its start, from where it is shown, sets its length (<see cref="SetFixLength"/>).
+    /// clip's last frame, and its start, from where it is shown, sets its length (<see cref="SetFixLength"/>). A close
+    /// loop's length is its stored one: the left edge sets it, or for After the right edge, and the other edge stays.
     /// </summary>
     public static TimelineDocument Resize(TimelineDocument doc, string key, bool leftEdge, int delta)
     {
@@ -364,6 +402,11 @@ internal static class MotionEdits
         var layer = doc.Motion[index];
         if (IsMatch(layer))
             return leftEdge && Shown(layer, doc.Length) is var shown ? SetFixLength(doc, key, shown.End - shown.Start - delta) : doc;
+        if (IsAnchored(layer))
+        {
+            var after = layer.Fix!.Placement == JoinPlacement.After;
+            return leftEdge == after ? doc : SetFixLength(doc, key, layer.End - layer.Start + (after ? delta : -delta));
+        }
         var resized = leftEdge
             ? layer with { Start = Math.Clamp(layer.Start + delta, 0, layer.End - 1) }
             : layer with { End = Math.Clamp(layer.End + delta, layer.Start + 1, Math.Max(layer.Start + 1, Limit(doc, layer))) };
@@ -373,12 +416,12 @@ internal static class MotionEdits
 
     /// <summary>
     /// Drags a fade's handle by <paramref name="delta"/> frames: the fade in's handle sits where the fade
-    /// in ends, the fade out's where it begins. Together they never exceed the layer. A match has none.
+    /// in ends, the fade out's where it begins. Together they never exceed the layer. A match or a close loop has none.
     /// </summary>
     public static TimelineDocument Fade(TimelineDocument doc, string key, bool fadeIn, int delta)
     {
         var index = IndexOf(doc, key);
-        if (index < 0 || delta == 0 || IsMatch(doc.Motion[index]))
+        if (index < 0 || delta == 0 || IsAnchored(doc.Motion[index]))
             return doc;
         var layer = doc.Motion[index];
         var length = layer.End - layer.Start;
@@ -847,7 +890,7 @@ internal static class MotionEdits
             string key;
             do key = "m" + (next++).ToString(CultureInfo.InvariantCulture);
             while (!keys.Add(key));
-            if (IsMatch(layer))
+            if (IsAnchored(layer))
             {
                 motion.Add(Normalize(Anchored(layer with { Key = key }, length)));
                 added.Add(key);

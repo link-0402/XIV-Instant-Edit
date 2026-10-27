@@ -1458,6 +1458,15 @@ internal sealed class TimelineEditor
         return true;
     }
 
+    /// <summary>Sets where the close loop <paramref name="key"/> blends (<see cref="MotionEdits.SetFixPlacement"/>) as one undo step, and selects it.</summary>
+    public bool SetFixPlacement(string key, JoinPlacement place)
+    {
+        if (!Commit(MotionEdits.SetFixPlacement(Document, key, place)))
+            return false;
+        SelectLayer(key);
+        return true;
+    }
+
     /// <summary>Re-read loop: the match <paramref name="key"/> lands on <paramref name="loopPose"/>'s loop pose, as one undo step, and is selected.</summary>
     public bool SetLoopPose(string key, MotionFix loopPose)
     {
