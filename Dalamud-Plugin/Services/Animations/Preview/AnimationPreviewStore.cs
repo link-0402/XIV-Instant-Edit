@@ -165,6 +165,20 @@ internal static class AnimationPreviewRules
 
     /// <summary> A playback speed: NaN becomes 1, otherwise 0 (paused) to 4. </summary>
     public static float ClampSpeed(float speed) => float.IsNaN(speed) ? 1 : Math.Clamp(speed, 0, 4);
+
+    /// <summary>
+    /// The EmoteMode an ActionTimeline key sits or lies in: 1 on the ground, 2 in a chair, 3 in bed, else 0. These are
+    /// the ground, chair and bed poses, their starts, and the emotes' versions there (emote/j_clap, emote/s_doze).
+    /// </summary>
+    public static byte SeatedMode(string? key) => key == null ? (byte)0
+        : GroundKey.IsMatch(key) ? (byte)1
+        : ChairKey.IsMatch(key) ? (byte)2
+        : BedKey.IsMatch(key) ? (byte)3
+        : (byte)0;
+
+    private static readonly Regex GroundKey = new(@"^(emote/(jmn|j_.+)|event_base/event_base_ground_start)$", RegexOptions.CultureInvariant);
+    private static readonly Regex ChairKey = new(@"^(emote/(sit|s_.+)|event_base/event_base_chair_start)$", RegexOptions.CultureInvariant);
+    private static readonly Regex BedKey = new(@"^emote/(l_.+|bed_.+)$", RegexOptions.CultureInvariant);
 }
 
 /// <summary>

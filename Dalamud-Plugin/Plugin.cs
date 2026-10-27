@@ -183,7 +183,7 @@ public sealed class Plugin : IDalamudPlugin
                 () => Services.Animations.AnimationRuntime.InspectPapDurations(bytes), cancellationToken: token).GetAwaiter().GetResult());
         _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra.Ipc, _penumbra.Animations, _penumbra.Previews, framework, log, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState);
-        _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, objects, clientState, targets, log);
+        _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, data, objects, clientState, targets, log);
         // The Timeline's sound inspector plays sounds through the game, served by a temporary mod.
         _soundPlayer = new Services.Audio.GameSoundPlayer(sigScanner, framework, _penumbra.Ipc, log,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));

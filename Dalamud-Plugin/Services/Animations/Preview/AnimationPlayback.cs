@@ -6,6 +6,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.Havok.Animation.Playback.Control.Default;
 using InstantEdit.Models;
+using Lumina.Excel.Sheets;
 
 namespace InstantEdit.Services.Animations.Preview;
 
@@ -39,8 +40,11 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     private static readonly TimeSpan DisposeWait = TimeSpan.FromSeconds(2);
     // How close to its duration a clip's time counts as its end (well under one 30 fps frame).
     private const float EndTolerance = .001f;
+    // How far the draw offset may drift from the held one before it is set again (a tenth of a millimetre).
+    private const float OffsetTolerance = .0001f;
 
     private readonly IFramework _framework;
+    private readonly IDataManager _data;
     private readonly IObjectTable _objects;
     private readonly IClientState _clientState;
     private readonly ITargetManager _targets;
@@ -65,6 +69,16 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         public required byte ModeParam { get; init; }
         public required ushort BaseOverride { get; init; }
         public required float[] Speeds { get; init; }
+        /// <summary> The draw offset the actor had, heels included. </summary>
+        public required Vector3 DrawOffset { get; init; }
+        /// <summary> The part of <see cref="DrawOffset"/> the game set (<see cref="GameOffset(Character*)"/>), without Simple Heels'. </summary>
+        public required Vector3 GameOffset { get; init; }
+        /// <summary> How the actor sat or lay then, as <see cref="AnimationPreviewRules.SeatedMode"/> numbers it; 0 standing. </summary>
+        public required byte SeatedMode { get; init; }
+        /// <summary> The draw offset held while a sitting or lying clip plays (<see cref="HoldOffset"/>); null for other clips. </summary>
+        public Vector3? HeldOffset { get; set; }
+        /// <summary> The base draw offset this playback set to hold it, which a stop takes off again; null while none is set. </summary>
+        public Vector3? OffsetBase { get; set; }
         public ushort Timeline { get; set; }
         /// <summary> A body timeline took over the base slot (AnimLock and BaseOverride), which a stop puts back. </summary>
         public bool BodyPlayed { get; set; }
@@ -83,9 +97,10 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         public float? Hold { get; set; }
     }
 
-    public AnimationPlayback(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets, IPluginLog log)
+    public AnimationPlayback(IFramework framework, IDataManager data, IObjectTable objects, IClientState clientState, ITargetManager targets, IPluginLog log)
     {
         _framework = framework;
+        _data = data;
         _objects = objects;
         _clientState = clientState;
         _targets = targets;
@@ -263,6 +278,11 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             chara->Timeline.BaseOverride = timelineId;
             // A held expression in the face slot would keep the timeline's own faces from playing.
             ClearFaceSlot(chara);
+            // A sitting or lying clip stays where the actor sat the same way, and goes without heels or the game's seat
+            // offset (a chair's moves the body onto the seat) when it stood or sat another way.
+            var seated = AnimationPreviewRules.SeatedMode(TimelineKey(timelineId));
+            session.HeldOffset = seated == 0 ? null : seated == session.SeatedMode ? session.DrawOffset : Vector3.Zero;
+            HoldOffset(chara, session);
         }
         chara->Timeline.TimelineSequencer.PlayTimeline(timelineId);
         if (session.SpeedSet)
@@ -421,6 +441,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
                 ClearFaceSlot(chara);
             if (session.SpeedSet)
                 Apply(chara, session);
+            HoldOffset(chara, session);
         }
         catch (Exception e)
         {
@@ -537,7 +558,55 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             ModeParam = chara->ModeParam,
             BaseOverride = chara->Timeline.BaseOverride,
             Speeds = speeds,
+            DrawOffset = chara->GameObject.DrawOffset,
+            GameOffset = GameOffset(chara),
+            SeatedMode = chara->Mode is CharacterModes.InPositionLoop or CharacterModes.EmoteLoop && chara->ModeParam is >= 1 and <= 3
+                ? chara->ModeParam
+                : (byte)0,
         };
+    }
+
+    private string? TimelineKey(ushort timelineId)
+        => _data.GetExcelSheet<ActionTimeline>().GetRowOrDefault(timelineId)?.Key.ExtractText();
+
+    /// <summary>
+    /// The draw offset the game gives the actor itself, under any Simple Heels offset: a chair sit on furniture moves
+    /// it onto the seat this way (0, -0.5, 0.42 on an inn bed's edge, seen 2026-10-27). Simple Heels adds its offset
+    /// inside SetDrawOffset, so setting 0 shows what it adds; the game's offset is put back at once.
+    /// </summary>
+    private static Vector3 GameOffset(Character* chara)
+    {
+        Vector3 drawn = chara->GameObject.DrawOffset;
+        chara->GameObject.SetDrawOffset(0, 0, 0);
+        var game = drawn - (Vector3)chara->GameObject.DrawOffset;
+        chara->GameObject.SetDrawOffset(game.X, game.Y, game.Z);
+        return game;
+    }
+
+    /// <summary>
+    /// Keeps the actor's draw offset at <see cref="Session.HeldOffset"/>, or puts the game's own offset back when there
+    /// is none. Simple Heels drops its heel offset only in the sitting modes, so a sitting clip in AnimLock floats by the
+    /// heels; and the sitting modes play their own loop instead of the clip (seen in game 2026-10-27). Simple Heels takes
+    /// a SetDrawOffset as the base it adds the heels to, so the base is set to what cancels them. Without Simple Heels
+    /// the base is the offset itself.
+    /// </summary>
+    private static void HoldOffset(Character* chara, Session session)
+    {
+        if (session.HeldOffset is not { } held)
+        {
+            if (session.OffsetBase != null)
+            {
+                session.OffsetBase = null;
+                chara->GameObject.SetDrawOffset(session.GameOffset.X, session.GameOffset.Y, session.GameOffset.Z);
+            }
+            return;
+        }
+        Vector3 current = chara->GameObject.DrawOffset;
+        if (Vector3.Distance(current, held) <= OffsetTolerance)
+            return;
+        var offsetBase = (session.OffsetBase ?? session.GameOffset) + held - current;
+        session.OffsetBase = offsetBase;
+        chara->GameObject.SetDrawOffset(offsetBase.X, offsetBase.Y, offsetBase.Z);
     }
 
     /// <summary> Ends the session; with <paramref name="restore"/> and still in GPose, puts the actor back as Brio does. </summary>
@@ -558,6 +627,8 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             if (session.SpeedSet)
                 for (var i = 0; i < SpeedSlots.Length; i++)
                     chara->Timeline.TimelineSequencer.SetSlotSpeed(SpeedSlots[i], session.Speeds[i]);
+            session.HeldOffset = null;
+            HoldOffset(chara, session);
             if (session.BodyPlayed)
             {
                 chara->Timeline.BaseOverride = session.BaseOverride;

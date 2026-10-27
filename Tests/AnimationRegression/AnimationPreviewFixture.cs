@@ -145,6 +145,11 @@ internal static class AnimationPreviewFixture
         check(AnimationPreviewRules.ClampSpeed(0.5f) == 0.5f && AnimationPreviewRules.ClampSpeed(-1) == 0 &&
               AnimationPreviewRules.ClampSpeed(9) == 4 && AnimationPreviewRules.ClampSpeed(float.NaN) == 1,
             "playback speed stays between paused and four times");
+        check(new[] { "emote/jmn", "emote/j_pose01_loop", "emote/j_clap", "event_base/event_base_ground_start" }.All(key => AnimationPreviewRules.SeatedMode(key) == 1) &&
+              new[] { "emote/sit", "emote/s_pose04_start", "emote/s_doze", "event_base/event_base_chair_start" }.All(key => AnimationPreviewRules.SeatedMode(key) == 2) &&
+              new[] { "emote/l_pose02_loop", "emote/bed_liedown_loop" }.All(key => AnimationPreviewRules.SeatedMode(key) == 3) &&
+              new[] { "normal/idle", "emote/salute", "emote/pose01_loop", "emote/u_amazed", "emote_sp/sp01", "", null }.All(key => AnimationPreviewRules.SeatedMode(key) == 0),
+            "ground, chair and bed timelines are told from each other and from standing ones by key");
     }
 
     private static void Records(Action<bool, string> check)
