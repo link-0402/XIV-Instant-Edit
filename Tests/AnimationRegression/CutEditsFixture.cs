@@ -323,7 +323,8 @@ internal static class CutEditsFixture
         check(editor.Key(TimelineKey.Cut) && editor.Document.Cuts!.Parts.Length == 2, "C cuts at the playhead");
         editor.Playhead = 70;
         check(editor.Key(TimelineKey.RemoveAfter) && editor.Document.Length == 70, "W removes from the playhead to the part's end");
-        check(!editor.SetSeam(MotionJoin.ForSeam) && !editor.FixLoop(new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Clean)) &&
+        check(!editor.SetSeam(MotionJoin.ForSeam) && !editor.FixLoop(new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Clean),
+                  new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Pops), null) &&
               !editor.SetEase(30), "a clip that doesn't loop takes no seam");
         editor.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 0));
         check(editor.Key(TimelineKey.Delete) && editor.Document.Length == 40 && editor.Undo() && editor.Document.Length == 70, "Delete removes a part; undo brings it back");

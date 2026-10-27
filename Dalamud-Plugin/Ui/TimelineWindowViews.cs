@@ -928,6 +928,9 @@ internal static partial class TimelineWindowViews
     /// <summary>Under the seam's place when it isn't Before: the loop's own start changes.</summary>
     public const string SeamPlacementNote = "This changes the loop's first frames, which the startup leads into.";
 
+    /// <summary>Under the loop seam's gap when the cut motion runs cleanly into its start and the bone layers make it jump.</summary>
+    public const string LayersJumpText = "Bone layers make this jump.";
+
     /// <summary>The Fix loop button's tooltip.</summary>
     public const string FixLoopTip = "Trims an end that holds still, blends a jump in pose and eases a jump in speed.";
 

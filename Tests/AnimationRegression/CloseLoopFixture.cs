@@ -21,6 +21,7 @@ internal static class CloseLoopFixture
         Journals(check);
         Apply(check);
         Edits(check);
+        Seam(check);
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
@@ -259,6 +260,68 @@ internal static class CloseLoopFixture
               editor.SelectedLayer == editorKey && editor.Undo() && MotionEdits.Find(editor.Document, editorKey) is { Start: 92, End: 100, Fix.Placement: JoinPlacement.Centered } &&
               !editor.SetFixPlacement(editorKey, JoinPlacement.Centered),
             "Placement is one undo step that selects the layer; the one it has is no change");
+    }
+
+    private static void Seam(Action<bool, string> check)
+    {
+        // The loop seam as it plays: Apply's popping loop, measured with its layers.
+        var plain = LoopClip(61, 30);
+        var turned = EditedSeam.Measure(plain, [Turn()], 30, CancellationToken.None);
+        var closed = EditedSeam.Measure(plain, [Turn(), CloseLayer(JoinPlacement.Centered, 8)], 30, CancellationToken.None);
+        check(turned.State != SeamState.Clean && closed.State == SeamState.Clean && LoopSeam.Analyze(plain, 0, 30).State == SeamState.Clean,
+            $"the edited seam measures the layers: the offset makes it jump ({turned.State}), a Close loop closes it ({closed.State}), the clip stays as it was");
+
+        var doc = new TimelineDocument(30, 30, null, [], 1) { Motion = [Turn()] };
+        var withClose = doc with { Motion = [Turn(), CloseLayer(JoinPlacement.Centered, 8)] };
+        check(EditedSeam.KeyOf("decode", doc) == EditedSeam.KeyOf("decode", doc with { FacePack = "emot/laugh" }) &&
+              EditedSeam.KeyOf("decode", doc) != EditedSeam.KeyOf("other", doc) && EditedSeam.KeyOf("decode", doc) != EditedSeam.KeyOf("decode", doc with { Length = 31 }),
+            "the edited seam's key: the decode, the cuts, the length and the layers");
+        var starts = 0;
+        var inline = new EditedSeam { Start = action => { starts++; action(); return Task.CompletedTask; } };
+        var first = inline.Report("decode", plain, doc, gesture: false);
+        check(first is { State: not SeamState.Clean } && ReferenceEquals(inline.Report("decode", plain, doc, gesture: false), first) && starts == 1,
+            "the edited seam is measured once for its key and returned for it");
+        check(inline.Report("decode", plain, withClose, gesture: true) == null && starts == 1 && inline.Last == first &&
+              inline.Report("decode", plain, withClose, gesture: false) is { State: SeamState.Clean } && starts == 2,
+            "a document changed during a gesture starts no measure, the last report stands, and after the gesture it is measured");
+
+        var queued = new List<Action>();
+        var held = new EditedSeam { Start = action => { queued.Add(action); return Task.CompletedTask; } };
+        check(held.Report("decode", plain, doc, gesture: false) == null && held.Last == null && queued.Count == 1, "a measure still running has no report");
+        var seen = held.Token;
+        held.Report("decode", plain, withClose, gesture: false);
+        queued[0]();
+        check(seen.IsCancellationRequested && !held.Token.IsCancellationRequested && queued.Count == 2 && held.Last == null &&
+              held.Report("decode", plain, withClose, gesture: false) == null && queued.Count == 2,
+            "a new key cancels the older measure, which ends without a report or an error");
+        queued[1]();
+        check(held.Report("decode", plain, withClose, gesture: false) is { State: SeamState.Clean } && held.Report("decode", plain, doc, gesture: false) == null,
+            "the measure for the key publishes its report for that key alone");
+
+        // Fix loop: the cut motion's fix when the cut seam jumps, a Close loop when the layers make it jump.
+        var pops = new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops);
+        var clean = new SeamReport(new JoinGap(0, 0, "", 3, 3), 3, null, SeamState.Clean);
+        static int Closes(TimelineEditor e) => e.Document.Motion.Count(layer => layer.Fix?.Kind == MotionFixKind.CloseLoop);
+        var layered = new TimelineDocument(100, 100, null, [], 1) { Motion = [Turn()] };
+        var editor = new TimelineEditor(layered) { Loops = true };
+        check(editor.FixLoop(pops, clean, pops) && Closes(editor) == 1 && editor.SelectedLayerValue is { Fix.Kind: MotionFixKind.CloseLoop, Enabled: true } &&
+              editor.Document.Cuts == null && editor.Undo() && Closes(editor) == 0 && !editor.Undo(),
+            "Fix loop on a seam the layers make jump adds a selected Close loop, as one undo step");
+        editor.FixLoop(pops, clean, pops);
+        var closeKey = editor.SelectedLayer!;
+        editor.SelectLayer("o1");
+        check(!editor.FixLoop(pops, clean, pops) && Closes(editor) == 1 && editor.SelectedLayer == closeKey,
+            "a second Fix loop selects the Close loop and adds none");
+        var off = new TimelineEditor(MotionEdits.SetEnabled(editor.Document, closeKey, false)) { Loops = true };
+        check(off.FixLoop(pops, pops, pops) && Closes(off) == 1 && off.SelectedLayer == closeKey && MotionEdits.Find(off.Document, closeKey) is { Enabled: true } &&
+              off.Document.Cuts?.Seam != null && off.Undo() && MotionEdits.Find(off.Document, closeKey) is { Enabled: false } && off.Document.Cuts == null && !off.Undo(),
+            "Fix loop turns a Close loop that is off back on and selects it, with the cut fix as one undo step");
+        var measuring = new TimelineEditor(layered) { Loops = true };
+        check(measuring.FixLoop(pops, pops, null) && measuring.Document.Cuts?.Seam != null && Closes(measuring) == 0,
+            "Fix loop while the edited seam is measured applies only the cut fix");
+        var unlayered = new TimelineEditor(layered with { Motion = [] }) { Loops = true };
+        check(!unlayered.FixLoop(pops, clean, pops) && Closes(unlayered) == 0 && !new TimelineEditor(layered) { Loops = false }.FixLoop(pops, pops, pops),
+            "Fix loop adds no Close loop without layers that change the motion, and does nothing on a clip that doesn't loop");
     }
 
     /// <summary>An offset ramping b1 from no turn on frame 10 to 20 degrees about X on frame 30, without fades.</summary>

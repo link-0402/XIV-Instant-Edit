@@ -188,14 +188,16 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
             decode.DrawNote();
             return;
         }
-        var (raw, shown) = clipBand.SeamOf(current, decoded);
-        ImGui.TextColored(shown.State == SeamState.Clean ? Theme.Success : Theme.Warning, TimelineWindowViews.SeamBadge(shown.State));
-        Widgets.HintWrapped(TimelineWindowViews.GapText(shown.Gap));
-        // The hold is the source's, in its frames; what still jumps is the output's.
-        if (shown.State != SeamState.Clean && raw.StallFrom is { } stall && stall < cuts.Parts[^1].To)
+        var (raw, cut, edited) = clipBand.SeamOf(current, decoded, out var measured);
+        ImGui.TextColored(edited.State == SeamState.Clean ? Theme.Success : Theme.Warning, TimelineWindowViews.SeamBadge(edited.State));
+        Widgets.HintWrapped(TimelineWindowViews.GapText(edited.Gap));
+        if (cut.State == SeamState.Clean && edited.State != SeamState.Clean)
+            Widgets.HintWrapped(TimelineWindowViews.LayersJumpText);
+        // The hold is the source's, in its frames; what still jumps is the cut output's.
+        if (cut.State != SeamState.Clean && raw.StallFrom is { } stall && stall < cuts.Parts[^1].To)
             Widgets.HintWrapped(TimelineWindowViews.StallText(cuts.Parts[^1].To - stall));
-        else if (shown.State == SeamState.Stalls)
-            Widgets.HintWrapped(TimelineWindowViews.JumpText(shown.Gap.SpeedIn, shown.Gap.SpeedOut));
+        else if (cut.State == SeamState.Stalls)
+            Widgets.HintWrapped(TimelineWindowViews.JumpText(cut.Gap.SpeedIn, cut.Gap.SpeedOut));
         if (cuts.Seam is { } seam)
         {
             ImGui.Spacing();
@@ -206,11 +208,12 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
         ImGui.Spacing();
         DrawEase(current, cuts, readOnly);
         ImGui.Spacing();
-        var clean = shown.State == SeamState.Clean;
+        var clean = edited.State == SeamState.Clean;
         using (ImRaii.Disabled(readOnly || !current.Loops || clean))
         {
+            // A seam with the layers still being measured fixes only the cut motion.
             if (ImGui.Button("Fix loop"))
-                current.FixLoop(raw);
+                current.FixLoop(raw, cut, measured ? edited : null);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(clean ? TimelineWindowViews.LoopCleanTip : TimelineWindowViews.FixLoopTip);

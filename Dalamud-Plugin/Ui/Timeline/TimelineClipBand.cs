@@ -26,6 +26,8 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     private int outputSeamLength;
     private string? outputSeamDecode;
     private SeamReport? outputSeam;
+    // The loop seam as the cut output plays with its bone layers, measured on a task.
+    private readonly EditedSeam editedSeam = new();
     // Where the seam's badge was drawn last, in screen pixels: a click there selects the seam.
     private (Vector2 Min, Vector2 Max)? seamBadge;
     // The motion as the cuts play it, sampled for pose matches once per output motion; the frames playing
@@ -336,10 +338,27 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
 
     /// <summary>
     /// The loop seam as the motion has it between the first part's start and the last part's end (what
-    /// a blend absorbs and Fix loop works from), and as the output plays it: with a seam blend or an
-    /// eased start, the cut motion is measured, once per change and never during a drag.
+    /// a blend absorbs and Fix loop works from), as the cuts play it (with a seam blend or an eased start,
+    /// the cut motion is measured, once per change and never during a drag), and as it plays with the bone
+    /// layers (see <see cref="EditedSeam"/>): while that is measured the last measure stands, or the cut seam
+    /// the first time, and <paramref name="measured"/> is false. With no layer changing the motion it is the cut seam.
     /// </summary>
-    public (SeamReport Raw, SeamReport Shown) SeamOf(TimelineEditor current, MotionClip decoded)
+    public (SeamReport Raw, SeamReport Cut, SeamReport Edited) SeamOf(TimelineEditor current, MotionClip decoded, out bool measured)
+    {
+        var (raw, cut) = CutSeamOf(current, decoded);
+        measured = true;
+        var doc = current.Document;
+        if (!MotionEvaluator.Changes(doc.Motion))
+            return (raw, cut, cut);
+        var output = decode.OutputMotion(current, decoded);
+        if (editedSeam.Report(decode.DecodedKey ?? "", output, doc, current.Gesture != TimelineGesture.None) is { } edited)
+            return (raw, cut, edited);
+        measured = false;
+        return (raw, cut, editedSeam.Last ?? cut);
+    }
+
+    /// <summary>The loop seam as the motion has it between the first part's start and the last part's end, and as the cuts play it.</summary>
+    private (SeamReport Raw, SeamReport Cut) CutSeamOf(TimelineEditor current, MotionClip decoded)
     {
         var doc = current.Document;
         var cuts = CutEdits.CutsOf(doc);
@@ -368,7 +387,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
         seamBadge = null;
         if (!current.Loops || session.Source is not { Standalone: false } loaded || decode.DecodedPose(loaded) is not { } decoded)
             return;
-        var shown = SeamOf(current, decoded).Shown.State;
+        var shown = SeamOf(current, decoded, out _).Edited.State;
         var text = TimelineWindowViews.SeamBadge(shown);
         var size = ImGui.CalcTextSize(text);
         var pad = Theme.Scaled(4);

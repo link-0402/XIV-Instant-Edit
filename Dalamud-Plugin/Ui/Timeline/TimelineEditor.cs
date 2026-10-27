@@ -1104,8 +1104,46 @@ internal sealed class TimelineEditor
     /// </summary>
     public bool SetEase(int frames, bool? atEnd = null) => Loops && Change(CutEdits.SetEase(Document, frames, atEnd));
 
-    /// <summary>Fixes the loop's seam by <paramref name="report"/> (see <see cref="CutEdits.FixLoop(TimelineDocument, SeamReport)"/>), as one undo step.</summary>
-    public bool FixLoop(SeamReport report) => Loops && Cutting(CutEdits.FixLoop(Document, report, out var removed), removed);
+    /// <summary>
+    /// Fix loop, on a clip that loops, as one undo step. When the cut motion's seam <paramref name="cut"/> isn't clean it
+    /// fixes it by the source's <paramref name="raw"/> (see <see cref="CutEdits.FixLoop(TimelineDocument, SeamReport)"/>).
+    /// When the seam with the bone layers, <paramref name="edited"/> (null while it is measured), isn't clean and the
+    /// layers change the motion, it selects a Close loop layer, turning it on when it is off, or adds one. False when it
+    /// changed nothing.
+    /// </summary>
+    public bool FixLoop(SeamReport raw, SeamReport cut, SeamReport? edited)
+    {
+        if (!Loops || gesture != TimelineGesture.None)
+            return false;
+        LastError = null;
+        var next = Document;
+        CutRemoval? removed = null;
+        if (cut.State != SeamState.Clean)
+        {
+            next = CutEdits.FixLoop(next, raw, out var trimmed);
+            removed = trimmed;
+        }
+        string? close = null;
+        if (edited is { State: not SeamState.Clean } && MotionEvaluator.Changes(next.Motion))
+        {
+            var closes = next.Motion.Where(layer => layer.Fix?.Kind == MotionFixKind.CloseLoop).ToArray();
+            if ((closes.FirstOrDefault(layer => layer.Enabled) ?? closes.FirstOrDefault()) is { } found)
+                next = MotionEdits.SetEnabled(next, close = found.Key, true);
+            else
+            {
+                var added = MotionEdits.AddFix(next, new MotionFix(MotionFixKind.CloseLoop), out var key, out var error);
+                LastError = error;
+                if (error == null)
+                    (next, close) = (added, key);
+            }
+        }
+        var changed = Commit(next);
+        if (changed && removed is { } cutOut)
+            LastRemoval = cutOut;
+        if (close != null)
+            SelectLayer(close);
+        return changed;
+    }
 
     /// <summary>
     /// Whether the sound <paramref name="eventKey"/>, which plays across a cut, is cut with the motion
