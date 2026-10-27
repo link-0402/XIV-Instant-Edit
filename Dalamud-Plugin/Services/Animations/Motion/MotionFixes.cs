@@ -112,6 +112,128 @@ internal static class MotionFixes
     }
 
     /// <summary>
+    /// The frames a close loop changes on a motion <paramref name="end"/> frames long: the end side's and the start side's,
+    /// an unused side empty. Its length N is the layer's, at least 1 and at most the motion's. Before puts all of it at the
+    /// end, After at the start, Centered the end's ceil(N / 2) frames and the start's floor(N / 2).
+    /// </summary>
+    public static ((int Start, int End) End, (int Start, int End) Start) CloseSpans(MotionLayer layer, float end)
+    {
+        var last = Math.Max(0, (int)Math.Round(end, MidpointRounding.AwayFromZero));
+        // At most the motion's length, so a motion under a frame long gets two empty sides.
+        var length = Math.Min(Math.Max(1, layer.End - layer.Start), last);
+        return layer.Fix?.Placement switch
+        {
+            JoinPlacement.Before => ((last - length, last), (0, 0)),
+            JoinPlacement.After => ((last, last), (0, length)),
+            _ => ((last - (length + 1) / 2, last), (0, length / 2)),
+        };
+    }
+
+    /// <summary>
+    /// Close loop: blends a looping clip's end into its start, quintic offsets that put the end on the start's pose moving
+    /// at its speed (<see cref="CloseSpans"/> for the frames each side changes). Rotations compose on the left like the cut
+    /// joins. Gaps and speeds are read from the clip as it arrives; at full amount the last sample is then the first.
+    /// </summary>
+    internal static void ApplyClose(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, float end, CancellationToken token)
+    {
+        if (clip.Samples <= 2)
+            return;
+        var rotate = layer.Components.HasFlag(PoseComponents.Rotation);
+        var move = layer.Components.HasFlag(PoseComponents.Position);
+        var amount = layer.Amount;
+        var (endSpan, startSpan) = CloseSpans(layer, end);
+        var last = clip.Samples - 1;
+        var lastFrame = clip.Frame(last);
+        // The end side is measured to the last sample, not the rounded end, so the last sample is exactly s = 1.
+        var endFrames = endSpan.End > endSpan.Start ? lastFrame - endSpan.Start : 0;
+        float startFrames = startSpan.End - startSpan.Start;
+        // Before gives the end all of the gap, After the start, Centered each half; a side with no frames (a centered
+        // blend 1 frame long) leaves it all to the other.
+        var endShare = startFrames <= 0 ? 1f : endFrames <= 0 ? 0f : layer.Fix?.Placement switch
+        {
+            JoinPlacement.Before => 1f,
+            JoinPlacement.After => 0f,
+            _ => .5f,
+        };
+        var startShare = 1 - endShare;
+        var step = lastFrame - clip.Frame(last - 1);
+
+        // Each sample's share of the gap and of the speed gap: rising to the gap over the end, falling from minus it over the start.
+        var weights = new List<(int Sample, float Gap, float Speed)>();
+        for (var i = 0; i <= last; i++)
+        {
+            var frame = clip.Frame(i);
+            float gap = 0, speed = 0;
+            if (endShare > 0 && endFrames > 0 && frame >= endSpan.Start - MotionEvaluator.FrameTolerance)
+            {
+                var s = Math.Clamp((frame - endSpan.Start) / endFrames, 0, 1);
+                gap += endShare * amount * MotionCutter.Rise(s);
+                speed += endShare * amount * endFrames * MotionCutter.RiseSpeed(s);
+            }
+            if (startShare > 0 && startFrames > 0 && frame < startSpan.End)
+            {
+                var s = Math.Clamp(frame / startFrames, 0, 1);
+                gap -= startShare * amount * MotionCutter.Fall(s);
+                speed -= startShare * amount * startFrames * MotionCutter.FallSpeed(s);
+            }
+            if (gap != 0 || speed != 0)
+                weights.Add((i, gap, speed));
+        }
+
+        var bones = layer.Bones.IsEmpty ? [.. Enumerable.Range(0, clip.Bones)] : layer.Bones.Where(index.ContainsKey).Select(name => index[name]).ToArray();
+        // Every gap and speed gap before any sample is written: the start side changes samples the end side's are read from.
+        var gaps = new (Vector3 Turn, Vector3 Move, Vector3 TurnSpeed, Vector3 MoveSpeed)[bones.Length];
+        for (var k = 0; k < bones.Length; k++)
+        {
+            var b = bones[k];
+            var (first, second, cur, prev) = (clip.Get(0, b), clip.Get(1, b), clip.Get(last, b), clip.Get(last - 1, b));
+            var firstTurn = Quaternion.Normalize(first.Rotation);
+            var curTurn = Quaternion.Normalize(cur.Rotation);
+            var rotationGap = MotionCutter.Log(MotionEvaluator.Align(firstTurn, curTurn) * Quaternion.Inverse(curTurn));
+            Vector3 rotationSpeed = Vector3.Zero, positionSpeed = Vector3.Zero;
+            if (step > 0)
+            {
+                // Speed gaps per timeline frame: the start's first pair's change less the end's last pair's, which the
+                // gap's turn on the left carries round with it, unbent through that turn (see Unbend).
+                var prevTurn = Quaternion.Normalize(prev.Rotation);
+                var landed = rotationGap * amount;
+                rotationSpeed = Unbend(landed, (MotionCutter.Log(MotionEvaluator.Align(Quaternion.Normalize(second.Rotation), firstTurn) * Quaternion.Inverse(firstTurn)) -
+                                                Vector3.Transform(MotionCutter.Log(MotionEvaluator.Align(curTurn, prevTurn) * Quaternion.Inverse(prevTurn)), MotionCutter.Exp(landed))) / step);
+                positionSpeed = (second.Position - first.Position - (cur.Position - prev.Position)) / step;
+            }
+            gaps[k] = (rotationGap, first.Position - cur.Position, rotationSpeed, positionSpeed);
+        }
+
+        for (var k = 0; k < bones.Length; k++)
+        {
+            token.ThrowIfCancellationRequested();
+            var b = bones[k];
+            var (rotationGap, positionGap, rotationSpeed, positionSpeed) = gaps[k];
+            foreach (var (i, gap, speed) in weights)
+            {
+                var value = clip.Get(i, b);
+                var turn = rotationGap * gap + rotationSpeed * speed;
+                if (rotate && turn != Vector3.Zero)
+                    value = value with { Rotation = Quaternion.Normalize(MotionCutter.Exp(turn) * value.Rotation) };
+                if (move)
+                    value = value with { Position = value.Position + positionGap * gap + positionSpeed * speed };
+                clip.Set(i, b, value);
+            }
+            // At full amount the last sample is the first, as the game wraps it, on its neighbour's hemisphere.
+            if (amount >= 1)
+            {
+                var first = clip.Get(0, b);
+                var value = clip.Get(last, b);
+                if (rotate)
+                    value = value with { Rotation = MotionEvaluator.Align(first.Rotation, clip.Get(last - 1, b).Rotation) };
+                if (move)
+                    value = value with { Position = first.Position };
+                clip.Set(last, b, value);
+            }
+        }
+    }
+
+    /// <summary>
     /// The rate of change of a turn vector at <paramref name="turn"/> that turns Exp(turn) at <paramref name="speed"/> (as a
     /// left change): the inverse left Jacobian. Off the turn's axis the two differ by about a third of the speed at 40 degrees.
     /// </summary>

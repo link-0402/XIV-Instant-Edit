@@ -591,7 +591,7 @@ internal static class FixLayerFixture
     /// A loop whose first frame is 20 degrees on from where <see cref="Startup"/> ends and that moves 2 degrees a
     /// frame; with <paramref name="ghost"/> it names a bone the rig lacks.
     /// </summary>
-    private static MotionFix Loop(bool ghost = false, bool shifted = false)
+    internal static MotionFix Loop(bool ghost = false, bool shifted = false)
     {
         var first = new Dictionary<string, BoneTransform>(StringComparer.Ordinal)
         {

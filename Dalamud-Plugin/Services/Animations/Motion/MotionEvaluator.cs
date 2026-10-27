@@ -205,7 +205,8 @@ internal static class MotionEvaluator
     /// <summary>
     /// Applies the active layers to <paramref name="clip"/> in place, in order, each to the motion the
     /// ones before it made, then keeps every bone's rotation on its previous sample's hemisphere.
-    /// Match startup to loop fixes apply after every other layer, in their own order, and never to a looping clip. On a looping clip,
+    /// Match startup to loop fixes apply after every other layer, in their own order, and never to a looping clip. Close loop
+    /// fixes apply after those, in their own order, and only to a looping clip. On a looping clip,
     /// layers covering it wrap their keys round (<see cref="Wraps"/>), and layers reaching its end cover its
     /// last samples (<see cref="ReachesEnd"/>).
     /// Throws for a layer naming a bone the clip's skeleton does not have.
@@ -224,7 +225,7 @@ internal static class MotionEvaluator
                 continue;
             // A pin layer keeps a bone limit it never uses.
             var mask = layer.Kind == MotionLayerKind.Pin ? null : Mask(layer, index);
-            if (layer.Fix?.Kind == MotionFixKind.MatchLoop)
+            if (layer.Fix?.Kind is MotionFixKind.MatchLoop or MotionFixKind.CloseLoop)
                 continue;
             switch (layer.Kind)
             {
@@ -261,6 +262,11 @@ internal static class MotionEvaluator
         foreach (var layer in layers)
             if (!clip.Loops && layer.Fix?.Kind == MotionFixKind.MatchLoop && Active(layer))
                 MotionFixes.ApplyMatch(clip, layer, index, end, token);
+        // Close loops then join the loop's end to its start, on whatever every other layer left there. A clip the game
+        // plays once has no seam to close.
+        foreach (var layer in layers)
+            if (clip.Loops && layer.Fix?.Kind == MotionFixKind.CloseLoop && Active(layer))
+                MotionFixes.ApplyClose(clip, layer, index, end, token);
         Continuity(clip);
     }
 
