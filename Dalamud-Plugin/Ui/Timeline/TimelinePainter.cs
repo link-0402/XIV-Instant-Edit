@@ -157,6 +157,8 @@ internal static class TimelinePainter
         {
             var layer = MotionEdits.Shown(doc.Motion[index], doc.Length);
             var top = min.Y + geometry.RowTop(layout.LayerRow(index));
+            if (top + geometry.Row >= rowsTop && top <= max.Y)
+                DrawClosePiece(drawList, current, doc.Motion[index], doc.Length, view, top, geometry.Row, trackLeft, hit);
             if (top + geometry.Row < rowsTop || top > max.Y || layer.End < view.First || layer.Start > view.Last)
                 continue;
             var y0 = top + pad;
@@ -201,8 +203,8 @@ internal static class TimelinePainter
                 var hotKey = hot && hit.Part == TimelinePart.LayerKey && hit.KeyFrame == key.Frame;
                 DrawKeyMark(drawList, shape, x, middle, half, TimelineUi.U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * alpha)));
             }
-            // A match has no fades to drag: its blend is its own.
-            if ((selected || hot) && layer.Fix?.Kind != MotionFixKind.MatchLoop)
+            // A match or a close loop has no fades to drag: its blend is its own.
+            if ((selected || hot) && !MotionEdits.IsAnchored(layer))
             {
                 var radius = Theme.Scaled(3);
                 drawList.AddCircleFilled(new Vector2(fadeInX, y0), radius,
@@ -219,6 +221,34 @@ internal static class TimelinePainter
             drawList.AddRectFilled(corner, end, TimelineUi.U32(Theme.WithAlpha(Theme.Accent, .12f)));
             drawList.AddRect(corner, end, TimelineUi.U32(Theme.WithAlpha(Theme.Accent, .7f)), 0, ImDrawFlags.None, line);
         }
+    }
+
+    /// <summary>
+    /// A centered close loop changes the clip's first frames as well as its last, which its bar shows: this is the thin matching
+    /// piece over frame 0, drawn as the bar is but unlabeled and not grabbed. Nothing for any other layer.
+    /// </summary>
+    private static void DrawClosePiece(ImDrawListPtr drawList, TimelineEditor current, MotionLayer layer, int length, TimelineView view,
+        float top, float row, float trackLeft, TimelineHit hit)
+    {
+        if (layer.Fix is not { Kind: MotionFixKind.CloseLoop, Placement: JoinPlacement.Centered })
+            return;
+        var (pieceStart, pieceEnd) = MotionFixes.CloseSpans(layer, length).Start;
+        if (pieceEnd <= pieceStart || pieceEnd < view.First || pieceStart > view.Last)
+            return;
+        var pad = Theme.Scaled(2);
+        var rounding = Theme.Scaled(3);
+        var line = Math.Max(1, MathF.Floor(Theme.Scale));
+        var colour = TimelineWindowViews.LayerColour(layer.Kind);
+        var alpha = layer.Enabled ? 1f : .4f;
+        var hot = hit.OnLayer && hit.Layer == layer.Key;
+        var x0 = trackLeft + view.X(pieceStart);
+        var x1 = Math.Max(trackLeft + view.X(pieceEnd), x0 + 1);
+        var y0 = top + pad;
+        var y1 = top + row - pad;
+        drawList.AddRectFilled(new Vector2(x0, y0), new Vector2(x1, y1), TimelineUi.U32(Theme.WithAlpha(colour, (hot ? .62f : .46f) * alpha)), rounding);
+        drawList.AddRect(new Vector2(x0, y0), new Vector2(x1, y1), TimelineUi.U32(Theme.WithAlpha(colour, .9f * alpha)), rounding, ImDrawFlags.None, line);
+        if (current.SelectedLayer == layer.Key)
+            drawList.AddRect(new Vector2(x0 - 1, y0 - 1), new Vector2(x1 + 1, y1 + 1), TimelineUi.U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
     }
 
     private enum KeyShape : byte { Diamond, Circle, Square }

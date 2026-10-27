@@ -1659,6 +1659,22 @@ then, after its cross-fade, Smooth jitter calms small shakes. Spec: docs/superpo
   and "Measured in game: 10 frames." offers Use it. Not checked: the Preview hand-off. Preview plays the
   startup on its own, and a script couldn't chain it into the loop with Brio open on the actor.
 
+## Close loop (pending)
+
+Close loop is a fix layer that blends a looping clip's end into its start after every other layer, so an edit that
+doesn't wrap doesn't snap at the seam. Add > Close loop, only on a clip the game loops. Place is Before (the
+last frames change), Centered (the last and first frames) or After (the first frames). Spec:
+docs/superpowers/specs/2026-10-27-close-loop-fix-design.md.
+
+- [ ] 1 Open a dance loop and add an Offset layer that starts mid-clip and runs to the end, so the loop snaps at
+  the seam. Add > Close loop: Live and the played loop are smooth, and stay smooth after a save to a new mod.
+  Fix loop on the seam panel does the same when the layers make it jump.
+- [ ] 2 Switch Place between Before, Centered and After: Before changes only the frames before the seam, After
+  only the frames after it, Centered both, as the bar shows (Centered also draws a thin piece at frame 0). Drag the
+  bar's inner edge, or set Blend over: the blend gets longer or shorter. The edge on the clip's end can't be grabbed.
+- [ ] 3 Pin both feet near the seam (Pin feet) and set Blend over to 8: the planted feet don't slide visibly at the
+  seam. The layer's tooltip warns that it may move pinned bones.
+
 ## Animations from scratch (pending)
 
 Start from a still pose, stand it on the ground, and borrow breathing from an idle (Pose2Idle's idea).

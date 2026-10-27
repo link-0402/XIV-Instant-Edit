@@ -621,11 +621,15 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         ImGui.TextUnformatted(TimelineWindowViews.LayerContent(layer));
         if (readOnly)
             return;
-        var match = layer.Fix?.Kind == MotionFixKind.MatchLoop;
+        // An anchored layer's inner edge sets its length: the left one, or for a close loop placed After the right one.
+        var anchored = MotionEdits.IsAnchored(layer);
+        var after = layer.Fix is { Kind: MotionFixKind.CloseLoop, Placement: JoinPlacement.After };
         ImGui.TextColored(Theme.Hint, hit.Part switch
         {
-            TimelinePart.LayerLeft when match => "Drag to blend over more or fewer frames.",
-            _ when match => "It ends on the clip's last frame.",
+            TimelinePart.LayerLeft when anchored && !after => "Drag to blend over more or fewer frames.",
+            TimelinePart.LayerRight when after => "Drag to blend over more or fewer frames.",
+            _ when after => "It starts on the clip's first frame.",
+            _ when anchored => "It ends on the clip's last frame.",
             TimelinePart.LayerLeft => "Drag to change where it starts.",
             TimelinePart.LayerRight => "Drag to change where it ends.",
             TimelinePart.LayerFadeIn => "Drag to change how long it fades in.",

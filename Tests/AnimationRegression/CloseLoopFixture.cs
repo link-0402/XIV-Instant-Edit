@@ -5,6 +5,7 @@ using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
@@ -22,6 +23,7 @@ internal static class CloseLoopFixture
         Apply(check);
         Edits(check);
         Seam(check);
+        Views(check);
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
@@ -322,6 +324,23 @@ internal static class CloseLoopFixture
         var unlayered = new TimelineEditor(layered with { Motion = [] }) { Loops = true };
         check(!unlayered.FixLoop(pops, clean, pops) && Closes(unlayered) == 0 && !new TimelineEditor(layered) { Loops = false }.FixLoop(pops, pops, pops),
             "Fix loop adds no Close loop without layers that change the motion, and does nothing on a clip that doesn't loop");
+    }
+
+    private static void Views(Action<bool, string> check)
+    {
+        // The UI copy is fixed; the game's font draws an ellipsis as dashes, so none may carry one.
+        string[] copy = [TimelineWindowViews.CloseLoopName, TimelineWindowViews.CloseLoopHint, TimelineWindowViews.CloseLoopNoLoop, TimelineWindowViews.CloseLoopPinNote];
+        check(TimelineWindowViews.CloseLoopName == "Close loop" &&
+              TimelineWindowViews.CloseLoopHint == "Blends the loop's end into its start after every other layer, so edits don't snap at the seam." &&
+              TimelineWindowViews.CloseLoopNoLoop == "Only for a clip the game loops." &&
+              TimelineWindowViews.CloseLoopPinNote == "Runs after every other layer, so it may move pinned bones near the seam.",
+            "the Close loop copy is the agreed text");
+        check(copy.All(text => !text.Contains("...") && !text.Contains('…')) && TimelineWindowViews.LayersJumpText == "Bone layers make this jump.",
+            "the Close loop copy has no ellipsis");
+        check(TimelineWindowViews.LayerHint(CloseLayer(JoinPlacement.Centered, 8)) is var hint &&
+              hint.Contains(TimelineWindowViews.CloseLoopHint) && hint.Contains(TimelineWindowViews.CloseLoopPinNote) &&
+              !TimelineWindowViews.LayerHint(Turn()).Contains(TimelineWindowViews.CloseLoopPinNote),
+            "a Close loop layer's hint says what it does and that it may move pinned bones; another layer's doesn't");
     }
 
     /// <summary>An offset ramping b1 from no turn on frame 10 to 20 degrees about X on frame 30, without fades.</summary>

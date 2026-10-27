@@ -64,8 +64,10 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             using (ImRaii.Disabled(readOnly))
                 DrawFrom(current, layer);
 
-        // A match ends on the clip's last frame and its blend is its fade: only its length is set.
-        var match = layer.Fix?.Kind == MotionFixKind.MatchLoop;
+        // A match ends on the clip's last frame and its blend is its fade: only its length is set. A close loop is anchored the
+        // same way, with a place besides, and has no game fade.
+        var match = MotionEdits.IsMatch(layer);
+        var close = layer.Fix?.Kind == MotionFixKind.CloseLoop;
         var hand = layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } shape } ? shape : null;
         var reset = layer.Fix?.Kind == MotionFixKind.ResetRoot;
         using (var facts = ImRaii.Table("##layer-facts", 2, ImGuiTableFlags.SizingFixedFit))
@@ -80,6 +82,11 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                     {
                         DrawBlendOver(current, layer);
                         DrawGameFade(layer, loaded);
+                    }
+                    else if (close)
+                    {
+                        DrawBlendOver(current, layer);
+                        DrawPlace(current, layer, readOnly);
                     }
                     else
                     {
@@ -109,6 +116,15 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         {
             DrawReread(layer, loaded, readOnly);
             ImGui.Spacing();
+        }
+        else if (close)
+        {
+            // The evaluator skips a close loop on a clip the game doesn't loop. The pin note is in the layer's hint above.
+            if (!current.Loops)
+            {
+                Widgets.HintWrapped("This clip doesn't loop, so this layer does nothing.");
+                ImGui.Spacing();
+            }
         }
         PollIdle(current);
         if (skeleton == null)
@@ -357,7 +373,10 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         ImGui.TextColored(Theme.Muted, TimelineText.Seconds(value));
     }
 
-    /// <summary> A match's length: how many frames before the clip's end it starts blending. One undo step per drag. </summary>
+    /// <summary>
+    /// An anchored layer's length: a match's how many frames before the clip's end it starts blending, a close loop's how many
+    /// frames it blends over. One undo step per drag.
+    /// </summary>
     private static void DrawBlendOver(TimelineEditor current, MotionLayer layer)
     {
         TimelineUi.Fact("Blend over");
@@ -372,7 +391,29 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         if (ImGui.IsItemDeactivated())
             current.EndFieldEdit();
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("How many frames before the end the blend starts. Ctrl+click to type.");
+            ImGui.SetTooltip(layer.Fix?.Kind == MotionFixKind.CloseLoop ? "How many frames the blend runs over. Ctrl+click to type."
+                : "How many frames before the end the blend starts. Ctrl+click to type.");
+    }
+
+    /// <summary> A close loop's place: whether it changes the frames before the seam, around it or after it. Each pick is one undo step. </summary>
+    private static void DrawPlace(TimelineEditor current, MotionLayer layer, bool readOnly)
+    {
+        var place = layer.Fix!.Placement;
+        TimelineUi.Fact("Place");
+        ImGui.SetNextItemWidth(Theme.Scaled(120));
+        using (var combo = ImRaii.Combo("##fix-place", TimelineWindowViews.PlacementName(place)))
+        {
+            if (combo.Success)
+            {
+                foreach (var option in Enum.GetValues<JoinPlacement>())
+                    if (ImGui.Selectable(TimelineWindowViews.PlacementName(option), option == place) && option != place)
+                        current.SetFixPlacement(layer.Key, option);
+            }
+            else if (!readOnly && ComboWheel.Scroll(Enum.GetValues<JoinPlacement>(), place, out var picked))
+                current.SetFixPlacement(layer.Key, picked);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Before changes the frames before the loop's end, After the frames after its start. Centered does both.");
     }
 
     // The game fade being dragged, or read after a drag, for the match it belongs to; the layer has the old one until the read lands.

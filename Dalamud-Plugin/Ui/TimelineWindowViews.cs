@@ -46,6 +46,10 @@ internal static partial class TimelineWindowViews
     public const string MatchLoopName = "Match startup to loop";
     public const string MatchLoopHint = "Blend this startup's end into the loop frame the game shows then, so they flow into each other.";
     public const string NoLoop = "Only a startup that leads into a loop";
+    public const string CloseLoopName = "Close loop";
+    public const string CloseLoopHint = "Blends the loop's end into its start after every other layer, so edits don't snap at the seam.";
+    public const string CloseLoopNoLoop = "Only for a clip the game loops.";
+    public const string CloseLoopPinNote = "Runs after every other layer, so it may move pinned bones near the seam.";
     public const string SmoothJitterName = "Smooth jitter";
     public const string SmoothJitterHint = "Calm small shakes and keep sharp moves.";
     public const string HandShapeName = "Hand shape";
@@ -165,6 +169,7 @@ internal static partial class TimelineWindowViews
     public static string LayerHint(MotionLayer layer) => layer.Fix?.Kind switch
     {
         MotionFixKind.MatchLoop => MatchLoopHint,
+        MotionFixKind.CloseLoop => CloseLoopHint + " " + CloseLoopPinNote,
         MotionFixKind.SmoothJitter => SmoothJitterHint,
         MotionFixKind.HandShape => HandShapeHint,
         MotionFixKind.ResetRoot => ResetRootHint,
@@ -197,7 +202,7 @@ internal static partial class TimelineWindowViews
         var moved = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var layer in doc.Motion.Where(MotionEvaluator.Active))
         {
-            // A match gives tracks to the loop's bones it moves off rest.
+            // A match gives tracks to the loop's bones it moves off rest; a close loop only reshapes what the other layers move, so it names none.
             if (MotionEdits.IsMatch(layer))
             {
                 moved.UnionWith(MatchedBones(layer, clip, skeleton));

@@ -210,8 +210,8 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             if (nearest is { } key0)
                 return key0;
         }
-        // A match has no fades, so its start edge is grabbed at any height.
-        if (y < Row / 3 && right - left > Edge * 2 && layer.Fix?.Kind != MotionFixKind.MatchLoop)
+        // A match or a close loop has no fades, so its edges are grabbed at any height. Its centered start piece isn't grabbed.
+        if (y < Row / 3 && right - left > Edge * 2 && !MotionEdits.IsAnchored(layer))
         {
             if (MathF.Abs(x - view.X(layer.Start + layer.FadeIn)) <= Edge)
                 return new TimelineHit(TimelinePart.LayerFadeIn, frame, null, null, row, layer.Key);
