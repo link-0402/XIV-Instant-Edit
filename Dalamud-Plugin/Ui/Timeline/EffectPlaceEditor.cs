@@ -40,7 +40,8 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
     public void Draw(TimelineEditor current, TimelineEvent ev, bool editable)
     {
         var onEvent = ev.Magic == EventMagic;
-        if (session.Source == null || ev.Lane != TimelineLane.Effect || !onEvent && !(ev.Magic == FileMagic && looks.ReadsFile(ev)))
+        // A VFX event's place is its own fields, so it needs no clip's file read.
+        if (ev.Lane != TimelineLane.Effect || !onEvent && (session.Source == null || ev.Magic != FileMagic || !looks.ReadsFile(ev)))
             return;
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Place##effect-place", ImGuiTreeNodeFlags.DefaultOpen))
