@@ -195,7 +195,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         {
             if (session.MotionDisplay?.Unshown is > 0 and var unshown)
                 ImGui.TextColored(Theme.Warning, TimelineWindowViews.LiveUnshown(unshown));
-            if (session.Fresh(loaded).Rebuild != null && TimelineWindowViews.LiveRebuiltPositions(current.Document))
+            if (session.Fresh(loaded).Rebuild is { Model: not null } && TimelineWindowViews.LiveRebuiltPositions(current.Document))
                 ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveRebuiltPositionsNote);
             ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched));
             return;
@@ -720,8 +720,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 fresh.BaseMotion != null ? fresh.Clip.Duration : null,
                 // The game plays the clip's own file; a motion from Blender or a rebuild shows only in a copy.
                 baseDiffers: current.Document.Replacement != null || fresh.Rebuild != null,
-                playedOn: fresh.Rebuild != null ? fresh.Clip.Resolution!.Selected!.Skeleton : null,
-                playedTracks: fresh.Rebuild != null ? fresh.Clip.Resolution!.TrackBones : default))
+                // A repair's copy goes onto the character's own skeleton by name, so bones the clip's skeleton lacks show too;
+                // a rebuild's onto the clip's own, which the game converts for the character's race.
+                playedOn: fresh.Rebuild is { Model: null } ? session.Playback.ActorSkeleton(actor) ?? fresh.Clip.Resolution!.Selected!.Skeleton
+                    : fresh.Rebuild != null ? fresh.Clip.Resolution!.Selected!.Skeleton : null,
+                playedTracks: fresh.Rebuild != null ? fresh.Clip.Resolution!.TrackBones : default,
+                sameRace: fresh.Rebuild is { Model: null }))
         {
             liveDecoded = decoded;
             return true;

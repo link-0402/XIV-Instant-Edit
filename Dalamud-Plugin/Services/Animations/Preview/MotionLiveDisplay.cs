@@ -125,10 +125,12 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         public float? SavedDuration { get; init; }
         /// <summary>The decoded motion isn't the file the game plays (a motion from Blender): a copy shows even without edits.</summary>
         public bool BaseDiffers { get; init; }
-        /// <summary>The clip's own skeleton when the decoded motion is a rebuild for another race's; null otherwise.</summary>
+        /// <summary>The clip's own skeleton when the decoded motion is a rebuild for another race's, or a repair; null otherwise.</summary>
         public SkeletonDescription? PlayedOn { get; init; }
         /// <summary>With <see cref="PlayedOn"/>, the playing binding's tracks: bones of that skeleton.</summary>
         public ImmutableArray<short> PlayedTracks { get; init; } = [];
+        /// <summary>With <see cref="PlayedOn"/>, a repair onto the clip's own race's standard, which the game doesn't convert.</summary>
+        public bool SameRace { get; init; }
         /// <summary>The edits to show; a new set is built as soon as the last build ends.</summary>
         public Edits Requested { get; set; } = new([], []);
         public Edits Shown { get; set; } = new([], []);
@@ -200,12 +202,13 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// the clip's own), before the layers, as a save cuts it. <paramref name="savedDuration"/> is the
     /// length of the file the game plays when a saved edit gave it another than the decoded motion's.
     /// <paramref name="baseDiffers"/> says the decoded motion isn't that file's at all (a motion from Blender, a rebuild).
-    /// <paramref name="playedOn"/> is the clip's own skeleton when <paramref name="decoded"/> is rebuilt onto another race's, and
-    /// <paramref name="playedTracks"/> the playing binding's tracks on it: copies are handed back to it (see <see cref="LiveConversion"/>).
+    /// <paramref name="playedOn"/> is the clip's own skeleton when <paramref name="decoded"/> is rebuilt onto another race's, or repaired
+    /// onto a standard of its own (<paramref name="sameRace"/>), and <paramref name="playedTracks"/> the playing binding's tracks on it:
+    /// copies are handed back to it (see <see cref="LiveConversion"/>).
     /// </summary>
     public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers,
         ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0, float? savedDuration = null, bool baseDiffers = false,
-        SkeletonDescription? playedOn = null, ImmutableArray<short> playedTracks = default)
+        SkeletonDescription? playedOn = null, ImmutableArray<short> playedTracks = default, bool sameRace = false)
     {
         RequireFrameworkThread();
         Stop();
@@ -219,7 +222,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         {
             ObjectIndex = actor.ObjectIndex, Address = actor.Address, GameObjectId = actor.GameObjectId,
             Fingerprint = fingerprint, Base = decoded, SavedDuration = savedDuration, BaseDiffers = baseDiffers,
-            PlayedOn = playedOn, PlayedTracks = playedTracks.IsDefault ? [] : playedTracks,
+            PlayedOn = playedOn, PlayedTracks = playedTracks.IsDefault ? [] : playedTracks, SameRace = sameRace,
             Accepted = alsoAccepted.Append(fingerprint).Where(print => print.Length > 0).ToHashSet(StringComparer.Ordinal),
         };
         // Shown is what the controls hold: the clip's own motion, which a motion from Blender never is.
@@ -285,9 +288,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         evaluationCancel = new CancellationTokenSource();
         var token = evaluationCancel.Token;
         var decoded = current.Base;
-        var (playedOn, playedTracks) = (current.PlayedOn, current.PlayedTracks);
+        var (playedOn, playedTracks, sameRace) = (current.PlayedOn, current.PlayedTracks, current.SameRace);
         evaluating = edits;
-        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Cuts, edits.Length, playedOn, playedTracks, token), token);
+        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Cuts, edits.Length, playedOn, playedTracks, sameRace, token), token);
     }
 
     private void OnUpdate(IFramework _)
@@ -637,10 +640,11 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// clip's own tracks, then a track for every bone the layers moved that had none, encoded with the
     /// clip's blend hint. The <paramref name="excluded"/> bones get no track, as in a saved file that
     /// leaves them out. With <paramref name="playedOn"/>, the result is handed back to that skeleton, the clip's own,
-    /// with tracks in <paramref name="playedTracks"/>' terms (see <see cref="LiveConversion"/>). Runs off the framework thread.
+    /// with tracks in <paramref name="playedTracks"/>' terms, its translations kept when <paramref name="sameRace"/>
+    /// (see <see cref="LiveConversion"/>). Runs off the framework thread.
     /// </summary>
     private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, MotionCuts? cuts,
-        int length, SkeletonDescription? playedOn, ImmutableArray<short> playedTracks, CancellationToken token)
+        int length, SkeletonDescription? playedOn, ImmutableArray<short> playedTracks, bool sameRace, CancellationToken token)
     {
         // The motion the layers apply to, and which tells the bones they moved: the clip's own, or as cut.
         var basis = cuts is { Whole: false } || length != 0
@@ -688,7 +692,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             (var onSource, var played, missing) = LiveConversion.Tracks(decoded.Skeleton, playedOn, tracks, playedTracks);
             tracks = [.. onSource];
             sources = [.. played];
-            edited = LiveConversion.ToSource(edited, playedOn, playedTracks);
+            edited = LiveConversion.ToSource(edited, playedOn, playedTracks, sameRace);
             skeleton = playedOn;
         }
         token.ThrowIfCancellationRequested();

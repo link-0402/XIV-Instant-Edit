@@ -352,7 +352,10 @@ internal static class TimelineToolsFixture
               TimelineWindowViews.BonesProblem(doc, clip, clip.Resolution?.Selected?.Skeleton, SkeletonStandard.Ivcs) is { } missing && missing.Contains("IVCS"),
             "a repair onto a standard that was found can save; one that wasn't found can't");
         var already = Clip(game, new StandardSkeleton(SkeletonStandard.Vanilla, game, "game"));
-        check(TimelineWindowViews.BonesProblem(doc, already, already.Resolution?.Selected?.Skeleton, SkeletonStandard.Vanilla) is { } same && same.Contains("already"),
+        check(TimelineWindowViews.BonesProblem(doc, already, already.Resolution?.Selected?.Skeleton, SkeletonStandard.Vanilla) is { } same && same.Contains("already") &&
+              TimelineWindowViews.BonesProblem(doc, already, game, SkeletonStandard.Vanilla) is { } edited && edited.Contains("already"),
             "a repair onto the skeleton the clip was already made for changes nothing and is refused");
+        check(TimelineWindowViews.BonesProblem(doc, clip, game, SkeletonStandard.Vanilla) == null,
+            "a repair edited on its standard still saves: the clip's own skeleton decides what changes, not the editing one");
     }
 }

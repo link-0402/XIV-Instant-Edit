@@ -57,8 +57,11 @@ internal sealed record SkeletonResolution(SkeletonResolutionState State, Immutab
     public ImmutableArray<StandardSkeleton> Standards { get; init; } = Standards.IsDefault ? [] : Standards;
     public ImmutableArray<StandardSkeleton> ActorStandards { get; init; } = ActorStandards.IsDefault ? [] : ActorStandards;
 }
-/// <summary>The race a borrowed clip is rebuilt for and the standard skeleton it is rebuilt onto.</summary>
-internal sealed record RaceRebuild(string Model, StandardSkeleton Target);
+/// <summary>
+/// The race a borrowed clip is rebuilt for and the standard skeleton it is rebuilt onto. Without a
+/// <paramref name="Model"/> it is a repair onto a standard of the clip's own race, edited on that standard as well.
+/// </summary>
+internal sealed record RaceRebuild(string? Model, StandardSkeleton Target);
 internal sealed record PoseBoneId(string Name, int Partial, int Slot = 0);
 internal sealed record PoseIk(bool Enabled, int Type, bool EnforceConstraints, int Depth, int Iterations,
     int First, int Second, int End, Vector3 Axis);

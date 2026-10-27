@@ -189,6 +189,23 @@ internal sealed partial class AnimationEditService
         return null;
     }
 
+    /// <summary>
+    /// The standard the newest finished edit that saved exactly <paramref name="current"/>'s file repaired it onto, for the
+    /// clip's own race; null when no such edit did. A repair writes only the bones the clip moves, so a file repaired onto a
+    /// bigger standard can read back as the smaller one: reopened, it is edited on the standard it was saved for.
+    /// </summary>
+    internal static SkeletonStandard? SavedRepair(IEnumerable<AnimationEditJournal> recovery, AnimationTimelineSource current)
+    {
+        if (current.Document == null || current.Standalone)
+            return null;
+        foreach (var journal in recovery)
+            if (journal is { State: "Completed", Request: { Operation: AnimationOperation.EditTimeline, RepairTarget: { } target, RepairModel: null } } &&
+                journal.Request.Capture.CollectionId == current.Capture.CollectionId && journal.Request.Timeline?.Startup == current.Startup &&
+                EditAgainFileProblem(journal, current) == null)
+                return target;
+        return null;
+    }
+
     /// <summary><paramref name="loaded"/> with <paramref name="journal"/>'s layers back on its kept motion; throws when they can't come back.</summary>
     private async Task<AnimationTimelineSource> WithEditAgainAsync(AnimationEditJournal journal, AnimationTimelineSource loaded,
         CancellationToken token)
@@ -355,7 +372,7 @@ internal sealed partial class AnimationEditService
     {
         if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
         // shortcut: the bake writes on the clip's own skeleton, not the rebuild's; teach ReplaceAsync the target to lift this.
-        if (source.Rebuild != null) throw new InvalidOperationException("A motion from Blender can't go onto a rebuilt clip yet. Choose Keep its own first.");
+        if (source.Rebuild != null) throw new InvalidOperationException("A motion from Blender can't go onto a rebuilt or repaired clip yet. Choose Keep its own first.");
         var clip = source.Clip;
         if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
             throw new InvalidOperationException(clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
@@ -374,7 +391,7 @@ internal sealed partial class AnimationEditService
         Action<string> status, CancellationToken token)
     {
         if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
-        if (source.Rebuild != null) throw new InvalidOperationException("A still pose can't go onto a rebuilt clip yet. Choose Keep its own first.");
+        if (source.Rebuild != null) throw new InvalidOperationException("A still pose can't go onto a rebuilt or repaired clip yet. Choose Keep its own first.");
         if (source.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
             throw new InvalidOperationException(source.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
         status("Holding the pose");

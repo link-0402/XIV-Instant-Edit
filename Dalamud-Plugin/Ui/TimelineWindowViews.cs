@@ -600,8 +600,9 @@ internal static partial class TimelineWindowViews
             return $"No {name} skeleton was found for this animation's model.";
         if (plan.Kept.IsEmpty)
             return $"None of the bones this animation moves are on the {name} skeleton.";
-        // With a rebuild the editing skeleton is the target itself, and the save still changes the race.
-        if (model == null && excluded.IsEmpty && editing?.Fingerprint == plan.Target.Skeleton.Fingerprint)
+        // The clip's own skeleton, not the editing one: with a repair or a rebuild that is the target itself. A rebuild
+        // still changes the race.
+        if (model == null && excluded.IsEmpty && clip.Resolution?.Selected?.Skeleton.Fingerprint == plan.Target.Skeleton.Fingerprint)
             return $"The animation was already made for the {name} skeleton. Choose Keep its own.";
         return null;
     }
@@ -876,6 +877,22 @@ internal static partial class TimelineWindowViews
     public static string LiveHint(bool retimed) => retimed
         ? "Live shows the motion. Sounds and effects keep their old timing until Preview."
         : "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too.";
+
+    /// <summary>A greyed-out bone's hover on the Bones map: the bone is on a bigger standard skeleton, picked with <paramref name="choice"/>.</summary>
+    public static string WiderBoneHint(string bone, string choice) =>
+        $"{bone}\nNot on this animation's skeleton. Choose {choice} under Skeleton in the Timeline window to pose it.";
+
+    /// <summary>
+    /// Whether <paramref name="bone"/>, at <paramref name="index"/> on the skeleton a save writes, is another bone on the character's
+    /// skeleton <paramref name="live"/> (by index): a track there would move that one. False while the character's skeleton is unknown.
+    /// </summary>
+    public static bool LandsElsewhere(string bone, int index, IReadOnlyList<string>? live) =>
+        live != null && (index >= live.Count || live[index] != bone);
+
+    /// <summary>The hover of a bone that <see cref="LandsElsewhere"/>: what the character has at its index.</summary>
+    public static string LandsElsewhereHint(int index, IReadOnlyList<string> live) => index < live.Count
+        ? $"At index {index} your character's skeleton has {AnimationPresentation.BoneName(live[index])}. Keys here would move that bone instead."
+        : $"Your character's skeleton has no bone at index {index}. Keys here won't play.";
 
     /// <summary>The warning while Live plays a rebuilt clip: how many of its bones the clip's own skeleton lacks.</summary>
     public static string LiveUnshown(int bones) =>

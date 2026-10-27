@@ -37,10 +37,11 @@ internal sealed class LoopPoseReader(TimelineSession session)
 
     /// <summary>
     /// The startup's <paramref name="rebuild"/> for reading its <paramref name="loop"/>: only when the loop's file is borrowed
-    /// the same way and the standard is found for it. Null reads the loop as the game plays it, such as one saved rebuilt already.
+    /// the same way and the standard is found for it; a repair (no race) only when the loop's own race has its standard. Null
+    /// reads the loop as the game plays it, such as one saved rebuilt already.
     /// </summary>
     internal static RaceRebuild? LoopRebuild(AnimationTimelineSource loop, RaceRebuild? rebuild) =>
-        rebuild != null && AnimationBones.RebuildRace(loop.Clip, loop.FileModel) == rebuild.Model &&
+        rebuild != null && (rebuild.Model == null || AnimationBones.RebuildRace(loop.Clip, loop.FileModel) == rebuild.Model) &&
         AnimationBones.Standard(loop.Clip, rebuild.Target.Standard, rebuild.Model) != null ? rebuild : null;
 
     /// <summary>The game fade measured for <paramref name="loaded"/>'s startup into its loop, or null when it never played.</summary>

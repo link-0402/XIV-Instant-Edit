@@ -63,8 +63,8 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
             Send(current);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(problem ?? "Send the motion as it plays now, with its cuts and bone layers.");
-        // ReplaceMotionAsync refuses a rebuilt clip only after Blender's motion was read.
-        var rebuilt = session.Rebuild != null ? "Choose Keep its own under Skeleton first. A motion from Blender can't go onto a rebuilt clip yet." : null;
+        // ReplaceMotionAsync refuses a rebuilt or repaired clip only after Blender's motion was read.
+        var rebuilt = session.Rebuild != null ? "Choose Keep its own under Skeleton first. A motion from Blender can't go onto a rebuilt or repaired clip yet." : null;
         if (ImGui.MenuItem("Motion from Blender", "", false, (problem ?? rebuilt) == null && sending == null && reading == null))
             Read(current);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -128,7 +128,7 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         if (reading != null)
             return "Wait for the motion being read.";
         if (session.Rebuild != null)
-            return "Choose Keep its own under Skeleton first. A still pose can't go onto a rebuilt clip yet.";
+            return "Choose Keep its own under Skeleton first. A still pose can't go onto a rebuilt or repaired clip yet.";
         return decode.DecodedPose(loaded) == null ? "The motion is still being read." : null;
     }
 

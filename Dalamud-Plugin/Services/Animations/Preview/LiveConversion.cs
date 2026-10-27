@@ -25,9 +25,10 @@ internal static class LiveConversion
     /// <summary>
     /// <paramref name="rebuilt"/>'s motion on the clip's own skeleton <paramref name="source"/>, which the game turns back into it:
     /// rotations and scales copied by bone name, <c>n_hara</c>'s translation divided by <see cref="HipsRatio"/>, every other
-    /// translation at the source's rest. Bones <paramref name="rebuilt"/> lacks sit at the source's rest.
+    /// translation at the source's rest. Bones <paramref name="rebuilt"/> lacks sit at the source's rest. A clip repaired onto a
+    /// standard of its own race isn't converted by the game (<paramref name="sameRace"/>): every translation is copied too.
     /// </summary>
-    public static MotionClip ToSource(MotionClip rebuilt, SkeletonDescription source, ImmutableArray<short> playedTracks)
+    public static MotionClip ToSource(MotionClip rebuilt, SkeletonDescription source, ImmutableArray<short> playedTracks, bool sameRace = false)
     {
         var ratio = HipsRatio(rebuilt.Skeleton, source);
         var index = MotionEvaluator.Index(rebuilt.Skeleton);
@@ -46,7 +47,7 @@ internal static class LiveConversion
                     continue;
                 }
                 var value = rebuilt.Get(s, from);
-                back.Set(s, b, value with { Position = bone.Name == Hips ? value.Position / ratio : rest.Position });
+                back.Set(s, b, sameRace ? value : value with { Position = bone.Name == Hips ? value.Position / ratio : rest.Position });
             }
         }
         return back;

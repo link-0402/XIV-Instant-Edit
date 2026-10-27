@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.Havok.Animation.Playback.Control.Default;
+using InstantEdit.Models;
 
 namespace InstantEdit.Services.Animations.Preview;
 
@@ -152,6 +153,64 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         var drawObject = ((FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)actor.Address)->DrawObject;
         return drawObject != null ? Quaternion.Normalize(drawObject->Object.Rotation) : Quaternion.CreateFromAxisAngle(Vector3.UnitY, actor.Rotation);
     }
+
+    /// <summary>
+    /// The body skeleton's bone names by index on the character bones are edited for: the GPose actor, else your own
+    /// character. An animation's tracks name bones by index, so a bone at another index there plays on another bone.
+    /// Read again only when the skeleton changes; null when neither is drawn.
+    /// </summary>
+    public string[]? ActorBoneNames()
+    {
+        RequireFrameworkThread();
+        var actor = (IGameObject?)GPoseActor() ?? _objects.LocalPlayer;
+        if (actor is not { Address: not 0 } || actor is not ICharacter)
+            return null;
+        var drawn = ((Character*)actor.Address)->GetCharacterBase();
+        if (drawn == null || drawn->Skeleton == null || drawn->Skeleton->PartialSkeletonCount < 1 || drawn->Skeleton->PartialSkeletons == null)
+            return null;
+        var pose = drawn->Skeleton->PartialSkeletons[0].GetHavokPose(0);
+        if (pose == null || pose->Skeleton == null || pose->Skeleton->Bones.Data == null)
+            return null;
+        var havok = pose->Skeleton;
+        if (_boneNames is { } known && known.Skeleton == (nint)havok && known.Bones == (nint)havok->Bones.Data && known.Names.Length == havok->Bones.Length)
+            return known.Names;
+        var names = new string[havok->Bones.Length];
+        for (var i = 0; i < names.Length; i++)
+            names[i] = havok->Bones[i].Name.String ?? string.Empty;
+        _boneNames = ((nint)havok, (nint)havok->Bones.Data, names);
+        return names;
+    }
+
+    // The names ActorBoneNames read last, with the Havok skeleton and bone array they came from: identities only, never followed.
+    private (nint Skeleton, nint Bones, string[] Names)? _boneNames;
+
+    /// <summary>
+    /// The body skeleton of the GPose character at <paramref name="index"/>, with its rest pose: Live hands a repaired clip's copy
+    /// back to it by bone name. Read again only when the skeleton changes; null outside GPose, when it isn't drawn or can't be read.
+    /// </summary>
+    public SkeletonDescription? ActorSkeleton(ushort index)
+    {
+        RequireFrameworkThread();
+        if (!_clientState.IsGPosing || index < FirstGPoseIndex || _objects[index] is not ICharacter { Address: not 0 } actor)
+            return null;
+        var drawn = ((Character*)actor.Address)->GetCharacterBase();
+        if (drawn == null || drawn->Skeleton == null || drawn->Skeleton->PartialSkeletonCount < 1 || drawn->Skeleton->PartialSkeletons == null)
+            return null;
+        var pose = drawn->Skeleton->PartialSkeletons[0].GetHavokPose(0);
+        if (pose == null || pose->Skeleton == null || pose->Skeleton->Bones.Data == null)
+            return null;
+        var havok = pose->Skeleton;
+        if (_actorSkeleton is { } known && known.Skeleton == (nint)havok && known.Bones == (nint)havok->Bones.Data)
+            return known.Description;
+        SkeletonDescription described;
+        try { described = AnimationSkeleton.Describe(havok); }
+        catch (InvalidDataException) { return null; }
+        _actorSkeleton = ((nint)havok, (nint)havok->Bones.Data, described);
+        return described;
+    }
+
+    // The skeleton ActorSkeleton described last, with the Havok skeleton and bone array it came from: identities only.
+    private (nint Skeleton, nint Bones, SkeletonDescription Description)? _actorSkeleton;
 
     /// <summary>
     /// Reads the body skeleton of the GPose character at <paramref name="index"/> as the game shows it this

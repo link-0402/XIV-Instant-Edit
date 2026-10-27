@@ -206,6 +206,18 @@ internal static class EditAgainFixture
               AnimationEditService.SavedLayersJournal(undone, Loaded("A1") with { EntryIndex = -1 }) == null &&
               AnimationEditService.SavedLayersJournal(undone, Loaded("A1") with { Document = null }) == null,
             "nor one in another collection, an expression's timeline or a clip that can't be edited");
+
+        AnimationEditJournal Repaired(AnimationEditJournal journal, SkeletonStandard? target, string? model = null) => new()
+        {
+            Id = journal.Id, Request = journal.Request with { RepairTarget = target, RepairModel = model }, State = journal.State, Files = journal.Files,
+        };
+        var yas = Repaired(Journal(capture, afterHash: "R1", baseHash: "B0"), SkeletonStandard.IvcsYas);
+        check(AnimationEditService.SavedRepair([yas, a], Loaded("R1")) == SkeletonStandard.IvcsYas,
+            "a file a save repaired onto IVCS + YAS reopens on that standard");
+        check(AnimationEditService.SavedRepair([yas], Loaded("A1")) == null && AnimationEditService.SavedRepair([With(yas, "Undone")], Loaded("R1")) == null &&
+              AnimationEditService.SavedRepair([Repaired(Journal(capture, afterHash: "R1"), SkeletonStandard.Ivcs, "c0801")], Loaded("R1")) == null &&
+              AnimationEditService.SavedRepair([a], Loaded("A1")) == null,
+            "not another file, an undone save, a rebuild for another race or a save without a repair");
     }
 
     private static void Journals(Action<bool, string> check)

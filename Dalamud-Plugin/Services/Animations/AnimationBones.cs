@@ -105,6 +105,26 @@ internal static class AnimationBones
     private static string? ActorRace(AnimationClip clip, string? fileModel)
         => clip.Resolution?.ActorModel is { } actor && actor != fileModel ? actor : null;
 
+    /// <summary>
+    /// The bones <paramref name="editing"/> lacks that a standard of the clip's race (or <paramref name="model"/>'s, for a rebuild)
+    /// has, each with the skeleton choice that edits on the smallest standard holding it: "Repair onto IVCS + YAS".
+    /// </summary>
+    public static Dictionary<string, string> WiderChoices(AnimationClip clip, SkeletonDescription editing, string? model)
+    {
+        var have = editing.Bones.Select(bone => bone.Name).ToHashSet(StringComparer.Ordinal);
+        var choices = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var standard in Enum.GetValues<SkeletonStandard>())
+        {
+            if (Standard(clip, standard, model) is not { } found)
+                continue;
+            var name = model == null ? "Repair onto " + StandardName(standard) : RebuildName(model, standard);
+            foreach (var bone in found.Skeleton.Bones)
+                if (!have.Contains(bone.Name))
+                    choices.TryAdd(bone.Name, name);
+        }
+        return choices;
+    }
+
     /// <summary>The skeleton choice's entry for a rebuild: "Rebuild for Miqo'te (Female), IVCS".</summary>
     public static string RebuildName(string model, SkeletonStandard standard) => $"Rebuild for {RaceName(model)}, {StandardName(standard)}";
 
@@ -122,11 +142,16 @@ internal static class AnimationBones
 
     /// <summary>
     /// <paramref name="rebuild"/> as the clip's match has it now (a skeleton chosen under Source, another character):
-    /// the same, onto the standard found now, or null when its race or standard is gone.
+    /// the same, onto the standard found now, or null when its race or standard is gone. A repair (no race) needs only
+    /// its standard for the clip's own race.
     /// </summary>
     public static RaceRebuild? CurrentRebuild(AnimationClip clip, string? fileModel, RaceRebuild rebuild, bool holdsOthers = false)
-        => RebuildRace(clip, fileModel, holdsOthers) is not { } race || race != rebuild.Model || Standard(clip, rebuild.Target.Standard, race) is not { } now ? null
-            : now == rebuild.Target ? rebuild : rebuild with { Target = now };
+    {
+        var race = rebuild.Model == null ? null : RebuildRace(clip, fileModel, holdsOthers);
+        if (rebuild.Model != null && race != rebuild.Model || Standard(clip, rebuild.Target.Standard, race) is not { } now)
+            return null;
+        return now == rebuild.Target ? rebuild : rebuild with { Target = now };
+    }
 
     private static string[] Kept(AnimationClip clip, IReadOnlyCollection<string> excluded)
     {

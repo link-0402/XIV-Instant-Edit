@@ -27,6 +27,75 @@ internal static class RaceRebuildFixture
         FooterChoices(check);
         LayersOverBake(check);
         LoopAndLive(check);
+        RepairEditing(check);
+    }
+
+    /// <summary>
+    /// A repair onto a standard of the clip's own race (a rebuild without a race): the bones are edited and decoded on
+    /// that standard, the save repairs onto it without changing the race, and Live keeps every translation.
+    /// </summary>
+    private static void RepairEditing(Action<bool, string> check)
+    {
+        var (clip, _, _, ownIvcs) = Borrowed();
+        var repair = new RaceRebuild(null, ownIvcs);
+        var moved = ownIvcs with { Origin = "another IVCS" };
+        check(ReferenceEquals(AnimationBones.CurrentRebuild(clip, "c0101", repair), repair) &&
+              AnimationBones.CurrentRebuild(clip, "c0101", repair with { Target = moved }) == repair &&
+              AnimationBones.CurrentRebuild(clip, "c0801", repair) == repair &&
+              AnimationBones.CurrentRebuild(clip with { Resolution = clip.Resolution! with { Standards = [] } }, "c0101", repair) == null,
+            "a repair follows the clip's own standards, whatever race the character is");
+
+        var doc = new TimelineDocument(30, 30, null, [], 1);
+        var source = TimelineToolsFixture.Source(clip, doc);
+        var session = (TimelineSession)RuntimeHelpers.GetUninitializedObject(typeof(TimelineSession));
+        session.Source = source;
+        session.Rebuild = repair;
+        check(session.EditingSkeleton(source) == ownIvcs.Skeleton, "the bones are edited on the repair's standard");
+        session.Rebuild = null;
+        check(session.EditingSkeleton(source) == clip.Resolution!.Selected!.Skeleton, "Keep its own edits on the clip's own skeleton");
+
+        check(MotionDecode.KeyOf(source with { Rebuild = repair }) != MotionDecode.KeyOf(source), "a repair is another decode of the same clip");
+        var request = AnimationEditService.TimelineRequest(source with { Rebuild = repair }, doc, AnimationDestination.InPlace, "Mod");
+        check(request is { RepairTarget: SkeletonStandard.Ivcs, RepairModel: null } &&
+              AnimationBakeRules.RepairedModel(request, clip, new AnimationPap(TimelineToolsFixture.Pap(101))) == null,
+            "the save repairs onto the standard and keeps the clip's race");
+        check(LoopPoseReader.LoopRebuild(source with { FileModel = "c0101" }, repair) == repair, "the loop is read on the same standard");
+        var game = AnimationBonesFixture.Rigs.Game;
+        var widerOnGame = AnimationBones.WiderChoices(clip, game, null);
+        var gameNames = game.Bones.Select(bone => bone.Name).ToHashSet();
+        string[] ivcsOnly = [.. ownIvcs.Skeleton.Bones.Select(bone => bone.Name).Where(name => !gameNames.Contains(name))];
+        check(ivcsOnly.Length > 0 && widerOnGame.Count == ivcsOnly.Length && ivcsOnly.All(bone => widerOnGame[bone] == "Repair onto IVCS"),
+            "on the game skeleton the map greys out the IVCS bones, pointing at Repair onto IVCS");
+        check(AnimationBones.WiderChoices(clip, ownIvcs.Skeleton, null).Count == 0, "on the biggest standard nothing is greyed out");
+        check(AnimationBones.WiderChoices(clip, game, "c0801").GetValueOrDefault("iv_ko_c_l") == AnimationBones.RebuildName("c0801", SkeletonStandard.Ivcs),
+            "a rebuild's greyed bones point at the rebuild onto the character's race");
+        check(TimelineWindowViews.WiderBoneHint("Groin", "Repair onto IVCS + YAS") ==
+              "Groin\nNot on this animation's skeleton. Choose Repair onto IVCS + YAS under Skeleton in the Timeline window to pose it.",
+            "a greyed-out bone's hover names the skeleton choice that adds it");
+
+        string[] rig = ["n_root", "n_hara", "j_kosi", "nf_sho_j_asi_e_l"];
+        check(!TimelineWindowViews.LandsElsewhere("j_kosi", 2, rig) && TimelineWindowViews.LandsElsewhere("iv_kyokin_phys_l", 3, rig) &&
+              TimelineWindowViews.LandsElsewhere("ya_kyo_l", 4, rig) && !TimelineWindowViews.LandsElsewhere("ya_kyo_l", 4, null),
+            "a bone is marked when the character's skeleton has another bone, or none, at its index; never while that skeleton is unknown");
+        check(TimelineWindowViews.LandsElsewhereHint(3, rig) ==
+                  $"At index 3 your character's skeleton has {AnimationPresentation.BoneName("nf_sho_j_asi_e_l")}. Keys here would move that bone instead." &&
+              TimelineWindowViews.LandsElsewhereHint(4, rig) == "Your character's skeleton has no bone at index 4. Keys here won't play.",
+            "the hover says which bone the index is on the character");
+
+        static SkeletonBone B(string name, short parent, Vector3 position) => new(name, parent, 0, new(position, Quaternion.Identity, Vector3.One));
+        var own = new SkeletonDescription("skeleton", "game", [B("n_root", -1, Vector3.Zero), B("n_hara", 0, new(0, 1, 0)), B("j_kosi", 1, new(0, .1f, 0))], [], [], []);
+        var standard = own with { Fingerprint = "ivcs", Bones = [.. own.Bones, B("iv_ko_c_l", 2, Vector3.Zero)] };
+        var motion = new MotionClip(standard, 1f / 30, 2) { SourceTracks = [1, 2, 3] };
+        for (var s = 0; s < motion.Samples; s++)
+        {
+            for (var b = 0; b < motion.Bones; b++)
+                motion.Set(s, b, MotionTransform.From(standard.Bones[b].Reference));
+            motion.Set(s, 2, motion.Get(s, 2) with { Position = new(0, .2f, .05f) });
+        }
+        var back = LiveConversion.ToSource(motion, own, [1, 2], sameRace: true);
+        var converted = LiveConversion.ToSource(motion, own, [1, 2]);
+        check(back.Get(0, 2).Position == new Vector3(0, .2f, .05f) && converted.Get(0, 2).Position == new Vector3(0, .1f, 0),
+            "Live keeps a repaired clip's translations, as the game plays it unconverted");
     }
 
     private static MotionLayer Offset(string bone, Vector3 move, bool enabled = true) => new("m1", MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1,
@@ -182,9 +251,9 @@ internal static class RaceRebuildFixture
             catch (InvalidOperationException e) { return e.Message; }
         }
         check(Refusal(() => service.ReplaceMotionAsync(source, null!, null!, doc, _ => { }, default)) ==
-                  "A motion from Blender can't go onto a rebuilt clip yet. Choose Keep its own first." &&
+                  "A motion from Blender can't go onto a rebuilt or repaired clip yet. Choose Keep its own first." &&
               Refusal(() => service.HoldStillAsync(source, null!, 0, 30, _ => { }, default)) ==
-                  "A still pose can't go onto a rebuilt clip yet. Choose Keep its own first.",
+                  "A still pose can't go onto a rebuilt or repaired clip yet. Choose Keep its own first.",
             "Motion from Blender and Still pose refuse while a rebuild is on");
     }
 
