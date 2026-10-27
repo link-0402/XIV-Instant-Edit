@@ -9,6 +9,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Textures.TextureWraps;
 using Lumina.Data.Files;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using InstantEdit.Studio.Models;
@@ -360,8 +361,10 @@ internal sealed class TextureThumbnailCache : IDisposable
     {
         if (image.Width > MaxSide || image.Height > MaxSide)
             image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(MaxSide, MaxSide), Mode = ResizeMode.Max }));
+        // Always RGBA: by default a greyscale source (e.g. a VRChat AO map) is written back as a
+        // greyscale PNG, which Dalamud uploads as a one-channel texture that draws red.
         using var ms = new MemoryStream();
-        image.SaveAsPng(ms);
+        image.SaveAsPng(ms, new PngEncoder { ColorType = PngColorType.RgbWithAlpha });
         return ms.ToArray();
     }
 
