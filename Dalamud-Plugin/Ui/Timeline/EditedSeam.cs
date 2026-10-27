@@ -19,8 +19,10 @@ internal sealed class EditedSeam
     // The key being measured and its cancellation; null when no measure runs.
     private string? building;
     private CancellationTokenSource? cancel;
-    // The last report a measure finished, and the key it was measured for.
-    private (string Key, SeamReport Report)? finished;
+    // The last report a measure finished, the key it was measured for and that key's decode.
+    private (string Key, string Decode, SeamReport Report)? finished;
+    // The key whose measure failed last; it isn't measured again.
+    private string? failedKey;
 
     /// <summary>Runs a measure off the draw thread; tests run it in place or hold it.</summary>
     internal Func<Action, Task> Start = Task.Run;
@@ -28,29 +30,36 @@ internal sealed class EditedSeam
     /// <summary>The cancellation of the measure started last, for tests.</summary>
     internal CancellationToken Token { get; private set; }
 
-    /// <summary>The last report a measure finished, whatever key it was for; null before the first.</summary>
-    public SeamReport? Last
+    /// <summary>
+    /// The last report a measure finished when it was measured for <paramref name="decodeKey"/>, whatever cuts, length and
+    /// layers; null before the first, or when it was for another decode.
+    /// </summary>
+    public SeamReport? Last(string decodeKey)
     {
-        get
-        {
-            lock (gate)
-                return finished?.Report;
-        }
+        lock (gate)
+            return finished is { } done && done.Decode == decodeKey ? done.Report : null;
     }
 
     /// <summary>
     /// The seam of <paramref name="cut"/> (the decode's motion as <paramref name="doc"/>'s cuts and length play it) with
-    /// <paramref name="doc"/>'s layers, when it is measured for exactly this key; null while it is measured. A new key
-    /// cancels a measure for an older one and, unless in a <paramref name="gesture"/>, starts its own.
+    /// <paramref name="doc"/>'s layers, when it is measured for exactly this key; null while it is measured, or when its
+    /// measure <paramref name="failed"/>, which isn't tried again for that key. A new key cancels a measure for an older
+    /// one and, unless in a <paramref name="gesture"/>, starts its own.
     /// </summary>
-    public SeamReport? Report(string decodeKey, MotionClip cut, TimelineDocument doc, bool gesture)
+    public SeamReport? Report(string decodeKey, MotionClip cut, TimelineDocument doc, bool gesture, out bool failed)
     {
         var key = KeyOf(decodeKey, doc);
+        failed = false;
         CancellationToken token;
         lock (gate)
         {
             if (finished is { } done && done.Key == key)
                 return done.Report;
+            if (failedKey == key)
+            {
+                failed = true;
+                return null;
+            }
             if (building == key)
                 return null;
             // A measure for another key is no longer wanted. The source isn't disposed: the task may still read its token.
@@ -63,9 +72,12 @@ internal sealed class EditedSeam
             Token = token = cancel.Token;
         }
         var (layers, length) = (doc.Motion, doc.Length);
-        Start(() => Build(key, cut, layers, length, token));
+        Start(() => Build(key, decodeKey, cut, layers, length, token));
         lock (gate)
+        {
+            failed = failedKey == key;
             return finished is { } now && now.Key == key ? now.Report : null;
+        }
     }
 
     /// <summary>
@@ -88,26 +100,39 @@ internal sealed class EditedSeam
     }
 
     /// <summary>
-    /// Measures for <paramref name="key"/> and publishes the report unless the measure was cancelled. Nothing escapes it:
-    /// a measure that fails leaves no report, and its key isn't measured again until it changes.
+    /// Measures for <paramref name="key"/> (of <paramref name="decodeKey"/>) and publishes the report unless the measure
+    /// was cancelled. Nothing escapes it: a measure that fails marks its key failed, which isn't measured again until it changes.
     /// </summary>
-    private void Build(string key, MotionClip cut, ImmutableArray<MotionLayer> layers, int length, CancellationToken token)
+    private void Build(string key, string decodeKey, MotionClip cut, ImmutableArray<MotionLayer> layers, int length, CancellationToken token)
     {
         SeamReport report;
         try
         {
             report = Measure(cut, layers, length, token);
         }
-        // Cancelled, or layers that can't apply (Live says why): either way the seam keeps its last report.
+        // Cancelled: a newer key took over, so there is nothing to publish.
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return;
+        }
+        // Layers that can't apply (Live says why, so nothing is logged from this thread): the key is failed, and the seam
+        // shows the cut motion's for it.
         catch (Exception e) when (e is not OutOfMemoryException)
         {
+            lock (gate)
+            {
+                if (token.IsCancellationRequested || building != key)
+                    return;
+                failedKey = key;
+                (cancel, building) = (null, null);
+            }
             return;
         }
         lock (gate)
         {
             if (token.IsCancellationRequested || building != key)
                 return;
-            finished = (key, report);
+            finished = (key, decodeKey, report);
             (cancel, building) = (null, null);
         }
     }

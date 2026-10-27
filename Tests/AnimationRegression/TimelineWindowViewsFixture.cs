@@ -307,7 +307,7 @@ internal static class TimelineWindowViewsFixture
         // A loop that arrives slow and leaves fast (the TikTok dance) gets its start eased in.
         check(TimelineWindowViews.JumpText(.19f, 1.61f) == "The loop starts again faster than it ends." &&
               TimelineWindowViews.JumpText(2, 1) == "The loop starts again slower than it ends." &&
-              TimelineWindowViews.FixLoopTip == "Trims an end that holds still, blends a jump in pose and eases a jump in speed." &&
+              TimelineWindowViews.FixLoopTip == "Trims an end that holds still, blends a jump in pose and eases a jump in speed. Adds Close loop when bone layers make it jump." &&
               TimelineWindowViews.EaseTip == "The faster side plays at the slower side's speed and catches up within these frames. The length stays." &&
               TimelineWindowViews.EaseLegend == "Ease" && TimelineWindowViews.EaseSides.SequenceEqual(["Start", "End"]) &&
               TimelineWindowViews.LoopCleanTip == "The loop already runs cleanly.", "loop ease texts");

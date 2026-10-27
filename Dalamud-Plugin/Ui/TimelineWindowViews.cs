@@ -937,7 +937,7 @@ internal static partial class TimelineWindowViews
     public const string LayersJumpText = "Bone layers make this jump.";
 
     /// <summary>The Fix loop button's tooltip.</summary>
-    public const string FixLoopTip = "Trims an end that holds still, blends a jump in pose and eases a jump in speed.";
+    public const string FixLoopTip = "Trims an end that holds still, blends a jump in pose and eases a jump in speed. Adds Close loop when bone layers make it jump.";
 
     /// <summary>A loop whose end and start move at different speeds: which way the speed jumps.</summary>
     public static string JumpText(float speedIn, float speedOut) => speedIn < speedOut

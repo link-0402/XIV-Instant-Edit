@@ -215,11 +215,27 @@ internal static class CloseLoopFixture
         check(new[] { added, before, after }.All(d => ReferenceEquals(MotionEdits.Move(d, key, -5), d) && ReferenceEquals(MotionEdits.Fade(d, key, true, 3), d) &&
                   ReferenceEquals(MotionEdits.Fade(d, key, false, -3), d)),
             "a Close loop's bar and fades don't move");
-        check(new[] { added, before }.All(d => MotionEdits.Find(MotionEdits.Resize(d, key, true, -4), key) is { Start: 88, End: 100 } &&
-                  MotionEdits.Find(MotionEdits.Resize(d, key, true, 3), key) is { Start: 95, End: 100 } && ReferenceEquals(MotionEdits.Resize(d, key, false, 4), d)) &&
+        check(MotionEdits.Find(MotionEdits.Resize(before, key, true, -4), key) is { Start: 88, End: 100 } &&
+              MotionEdits.Find(MotionEdits.Resize(before, key, true, 3), key) is { Start: 95, End: 100 } && ReferenceEquals(MotionEdits.Resize(before, key, false, 4), before) &&
               MotionEdits.Find(MotionEdits.Resize(after, key, false, 4), key) is { Start: 0, End: 12 } &&
               MotionEdits.Find(MotionEdits.Resize(after, key, false, -3), key) is { Start: 0, End: 5 } && ReferenceEquals(MotionEdits.Resize(after, key, true, -4), after),
             "dragging a Close loop's edge away from its anchor sets its length by the stored one, the other edge does nothing");
+        check(MotionEdits.Resize(added, key, true, -4) is var wider && MotionEdits.Find(wider, key) is { Start: 84, End: 100 } &&
+              MotionEdits.Shown(MotionEdits.Find(wider, key)!, 100) is { Start: 92, End: 100 } &&
+              MotionEdits.Find(MotionEdits.Resize(added, key, true, 3), key) is { Start: 98, End: 100 } && ReferenceEquals(MotionEdits.Resize(added, key, false, 4), added),
+            "a centered Close loop's left edge follows the pointer: its length changes twice as far, the right edge does nothing");
+
+        // On the canvas the centred edge lands where it is shown, so it snaps to the playhead there.
+        var dragging = new TimelineEditor(added) { Playhead = 92 };
+        dragging.SetWidth(440);
+        var geometry = new TimelineGeometry(Legend: 100, Ruler: 24, Row: 20, Edge: 5, Marker: 9);
+        var edge = dragging.HitTest(geometry, new Vector2(geometry.Legend + dragging.View.X(96), geometry.Ruler + dragging.Layout.LayerRow(0) * geometry.Row + 10));
+        dragging.Press(edge);
+        dragging.Drag(edge.Frame - 3.8f);
+        check(edge is { Part: TimelinePart.LayerLeft, Layer: var grabbed } && grabbed == key && dragging.SnapGuide == 92 &&
+              MotionEdits.Find(dragging.Document, key) is { Start: 84, End: 100 } shownDrag && MotionEdits.Shown(shownDrag, 100).Start == dragging.SnapGuide,
+            "dragging a centered Close loop's left edge lands it on the frame it is shown from, which snaps");
+        dragging.Release();
         check(MotionEdits.Shown(MotionEdits.Find(added, key)!, 100) is { Start: 96, End: 100, FadeIn: 0, FadeOut: 0 } &&
               MotionEdits.Shown(MotionEdits.Find(before, key)!, 100) is { Start: 92, End: 100 } &&
               MotionEdits.Shown(MotionEdits.Find(after, key)!, 100) is { Start: 0, End: 8, FadeIn: 0, FadeOut: 0 } &&
@@ -258,7 +274,7 @@ internal static class CloseLoopFixture
         editor.AddFix(new MotionFix(MotionFixKind.CloseLoop));
         var editorKey = editor.SelectedLayer!;
         editor.AddFix(new MotionFix(MotionFixKind.SmoothJitter));
-        check(editor.SelectedLayer != editorKey &&editor.SetFixPlacement(editorKey, JoinPlacement.After) && MotionEdits.Find(editor.Document, editorKey) is { Start: 0, End: 8, Fix.Placement: JoinPlacement.After } &&
+        check(editor.SelectedLayer != editorKey && editor.SetFixPlacement(editorKey, JoinPlacement.After) && MotionEdits.Find(editor.Document, editorKey) is { Start: 0, End: 8, Fix.Placement: JoinPlacement.After } &&
               editor.SelectedLayer == editorKey && editor.Undo() && MotionEdits.Find(editor.Document, editorKey) is { Start: 92, End: 100, Fix.Placement: JoinPlacement.Centered } &&
               !editor.SetFixPlacement(editorKey, JoinPlacement.Centered),
             "Placement is one undo step that selects the layer; the one it has is no change");
@@ -280,25 +296,38 @@ internal static class CloseLoopFixture
             "the edited seam's key: the decode, the cuts, the length and the layers");
         var starts = 0;
         var inline = new EditedSeam { Start = action => { starts++; action(); return Task.CompletedTask; } };
-        var first = inline.Report("decode", plain, doc, gesture: false);
-        check(first is { State: not SeamState.Clean } && ReferenceEquals(inline.Report("decode", plain, doc, gesture: false), first) && starts == 1,
+        var first = inline.Report("decode", plain, doc, gesture: false, out var failed);
+        check(first is { State: not SeamState.Clean } && !failed && ReferenceEquals(inline.Report("decode", plain, doc, gesture: false, out _), first) && starts == 1,
             "the edited seam is measured once for its key and returned for it");
-        check(inline.Report("decode", plain, withClose, gesture: true) == null && starts == 1 && inline.Last == first &&
-              inline.Report("decode", plain, withClose, gesture: false) is { State: SeamState.Clean } && starts == 2,
+        check(inline.Report("decode", plain, withClose, gesture: true, out failed) == null && !failed && starts == 1 && inline.Last("decode") == first &&
+              inline.Report("decode", plain, withClose, gesture: false, out _) is { State: SeamState.Clean } && starts == 2,
             "a document changed during a gesture starts no measure, the last report stands, and after the gesture it is measured");
+        check(inline.Last("other") == null && inline.Report("other", plain, doc, gesture: true, out _) == null && inline.Last("other") == null,
+            "the last report stands only for the decode it was measured for");
 
         var queued = new List<Action>();
         var held = new EditedSeam { Start = action => { queued.Add(action); return Task.CompletedTask; } };
-        check(held.Report("decode", plain, doc, gesture: false) == null && held.Last == null && queued.Count == 1, "a measure still running has no report");
+        check(held.Report("decode", plain, doc, gesture: false, out failed) == null && !failed && held.Last("decode") == null && queued.Count == 1,
+            "a measure still running has no report");
         var seen = held.Token;
-        held.Report("decode", plain, withClose, gesture: false);
+        held.Report("decode", plain, withClose, gesture: false, out _);
         queued[0]();
-        check(seen.IsCancellationRequested && !held.Token.IsCancellationRequested && queued.Count == 2 && held.Last == null &&
-              held.Report("decode", plain, withClose, gesture: false) == null && queued.Count == 2,
+        check(seen.IsCancellationRequested && !held.Token.IsCancellationRequested && queued.Count == 2 && held.Last("decode") == null &&
+              held.Report("decode", plain, withClose, gesture: false, out failed) == null && !failed && queued.Count == 2,
             "a new key cancels the older measure, which ends without a report or an error");
         queued[1]();
-        check(held.Report("decode", plain, withClose, gesture: false) is { State: SeamState.Clean } && held.Report("decode", plain, doc, gesture: false) == null,
+        check(held.Report("decode", plain, withClose, gesture: false, out _) is { State: SeamState.Clean } && held.Report("decode", plain, doc, gesture: false, out _) == null,
             "the measure for the key publishes its report for that key alone");
+
+        // A measure that throws (here layers that can't apply) is failed for its key: no report, and no new measure.
+        var broken = doc with { Motion = [Turn(), CloseLayer(JoinPlacement.Centered, 8) with { Fix = new MotionFix(MotionFixKind.CloseLoop, Fade: 4) }] };
+        var failing = new EditedSeam { Start = action => { starts++; action(); return Task.CompletedTask; } };
+        starts = 0;
+        check(failing.Report("decode", plain, broken, gesture: false, out failed) == null && failed && starts == 1 &&
+              failing.Report("decode", plain, broken, gesture: false, out failed) == null && failed && starts == 1 && failing.Last("decode") == null,
+            "a measure that fails reports its key as failed, once, rather than as measured forever");
+        check(failing.Report("decode", plain, doc, gesture: false, out failed) is { State: not SeamState.Clean } && !failed && starts == 2,
+            "after a failed measure a new key is measured");
 
         // Fix loop: the cut motion's fix when the cut seam jumps, a Close loop when the layers make it jump.
         var pops = new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops);

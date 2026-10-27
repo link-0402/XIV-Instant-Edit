@@ -393,6 +393,7 @@ internal static class MotionEdits
     /// a frame long or more and its fades shrink to fit. Keys stay where they are. A match's end stays on the
     /// clip's last frame, and its start, from where it is shown, sets its length (<see cref="SetFixLength"/>). A close
     /// loop's length is its stored one: the left edge sets it, or for After the right edge, and the other edge stays.
+    /// Centered shows only the end's half, so its left edge changes the length twice as far, to follow the pointer.
     /// </summary>
     public static TimelineDocument Resize(TimelineDocument doc, string key, bool leftEdge, int delta)
     {
@@ -404,8 +405,10 @@ internal static class MotionEdits
             return leftEdge && Shown(layer, doc.Length) is var shown ? SetFixLength(doc, key, shown.End - shown.Start - delta) : doc;
         if (IsAnchored(layer))
         {
-            var after = layer.Fix!.Placement == JoinPlacement.After;
-            return leftEdge == after ? doc : SetFixLength(doc, key, layer.End - layer.Start + (after ? delta : -delta));
+            var place = layer.Fix!.Placement;
+            var after = place == JoinPlacement.After;
+            var grows = after ? delta : place == JoinPlacement.Centered ? -2 * delta : -delta;
+            return leftEdge == after ? doc : SetFixLength(doc, key, layer.End - layer.Start + grows);
         }
         var resized = leftEdge
             ? layer with { Start = Math.Clamp(layer.Start + delta, 0, layer.End - 1) }

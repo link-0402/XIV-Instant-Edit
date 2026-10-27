@@ -791,7 +791,9 @@ internal sealed class TimelineEditor
             {
                 var left = gesture == TimelineGesture.LayerLeft;
                 var next = MotionEdits.Resize(start, layerKey, left, delta);
-                return (next, MotionEdits.Find(next, layerKey) is { } resized ? left ? resized.Start : resized.End : -1);
+                // A match or a close loop lands where it is shown, which a centred close loop's stored start isn't.
+                return (next, MotionEdits.Find(next, layerKey) is { } resized && MotionEdits.Shown(resized, next.Length) is var shown
+                    ? left ? shown.Start : shown.End : -1);
             }
             case TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut:
             {

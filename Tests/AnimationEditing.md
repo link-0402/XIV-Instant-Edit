@@ -1671,9 +1671,10 @@ docs/superpowers/specs/2026-10-27-close-loop-fix-design.md.
   Fix loop on the seam panel does the same when the layers make it jump.
 - [ ] 2 Switch Place between Before, Centered and After: Before changes only the frames before the seam, After
   only the frames after it, Centered both, as the bar shows (Centered also draws a thin piece at frame 0). Drag the
-  bar's inner edge, or set Blend over: the blend gets longer or shorter. The edge on the clip's end can't be grabbed.
+  bar's inner edge, or set Blend over: the blend gets longer or shorter. Centered's inner edge follows the pointer
+  and snaps. The edge on the clip's end shows a resize cursor but doesn't move.
 - [ ] 3 Pin both feet near the seam (Pin feet) and set Blend over to 8: the planted feet don't slide visibly at the
-  seam. The layer's tooltip warns that it may move pinned bones.
+  seam. The layer panel's hint warns that it may move pinned bones.
 
 ## Animations from scratch (pending)
 

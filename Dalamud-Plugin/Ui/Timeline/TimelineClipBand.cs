@@ -340,8 +340,9 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     /// The loop seam as the motion has it between the first part's start and the last part's end (what
     /// a blend absorbs and Fix loop works from), as the cuts play it (with a seam blend or an eased start,
     /// the cut motion is measured, once per change and never during a drag), and as it plays with the bone
-    /// layers (see <see cref="EditedSeam"/>): while that is measured the last measure stands, or the cut seam
-    /// the first time, and <paramref name="measured"/> is false. With no layer changing the motion it is the cut seam.
+    /// layers (see <see cref="EditedSeam"/>): while that is measured the last measure of the same decode stands,
+    /// else the cut seam, and <paramref name="measured"/> is false. With no layer changing the motion, or layers
+    /// the measure fails on, it is the cut seam.
     /// </summary>
     public (SeamReport Raw, SeamReport Cut, SeamReport Edited) SeamOf(TimelineEditor current, MotionClip decoded, out bool measured)
     {
@@ -351,10 +352,15 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
         if (!MotionEvaluator.Changes(doc.Motion))
             return (raw, cut, cut);
         var output = decode.OutputMotion(current, decoded);
-        if (editedSeam.Report(decode.DecodedKey ?? "", output, doc, current.Gesture != TimelineGesture.None) is { } edited)
+        var decodeKey = decode.DecodedKey ?? "";
+        // A field drag holds history open without a pointer gesture; both edit the document every frame.
+        var gesture = current.Gesture != TimelineGesture.None || current.History.InGesture;
+        if (editedSeam.Report(decodeKey, output, doc, gesture, out var failed) is { } edited)
             return (raw, cut, edited);
+        if (failed)
+            return (raw, cut, cut);
         measured = false;
-        return (raw, cut, editedSeam.Last ?? cut);
+        return (raw, cut, editedSeam.Last(decodeKey) ?? cut);
     }
 
     /// <summary>The loop seam as the motion has it between the first part's start and the last part's end, and as the cuts play it.</summary>
