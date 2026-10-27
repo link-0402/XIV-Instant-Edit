@@ -229,6 +229,9 @@ internal static partial class TmbFileFixture
               TimelineEffectLooks.Apply(sparse, still).SequenceEqual(sparse) && TimelineEffectLooks.Apply(effect, still).SequenceEqual(effect) &&
               still.IsEmpty && TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(noBlocks), still) == null,
             "no move, no turn and a size of 1 change no byte, on an attached effect too");
+        check(still.Equals(new TimelineEffectEdit()) && new TimelineEffectEdit().Equals(still) && still.GetHashCode() == new TimelineEffectEdit().GetHashCode() &&
+              !still.Equals(still with { Move = Vector3.UnitY }),
+            "an edit with no move, no turn and a size of 1 equals an empty one");
         LibraryMoves(check);
     }
 

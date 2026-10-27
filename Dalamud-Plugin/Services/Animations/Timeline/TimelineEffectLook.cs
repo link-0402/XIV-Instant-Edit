@@ -112,13 +112,14 @@ internal sealed record TimelineEffectEdit
     public Vector3 Recolor(Vector3 rgb) =>
         Swapped(TimelineEffectLooks.Swatch(rgb)) ?? TimelineEffectLooks.Shift(rgb, Hue, Saturation);
 
+    // Move, turn and size compare as they change things, so a zero move equals none (as in IsEmpty).
     public bool Equals(TimelineEffectEdit? other) =>
         other is not null && (ReferenceEquals(this, other) ||
-            Tint == other.Tint && Size == other.Size && Move == other.Move && Turn == other.Turn && Hue == other.Hue &&
+            Tint == other.Tint && Sizes == other.Sizes && Moves == other.Moves && Turns == other.Turns && Hue == other.Hue &&
             Saturation == other.Saturation && Glow == other.Glow && Opacity == other.Opacity && LightRange == other.LightRange &&
             Colors.SequenceEqual(other.Colors));
 
-    public override int GetHashCode() => HashCode.Combine(Tint, Size, Move, Turn, Hue, Saturation, Glow, HashCode.Combine(Opacity, LightRange, Colors.Length));
+    public override int GetHashCode() => HashCode.Combine(Tint, Sizes, Moves, Turns, Hue, Saturation, Glow, HashCode.Combine(Opacity, LightRange, Colors.Length));
 }
 
 /// <summary>

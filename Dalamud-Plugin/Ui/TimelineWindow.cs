@@ -32,6 +32,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineReader reader;
     private readonly MotionDecode decode;
     private readonly EffectLookEditor effectLooks;
+    private readonly EffectPlaceEditor effectPlace;
     private readonly SoundFiles soundFiles;
     private readonly TimelinePickers pickers;
     private readonly SoundInspector soundInspector;
@@ -97,6 +98,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         clipBand = new TimelineClipBand(session, decode);
         cutPanel = new CutPanel(session, decode, clipBand);
         effectLooks = new EffectLookEditor(session);
+        effectPlace = new EffectPlaceEditor(session, effectLooks);
         soundFiles = new SoundFiles(session);
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
@@ -107,7 +109,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
         keys = new ShortcutKeys(keyState, framework);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
-        properties = new PropertiesPanel(session, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
+        properties = new PropertiesPanel(session, effectPlace, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
         soundSave = new SoundSaveCheck(session, soundFiles);
         saveFooter = new SaveFooter(session, timelinePreview, decode, effectLooks, soundFiles, soundSave, texts, () => reader.Busy,
             afterUndo =>

@@ -9,9 +9,9 @@ namespace InstantEdit.Ui.Timeline;
 /// The properties panel: the selected event's start, length, file and fields. Each field edit is
 /// one undo step (BeginFieldEdit when it activates, a live Replace per change, EndFieldEdit when it
 /// is left). Locked and move-only events show their reason and read-only values. A bone layer, a
-/// part of the clip band, an effect's look and a sound's file have panels of their own, drawn here.
+/// part of the clip band, an effect's place and look and a sound's file have panels of their own, drawn here.
 /// </summary>
-internal sealed class PropertiesPanel(TimelineSession session, EffectLookEditor effectLooks, SoundInspector soundInspector, CutPanel cutPanel,
+internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor effectPlace, EffectLookEditor effectLooks, SoundInspector soundInspector, CutPanel cutPanel,
     LayerPanel layerPanel, TimelineTexts texts, TimelinePickers pickers)
 {
     // The File field of a sound or effect: its text while typed in, its last refusal, and where
@@ -135,6 +135,9 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectLookEditor 
                 else if (kind != null)
                     foreach (var field in kind.Fields)
                     {
+                        // A VFX event's position, rotation and scale are in Place.
+                        if (EffectPlaceEditor.Placed(ev, field))
+                            continue;
                         TimelineUi.Fact(field.Label);
                         using var id = ImRaii.PushId(field.Name);
                         var value = ev.Values?.GetValueOrDefault(field.Name) ?? 0;
@@ -164,6 +167,7 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectLookEditor 
             if (ImGui.Button("Delete"))
                 current.DeleteSelection();
         }
+        effectPlace.Draw(current, ev, editable);
         effectLooks.Draw(current, ev, editable);
         soundInspector.DrawFile(current, ev, editable);
     }

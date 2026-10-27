@@ -7,9 +7,9 @@ using InstantEdit.Services.Animations.Timeline;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The effect editor under an effect's properties: the whole effect's tint, size, offset and turn,
-/// the colours its parts use with hue and saturation, glow, opacity and light range. An effect is
-/// read on a task the first time it is shown. The changes stay on the event as its look until a
+/// The effect editor under an effect's properties: the whole effect's tint, the colours its parts
+/// use with hue and saturation, glow, opacity and light range (its place is <see cref="EffectPlaceEditor"/>'s).
+/// An effect is read on a task the first time it is shown. The changes stay on the event as its look until a
 /// save or preview writes them into a copy of the effect (see <see cref="TimelineEffectLooks.Bake"/>).
 /// </summary>
 internal sealed class EffectLookEditor(TimelineSession session)
@@ -23,7 +23,6 @@ internal sealed class EffectLookEditor(TimelineSession session)
     private Guid? effectsCollection;
     // A look control's changes until no control is active make one undo step.
     private bool lookEditing;
-    private bool sizePerAxis;
     // The swatch whose colour the popup changes.
     private Vector3 swatchEditing;
 
@@ -123,7 +122,8 @@ internal sealed class EffectLookEditor(TimelineSession session)
     /// <summary> Drops the running look edit when the editor starts over with another document. </summary>
     public void ForgetEdit() => lookEditing = false;
 
-    private void SetLook(TimelineEditor current, TimelineEvent ev, TimelineEffectEdit look)
+    /// <summary> Puts <paramref name="look"/> on the event; changes until no control is active make one undo step. </summary>
+    public void SetLook(TimelineEditor current, TimelineEvent ev, TimelineEffectEdit look)
     {
         if (!lookEditing)
         {
@@ -133,28 +133,43 @@ internal sealed class EffectLookEditor(TimelineSession session)
         current.Replace(ev with { Look = look });
     }
 
+    /// <summary> Whether <paramref name="ev"/> plays an effect file the editors can read. </summary>
+    public bool ReadsFile(TimelineEvent ev) =>
+        session.Source != null && ev.Lane == TimelineLane.Effect && ev.Path.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase) &&
+        AnimationDependencies.SafeGamePath(ev.Path);
+
+    /// <summary>
+    /// The look of the effect <paramref name="ev"/> plays (see <see cref="ReadsFile"/>), read on a task the
+    /// first time. While it is read, or when it couldn't be, this shows that and gives null.
+    /// </summary>
+    public TimelineEffectLook? LookOrStatus(TimelineEvent ev)
+    {
+        if (session.Source is not { } loaded)
+            return null;
+        var read = EffectFor(ev.Path, loaded);
+        if (read.Look is { } look)
+            return look;
+        if (read.Error != null)
+            Widgets.HintWrapped("The effect could not be read. " + read.Error);
+        else
+        {
+            Widgets.Spinner();
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, "Reading the effect");
+        }
+        return null;
+    }
+
     public void Draw(TimelineEditor current, TimelineEvent ev, bool editable)
     {
-        if (session.Source is not { } loaded || ev.Lane != TimelineLane.Effect || !ev.Path.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase) ||
-            !AnimationDependencies.SafeGamePath(ev.Path))
+        if (!ReadsFile(ev))
             return;
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Look##effect-look", ImGuiTreeNodeFlags.DefaultOpen))
             return;
-        var read = EffectFor(ev.Path, loaded);
-        if (read.Look is not { } look)
-        {
-            if (read.Error != null)
-                Widgets.HintWrapped("The effect could not be read. " + read.Error);
-            else
-            {
-                Widgets.Spinner();
-                ImGui.SameLine(0, Theme.Gap);
-                ImGui.AlignTextToFramePadding();
-                ImGui.TextColored(Theme.Muted, "Reading the effect");
-            }
+        if (LookOrStatus(ev) is not { } look)
             return;
-        }
         Widgets.HintWrapped("Changes go into a copy of the effect.");
         var edit = ev.Look ?? NoLook;
         using (ImRaii.Disabled(!editable))
@@ -165,85 +180,34 @@ internal sealed class EffectLookEditor(TimelineSession session)
                 {
                     ImGui.TableSetupColumn("##look-name", ImGuiTableColumnFlags.WidthFixed);
                     ImGui.TableSetupColumn("##look-value", ImGuiTableColumnFlags.WidthStretch);
-                    DrawWholeEffect(current, ev, look, edit);
+                    DrawTint(current, ev, look, edit);
                     DrawColours(current, ev, look, edit);
                     DrawStrengths(current, ev, look, edit);
                 }
             }
-            using (ImRaii.Disabled(ev.Look == null))
+            // The place stays as it is.
+            var placeOnly = new TimelineEffectEdit { Move = edit.Move, Turn = edit.Turn, Size = edit.Size };
+            using (ImRaii.Disabled(edit.Equals(placeOnly)))
             {
                 if (ImGui.SmallButton("Reset look"))
-                    SetLook(current, ev, NoLook);
+                    SetLook(current, ev, placeOnly);
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Put the effect back as it is.");
     }
 
-    /// <summary> Tint, the file's own until changed; size, move and turn, changes from the file's own. </summary>
-    private void DrawWholeEffect(TimelineEditor current, TimelineEvent ev, TimelineEffectLook look, TimelineEffectEdit edit)
+    /// <summary> Tint, the file's own until changed. </summary>
+    private void DrawTint(TimelineEditor current, TimelineEvent ev, TimelineEffectLook look, TimelineEffectEdit edit)
     {
-        if (look.Tint is { } fileTint)
-        {
-            TimelineUi.Fact("Tint");
-            var tint = edit.Tint ?? fileTint;
-            ImGui.SetNextItemWidth(-1);
-            if (ImGui.ColorEdit3("##tint", ref tint, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.Hdr))
-                SetLook(current, ev, edit with { Tint = Changed(Vector3.Clamp(tint, Vector3.Zero, new Vector3(TimelineEffectEdit.MaxTint)), fileTint) });
-            TimelineUi.Tip("Colours the whole effect. Above 1 makes it brighter.");
-        }
-        if (look.Size != null)
-        {
-            TimelineUi.Fact("Size");
-            var size = edit.Size ?? Vector3.One;
-            var perAxis = sizePerAxis || size.X != size.Y || size.Y != size.Z;
-            var button = ImGui.CalcTextSize("XYZ").X + ImGui.GetStyle().FramePadding.X * 2;
-            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(60), ImGui.GetContentRegionAvail().X - button - Theme.Gap));
-            bool changed;
-            if (perAxis)
-                changed = ImGui.DragFloat3("##size", ref size, .01f, TimelineEffectEdit.MinSize, TimelineEffectEdit.MaxSize, "%.2f", ImGuiSliderFlags.AlwaysClamp);
-            else
-            {
-                var all = size.X;
-                changed = ImGui.DragFloat("##size", ref all, .01f, TimelineEffectEdit.MinSize, TimelineEffectEdit.MaxSize, "%.2f", ImGuiSliderFlags.AlwaysClamp);
-                size = new Vector3(all);
-            }
-            if (changed)
-                SetLook(current, ev, edit with { Size = Changed(size, Vector3.One) });
-            TimelineUi.Tip("Scales the whole effect.");
-            ImGui.SameLine(0, Theme.Gap);
-            // Back to one value only when the axes agree; otherwise it would flatten them.
-            var differ = perAxis && !sizePerAxis;
-            using (ImRaii.Disabled(differ))
-            {
-                if (ImGui.SmallButton(perAxis ? "All##size-axes" : "XYZ##size-axes"))
-                    sizePerAxis = !perAxis;
-            }
-            TimelineUi.Tip(differ ? "The axes differ, so each is set on its own." : perAxis ? "Set all axes together." : "Set each axis on its own.");
-        }
-        if (look.Offset != null)
-        {
-            TimelineUi.Fact("Move");
-            var move = edit.Move ?? Vector3.Zero;
-            ImGui.SetNextItemWidth(-1);
-            if (ImGui.DragFloat3("##move", ref move, .01f, -TimelineEffectEdit.MaxMove, TimelineEffectEdit.MaxMove, "%.2f", ImGuiSliderFlags.AlwaysClamp))
-                SetLook(current, ev, edit with { Move = Changed(move, Vector3.Zero) });
-            TimelineUi.Tip("Moves the whole effect.");
-        }
-        if (look.Turn != null)
-        {
-            TimelineUi.Fact("Turn");
-            // Stored in radians, shown in degrees.
-            const float degrees = 180 / MathF.PI, most = TimelineEffectEdit.MaxTurn * degrees;
-            var turn = (edit.Turn ?? Vector3.Zero) * degrees;
-            ImGui.SetNextItemWidth(-1);
-            if (ImGui.DragFloat3("##turn", ref turn, .5f, -most, most, "%.0f°", ImGuiSliderFlags.AlwaysClamp))
-            {
-                var radians = Vector3.Clamp(turn / degrees, new Vector3(-TimelineEffectEdit.MaxTurn), new Vector3(TimelineEffectEdit.MaxTurn));
-                SetLook(current, ev, edit with { Turn = Changed(radians, Vector3.Zero) });
-            }
-            TimelineUi.Tip("Turns the whole effect, in degrees.");
-        }
+        if (look.Tint is not { } fileTint)
+            return;
+        TimelineUi.Fact("Tint");
+        var tint = edit.Tint ?? fileTint;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.ColorEdit3("##tint", ref tint, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.Hdr))
+            SetLook(current, ev, edit with { Tint = Changed(Vector3.Clamp(tint, Vector3.Zero, new Vector3(TimelineEffectEdit.MaxTint)), fileTint) });
+        TimelineUi.Tip("Colours the whole effect. Above 1 makes it brighter.");
     }
 
     /// <summary> The colours the parts use as swatches to change one by one, then hue and saturation for all of them. </summary>
@@ -343,5 +307,5 @@ internal sealed class EffectLookEditor(TimelineSession session)
     }
 
     /// <summary> A whole-effect value as the look keeps it: null when it is the file's own again. </summary>
-    private static Vector3? Changed(Vector3 value, Vector3 file) => Vector3.DistanceSquared(value, file) < 1e-10f ? null : value;
+    internal static Vector3? Changed(Vector3 value, Vector3 file) => Vector3.DistanceSquared(value, file) < 1e-10f ? null : value;
 }

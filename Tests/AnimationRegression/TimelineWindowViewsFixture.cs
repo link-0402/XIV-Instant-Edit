@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Globalization;
+using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
@@ -40,6 +41,7 @@ internal static class TimelineWindowViewsFixture
         Packs(check, texts);
         Texts(check, texts);
         Sounds(check, texts);
+        Places(check, texts);
         ChangedFiles(check);
         check(texts.All(text => !text.Contains("...", StringComparison.Ordinal) && !text.Contains('\u2026')),
             "Timeline window texts never use an ellipsis");
@@ -453,6 +455,26 @@ internal static class TimelineWindowViewsFixture
     }
 
     /// <summary>The sound inspector's words: what each option of a sound event does.</summary>
+    private static void Places(Action<bool, string> check, List<string> texts)
+    {
+        static TimelineEffectLook Look(bool bound) => new(null, null, null, null, [], false, false, false, bound, default);
+        var vfx = Ev("v", "C012", TimelineLane.Effect, 0, "vfx/a.avfx", 30);
+        var async = Ev("a", "C173", TimelineLane.Effect, 0, "vfx/b.avfx");
+        var hints = new[] { EffectPlaceEditor.RouteHint(vfx, null), EffectPlaceEditor.RouteHint(async, Look(true)), EffectPlaceEditor.RouteHint(async, Look(false)) };
+        texts.AddRange(hints);
+        check(hints[0] == "Moves this event only. Scales with the character's race." &&
+              hints[1] == "Attached to a bone; moved on its attach point" &&
+              hints[2] == "Moves the effect file; other events playing it move too",
+            "Place says what a VFX event, an attached effect file and another effect file move");
+
+        var stored = new Vector3(.1f, .2f, .3f);
+        var shown = stored * (180 / MathF.PI);
+        var turned = EffectPlaceEditor.Turned(stored, shown, shown with { X = shown.X + .5f });
+        check(turned.Y == stored.Y && turned.Z == stored.Z && MathF.Abs(turned.X - (shown.X + .5f) * MathF.PI / 180) < 1e-6f &&
+              EffectPlaceEditor.Turned(stored, shown, shown) == stored,
+            "a turn keeps the stored radians of the axes the drag didn't change");
+    }
+
     private static void Sounds(Action<bool, string> check, List<string> texts)
     {
         check(TimelineWindowViews.PlaysText(1) == "Once" && TimelineWindowViews.PlaysText(-1) == "Keep looping" && TimelineWindowViews.PlaysText(90) == "Custom (90)",
