@@ -157,10 +157,15 @@ internal static class Gui
         float buttonW = ImGui.GetFrameHeight();
         ImGui.SetNextItemWidth(-(buttonW + ImGui.GetStyle().ItemInnerSpacing.X + reserveRight));
         bool changed = ImGui.InputTextWithHint($"##{id}", hint, ref path, 1024);
+        bool active = ImGui.IsItemActive();
         if (ImGui.IsItemHovered() && !string.IsNullOrEmpty(path))
             ImGui.SetTooltip(help != null ? $"{path}\n\n{help}" : path);
         if (drop != null && FileDrop.Target(drop.Reject, out var dropped))
+        {
+            // A focused input writes its own buffer back next frame, which would wipe the dropped path.
+            if (active) ImGuiP.ClearActiveID();
             drop.OnDrop(dropped);
+        }
 
         ImGui.SameLine(0, ImGui.GetStyle().ItemInnerSpacing.X);
         if (IconButton(kind == PathKind.Folder ? FontAwesomeIcon.FolderOpen : FontAwesomeIcon.File,
