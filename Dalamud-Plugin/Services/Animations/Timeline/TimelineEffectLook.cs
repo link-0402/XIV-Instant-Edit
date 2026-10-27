@@ -15,13 +15,25 @@ internal sealed record TimelineEffectColor(Vector3 Rgb, int Uses);
 /// <param name="Tint">Multiplies the colour of the whole effect (RvR, RvG, RvB).</param>
 /// <param name="Size">Scales the whole effect (RvSx, RvSy, RvSz).</param>
 /// <param name="Offset">Moves the whole effect (RvPx, RvPy, RvPz).</param>
-/// <param name="Turn">Turns the whole effect (RvRx, RvRy, RvRz), in degrees.</param>
+/// <param name="Turn">Turns the whole effect (RvRx, RvRy, RvRz), in radians (shown in degrees).</param>
 /// <param name="Colors">The colours its parts use, most used first.</param>
 /// <param name="Glow">Whether its particles or lights have brightness for Glow to scale.</param>
 /// <param name="Opacity">Whether its particles have alpha for Opacity to scale.</param>
 /// <param name="LightRange">Whether it has a point light whose range Light range scales.</param>
+/// <param name="Bound">Whether it is attached to a binder: a timeline (BnNo) or one of its items (BdNo) names one.</param>
+/// <param name="BinderPositions">The positions of its binders' property blocks, in file order.</param>
 internal sealed record TimelineEffectLook(Vector3? Tint, Vector3? Size, Vector3? Offset, Vector3? Turn,
-    ImmutableArray<TimelineEffectColor> Colors, bool Glow, bool Opacity, bool LightRange);
+    ImmutableArray<TimelineEffectColor> Colors, bool Glow, bool Opacity, bool LightRange, bool Bound,
+    ImmutableArray<TimelineEffectBinderPos> BinderPositions);
+
+/// <summary>
+/// The position (Pos) of one property block of a binder.
+/// </summary>
+/// <param name="Binder">The binder's index among the file's Bind blocks.</param>
+/// <param name="Block">The property block: PrpS, Prp1, Prp2 or PrpG.</param>
+/// <param name="Constant">The position when it has one key (<paramref name="Keys"/> is 1): an axis without a key is 0. Null otherwise.</param>
+/// <param name="Keys">The most keys any of its X, Y and Z curves has; files leave out an axis that stays 0.</param>
+internal sealed record TimelineEffectBinderPos(int Binder, string Block, Vector3? Constant, int Keys);
 
 /// <summary>
 /// The effect editor's changes to one effect. The whole-effect values replace the file's (null keeps
@@ -30,12 +42,14 @@ internal sealed record TimelineEffectLook(Vector3? Tint, Vector3? Size, Vector3?
 /// </summary>
 internal sealed record TimelineEffectEdit
 {
-    public const float MaxTint = 4, MinSize = .01f, MaxSize = 20, MaxOffset = 100, MaxTurn = 360;
+    public const float MaxTint = 4, MinSize = .01f, MaxSize = 20, MaxOffset = 100, MaxTurn = 2 * MathF.PI;
     public const float MaxSaturation = 2, MaxGlow = 4, MaxOpacity = 2, MaxLightRange = 4;
 
     public Vector3? Tint { get; init; }
     public Vector3? Size { get; init; }
     public Vector3? Offset { get; init; }
+
+    /// <summary>The whole effect's turn, in radians (shown in degrees).</summary>
     public Vector3? Turn { get; init; }
 
     /// <summary>Turns every colour's hue, in degrees.</summary>
@@ -135,7 +149,10 @@ internal static class TimelineEffectLooks
 
     private readonly record struct Spot(Part Part, int At);
 
-    private sealed record Layout(Dictionary<string, int> Root, List<Spot> Spots);
+    private sealed record Layout(Dictionary<string, int> Root, List<Spot> Spots, bool Bound, List<TimelineEffectBinderPos> Binders);
+
+    /// <summary>A binder's property blocks, each of which may place the effect.</summary>
+    private static readonly HashSet<string> BinderBlocks = ["PrpS", "Prp1", "Prp2", "PrpG"];
 
     /// <summary>A colour as a swatch: each channel rounded to three decimals, so copies of one colour count as one.</summary>
     public static Vector3 Swatch(Vector3 rgb) =>
@@ -208,7 +225,7 @@ internal static class TimelineEffectLooks
         return new TimelineEffectLook(Root(avfx, layout, TintFields), Root(avfx, layout, SizeFields), Root(avfx, layout, OffsetFields),
             Root(avfx, layout, TurnFields), colours,
             layout.Spots.Any(s => s.Part == Part.Glow), layout.Spots.Any(s => s.Part == Part.Alpha),
-            layout.Spots.Any(s => s.Part == Part.LightRange));
+            layout.Spots.Any(s => s.Part == Part.LightRange), layout.Bound, [.. layout.Binders]);
     }
 
     /// <summary>
@@ -386,9 +403,18 @@ internal static class TimelineEffectLooks
         var length = RootLength(avfx);
         var root = new Dictionary<string, int>(StringComparer.Ordinal);
         var spots = new List<Spot>();
+        var bound = false;
+        var binders = new List<TimelineEffectBinderPos>();
+        var binder = 0;
         foreach (var (name, start, size) in AnimationDependencies.Chunks(avfx, 8, 8 + length))
             switch (name)
             {
+                case "TmLn":
+                    bound |= Timeline(avfx, start, size);
+                    break;
+                case "Bind":
+                    Binder(avfx, start, size, binder++, binders);
+                    break;
                 case "Ptcl":
                     Particle(avfx, start, size, spots);
                     break;
@@ -405,7 +431,53 @@ internal static class TimelineEffectLooks
                         root.TryAdd(name, start);
                     break;
             }
-        return new Layout(root, spots);
+        return new Layout(root, spots, bound, binders);
+    }
+
+    /// <summary>
+    /// Whether a timeline names a binder: its own (BnNo) or one of its items' (BdNo); -1 is none. Each
+    /// Item holds the items before it too, so the last one lists them all.
+    /// </summary>
+    private static bool Timeline(byte[] avfx, int start, int size)
+    {
+        var bound = false;
+        (int At, int Size)? items = null;
+        foreach (var (name, at, count) in AnimationDependencies.Chunks(avfx, start, start + size))
+            if (name == "BnNo" && count >= 4) bound |= BinaryPrimitives.ReadInt32LittleEndian(avfx.AsSpan(at)) != -1;
+            else if (name == "Item") items = (at, count);
+        if (items is { } last)
+            foreach (var (name, at, count) in AnimationDependencies.Chunks(avfx, last.At, last.At + last.Size))
+                if (name == "BdNo" && count >= 4) bound |= BinaryPrimitives.ReadInt32LittleEndian(avfx.AsSpan(at)) != -1;
+        return bound;
+    }
+
+    /// <summary>The positions of a binder's property blocks that have one (Pos, a curve per axis).</summary>
+    private static void Binder(byte[] avfx, int start, int size, int binder, List<TimelineEffectBinderPos> positions)
+    {
+        foreach (var (block, at, count) in AnimationDependencies.Chunks(avfx, start, start + size))
+            if (BinderBlocks.Contains(block))
+                foreach (var (field, from, bytes) in AnimationDependencies.Chunks(avfx, at, at + count))
+                    if (field == "Pos")
+                        positions.Add(Position(avfx, from, bytes, binder, block));
+    }
+
+    /// <summary>
+    /// A Pos block's key count and, when no axis has more than one key, its value (a single value is a
+    /// key's third float). Files leave out the curves of axes that stay 0, so those read 0.
+    /// </summary>
+    private static TimelineEffectBinderPos Position(byte[] avfx, int start, int size, int binder, string block)
+    {
+        var values = new float[3];
+        var keys = 0;
+        foreach (var (axis, at, count) in AnimationDependencies.Chunks(avfx, start, start + size))
+            if (axis is "X" or "Y" or "Z")
+            {
+                var found = Keys(avfx, at, count).ToList();
+                keys = Math.Max(keys, found.Count);
+                if (found.Count == 1)
+                    values[axis[0] - 'X'] = BinaryPrimitives.ReadSingleLittleEndian(avfx.AsSpan(found[0] + 12));
+            }
+        return new TimelineEffectBinderPos(binder, block, keys == 1 ? new Vector3(values[0], values[1], values[2]) : null, keys);
     }
 
     private static void Particle(byte[] avfx, int start, int size, List<Spot> spots)

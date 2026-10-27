@@ -24,9 +24,10 @@ internal static partial class TmbFileFixture
         check(look.Tint == new Vector3(1, 1, 1.5f) && look.Size == Vector3.One && look.Offset == Vector3.Zero && look.Turn == Vector3.Zero &&
               look.Colors.Length == expected.Length &&
               look.Colors.Zip(expected).All(c => c.First.Rgb == TimelineEffectLooks.Swatch(c.Second.Rgb) && c.First.Uses == c.Second.Uses) &&
-              look is { Glow: true, Opacity: true, LightRange: true },
+              look is { Glow: true, Opacity: true, LightRange: true, Bound: false, BinderPositions.IsEmpty: true },
             "an effect's look reads its root tint, size, offset and turn, and its colours most used first: no white emitter colour, " +
-            "simple colours only when used, light colours but none of a blur");
+            "simple colours only when used, light colours but none of a blur; it is not on a binder");
+        Binders(check);
         var bare = Chunk("AVFX", Chunk("Ver", Ints(1)));
         check(TimelineEffectLooks.Read(bare) is { Tint: null, Size: null, Colors.IsEmpty: true, Glow: false, Opacity: false, LightRange: false } &&
               TimelineEffectLooks.Apply(bare, new TimelineEffectEdit { Tint = Vector3.One, Hue = 90, Glow = 2 }).SequenceEqual(bare),
@@ -43,14 +44,18 @@ internal static partial class TmbFileFixture
 
         var edit = new TimelineEffectEdit
         {
-            Tint = new Vector3(2, 1, 1), Size = new Vector3(.5f), Offset = new Vector3(0, 1, 0), Turn = new Vector3(0, 90, 0), Hue = 180,
+            Tint = new Vector3(2, 1, 1), Size = new Vector3(.5f), Offset = new Vector3(0, 1, 0), Turn = new Vector3(0, MathF.PI / 2, 0), Hue = 180,
             Colors = [(TimelineEffectLooks.Swatch(new Vector3(0, 0, 1)), new Vector3(0, 1, 0))], Glow = 2, Opacity = .5f, LightRange = .5f,
         };
         var edited = TimelineEffectLooks.Apply(effect, edit);
         var after = TimelineEffectLooks.Read(edited);
         check(edited.Length == effect.Length && after.Tint == new Vector3(2, 1, 1) && after.Size == new Vector3(.5f) &&
-              after.Offset == new Vector3(0, 1, 0) && after.Turn == new Vector3(0, 90, 0),
-            "a look writes the whole effect's tint, size, offset and turn");
+              after.Offset == new Vector3(0, 1, 0) && after.Turn is { } turn && Vector3.Distance(turn, new Vector3(0, MathF.PI / 2, 0)) < 1e-6f &&
+              Found(edited, "RvRy") is [(var turnY, 4)] && Math.Abs(BitConverter.ToSingle(edited, turnY) - MathF.PI / 2) < 1e-6f,
+            "a look writes the whole effect's tint, size, offset and turn, the turn in radians");
+        check(TimelineEffectLooks.Read(TimelineEffectLooks.Apply(effect, new TimelineEffectEdit { Turn = new Vector3(10, -10, 1) })).Turn ==
+              new Vector3(2 * MathF.PI, -2 * MathF.PI, 1) && TimelineEffectEdit.MaxTurn == 2 * MathF.PI,
+            "a turn is held to one full turn either way, in radians");
         check(Near(Colours(edited, "Ptcl", "Col", "RGB"), [new(0, .5f, 1), new(0, 1, 0)]) &&
               Near(Colours(edited, "Ptcl", "Data", "ColB", "RGB"), [new(0, .5f, 1)]) &&
               Near(Colours(edited, "Emit", "Col", "RGB"), [Vector3.One, new(.6f, .4f, .2f)]) &&
@@ -93,6 +98,45 @@ internal static partial class TmbFileFixture
             "a colour or value that a change would push past a float's range stays as it is");
 
         Saving(check, reject, effect, edit);
+    }
+
+    /// <summary>
+    /// Effects on a binder: bound when a timeline or one of its items names a binder (each Item holds
+    /// the items before it too, so the last is read), with the positions of the binders' property
+    /// blocks as their Pos curves give them.
+    /// </summary>
+    private static void Binders(Action<bool, string> check)
+    {
+        static byte[] Leaf(string name, int value) => Chunk(name, Ints(value));
+        static byte[] Entry(int binder) =>
+            [.. Leaf("bEna", 1), .. Leaf("StTm", 0), .. Leaf("EdTm", 30), .. Leaf("BdNo", binder), .. Leaf("EfNo", -1), .. Leaf("EmNo", 0), .. Leaf("ClNo", -1)];
+        static byte[] Timeline(int binder, params byte[][] items) => Chunk("TmLn", [.. Leaf("BnNo", binder), .. items.SelectMany(i => Chunk("Item", i))]);
+        static byte[] Axis(string name, params float[] values) => Chunk(name, [
+            .. Leaf("KeyC", values.Length),
+            .. Chunk("Keys", [.. values.SelectMany((v, i) => (byte[])[.. BitConverter.GetBytes((short)(i * 10)), .. BitConverter.GetBytes((short)0), .. Floats(9, 9, v)])]),
+        ]);
+        static byte[] Pos(float[] x, float[] y, float[] z) => Chunk("Pos", [.. Axis("X", x), .. Axis("Y", y), .. Axis("Z", z)]);
+        static byte[] Effect(params byte[][] parts) => Chunk("AVFX", [.. Chunk("Ver", Ints(0x20110913)), .. Chunk("RvRy", Floats(0)), .. parts.SelectMany(p => p)]);
+
+        var bound = Effect(Timeline(-1, Entry(0)), Chunk("Bind", [.. Leaf("BnVr", 1), .. Chunk("PrpS", Pos([1], [2], [3]))]));
+        check(TimelineEffectLooks.Read(bound) is { Bound: true, BinderPositions: [{ Binder: 0, Block: "PrpS", Constant: { X: 1, Y: 2, Z: 3 }, Keys: 1 }] },
+            "an effect whose timeline item uses a binder is bound, and reads the binder's position from its one key");
+
+        var several = Effect(Timeline(2), Chunk("Bind", Leaf("BnVr", 1)),
+            Chunk("Bind", [.. Chunk("Prp1", Pos([1, 5], [2], [])), .. Chunk("Prp2", Leaf("BnNo", 0)),
+                .. Chunk("PrpG", Chunk("Pos", [.. Leaf("ACT", 0), .. Axis("Y", 5), .. Axis("Z", 6)]))]));
+        check(TimelineEffectLooks.Read(several) is
+              {
+                  Bound: true,
+                  BinderPositions: [{ Binder: 1, Block: "Prp1", Constant: null, Keys: 2 }, { Binder: 1, Block: "PrpG", Constant: { X: 0, Y: 5, Z: 6 }, Keys: 1 }],
+              },
+            "a timeline without items that names a binder is bound; binders without property blocks, and blocks without a position, " +
+            "list none; a moving position has no constant; an axis the file leaves out is 0");
+
+        var unbound = Effect(Timeline(-1, Entry(-1), [.. Entry(-1), .. Entry(-1)]), Timeline(-1),
+            Chunk("Bind", Chunk("PrpS", Pos([], [], []))));
+        check(TimelineEffectLooks.Read(unbound) is { Bound: false, BinderPositions: [{ Binder: 0, Block: "PrpS", Constant: null, Keys: 0 }] },
+            "an effect whose timelines and items name no binder is not bound, though its binders are still read; a position without keys has no constant");
     }
 
     /// <summary> Looks on timeline events: kept by edits, refused unwritten, and saved as copies. </summary>

@@ -233,10 +233,15 @@ internal sealed class EffectLookEditor(TimelineSession session)
         if (look.Turn is { } fileTurn)
         {
             TimelineUi.Fact("Turn");
-            var turn = edit.Turn ?? fileTurn;
+            // Stored in radians, shown in degrees.
+            const float degrees = 180 / MathF.PI, most = TimelineEffectEdit.MaxTurn * degrees;
+            var turn = (edit.Turn ?? fileTurn) * degrees;
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.DragFloat3("##turn", ref turn, .5f, -TimelineEffectEdit.MaxTurn, TimelineEffectEdit.MaxTurn, "%.0f°", ImGuiSliderFlags.AlwaysClamp))
-                SetLook(current, ev, edit with { Turn = Changed(turn, fileTurn) });
+            if (ImGui.DragFloat3("##turn", ref turn, .5f, -most, most, "%.0f°", ImGuiSliderFlags.AlwaysClamp))
+            {
+                var radians = Vector3.Clamp(turn / degrees, new Vector3(-TimelineEffectEdit.MaxTurn), new Vector3(TimelineEffectEdit.MaxTurn));
+                SetLook(current, ev, edit with { Turn = Changed(radians, fileTurn) });
+            }
             TimelineUi.Tip("Turns the whole effect, in degrees.");
         }
     }
