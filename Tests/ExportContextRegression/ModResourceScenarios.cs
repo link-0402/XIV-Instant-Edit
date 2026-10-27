@@ -30,13 +30,13 @@ internal static class ModResourceScenarios
     {
         var metal = DummyTextureLibrary.Resolve(TextureType.Mask, DummyTextureLibrary.MetalKey);
         var flat = DummyTextureLibrary.Resolve(TextureType.Normal, null);
-        Require(metal is { R: 185, G: 5, B: 185, A: 255 } && flat is { R: 128, G: 128, B: 255, A: 255 } &&
+        Require(metal is { R: 255, G: 0, B: 255, A: 255 } && flat is { R: 128, G: 128, B: 255, A: 255 } &&
                 DummyTextureLibrary.Resolve(TextureType.Diffuse, DummyTextureLibrary.MetalKey) is { R: 255, G: 255, B: 255 },
             "placeholders: metal and flat normal have their colors, and a role without metal falls back to white");
 
         Require(TextureConverter.CreateDummy(metal, TextureCompression.None, out var tex, out var error) &&
                 BitConverter.ToUInt16(tex, 8) == 16 && BitConverter.ToUInt16(tex, 10) == 16 && tex.Length == 80 + 16 * 16 * 4 &&
-                tex[80] == 185 && tex[81] == 5 && tex[82] == 185 && tex[83] == 255 && tex[^4] == 185 && tex[^1] == 255,
+                tex[80] == 255 && tex[81] == 0 && tex[82] == 255 && tex[83] == 255 && tex[^4] == 255 && tex[^1] == 255,
             $"placeholders: an uncompressed one is a 16 x 16 BGRA square of its color ({error})");
         Require(TextureConverter.CreateDummy(metal, TextureCompression.Bc7, out tex, out error) &&
                 BitConverter.ToUInt16(tex, 8) == 16 && BitConverter.ToUInt16(tex, 10) == 16,

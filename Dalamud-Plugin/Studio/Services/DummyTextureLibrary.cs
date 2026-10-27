@@ -24,7 +24,7 @@ public static class DummyTextureLibrary
 
     private static readonly DummyOption White      = new(GeneratedKey,  "White",          255, 255, 255);
     private static readonly DummyOption NullNormal = new(NullNormalKey, "Flat (no bump)", 128, 128, 255);
-    private static readonly DummyOption Metal      = new(MetalKey,      "Metal",          185,   5, 185);
+    private static readonly DummyOption Metal      = new(MetalKey,      "Metal",          255,   0, 255);
 
     /// <summary>The placeholder options offered for a texture role, in display order. The first is the default.</summary>
     public static IReadOnlyList<DummyOption> OptionsFor(TextureType type) => type switch
