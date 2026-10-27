@@ -23,6 +23,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     private string? selectionLayer;
     // The ease curve handle being dragged: 0 or 1, -1 for none.
     private int easeHandle = -1;
+    // The open pin bone list's search; only one combo is open at a time.
+    private static string pinFilter = string.Empty;
     private readonly HandShapePanel hands = new(session, posing);
 
     public void Draw(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded)
@@ -272,7 +274,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
             () => [(null, "Character"), .. Enumerable.Range(0, skeleton.Bones.Length)
                 .Where(b => b != top && !BonePosing.IsBelow(skeleton, b, top))
                 .Select(b => ((string?)skeleton.Bones[b].Name, AnimationPresentation.BoneName(skeleton.Bones[b].Name)))],
-            pin.RelativeTo, relative => pin with { RelativeTo = relative });
+            pin.RelativeTo, relative => pin with { RelativeTo = relative }, true);
 
         string fallback;
         ImmutableArray<string> choices;
@@ -293,7 +295,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         PinChoice(current, layer, "Bends up to", "##pin-top", "The highest bone that may turn to hold the pin.",
             pin.Top is { } highest ? AnimationPresentation.BoneName(highest) : fallback,
             () => [.. offerDefault ? new[] { ((string?)null, fallback) } : Array.Empty<(string?, string)>(), .. choices.Select(name => ((string?)name, AnimationPresentation.BoneName(name)))],
-            pin.Top, highest => pin with { Top = highest });
+            pin.Top, highest => pin with { Top = highest }, true);
 
         PinChoice(current, layer, "When", "##pin-when", "At keys holds the spots you key, such as a hand on a knee. When planted holds the bone wherever the motion rests it, such as feet on the floor.",
             pin.Planted ? "When planted" : "At keys", () => [(false, "At keys"), (true, "When planted")], pin.Planted,
@@ -304,9 +306,12 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                 pin.Sensitivity, sensitivity => pin with { Sensitivity = sensitivity });
     }
 
-    /// <summary> A fact row with a combo of <paramref name="options"/>, listed only while open; a pick commits the changed pin. </summary>
+    /// <summary>
+    /// A fact row with a combo of <paramref name="options"/>, listed only while open; a pick commits the changed pin.
+    /// With <paramref name="search"/> (bone lists) a field above the list filters it.
+    /// </summary>
     private static void PinChoice<T>(TimelineEditor current, MotionLayer layer, string label, string id, string tooltip, string preview,
-        Func<IEnumerable<(T Value, string Name)>> options, T value, Func<T, MotionPin> with)
+        Func<IEnumerable<(T Value, string Name)>> options, T value, Func<T, MotionPin> with, bool search = false)
     {
         TimelineUi.Fact(label);
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(140), ImGui.GetContentRegionAvail().X));
@@ -314,11 +319,24 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         {
             if (combo.Success)
             {
+                if (search)
+                {
+                    ImGui.SetNextItemWidth(-1);
+                    if (ImGui.IsWindowAppearing())
+                    {
+                        pinFilter = string.Empty;
+                        ImGui.SetKeyboardFocusHere();
+                    }
+                    ImGui.InputTextWithHint("##pin-search", "Search bones", ref pinFilter, 64);
+                }
                 var at = 0;
                 foreach (var (option, name) in options())
                 {
+                    at++;
+                    if (search && pinFilter.Length > 0 && !name.Contains(pinFilter, StringComparison.OrdinalIgnoreCase))
+                        continue;
                     var chosen = EqualityComparer<T>.Default.Equals(option, value);
-                    if (ImGui.Selectable($"{name}##{at++}", chosen) && !chosen)
+                    if (ImGui.Selectable($"{name}##{at}", chosen) && !chosen)
                         current.Commit(MotionEdits.SetPin(current.Document, layer.Key, with(option)));
                 }
             }
