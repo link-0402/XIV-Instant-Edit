@@ -61,6 +61,207 @@ internal static class TimelineEffectFiles
         return output;
     }
 
+    public const string StopBeforeStart = "Stops at is before the effect starts";
+    public const string NothingScheduled = "This effect has nothing scheduled to stop";
+    public const string NoRoomForKill = "This effect can't take a kill: it names a clip it lacks";
+
+    /// <summary>The first frame the effect's schedule kills it at, whether or not it would end anyway; null when it never does.</summary>
+    internal static int? KillsAt(byte[] avfx) => ReadSchedule(avfx).Kills is { Count: > 0 } kills ? kills.Min(k => k.At) : null;
+
+    /// <summary>
+    /// The effect with its schedule killing it at <paramref name="stop"/> frames after it starts. Every
+    /// KILL item a scheduled item reaches gets the start that puts it at the stop, in every Item
+    /// container; without one, a KILL the schedule reaches only while its item or scheduler entry is
+    /// off is turned on in every copy and moved; without that either, the timeline scheduled first gets
+    /// a KILL clip and an Item container holding its items and one playing it. A kill whose scheduler
+    /// item starts after the stop is past it already and stays, so no item start goes below 0. Throws
+    /// <see cref="InvalidDataException"/> with <see cref="StopBeforeStart"/> when nothing scheduled
+    /// starts by the stop, <see cref="NothingScheduled"/>, or <see cref="NoRoomForKill"/> when every
+    /// timeline that could take a KILL has an item naming the clip it would be.
+    /// </summary>
+    public static byte[] WithKill(byte[] avfx, int stop)
+    {
+        var (timelines, schedulers) = ReadBlocks(avfx);
+        var output = (byte[])avfx.Clone();
+        var on = new List<ScheduledKill>();
+        var off = new List<ScheduledKill>();
+        foreach (var scheduler in schedulers)
+            for (var index = 0; index < Math.Min(scheduler.Count, scheduler.Items.Count); index++)
+            {
+                var entry = scheduler.Items[index];
+                var number = entry.Get("TlNo", -1);
+                var start = entry.Get("StTm", 0);
+                if (number < 0 || number >= timelines.Count || start > stop)
+                    continue;
+                var timeline = timelines[number];
+                for (var item = 0; item < timeline.Items.Count; item++)
+                    if (Kills(timeline, timeline.Items[item]))
+                        (entry.Get("bEna", 1) != 0 && timeline.Items[item].Get("bEna", 1) != 0 ? on : off)
+                            .Add(new ScheduledKill(scheduler, index, start, timeline, item));
+            }
+        if (on.Count > 0)
+            foreach (var kill in on)
+                MoveKill(avfx, output, kill, stop, turnOn: false);
+        else if (off.Count > 0)
+        {
+            TurnOn(avfx, output, off[0].Scheduler, off[0].Index);
+            MoveKill(avfx, output, off[0], stop, turnOn: true);
+        }
+        else
+            output = AddKill(avfx, output, timelines, schedulers, stop);
+        if (KillsAt(output) != stop) throw new InvalidDataException("The effect's kill could not be moved.");
+        return output;
+    }
+
+    /// <summary>A scheduler item (by its index) that starts a timeline at <paramref name="Start"/>, and that timeline's KILL item.</summary>
+    private sealed record ScheduledKill(SchedulerBlock Scheduler, int Index, int Start, TimelineBlock Timeline, int Item);
+
+    /// <summary>A scheduler chunk: how many items it has, the items of its last Item chunk, and every chunk that repeats them (Item and Trgr).</summary>
+    private sealed record SchedulerBlock(int Count, List<Entry> Items, List<(int Start, int Size)> Copies);
+
+    /// <summary>
+    /// A timeline chunk's payload: its Item containers, the items of the last, its clips' types, where its
+    /// first Clip chunk starts (null without one), and its own fields (TICn, CpCn).
+    /// </summary>
+    private sealed record TimelineBlock(int Start, int Size, List<(int Start, int Size)> Containers, List<Entry> Items, List<int> Clips,
+        int? FirstClip, Entry Fields);
+
+    private static (List<TimelineBlock> Timelines, List<SchedulerBlock> Schedulers) ReadBlocks(byte[] avfx)
+    {
+        var length = RootLength(avfx);
+        var timelines = new List<TimelineBlock>();
+        var schedulers = new List<SchedulerBlock>();
+        foreach (var (name, start, size) in AnimationDependencies.Chunks(avfx, 8, 8 + length))
+            if (name == "TmLn")
+            {
+                var containers = new List<(int Start, int Size)>();
+                var clips = new List<int>();
+                int? firstClip = null;
+                var fields = new Entry();
+                foreach (var (field, at, count) in AnimationDependencies.Chunks(avfx, start, start + size))
+                    if (field == "Item") containers.Add((at, count));
+                    else if (field == "Clip")
+                    {
+                        firstClip ??= at - 8;
+                        clips.Add(count >= 4 ? BinaryPrimitives.ReadInt32LittleEndian(avfx.AsSpan(at)) : 0);
+                    }
+                    else if (count >= 4) fields.Fields[field] = (BinaryPrimitives.ReadInt32LittleEndian(avfx.AsSpan(at)), at, 4);
+                var items = containers.Count > 0 ? Entries(avfx, containers[^1].Start, containers[^1].Size) : [];
+                timelines.Add(new TimelineBlock(start, size, containers, items, clips, firstClip, fields));
+            }
+            else if (name == "Schd")
+            {
+                var count = 0;
+                List<Entry> items = [];
+                var copies = new List<(int Start, int Size)>();
+                foreach (var (field, at, bytes) in AnimationDependencies.Chunks(avfx, start, start + size))
+                    if (field == "ItCn" && bytes >= 4) count = BinaryPrimitives.ReadInt32LittleEndian(avfx.AsSpan(at));
+                    else if (field is "Item" or "Trgr")
+                    {
+                        copies.Add((at, bytes));
+                        if (field == "Item") items = Entries(avfx, at, bytes);
+                    }
+                schedulers.Add(new SchedulerBlock(count, items, copies));
+            }
+        return (timelines, schedulers);
+    }
+
+    private static bool Kills(TimelineBlock timeline, Entry item) =>
+        item.Get("ClNo", -1) is var clip && clip >= 0 && clip < timeline.Clips.Count && timeline.Clips[clip] == KillClip;
+
+    /// <summary>A KILL item's start set so it plays at <paramref name="stop"/>, in every Item container that holds it; turned on too when asked.</summary>
+    private static void MoveKill(byte[] avfx, byte[] output, ScheduledKill kill, int stop, bool turnOn)
+    {
+        var last = kill.Timeline.Items[kill.Item];
+        foreach (var (start, size) in kill.Timeline.Containers)
+        {
+            var entries = Entries(avfx, start, size);
+            if (kill.Item >= entries.Count)
+                continue;
+            var copy = entries[kill.Item];
+            if (copy.Get("ClNo", -1) != last.Get("ClNo", -1) || copy.Get("StTm", 0) != last.Get("StTm", 0))
+                continue;
+            if (!copy.Fields.TryGetValue("StTm", out var time) || time.Size < 4)
+                throw new InvalidDataException("The effect's kill has no start to move.");
+            BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(time.At), stop - kill.Start);
+            if (turnOn && copy.Fields.TryGetValue("bEna", out var enabled))
+                TurnOn(output, enabled);
+        }
+    }
+
+    /// <summary>A scheduler item turned on in every Item and Trgr chunk that repeats it.</summary>
+    private static void TurnOn(byte[] avfx, byte[] output, SchedulerBlock scheduler, int index)
+    {
+        var item = scheduler.Items[index];
+        foreach (var (start, size) in scheduler.Copies)
+        {
+            var entries = Entries(avfx, start, size);
+            if (index < Math.Min(entries.Count, scheduler.Count) && entries[index] is var entry &&
+                entry.Get("StTm", 0) == item.Get("StTm", 0) && entry.Get("TlNo", -1) == item.Get("TlNo", -1) &&
+                entry.Fields.TryGetValue("bEna", out var enabled))
+                TurnOn(output, enabled);
+        }
+    }
+
+    private static void TurnOn(byte[] output, (int Value, int At, int Size) field)
+    {
+        output.AsSpan(field.At, field.Size).Clear();
+        output[field.At] = 1;
+    }
+
+    /// <summary>
+    /// The effect with a KILL clip added to the timeline scheduled first (the first of those starting
+    /// together) that has no playing item naming the new clip's index, and an Item container after its
+    /// last one holding its items and one that plays the clip at <paramref name="stop"/>; its item and
+    /// clip counts and the sizes around them grow.
+    /// </summary>
+    private static byte[] AddKill(byte[] avfx, byte[] output, List<TimelineBlock> timelines, List<SchedulerBlock> schedulers, int stop)
+    {
+        var scheduled = schedulers.SelectMany(s => s.Items.Take(s.Count))
+            .Where(e => e.Get("bEna", 1) != 0 && e.Get("TlNo", -1) is var number && number >= 0 && number < timelines.Count)
+            .OrderBy(e => e.Get("StTm", 0)).ToList();
+        if (scheduled.Count == 0) throw new InvalidDataException(NothingScheduled);
+        if (stop < scheduled[0].Get("StTm", 0)) throw new InvalidDataException(StopBeforeStart);
+        // An item may name a clip its timeline lacks; the new clip must not be the one an item that plays names, or that item would kill the effect.
+        var first = scheduled.FirstOrDefault(e => e.Get("StTm", 0) <= stop && timelines[e.Get("TlNo", -1)] is var candidate &&
+                                                  candidate.Items.All(i => i.Get("bEna", 1) == 0 || i.Get("ClNo", -1) != candidate.Clips.Count))
+                    ?? throw new InvalidDataException(NoRoomForKill);
+        var start = first.Get("StTm", 0);
+        var timeline = timelines[first.Get("TlNo", -1)];
+        if (!timeline.Fields.Fields.TryGetValue("TICn", out var itemCount) || !timeline.Fields.Fields.TryGetValue("CpCn", out var clipCount))
+            throw new InvalidDataException("The effect's timeline has no item or clip count.");
+        BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(itemCount.At), timeline.Items.Count + 1);
+        BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(clipCount.At), timeline.Clips.Count + 1);
+        // The new item's fields as library items that name a clip have them (bEna is 4 bytes), after the items before it in a new container.
+        var at = stop - start;
+        byte[] item =
+        [
+            .. TimelineEffectLooks.Leaf("bEna", 1), .. TimelineEffectLooks.Leaf("StTm", at), .. TimelineEffectLooks.Leaf("EdTm", at),
+            .. TimelineEffectLooks.Leaf("BdNo", -1), .. TimelineEffectLooks.Leaf("EfNo", -1), .. TimelineEffectLooks.Leaf("EmNo", -1),
+            .. TimelineEffectLooks.Leaf("Plfm", 0), .. TimelineEffectLooks.Leaf("ClNo", timeline.Clips.Count),
+        ];
+        var last = timeline.Containers.Count > 0 ? timeline.Containers[^1] : ((int Start, int Size)?)null;
+        byte[] items = last is { } found ? [.. avfx.AsSpan(found.Start, found.Size), .. item] : item;
+        var itemAt = last is { } previous ? previous.Start + previous.Size + (-previous.Size & 3) : timeline.FirstClip ?? timeline.Start + timeline.Size;
+        int[] sizes = [4, timeline.Start - 4];
+        return TimelineEffectLooks.Grown(output,
+        [
+            new TimelineEffectLooks.Addition(itemAt, TimelineEffectLooks.Block("Item", items), sizes),
+            new TimelineEffectLooks.Addition(timeline.Start + timeline.Size, TimelineEffectLooks.Block("Clip", KillPayload()), sizes),
+        ]);
+    }
+
+    /// <summary>A KILL clip as VFXEditor writes one: its type, then ints (0, 0, 0, 1), floats (-1, -1, 0, 0) and 128 zero bytes.</summary>
+    private static byte[] KillPayload()
+    {
+        var payload = new byte[164];
+        BinaryPrimitives.WriteInt32LittleEndian(payload, KillClip);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(16), 1);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(20), -1);
+        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(24), -1);
+        return payload;
+    }
+
     /// <summary>The effect with every emitter sound named <paramref name="from"/> renamed to <paramref name="to"/>.</summary>
     public static byte[] WithSound(byte[] avfx, string from, string to)
     {

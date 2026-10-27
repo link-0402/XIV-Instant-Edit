@@ -94,7 +94,8 @@ internal sealed class TimelineLayout
 
     /// <summary>
     /// Lays out <paramref name="doc"/>. <paramref name="visibleLength"/> gives the frames an event
-    /// visibly takes beyond its duration (a sound's play length, a label); null counts only durations.
+    /// visibly takes beyond its duration (a sound's play length, a label); null counts only durations
+    /// and Async VFX stops (<see cref="TimelineEffectEdit.Stop"/>).
     /// <paramref name="motionFrames"/> gives facial motions' own lengths by name (see
     /// <see cref="TimelineDocument.PlayedFrames"/>); without it they count what they store. The layers
     /// keyed in <paramref name="unfolded"/> get a row per bone, in <paramref name="boneOrder"/> (see
@@ -118,8 +119,9 @@ internal sealed class TimelineLayout
             if (doc.PlayedFrames(ev, motionFrames) is var played && played != ev.Duration)
                 ev = ev with { Duration = played };
             shown[index] = ev;
-            // Saturating: mods use int32 durations such as 9999999 for "until the end".
-            ends[index] = (int)Math.Min(int.MaxValue, (long)ev.Start + Math.Max(Math.Max(ev.Duration, visibleLength?.Invoke(ev) ?? 0), 1));
+            // Saturating: mods use int32 durations such as 9999999 for "until the end". An Async VFX with a stop shows a bar to it.
+            var stop = ev.Magic == "C173" && ev.Look?.Stop is { } frames ? frames : 0;
+            ends[index] = (int)Math.Min(int.MaxValue, (long)ev.Start + Math.Max(Math.Max(Math.Max(ev.Duration, visibleLength?.Invoke(ev) ?? 0), stop), 1));
             indexByKey.TryAdd(ev.Key, index);
             present[LaneIndex(ev.Lane)] = true;
         }

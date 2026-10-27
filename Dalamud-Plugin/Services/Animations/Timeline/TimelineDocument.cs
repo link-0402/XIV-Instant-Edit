@@ -34,7 +34,7 @@ internal enum TimelineAccess : byte
 /// <param name="Group">Shared by the entries one Add created together, such as a prop's parts; null when alone.</param>
 /// <param name="CloneOf">For a copy of a loaded entry, that entry's "t" key: saving copies every byte of it, not only the fields shown.</param>
 /// <param name="Loop">A kept moving face that loops (see <see cref="TimelineDocument.Loops"/>): saved as copies of itself back to back.</param>
-/// <param name="Look">An effect's changed look (tint, size, colours): saving writes it into a copy of the effect (<see cref="TimelineEffectLooks.Bake"/>); null when unchanged.</param>
+/// <param name="Look">An effect's changed look (tint, place, colours, where it stops): saving writes it into a copy of the effect (<see cref="TimelineEffectLooks.Bake"/>); null when unchanged.</param>
 /// <param name="Pin">A sound event that always plays one alternative of its random set: that alternative's id (<see cref="TimelineSoundAlternative.Id"/>); null plays any. Saving gives it a copy of the file holding only that one.</param>
 internal sealed record TimelineEvent(
     string Key,

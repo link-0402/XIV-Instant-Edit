@@ -91,6 +91,9 @@ internal static class TimelineUi
 
     public static TimelineEvent With(TimelineEvent ev, TimelineField field, double value) => With(ev, field.Name, value);
 
+    /// <summary> The event with <paramref name="field"/> set; an Async VFX's Keep looping clears its Stops at (<see cref="TimelineEffectCheck.WithLoop"/>). </summary>
     public static TimelineEvent With(TimelineEvent ev, string field, double value) =>
-        ev with { Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(field, value) };
+        ev.Magic == "C173" && field == TimelineEffectCheck.LoopField
+            ? TimelineEffectCheck.WithLoop(ev, value)
+            : ev with { Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(field, value) };
 }

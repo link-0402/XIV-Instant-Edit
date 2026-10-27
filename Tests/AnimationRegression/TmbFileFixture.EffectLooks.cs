@@ -29,6 +29,7 @@ internal static partial class TmbFileFixture
             "simple colours only when used, light colours but none of a blur; it is not on a binder");
         Binders(check);
         Moving(check);
+        Stops(check);
         var bare = Chunk("AVFX", Chunk("Ver", Ints(1)));
         check(TimelineEffectLooks.Read(bare) is { Tint: null, Size: null, Colors.IsEmpty: true, Glow: false, Opacity: false, LightRange: false } &&
               TimelineEffectLooks.Apply(bare, new TimelineEffectEdit { Tint = Vector3.One, Hue = 90, Glow = 2 }).SequenceEqual(bare),
@@ -243,16 +244,11 @@ internal static partial class TmbFileFixture
     /// </summary>
     private static void LibraryMoves(Action<bool, string> check)
     {
-        const string library = @"G:\Penumbra";
-        if (!Directory.Exists(library))
+        if (LibraryEffects() is not { } files)
         {
             Console.WriteLine("[SKIP] effect moves: the mod library isn't at G:\\Penumbra");
             return;
         }
-        var random = new Random(20261027);
-        var files = Directory.GetDirectories(library).Order(StringComparer.OrdinalIgnoreCase).OrderBy(_ => random.Next())
-            .Select(folder => Directory.GetFiles(folder, "*.avfx", SearchOption.AllDirectories)).Where(f => f.Length > 0).Take(25)
-            .SelectMany(f => f).ToList();
         var up = new TimelineEffectEdit { Move = new Vector3(0, 1, 0) };
         int read = 0, refused = 0, moved = 0;
         var failures = new List<string>();
@@ -375,6 +371,262 @@ internal static partial class TmbFileFixture
             .. Leaf("KeyC", 1), .. Leaf("BvPr", 0), .. Leaf("BvPo", 0), .. Leaf("RanT", 0),
             .. Chunk("Keys", [.. BitConverter.GetBytes((short)0), .. BitConverter.GetBytes((short)1), .. Floats(1, 1, value)]),
         ]);
+    }
+
+    /// <summary>
+    /// Stops at: a KILL written into a copy of an Async VFX's effect, so it ends that many frames after
+    /// it starts. A KILL the schedule reaches moves, one it reaches only while off is turned on, and an
+    /// effect without one gets one. A kill scheduled after the stop is past it already and stays.
+    /// </summary>
+    private static void Stops(Action<bool, string> check)
+    {
+        // Scheduled at 0: a timeline whose first item kills at 909, an emitter item after it, so the kill is in both Item containers.
+        var killing = KillEffects.Effect([KillEffects.Scheduled(1, 0, 0)],
+            KillEffects.Timeline(0, 1, KillEffects.Item(909, 910, -1, 0), KillEffects.Item(0, 455, 0, -1)));
+        var moved = TimelineEffectFiles.WithKill(killing, 300);
+        var killStarts = Found(killing, "TmLn", "Item").Select(c => AnimationDependencies.Chunks(killing, c.At, c.At + c.Size).First(f => f.Name == "StTm").Start).ToList();
+        check(TimelineEffectFiles.KillsAt(killing) == 909 && TimelineEffectFiles.KillsAt(moved) == 300 && moved.Length == killing.Length &&
+              killStarts.Count == 2 && killStarts.All(at => BitConverter.ToInt32(moved, at) == 300) &&
+              Differing(killing, moved).All(i => killStarts.Any(at => i >= at && i < at + 4)),
+            "a stop moves the kill the schedule reaches, in every Item container, and changes no other byte");
+
+        var offItem = KillEffects.Effect([KillEffects.Scheduled(1, 0, 0)], KillEffects.Timeline(0, 1, KillEffects.Item(909, 910, -1, 0, enabled: 0)));
+        var offScheduled = KillEffects.Effect([KillEffects.Scheduled(0, 100, 0), KillEffects.Scheduled(1, 0, 1)],
+            KillEffects.Timeline(0, 1, KillEffects.Item(0, 1, -1, 0)), KillEffects.Timeline(455, 0, KillEffects.Item(0, -1, 0, -1)));
+        var turnedOn = TimelineEffectFiles.WithKill(offScheduled, 300);
+        var copies = Found(turnedOn, "Schd", "Item").Concat(Found(turnedOn, "Schd", "Trgr"))
+            .Select(c => AnimationDependencies.Chunks(turnedOn, c.At, c.At + c.Size).First(f => f.Name == "bEna").Start).ToList();
+        check(TimelineEffectFiles.KillsAt(offItem) == null && TimelineEffectFiles.KillsAt(TimelineEffectFiles.WithKill(offItem, 300)) == 300 &&
+              TimelineEffectFiles.KillsAt(offScheduled) == null && TimelineEffectFiles.KillsAt(turnedOn) == 300 && turnedOn.Length == offScheduled.Length &&
+              copies.Count == 4 && copies.All(at => turnedOn[at] == 1) &&
+              Found(turnedOn, "TmLn", "Item").Take(1).All(c => AnimationDependencies.Chunks(turnedOn, c.At, c.At + c.Size).First(f => f.Name == "StTm") is var field &&
+                  BitConverter.ToInt32(turnedOn, field.Start) == 200),
+            "a kill reached only while its item or scheduler entry is off is turned on in every copy and moved to the stop");
+
+        var plain = KillEffects.Effect([KillEffects.Scheduled(1, 0, 0)], KillEffects.Timeline(455, 0, KillEffects.Item(0, -1, 0, -1)));
+        var added = TimelineEffectFiles.WithKill(plain, 60);
+        var containers = Found(added, "TmLn", "Item");
+        var clip = Found(added, "TmLn", "Clip");
+        int Leaf(byte[] avfx, string name) => BitConverter.ToInt32(avfx, Found(avfx, "TmLn", name).Single().At);
+        var oldItems = Found(plain, "TmLn", "Item").Single();
+        check(TimelineEffectFiles.KillsAt(plain) == null && TimelineEffectFiles.KillsAt(added) == 60 &&
+              Leaf(added, "CpCn") == 1 && Leaf(added, "TICn") == Leaf(plain, "TICn") + 1 && BitConverter.ToInt32(added, 4) == added.Length - 8 &&
+              containers.Count == 2 && added.AsSpan(containers[1].At, oldItems.Size).SequenceEqual(plain.AsSpan(oldItems.At, oldItems.Size)) &&
+              clip.Count == 1 && added.AsSpan(clip[0].At, clip[0].Size).SequenceEqual(KillEffects.KillPayload) &&
+              added.Length == plain.Length + 8 + containers[1].Size + 8 + clip[0].Size &&
+              TimelineEffectLooks.Read(added) is { Bound: false },
+            "an effect without a kill gets a KILL clip and an Item container with the old items and the kill, its counts and sizes fixed");
+        var entries = ItemEntries(added, containers[1]);
+        check(entries.Count == 2 && entries[1].SequenceEqual([("bEna", 1), ("StTm", 60), ("EdTm", 60), ("BdNo", -1), ("EfNo", -1), ("EmNo", -1), ("Plfm", 0), ("ClNo", 0)]),
+            "the added item plays the new clip at the stop and is attached to nothing, its fields as VFXEditor writes them");
+
+        var late = KillEffects.Effect([KillEffects.Scheduled(1, 10, 0)], KillEffects.Timeline(455, 0, KillEffects.Item(0, -1, 0, -1)));
+        var nothing = KillEffects.Effect([KillEffects.Scheduled(0, 0, 0)], KillEffects.Timeline(455, 0, KillEffects.Item(0, -1, 0, -1)));
+        check(Refusal(() => TimelineEffectFiles.WithKill(late, 5)) == TimelineEffectFiles.StopBeforeStart &&
+              TimelineEffectFiles.StopBeforeStart == "Stops at is before the effect starts" &&
+              Refusal(() => TimelineEffectFiles.WithKill(nothing, 60)) == TimelineEffectFiles.NothingScheduled &&
+              TimelineEffectFiles.KillsAt(TimelineEffectFiles.WithKill(late, 10)) == 10,
+            "a stop before the effect starts, or on an effect with nothing scheduled, is refused");
+
+        // Library effects have items naming a clip their timeline lacks: a new clip there would be the one they name.
+        var dangling = KillEffects.Timeline(455, 0, KillEffects.Item(5, 20, 0, 0));
+        var onlyDangling = KillEffects.Effect([KillEffects.Scheduled(1, 0, 0)], dangling);
+        var another = TimelineEffectFiles.WithKill(KillEffects.Effect([KillEffects.Scheduled(1, 0, 0), KillEffects.Scheduled(1, 4, 1)],
+            dangling, KillEffects.Timeline(455, 0, KillEffects.Item(0, -1, 1, -1))), 60);
+        check(Refusal(() => TimelineEffectFiles.WithKill(onlyDangling, 60)) == TimelineEffectFiles.NoRoomForKill &&
+              TimelineEffectFiles.KillsAt(another) == 60 && Found(another, "TmLn", "CpCn").Select(c => BitConverter.ToInt32(another, c.At)).SequenceEqual([0, 1]),
+            "a kill is never added where an item names the clip it would be; the next timeline scheduled takes it");
+
+        // Red Carpet's layout: its kill is scheduled at 908; a stop before that adds a kill, one after it moves the kill.
+        var carpet = KillEffects.Effect([KillEffects.Scheduled(1, 908, 1), KillEffects.Scheduled(1, 0, 2)],
+            KillEffects.Timeline(0, 0, KillEffects.Item(0, -1, 0, -1)), KillEffects.Timeline(0, 1, KillEffects.Item(0, 1, -1, 0)),
+            KillEffects.Timeline(455, 0, KillEffects.Item(213, 347, 1, -1), KillEffects.Item(357, 455, 2, -1)));
+        var early = TimelineEffectFiles.WithKill(carpet, 300);
+        var later = TimelineEffectFiles.WithKill(carpet, 1000);
+        check(TimelineEffectFiles.EndsAt(carpet) == 908 && TimelineEffectFiles.KillsAt(early) == 300 && early.Length > carpet.Length &&
+              Found(early, "TmLn", "CpCn").Select(c => BitConverter.ToInt32(early, c.At)).SequenceEqual([0, 1, 1]) &&
+              TimelineEffectFiles.KillsAt(later) == 1000 && later.Length == carpet.Length &&
+              Found(later, "TmLn").Skip(1).Take(1).SelectMany(t => AnimationDependencies.Chunks(later, t.At, t.At + t.Size)).Where(c => c.Name == "Item")
+                  .All(c => AnimationDependencies.Chunks(later, c.Start, c.Start + c.Size).First(f => f.Name == "StTm") is var start && BitConverter.ToInt32(later, start.Start) == 92),
+            "a kill scheduled after the stop stays, and the timeline scheduled first gets one of its own; a stop after it moves it, never below 0");
+
+        var stop = new TimelineEffectEdit { Stop = 300 };
+        check(!stop.IsEmpty && !stop.Equals(new TimelineEffectEdit()) && stop.Equals(new TimelineEffectEdit { Stop = 300 }) &&
+              stop.GetHashCode() == new TimelineEffectEdit { Stop = 300 }.GetHashCode() && !stop.Equals(new TimelineEffectEdit { Stop = 301 }) &&
+              TimelineEffectLooks.Apply(killing, stop).SequenceEqual(moved) && TimelineEffectLooks.Apply(killing, new TimelineEffectEdit()).SequenceEqual(killing),
+            "a look's stop is written by the look's writer, so saves, previews and rebuilt copies get the kill");
+        StopEdits(check);
+        LibraryStops(check);
+    }
+
+    /// <summary> The entries of an Item container, each its fields in order: a new entry starts whenever a field comes again. </summary>
+    private static List<List<(string Name, int Value)>> ItemEntries(byte[] avfx, (int At, int Size) container)
+    {
+        var entries = new List<List<(string Name, int Value)>>();
+        foreach (var (name, at, size) in AnimationDependencies.Chunks(avfx, container.At, container.At + container.Size))
+        {
+            if (entries.Count == 0 || entries[^1].Any(f => f.Name == name))
+                entries.Add([]);
+            entries[^1].Add((name, size >= 4 ? BitConverter.ToInt32(avfx, at) : avfx[at]));
+        }
+        return entries;
+    }
+
+    /// <summary> The message of the refusal <paramref name="write"/> throws; null when it doesn't. </summary>
+    private static string? Refusal(Action write)
+    {
+        try { write(); }
+        catch (InvalidDataException e) { return e.Message; }
+        return null;
+    }
+
+    /// <summary> Stops at on an event: it replaces Keep looping and the other way round, scales with the length, and draws a bar to the stop. </summary>
+    private static void StopEdits(Action<bool, string> check)
+    {
+        var values = ImmutableDictionary<string, double>.Empty.Add(TimelineEffectCheck.LoopField, TimelineEffectCheck.KeepLooping);
+        var looping = new TimelineEvent("t4", "C173", TimelineLane.Effect, 10, 0, false, "vfx/mod/a.avfx", TimelineAccess.Editable, null, false, values,
+            Look: new TimelineEffectEdit { Hue = 30 });
+        var stopped = TimelineEffectCheck.WithStop(looping, 60);
+        check(stopped.Values[TimelineEffectCheck.LoopField] == 1 && stopped.Look is { Stop: 60, Hue: 30 } &&
+              TimelineEffectCheck.WithStop(looping, 0).Look!.Stop == 1 && TimelineEffectCheck.WithStop(stopped, null).Look is { Stop: null, Hue: 30 } &&
+              TimelineEffectCheck.WithStop(stopped, null).Values[TimelineEffectCheck.LoopField] == 1,
+            "Stops at replaces Keep looping: Loop/wait goes back to 1; clearing it leaves Loop/wait as it is");
+        var kept = TimelineEffectCheck.WithLoop(stopped, TimelineEffectCheck.KeepLooping);
+        check(kept.Values[TimelineEffectCheck.LoopField] == -1 && kept.Look is { Stop: null, Hue: 30 } &&
+              TimelineEffectCheck.WithLoop(stopped, 3).Look!.Stop == 60 &&
+              InstantEdit.Ui.Timeline.TimelineUi.With(stopped, TimelineEffectCheck.LoopField, -1).Look!.Stop == null,
+            "choosing Keep looping clears Stops at; another Loop/wait keeps it");
+
+        var doc = new TimelineDocument(100, 100, null, [stopped], 1);
+        var problems = ImmutableArray.Create(new TimelineEffectCheck.Problem("t4", stopped.Path, TimelineEffectIssue.LoopsOnce, 1, 50));
+        var fixedEvent = TimelineEffectCheck.Fix(doc, problems).Events[0];
+        var longer = TimelineEdits.SetLength(doc, 200, true).Events[0];
+        check(fixedEvent.Values[TimelineEffectCheck.LoopField] == -1 && fixedEvent.Look is { Stop: null } &&
+              longer.Look!.Stop == 120 && TimelineEdits.SetLength(doc, 200, false).Events[0].Look!.Stop == 60 &&
+              TimelineEdits.SetLength(doc with { Events = [TimelineEffectCheck.WithStop(stopped, 1)] }, 10, true).Events[0].Look!.Stop == 1,
+            "keeping the effects looping clears their stops; a scaled length scales a stop like a duration, never below 1");
+        var layout = InstantEdit.Ui.Timeline.TimelineLayout.Build(doc);
+        check(layout.EndOf(0) == 70 && InstantEdit.Ui.Timeline.TimelineLayout.Build(doc with { Events = [looping] }).EndOf(0) == 11,
+            "an Async VFX with a stop is drawn as a bar to it");
+    }
+
+    /// <summary>
+    /// Real effects from 25 sampled mod folders of the library at G:\Penumbra, when it is there: a stop
+    /// at 120 is written into every effect with something scheduled, which then reads and kills at 120,
+    /// unless its only timelines have an item naming the clip a new KILL would be. The KILL clips and
+    /// timeline items the writer adds are laid out as the library's own.
+    /// </summary>
+    private static void LibraryStops(Action<bool, string> check)
+    {
+        if (LibraryEffects() is not { } files)
+        {
+            Console.WriteLine("[SKIP] effect stops: the mod library isn't at G:\\Penumbra");
+            return;
+        }
+        int stopped = 0, unscheduled = 0, noRoom = 0;
+        var failures = new List<string>();
+        var kills = new Dictionary<string, int>();
+        string? realItem = null;
+        foreach (var file in files)
+        {
+            var bytes = File.ReadAllBytes(file);
+            try
+            {
+                var after = TimelineEffectFiles.WithKill(bytes, 120);
+                if (TimelineEffectFiles.KillsAt(after) == 120 && BitConverter.ToInt32(after, 4) == after.Length - 8 && TimelineEffectLooks.Read(after) != null)
+                    stopped++;
+                else
+                    failures.Add($"{Path.GetFileName(file)} doesn't stop at 120");
+            }
+            catch (InvalidDataException e) when (e.Message == TimelineEffectFiles.NothingScheduled) { unscheduled++; }
+            catch (InvalidDataException e) when (e.Message == TimelineEffectFiles.NoRoomForKill)
+            {
+                noRoom++;
+                Console.WriteLine($"  {Path.GetFileName(file)}: {e.Message}");
+            }
+            catch (InvalidDataException e) { failures.Add($"{Path.GetFileName(file)}: {e.Message}"); }
+            // Each KILL clip's size, its four ints and four floats, and whether anything follows them.
+            foreach (var clip in Found(bytes, "TmLn", "Clip").Where(c => c.Size >= 4 && BitConverter.ToInt32(bytes, c.At) == 0x4B494C4C))
+            {
+                var layout = clip.Size < 36 ? $"{clip.Size} bytes"
+                    : $"{clip.Size} bytes, ints {string.Join(" ", Enumerable.Range(0, 4).Select(i => BitConverter.ToInt32(bytes, clip.At + 4 + 4 * i)))}, " +
+                      $"floats {string.Join(" ", Enumerable.Range(0, 4).Select(i => BitConverter.ToSingle(bytes, clip.At + 20 + 4 * i)))}" +
+                      (bytes.AsSpan(clip.At + 36, clip.Size - 36).IndexOfAnyExcept((byte)0) >= 0 ? ", more" : "");
+                kills[layout] = kills.GetValueOrDefault(layout) + 1;
+            }
+            // The first item that names a clip, its fields and their sizes.
+            foreach (var container in Found(bytes, "TmLn", "Item"))
+            {
+                var entry = new List<(string Name, int Start, int Size)>();
+                foreach (var field in AnimationDependencies.Chunks(bytes, container.At, container.At + container.Size).Append((Name: "", Start: 0, Size: 0)))
+                {
+                    if (field.Name == "" || entry.Any(f => f.Name == field.Name))
+                    {
+                        if (realItem == null && entry.Any(f => f.Name == "ClNo"))
+                            realItem = string.Join(",", entry.Select(f => $"{f.Name}:{f.Size}"));
+                        entry.Clear();
+                    }
+                    entry.Add(field);
+                }
+            }
+        }
+        foreach (var failure in failures.Take(5))
+            Console.WriteLine("  " + failure);
+        foreach (var (layout, count) in kills.OrderByDescending(k => k.Value).Take(6))
+            Console.WriteLine($"  library KILL clip ({count}): {layout}");
+        check(files.Count > 0 && failures.Count == 0 && stopped + unscheduled + noRoom == files.Count,
+            $"library effects stop at 120 unless nothing in them is scheduled or an item names the new clip ({stopped} stopped, " +
+            $"{unscheduled} with nothing scheduled, {noRoom} with no room for a kill, {files.Count} in 25 mod folders)");
+        // The ints (the first is the fade) and the first float vary; every one is 164 bytes with nothing after the floats.
+        check(kills.Count > 0 && kills.Keys.All(k => k.StartsWith("164 bytes, ints ", StringComparison.Ordinal) && !k.EndsWith(", more")) &&
+              KillEffects.KillPayload.Length == 164 && KillEffects.KillPayload.Skip(36).All(b => b == 0),
+            $"a new KILL clip has the size and zeros of the library's own ({kills.Values.Sum()} found, {kills.Count} layouts)");
+        check(realItem == "bEna:4,StTm:4,EdTm:4,BdNo:4,EfNo:4,EmNo:4,Plfm:4,ClNo:4",
+            $"a new timeline item has the fields of the library's own ({realItem ?? "none found"})");
+    }
+
+    /// <summary> The effects of 25 sampled mod folders of the library at G:\Penumbra; null when it isn't there. </summary>
+    private static List<string>? LibraryEffects()
+    {
+        const string library = @"G:\Penumbra";
+        if (!Directory.Exists(library))
+            return null;
+        var random = new Random(20261027);
+        return Directory.GetDirectories(library).Order(StringComparer.OrdinalIgnoreCase).OrderBy(_ => random.Next())
+            .Select(folder => Directory.GetFiles(folder, "*.avfx", SearchOption.AllDirectories)).Where(f => f.Length > 0).Take(25)
+            .SelectMany(f => f).ToList();
+    }
+
+    /// <summary> Effect files with a scheduler and timelines, built as VFXEditor writes them (as the Red Carpet check's are). </summary>
+    private static class KillEffects
+    {
+        private static byte[] Field(string name, int value) => Chunk(name, Ints(value));
+
+        /// <summary> A scheduler item: on or off, its start, the timeline it starts. </summary>
+        public static byte[] Scheduled(byte enabled, int start, int timeline) => [.. Chunk("bEna", [enabled]), .. Field("StTm", start), .. Field("TlNo", timeline)];
+
+        public static byte[] Item(int start, int end, int emitter, int clip, byte enabled = 1) => [.. Field("bEna", enabled), .. Field("StTm", start),
+            .. Field("EdTm", end), .. Field("BdNo", -1), .. Field("EfNo", -1), .. Field("EmNo", emitter), .. Field("Plfm", 0), .. Field("ClNo", clip)];
+
+        /// <summary> A KILL clip: its type, fade 0 and hide 1, then two -1 floats and zeros. </summary>
+        public static readonly byte[] KillPayload = [.. Ints(0x4B494C4C, 0, 0, 0, 1), .. Floats(-1, -1, 0, 0), .. new byte[128]];
+
+        /// <summary> A timeline: every Item container repeats the items before it; <paramref name="kills"/> KILL clips follow. </summary>
+        public static byte[] Timeline(int loopEnd, int kills, params byte[][] items) => Chunk("TmLn", [
+            .. Field("LpSt", 0), .. Field("LpEd", loopEnd), .. Field("BnNo", -1), .. Field("TICn", items.Length), .. Field("CpCn", kills),
+            .. items.Select((_, i) => Chunk("Item", [.. items.Take(i + 1).SelectMany(x => x)])).SelectMany(x => x),
+            .. Enumerable.Range(0, kills).SelectMany(_ => Chunk("Clip", KillPayload))]);
+
+        /// <summary> An effect whose scheduler starts <paramref name="scheduled"/>; its Trgr chunks repeat every item, as VFXEditor writes them. </summary>
+        public static byte[] Effect(byte[][] scheduled, params byte[][] timelines)
+        {
+            byte[][] triggers = [Scheduled(1, 0, -1), Scheduled(1, 0, -1)];
+            var scheduler = Chunk("Schd", [
+                .. Field("ItCn", scheduled.Length), .. Field("TrCn", triggers.Length),
+                .. scheduled.Select((_, i) => Chunk("Item", [.. scheduled.Take(i + 1).SelectMany(x => x)])).SelectMany(x => x),
+                .. triggers.Select((_, i) => Chunk("Trgr", [.. scheduled.SelectMany(x => x), .. triggers.Take(i + 1).SelectMany(x => x)])).SelectMany(x => x)]);
+            return Chunk("AVFX", [.. Chunk("Ver", Ints(1)), .. scheduler, .. timelines.SelectMany(t => t), .. Chunk("Emit", Field("SdNo", 1))]);
+        }
     }
 
     /// <summary> Looks on timeline events: kept by edits, refused unwritten, and saved as copies. </summary>

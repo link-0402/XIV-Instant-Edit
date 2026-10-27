@@ -185,8 +185,8 @@ internal sealed class EffectLookEditor(TimelineSession session)
                     DrawStrengths(current, ev, look, edit);
                 }
             }
-            // The place stays as it is.
-            var placeOnly = new TimelineEffectEdit { Move = edit.Move, Turn = edit.Turn, Size = edit.Size };
+            // The place and the stop stay as they are.
+            var placeOnly = new TimelineEffectEdit { Move = edit.Move, Turn = edit.Turn, Size = edit.Size, Stop = edit.Stop };
             using (ImRaii.Disabled(edit.Equals(placeOnly)))
             {
                 if (ImGui.SmallButton("Reset look"))

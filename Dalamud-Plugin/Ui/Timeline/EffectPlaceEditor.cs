@@ -8,7 +8,8 @@ namespace InstantEdit.Ui.Timeline;
 /// <summary>
 /// The Place section above an effect's look: move, turn and size. A VFX event (C012) is placed by its
 /// own Position, Rotation and Scale fields; an Async VFX event (C173) by its effect file, through the
-/// look (<see cref="TimelineEffectEdit.Move"/>, <see cref="TimelineEffectEdit.Turn"/>, <see cref="TimelineEffectEdit.Size"/>).
+/// look (<see cref="TimelineEffectEdit.Move"/>, <see cref="TimelineEffectEdit.Turn"/>, <see cref="TimelineEffectEdit.Size"/>),
+/// which also says where it stops (<see cref="TimelineEffectEdit.Stop"/>).
 /// </summary>
 internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEditor looks)
 {
@@ -17,6 +18,8 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
     private static readonly string[] Axes = ["X", "Y", "Z"];
     private static readonly TimelineEffectEdit NoLook = new();
     private bool sizePerAxis;
+    // The last Stops at checked against an effect's bytes, and why it was refused.
+    private (byte[]? Bytes, int Stop, string? Refusal) stopCheck;
 
     /// <summary> The VFX event fields Place edits, which the properties' field rows leave out. </summary>
     public static bool Placed(TimelineEvent ev, TimelineField field) =>
@@ -151,6 +154,52 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
                 SizeAxesButton(size);
             }
         }
+        DrawStopRow(current, ev, edit);
+    }
+
+    /// <summary> Stops at: the frame after the effect starts that a KILL in its copy ends it at; unset, the file ends it. </summary>
+    private void DrawStopRow(TimelineEditor current, TimelineEvent ev, TimelineEffectEdit edit)
+    {
+        TimelineUi.Fact("Stops at");
+        if (edit.Stop is not { } stop)
+        {
+            if (ImGui.SmallButton("Set##effect-stop"))
+                SetStop(current, ev, Math.Max(1, current.Document.Length - ev.Start));
+            TimelineUi.Tip("Ends the effect at a frame. Stops at replaces Keep looping.");
+            return;
+        }
+        var frames = stop;
+        ImGui.SetNextItemWidth(Theme.Scaled(90));
+        if (ImGui.InputInt("##effect-stop", ref frames, 0, 0))
+            SetStop(current, ev, frames);
+        TimelineUi.Tip("Frames after the effect starts. Stops at replaces Keep looping.");
+        ImGui.SameLine(0, Theme.Gap);
+        if (ImGui.SmallButton("Clear##effect-stop"))
+            SetStop(current, ev, null);
+        TimelineUi.Tip("Let the effect end as its file does.");
+        if (StopRefusal(ev.Path, stop) is { } refusal)
+            TimelineUi.Note(null, Theme.Warning, refusal);
+    }
+
+    private void SetStop(TimelineEditor current, TimelineEvent ev, int? stop)
+    {
+        var stopped = TimelineEffectCheck.WithStop(ev, stop);
+        looks.SetLook(current, stopped, stopped.Look!);
+    }
+
+    /// <summary> Why the effect can't stop at <paramref name="stop"/>; null when it can or isn't read. Checked again only when the file or the stop changes. </summary>
+    private string? StopRefusal(string path, int stop)
+    {
+        if (looks.EffectBytes(path) is not { } bytes)
+            return null;
+        if (!ReferenceEquals(stopCheck.Bytes, bytes) || stopCheck.Stop != stop)
+        {
+            string? refusal = null;
+            try { TimelineEffectFiles.WithKill(bytes, stop); }
+            catch (InvalidDataException e) { refusal = e.Message; }
+            stopCheck = (bytes, stop, refusal);
+        }
+        return stopCheck.Refusal;
     }
 
     /// <summary> The size as one value, or per axis once the XYZ button is on or the axes differ; true when dragged. </summary>

@@ -59,6 +59,12 @@ internal sealed record TimelineEffectEdit
     /// <summary>Turns the whole effect further, in radians (shown in degrees). An attached effect can't be turned.</summary>
     public Vector3? Turn { get; init; }
 
+    /// <summary>
+    /// Ends the effect this many frames after it starts, by a KILL in its schedule (<see cref="TimelineEffectFiles.WithKill"/>);
+    /// null lets it end as the file does. Only an Async VFX event (C173) sets it.
+    /// </summary>
+    public int? Stop { get; init; }
+
     /// <summary>The move, turn and size when they change something: not null, a zero move or turn, or a size of 1.</summary>
     internal Vector3? Moves => Move is { } move && move != Vector3.Zero ? move : null;
 
@@ -86,7 +92,7 @@ internal sealed record TimelineEffectEdit
     /// <summary>Scales how far the point lights reach.</summary>
     public float LightRange { get; init; } = 1;
 
-    public bool IsEmpty => Tint == null && Sizes == null && Moves == null && Turns == null && !Recolors &&
+    public bool IsEmpty => Tint == null && Sizes == null && Moves == null && Turns == null && Stop == null && !Recolors &&
                            Glow == 1 && Opacity == 1 && LightRange == 1;
 
     /// <summary>Whether the colours of the parts change.</summary>
@@ -115,11 +121,12 @@ internal sealed record TimelineEffectEdit
     // Move, turn and size compare as they change things, so a zero move equals none (as in IsEmpty).
     public bool Equals(TimelineEffectEdit? other) =>
         other is not null && (ReferenceEquals(this, other) ||
-            Tint == other.Tint && Sizes == other.Sizes && Moves == other.Moves && Turns == other.Turns && Hue == other.Hue &&
+            Tint == other.Tint && Sizes == other.Sizes && Moves == other.Moves && Turns == other.Turns && Stop == other.Stop && Hue == other.Hue &&
             Saturation == other.Saturation && Glow == other.Glow && Opacity == other.Opacity && LightRange == other.LightRange &&
             Colors.SequenceEqual(other.Colors));
 
-    public override int GetHashCode() => HashCode.Combine(Tint, Sizes, Moves, Turns, Hue, Saturation, Glow, HashCode.Combine(Opacity, LightRange, Colors.Length));
+    public override int GetHashCode() =>
+        HashCode.Combine(Tint, Sizes, Moves, Turns, Hue, Saturation, Glow, HashCode.Combine(Opacity, LightRange, Colors.Length, Stop));
 }
 
 /// <summary>
@@ -268,7 +275,8 @@ internal static class TimelineEffectLooks
 
     /// <summary>
     /// <paramref name="avfx"/> with <paramref name="edit"/> written in: the same bytes but for the numbers
-    /// it changes, and the position curves a move on an attached effect adds. Values out of the
+    /// it changes, the position curves a move on an attached effect adds, and the KILL a stop adds
+    /// (<see cref="TimelineEffectFiles.WithKill"/>, which may refuse it). Values out of the
     /// editor's ranges are clamped. Throws <see cref="InvalidDataException"/> with <see cref="MoveRefusal"/>'s
     /// text for an edit it can't write.
     /// </summary>
@@ -320,9 +328,9 @@ internal static class TimelineEffectLooks
                     Scale(avfx, output, at, range);
                     break;
             }
-        return layout.Bound && edit.Moves is { } move
-            ? MoveBinders(output, Vector3.Clamp(Finite(move), new Vector3(-TimelineEffectEdit.MaxMove), new Vector3(TimelineEffectEdit.MaxMove)))
-            : output;
+        if (layout.Bound && edit.Moves is { } move)
+            output = MoveBinders(output, Vector3.Clamp(Finite(move), new Vector3(-TimelineEffectEdit.MaxMove), new Vector3(TimelineEffectEdit.MaxMove)));
+        return edit.Stop is { } stop ? TimelineEffectFiles.WithKill(output, Math.Clamp(stop, 1, TimelineDocument.MaxFrames)) : output;
     }
 
     /// <summary>
@@ -620,7 +628,7 @@ internal static class TimelineEffectLooks
     }
 
     /// <summary>Bytes to add at <paramref name="At"/>, and the size fields of the blocks they go into.</summary>
-    private readonly record struct Addition(int At, byte[] Bytes, int[] Sizes);
+    internal readonly record struct Addition(int At, byte[] Bytes, int[] Sizes);
 
     /// <summary>
     /// <paramref name="avfx"/> with <paramref name="move"/> added to the position (Pos) of every binder
@@ -690,7 +698,7 @@ internal static class TimelineEffectLooks
     }
 
     /// <summary><paramref name="avfx"/> with <paramref name="added"/> put in and the size fields around each grown by it.</summary>
-    private static byte[] Grown(byte[] avfx, List<Addition> added)
+    internal static byte[] Grown(byte[] avfx, List<Addition> added)
     {
         if (added.Count == 0)
             return avfx;
@@ -714,7 +722,7 @@ internal static class TimelineEffectLooks
     }
 
     /// <summary>A block as VFXEditor writes one: its name reversed and zero-padded to four bytes, its size, its payload padded to four.</summary>
-    private static byte[] Block(string name, byte[] payload)
+    internal static byte[] Block(string name, byte[] payload)
     {
         var block = new byte[8 + payload.Length + (-payload.Length & 3)];
         for (var i = 0; i < name.Length; i++)
@@ -724,7 +732,7 @@ internal static class TimelineEffectLooks
         return block;
     }
 
-    private static byte[] Leaf(string name, int value)
+    internal static byte[] Leaf(string name, int value)
     {
         var payload = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(payload, value);

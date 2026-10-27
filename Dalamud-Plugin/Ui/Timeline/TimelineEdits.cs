@@ -117,8 +117,8 @@ internal static class TimelineEdits
     /// <summary>
     /// Changes the length to <paramref name="frames"/>, clamped to the editor's limits. Motion clips
     /// and bone layers that lasted the whole old length (give or take a frame) last the new one. With
-    /// <paramref name="scaleEvents"/> every start and every non-zero duration scales with the length
-    /// (rounded half away from zero), and a start that played before still plays; without it nothing
+    /// <paramref name="scaleEvents"/> every start, every non-zero duration and every effect's Stops at
+    /// scales with the length (rounded half away from zero), and a start that played before still plays; without it nothing
     /// else moves. Durations past <see cref="TimelineDocument.MaxFrames"/> mean "until the end" in
     /// mods and never scale, nor do those of motions at their own speed, which the game ignores.
     /// With <paramref name="loaded"/> (the document as it was loaded), the motions that follow are
@@ -141,6 +141,7 @@ internal static class TimelineEdits
             var ev = events[index];
             var start = ev.Start;
             var duration = ev.Duration;
+            var look = ev.Look;
             if (scaleEvents && old > 0)
             {
                 start = TimelineSnap.Round(ev.Start * ratio);
@@ -149,6 +150,9 @@ internal static class TimelineEdits
                 start = Math.Clamp(start, 0, TimelineDocument.MaxFrames);
                 if (duration is > 0 and <= TimelineDocument.MaxFrames && !TimelineDocument.OwnPace(ev))
                     duration = Math.Clamp(TimelineSnap.Round(ev.Duration * ratio), 1, TimelineDocument.MaxFrames);
+                // An effect's stop is a length too.
+                if (look is { Stop: { } stop })
+                    look = look with { Stop = Math.Clamp(TimelineSnap.Round(stop * ratio), 1, TimelineDocument.MaxFrames) };
             }
             if (ev.Lane == TimelineLane.Motion && (original == null
                     ? doc.LastsWhole(ev.Duration)
@@ -161,8 +165,8 @@ internal static class TimelineEdits
                 else if (ev.Access == TimelineAccess.Movable)
                     duration = before.Duration;
             }
-            if (start != ev.Start || duration != ev.Duration)
-                events[index] = ev with { Start = start, Duration = duration };
+            if (start != ev.Start || duration != ev.Duration || !ReferenceEquals(look, ev.Look))
+                events[index] = ev with { Start = start, Duration = duration, Look = look };
         }
         var next = doc with { Length = length, Events = events.ToImmutable() };
         // Bone layers that lasted to the end (a still pose, an idle) last to the new one, keys where they were. A match or a

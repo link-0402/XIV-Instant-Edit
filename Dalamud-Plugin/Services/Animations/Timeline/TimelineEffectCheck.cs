@@ -88,8 +88,8 @@ internal static class TimelineEffectCheck
     }
 
     /// <summary>
-    /// Keeps every problem's effect going: loop/wait -1, and the effect's copy in place of the effect
-    /// when it ends itself or its sound stops. The copies it uses must be packaged with the edit
+    /// Keeps every problem's effect going: loop/wait -1 (which clears a Stops at), and the effect's copy
+    /// in place of the effect when it ends itself or its sound stops. The copies it uses must be packaged with the edit
     /// (<see cref="Copies"/>). Events that can't be edited stay as they are.
     /// </summary>
     public static TimelineDocument Fix(TimelineDocument document, IEnumerable<Problem> problems)
@@ -101,10 +101,29 @@ internal static class TimelineEffectCheck
         {
             if (!byKey.TryGetValue(ev.Key, out var found) || ev.Access != TimelineAccess.Editable || ev.Values == null)
                 return ev;
-            var kept = ev with { Values = ev.Values.SetItem(LoopField, KeepLooping) };
+            var kept = WithLoop(ev, KeepLooping);
             return found.Select(p => p.Copy).FirstOrDefault(c => c != null) is { } copy ? kept with { Path = copy.GamePath } : kept;
         }).ToImmutableArray();
         return events.SequenceEqual(document.Events) ? document : document with { Events = events };
+    }
+
+    /// <summary>
+    /// The event with Stops at (<see cref="TimelineEffectEdit.Stop"/>) set to <paramref name="stop"/> frames,
+    /// at least 1, or cleared with null. Stops at replaces Keep looping, since removing the effect's kills
+    /// and adding one fight over the same scheduler item: setting it puts Loop/wait -1 back to 1.
+    /// </summary>
+    public static TimelineEvent WithStop(TimelineEvent ev, int? stop)
+    {
+        var look = (ev.Look ?? new TimelineEffectEdit()) with { Stop = stop is { } frames ? Math.Clamp(frames, 1, TimelineDocument.MaxFrames) : null };
+        var values = stop != null && ev.Values?.GetValueOrDefault(LoopField) == KeepLooping ? ev.Values.SetItem(LoopField, 1) : ev.Values;
+        return ev with { Look = look, Values = values! };
+    }
+
+    /// <summary>The event with Loop/wait set to <paramref name="value"/>; Keep looping (-1) clears Stops at (see <see cref="WithStop"/>).</summary>
+    public static TimelineEvent WithLoop(TimelineEvent ev, double value)
+    {
+        var looped = ev with { Values = (ev.Values ?? ImmutableDictionary<string, double>.Empty).SetItem(LoopField, value) };
+        return value == KeepLooping && ev.Look is { Stop: not null } look ? looped with { Look = look with { Stop = null } } : looped;
     }
 
     /// <summary>The copies <see cref="Fix"/> puts in place, once each.</summary>
