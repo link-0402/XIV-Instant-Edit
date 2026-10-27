@@ -97,7 +97,7 @@ internal static class MotionEvaluator
     {
         if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation) ||
             layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From) ||
-            layer.Fix is { } read && (!Enum.IsDefined(read.Kind) || (read.Axes & ~MotionAxes.All) != 0))
+            layer.Fix is { } read && (!Enum.IsDefined(read.Kind) || (read.Axes & ~MotionAxes.All) != 0 || !Enum.IsDefined(read.Placement)))
             throw new InvalidDataException("A bone layer can't be read.");
         var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
         if (layer.Start < 0 || layer.End <= layer.Start || layer.End > TimelineDocument.MaxFrames)
@@ -143,6 +143,8 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} can't have a hand.");
         if (layer.Fix is { Kind: not MotionFixKind.ResetRoot, Axes: not MotionAxes.None })
             throw new InvalidDataException($"{name} can't have axes.");
+        if (layer.Fix is { Kind: not MotionFixKind.CloseLoop, Placement: not JoinPlacement.Centered })
+            throw new InvalidDataException($"{name} can't have a placement.");
         if (layer.Fix?.Hand is { } hand)
         {
             if (!Enum.IsDefined(hand.Side) || string.IsNullOrEmpty(hand.Shape) || hand.Shape.Length > MaxHandShapeName)

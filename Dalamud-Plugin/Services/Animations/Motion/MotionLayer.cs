@@ -34,6 +34,8 @@ internal enum MotionFixKind : byte
     HandShape,
     /// <summary>Turns the root bone back to its rest on the picked axes (<see cref="MotionFix.Axes"/>), and with Y a facing turn baked into the body.</summary>
     ResetRoot,
+    /// <summary>Blends a looping clip's end into its start after every other layer, pose and speed.</summary>
+    CloseLoop,
 }
 
 /// <summary>The axes a root reset takes the turn out of, in the root's own space (Y is up). Saved as numbers.</summary>
@@ -73,8 +75,10 @@ internal sealed record MotionHand(MotionHandSide Side, string Shape, float Curl 
 /// that many frames before the startup's end, so the startup's last frame shows with the loop's frame of that number,
 /// the one the match lands on. Journals written before it load with 0, the loop's first frame.</param>
 /// <param name="Axes">For a root reset, the axes it takes the root's turn out of; none for other fixes.</param>
+/// <param name="Placement">For a close, where the blend sits at the seam; other fixes keep the default.</param>
 internal sealed record MotionFix(MotionFixKind Kind, ImmutableDictionary<string, BoneTransform>? LoopFirst = null,
-    ImmutableDictionary<string, BoneTransform>? LoopSecond = null, int Fade = 0, MotionHand? Hand = null, MotionAxes Axes = MotionAxes.None);
+    ImmutableDictionary<string, BoneTransform>? LoopSecond = null, int Fade = 0, MotionHand? Hand = null, MotionAxes Axes = MotionAxes.None,
+    JoinPlacement Placement = JoinPlacement.Centered);
 
 /// <summary>How readily a planted pin counts its bone as down. Saved as numbers; Normal first, so a missing value reads as Normal.</summary>
 internal enum PinSensitivity : byte
