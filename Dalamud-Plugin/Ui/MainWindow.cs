@@ -113,7 +113,7 @@ public sealed class MainWindow : Window, IDisposable
         _onScreenTab = new OnScreenTab(config, saveConfig, onScreen, _rows, _hoverCards, _textureTab, _slotIcons, _expansion);
         _gameExportDialog = new GameFileExportDialog(config, saveConfig, penumbra, log, _feed, _rows);
         _gameFilesTab = new GameFilesTab(onScreen, _rows, _hoverCards, _gameExportDialog);
-        _animationsTab = new AnimationsTab(onScreen, _animationHub, _animationSend, _recorder, _rows, _expansion, lifetime);
+        _animationsTab = new AnimationsTab(onScreen, _animationHub, _animationSend, _recorder, _rows, _expansion, _feed, lifetime);
         _skinSeams = new SkinSeamDialog(onScreen, config, log, _feed, lifetime);
         _compressionCard = new TextureCompressionCard(config, log, _notifications, lifetime);
         _heelsCard = new HeelsOffsetCard(config, saveConfig, _feed);

@@ -21,12 +21,20 @@ internal static class MotionHold
     /// held still for <paramref name="frames"/> frames: one sample a frame, so later edits find the
     /// usual grid. It keeps the clip's tracks, blend hint and loop flag.
     /// </summary>
-    public static MotionClip Still(MotionClip playing, float frame, int frames)
+    public static MotionClip Still(MotionClip playing, float frame, int frames) => Still(playing, playing.Pose(frame), frame, frames);
+
+    /// <summary>
+    /// <paramref name="pose"/>, one local transform per bone of <paramref name="playing"/>'s skeleton, held
+    /// still for <paramref name="frames"/> frames as <see cref="Still(MotionClip, float, int)"/> holds one of its
+    /// own; the float tracks hold <paramref name="playing"/>'s at timeline frame <paramref name="frame"/>.
+    /// </summary>
+    public static MotionClip Still(MotionClip playing, MotionTransform[] pose, float frame, int frames)
     {
         if (frames < 1)
             throw new InvalidDataException("A still pose needs at least one frame.");
+        if (pose.Length != playing.Bones)
+            throw new InvalidDataException("The pose is for another skeleton.");
         var samples = frames + 1;
-        var pose = playing.Pose(frame);
         var tracks = playing.FloatTracks;
         float[]? floats = null;
         if (playing.TrackFloats is { } source)
@@ -48,6 +56,22 @@ internal static class MotionHold
             for (var b = 0; b < pose.Length; b++)
                 still.Set(k, b, pose[b]);
         return still;
+    }
+
+    /// <summary>
+    /// <paramref name="donor"/>'s pose at timeline frame <paramref name="frame"/> on <paramref name="playing"/>'s
+    /// skeleton, bone by bone by name, such as the game's idle on a skeleton mod's: a bone the donor's skeleton
+    /// lacks keeps <paramref name="playing"/>'s own pose at its first frame.
+    /// </summary>
+    public static MotionTransform[] Borrowed(MotionClip playing, MotionClip donor, float frame = 0)
+    {
+        var pose = playing.Pose(0);
+        var from = donor.Pose(frame);
+        var index = MotionEvaluator.Index(donor.Skeleton);
+        for (var b = 0; b < pose.Length; b++)
+            if (index.TryGetValue(playing.Skeleton.Bones[b].Name, out var d))
+                pose[b] = from[d];
+        return pose;
     }
 
     /// <summary>The lowest model-space height of the feet and toes in a local pose; null on a skeleton without them.</summary>

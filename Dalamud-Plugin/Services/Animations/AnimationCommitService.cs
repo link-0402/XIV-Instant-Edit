@@ -91,11 +91,14 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         }
         if (added is { } extra)
         {
-            if (!files.ContainsKey(extra.For)) throw new InvalidDataException("Added files must belong to an edited animation.");
+            // An instant startup is added beside its loop, which itself stays as it is.
+            if (!files.ContainsKey(extra.For) && !(request.Destination == AnimationDestination.InPlace && files.IsEmpty &&
+                    manifest.Resources.Any(r => r.GamePath == extra.For)))
+                throw new InvalidDataException("Added files must belong to an edited animation.");
             foreach (var (gamePath, bytes) in extra.Files)
             {
                 token.ThrowIfCancellationRequested();
-                if (!AddedGamePath(gamePath) || files.ContainsKey(gamePath))
+                if (!AddedGamePath(gamePath, request) || files.ContainsKey(gamePath))
                     throw new InvalidDataException($"{gamePath} can't be added to the mod.");
                 string mod, root, relative;
                 if (request.Destination == AnimationDestination.NewMod)
@@ -149,9 +152,15 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     /// <summary>Where an in-place edit puts the files it adds, inside the edited animation's mod.</summary>
     internal const string AddedFolder = "instant_edit/";
 
-    /// <summary>The kinds of file an edit may add: sounds, effects and what effects use.</summary>
-    internal static bool AddedGamePath(string gamePath) => AnimationDependencies.SafeGamePath(gamePath) &&
-        Path.GetExtension(gamePath).ToLowerInvariant() is ".scd" or ".avfx" or ".atex" or ".tmb";
+    /// <summary>
+    /// The kinds of file an edit may add: sounds, effects and what effects use, and for a timeline edit of
+    /// <paramref name="request"/>'s startup that startup's own animation (an instant startup beside its loop).
+    /// </summary>
+    internal static bool AddedGamePath(string gamePath, AnimationBakeRequest? request = null) => AnimationDependencies.SafeGamePath(gamePath) &&
+        (Path.GetExtension(gamePath).ToLowerInvariant() is ".scd" or ".avfx" or ".atex" or ".tmb" ||
+         request is { Operation: AnimationOperation.EditTimeline, Timeline.Startup: true, Capture.Startup: { } startup } &&
+         string.Equals(gamePath, startup.GamePath, StringComparison.OrdinalIgnoreCase) &&
+         gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase));
 
     internal static AnimationBakeRequest RecoveryRequest(AnimationBakeRequest request)
     {
@@ -457,7 +466,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     {
         var safeRelative = file.AddedFor is null
             ? AnimationResources.SafeModRelativePath(file.RelativePath, file.GamePath)
-            : AddedGamePath(file.GamePath) && AnimationDependencies.SafeGamePath(file.AddedFor) &&
+            : AddedGamePath(file.GamePath, journal.Request) && AnimationDependencies.SafeGamePath(file.AddedFor) &&
               ModPaths.IsSafeGameResourcePath(file.RelativePath.Replace('\\', '/'), Path.GetExtension(file.GamePath));
         if (!ModPaths.IsSafeModName(file.ModDirectory) || !AnimationDependencies.SafeGamePath(file.GamePath) ||
             !safeRelative ||

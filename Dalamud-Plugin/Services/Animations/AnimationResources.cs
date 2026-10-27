@@ -135,6 +135,15 @@ internal sealed class AnimationResources(PenumbraIpc penumbra, AnimationModServi
         return result;
     }
 
+    /// <summary>The game's own file at <paramref name="gamePath"/>, whatever mods replace it; null when the game has none.</summary>
+    public async Task<byte[]?> ReadGameAsync(string gamePath, CancellationToken token)
+    {
+        if (!AnimationDependencies.SafeGamePath(gamePath)) throw new InvalidDataException($"Invalid game path {gamePath}.");
+        var bytes = await Task.Run(() => data.FileExists(gamePath) ? data.GetFile(gamePath)?.Data : null, token);
+        if (bytes?.Length > AnimationPap.MaxFileSize) throw new InvalidDataException($"{gamePath} exceeds 256 MiB.");
+        return bytes;
+    }
+
     internal static string ResourceMapKey(Dictionary<string, HashSet<string>> paths)
     {
         var builder = new StringBuilder();

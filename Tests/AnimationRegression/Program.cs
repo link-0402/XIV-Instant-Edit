@@ -53,6 +53,7 @@ Scenarios.Run(() => SoundCutFixture.Run(Check, Reject));
 Scenarios.Run(() => BlenderMotionFixture.Run(Check, Reject));
 Scenarios.Run(() => MotionReplacementFixture.Run(Check, Reject));
 Scenarios.Run(() => FromScratchFixture.Run(Check, Reject));
+Scenarios.Run(() => InstantStartupFixture.Run(Check, Reject));
 Scenarios.Run(() => RaceRebuildFixture.Run(Check, Reject));
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])

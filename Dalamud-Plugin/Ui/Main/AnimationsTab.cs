@@ -27,7 +27,10 @@ internal sealed class AnimationsTab
     private readonly RecorderPanel _recorder;
     private readonly ResourceRows _rows;
     private readonly ExpansionState _expansion;
+    private readonly StatusFeed _feed;
     private readonly CancellationToken _lifetime;
+    // The instant startup being saved, reported once its job ends.
+    private Guid? instantStartupJob;
     private AnimationCapture? animationSelection;
     private bool animationStartupSelected;
     private string animationFilter = "";
@@ -45,7 +48,7 @@ internal sealed class AnimationsTab
     private string? effectCheckKey;
 
     public AnimationsTab(OnScreenService onScreen, AnimationIntegration animations, AnimationSendDialog animationSend, RecorderPanel recorder,
-        ResourceRows rows, ExpansionState expansion, CancellationToken lifetime)
+        ResourceRows rows, ExpansionState expansion, StatusFeed feed, CancellationToken lifetime)
     {
         _onScreen = onScreen;
         _animations = animations;
@@ -53,6 +56,7 @@ internal sealed class AnimationsTab
         _recorder = recorder;
         _rows = rows;
         _expansion = expansion;
+        _feed = feed;
         _lifetime = lifetime;
     }
 
@@ -83,6 +87,7 @@ internal sealed class AnimationsTab
             return;
         }
         animations.StartObservation();
+        ReportInstantStartup(animations);
         TrackAnimationSelection(animations.Observer);
         var rows = ReadAnimationRows(animations.Observer.History);
         Widgets.SearchBox("##animation-search", ref animationFilter, "Search animations, mods and paths");
@@ -282,7 +287,35 @@ internal sealed class AnimationsTab
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.GhostIconButton("##more", FontAwesomeIcon.EllipsisH, "More actions"))
             ImGui.OpenPopup(ResourceRows.RowMenuPopup);
-        _rows.DrawRowMenu(animationActor, view);
+        _rows.DrawRowMenu(animationActor, view, row.Startup || row.Capture.Startup is null ? null : () => DrawInstantStartupItem(row.Capture));
+    }
+
+    /// <summary>A loop's menu item that gives it an instant startup (see <see cref="AnimationEditService.MakeInstantStartup"/>).</summary>
+    private void DrawInstantStartupItem(AnimationCapture capture)
+    {
+        var service = _animations.Service;
+        var blocked = service is null ? _animations.Unavailable
+            : service.Busy ? "Another animation edit is running."
+            : AnimationEditService.InstantStartupBlock(capture);
+        using (ImRaii.Disabled(blocked is not null))
+            if (ImGui.MenuItem("Make startup instant") && service is not null)
+            {
+                instantStartupJob = service.MakeInstantStartup(capture);
+                _feed.Report(StatusChannel.Animations, FeedbackSeverity.Info, "Making the startup instant");
+            }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(blocked ?? $"Replace the startup with the game's idle, {TimelineDocument.MinLength} frames long,\n" +
+                $"so the loop starts at once. Saved in {UiText.Safe(capture.Sources.FirstOrDefault(s => s.GamePath == capture.Clip.GamePath)?.ModName, "the loop's mod")}.\n" +
+                "Undo it under Edits in the Timeline window.");
+    }
+
+    /// <summary>Tells the status strip how the instant startup save went, once it ends.</summary>
+    private void ReportInstantStartup(AnimationEditService service)
+    {
+        if (instantStartupJob is not { } job || service.LastResult is not { } result || result.Id != job || service.Busy)
+            return;
+        instantStartupJob = null;
+        _feed.Report(StatusChannel.Animations, result.Success ? FeedbackSeverity.Success : FeedbackSeverity.Warning, result.Message);
     }
 
     /// <summary> The line joining a startup row to the animation above it, hanging from that row's glyph. </summary>
