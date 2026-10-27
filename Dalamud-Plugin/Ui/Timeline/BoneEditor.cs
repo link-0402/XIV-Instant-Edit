@@ -47,6 +47,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
     // Static so a copied pose carries to another clip and between the panel and the Bones window.
     private static PoseCopy? poseClipboard;
 
+    /// <summary>Puts <paramref name="copy"/> on the clipboard Paste pose reads.</summary>
+    public static void CopyPose(PoseCopy copy) => poseClipboard = copy;
+
     /// <summary>Whether the ball and the gizmo use the character's axes rather than the primary bone's own.</summary>
     public bool CharacterAxes => characterAxes;
 
@@ -85,9 +88,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         }
         Func<string, Quaternion> space = frames != null ? frames.Space : _ => Quaternion.Identity;
         List<PoseTarget> others = [.. turned.Where(target => target.Bone != bone)];
-        // A pose bone whose key only turned it starts a move from the clip's own position here.
-        var motion = pose ? posing.MotionPose(loaded, frame) : null;
-        Func<string, Vector3?> own = name => motion is { } known && index.TryGetValue(name, out var at) ? known.Local[at].Position : null;
+        // A pose bone whose key only turned it starts a move from where the layers before this one leave it.
+        var before = pose ? (frames ?? posing.FramesAt(loaded, current.Document, layer, frame))?.Before : null;
+        Func<string, Vector3?> own = name => before != null && index.TryGetValue(name, out var at) ? before[at].Position : null;
 
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, $"At {TimelineWindowViews.FrameText(frame)}");
@@ -169,13 +172,13 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         {
             if (ImGui.Button("Reset"))
             {
-                var motion = pose ? posing.MotionPose(loaded, frame) : null;
+                var before = pose ? posing.FramesAt(loaded, current.Document, layer, frame)?.Before : null;
                 current.Commit(PoseEdits.Reset(current.Document, layer.Key, frame, bones, pose,
-                    bone => motion is { } known && index.TryGetValue(bone, out var at) ? known.Local[at] : null));
+                    bone => before != null && index.TryGetValue(bone, out var at) ? before[at] : null));
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(pose ? "Key the clip's own pose at the playhead." : "Key no change at the playhead, so the clip's own motion shows there.");
+            ImGui.SetTooltip(pose ? "Key the pose the layers above leave, at the playhead." : "Key no change at the playhead, so the layers above show there.");
 
         var pairs = PoseEdits.MirrorPairs(posing.Selection.Bones, posing.Selection.Primary, index.ContainsKey)
             .Where(pair => layer.Keys.Any(key => key.Bones.ContainsKey(pair.From))).ToList();
@@ -183,8 +186,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         FlowLine("Mirror");
         using (ImRaii.Disabled(readOnly || pairs.Count == 0 || !mirrorReady))
         {
-            // The motion as the document cuts or stretches it, as Paste mirrored reads it.
-            if (ImGui.Button("Mirror") && PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton, at => posing.MotionPose(loaded, at)?.Local) is { } mirrored)
+            // The motion as the layers before this one leave it, as Paste mirrored reads it.
+            if (ImGui.Button("Mirror") && PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton,
+                    at => posing.FramesAt(loaded, current.Document, layer, at)?.Before) is { } mirrored)
                 current.Commit(mirrored);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -215,8 +219,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(noPaste ?? "Key the copied bones at the playhead.");
 
-        // Mirroring reads the clip's own pose here, which may still be read.
-        var local = noPaste == null ? posing.MotionPose(loaded, frame)?.Local : null;
+        // Mirroring reads the pose the layers before this one leave here, which may still be read.
+        var local = noPaste == null ? posing.FramesAt(loaded, current.Document, layer, frame)?.Before : null;
         FlowLine("Paste mirrored");
         using (ImRaii.Disabled(readOnly || noPaste != null || local == null))
         {

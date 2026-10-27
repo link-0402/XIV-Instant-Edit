@@ -353,11 +353,11 @@ public sealed partial class TimelineWindow
             else if (operation == ImGuizmoOperation.Translate)
             {
                 var offset = layer.Kind == MotionLayerKind.Offset;
-                // A pin key is a spot in the pin's space: it moves from where it is, never from the clip's own position.
-                var motion = offset || layer.Kind == MotionLayerKind.Pin ? null : MotionPose(loaded, frame);
+                // A pin key is a spot in the pin's space: it moves from where it is, never from where the layers before leave the bone.
+                var under = offset || layer.Kind == MotionLayerKind.Pin ? null : frames.Before;
                 var (index, _) = BoneTree(skeleton);
                 current.Change(PoseEdits.Move(current.Document, layer.Key, frame, turned, follow.Move, frames.Space, offset,
-                    name => motion is { } own && index.TryGetValue(name, out var b) ? own.Local[b].Position : null));
+                    name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null));
             }
             else
                 current.Change(PoseEdits.Turn(current.Document, layer.Key, frame, turned, follow.Turn, frames.Space));

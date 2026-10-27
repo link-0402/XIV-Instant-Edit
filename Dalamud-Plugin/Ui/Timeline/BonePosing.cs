@@ -534,13 +534,14 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             var selected = selection.Primary is { } first ? selection.Bones.Where(name => name != first).Prepend(first) : selection.Bones;
             return PinTargets(layer, frame, selected, index, frames.BeforeModel, loop, spots);
         }
-        (MotionTransform[] Local, MotionTransform[] Model)? motion = null;
-        if (layer.Kind == MotionLayerKind.Pose && (motion = MotionPose(loaded, frame)) == null)
+        // An unkeyed pose bone starts where the layers before this one leave it, so a second pose layer builds on the first.
+        MotionTransform[]? before = null;
+        if (layer.Kind == MotionLayerKind.Pose && (before = FramesAt(loaded, doc, layer, frame)?.Before) == null)
             return null;
         var targets = new List<PoseTarget>();
         foreach (var bone in selection.Primary is { } primary ? selection.Bones.Where(name => name != primary).Prepend(primary) : selection.Bones)
         {
-            if (!index.TryGetValue(bone, out var at) || PoseEdits.Value(layer, bone, frame, motion?.Local[at], loop) is not { } value)
+            if (!index.TryGetValue(bone, out var at) || PoseEdits.Value(layer, bone, frame, before?[at], loop) is not { } value)
                 continue;
             targets.Add(new PoseTarget(bone, value, PoseEdits.Moved(layer, bone, frame)));
         }

@@ -55,7 +55,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
     private string? poseLayer;
     private string? lastPoseFolder;
     // The waiting pose made local on one skeleton, for a key frame and a frame of its clip.
-    private (PoseSource Source, string Skeleton, int Frame, int ClipFrame, PoseImport Import)? poseImport;
+    private (PoseSource Source, string Skeleton, int Frame, int ClipFrame, MotionTransform[]? Under, PoseImport Import)? poseImport;
 
     /// <summary>
     /// "Key a pose": the menu of pose sources, then the pose waiting to be keyed into <paramref name="layer"/>,
@@ -307,7 +307,9 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         // A startup's end is its last frame, where its loop takes over.
         var frame = staged.AtEnd ? current.Document.Length : current.Playhead;
         PoseImport? import;
-        try { import = PoseImportFor(staged, skeleton, loaded, frame); }
+        // The pose the layers before this one leave: a file's missing bones, the bones' scale and the ground start from it.
+        var under = posing.FramesAt(loaded, current.Document, layer, frame)?.Before;
+        try { import = PoseImportFor(staged, skeleton, under, frame); }
         catch (InvalidDataException e)
         {
             using var wrap = ImRaii.TextWrapPos(0f);
@@ -380,21 +382,20 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
             ImGui.SetTooltip("Move the body up or down so the lowest foot stands as low as in the clip, after bent legs lift it.");
 
         var inside = frame >= layer.Start && frame <= layer.End;
-        var own = posing.MotionPose(loaded, frame);
         var blocked = readOnly ? "Wait for the save to finish."
             : !inside ? staged.AtEnd ? "The layer must reach the clip's end." : "Move the playhead into the layer."
             : bones.Count == 0 ? selectedOnly ? "The pose has none of the selected bones." : "The pose has none of this skeleton's bones."
-            : own == null ? decode.Status
+            : under == null ? decode.Status
             : null;
         using (ImRaii.Disabled(blocked != null))
         {
             if (ImGui.Button((staged.AtEnd ? $"Key at the end ({TimelineWindowViews.FrameText(frame)})" : $"Key at {TimelineWindowViews.FrameText(frame)}") + "###pose-key") &&
-                own is { } clipPose)
+                under != null)
             {
                 var index = posing.BoneTree(skeleton).Index;
                 var next = PoseEdits.KeyPose(current.Document, layer.Key, frame, import, bones, positions,
-                    bone => index.TryGetValue(bone, out var at) ? clipPose.Local[at] : null);
-                if (ground && PoseEdits.Grounded(skeleton, clipPose.Local, import, bones, positions) is { } body)
+                    bone => index.TryGetValue(bone, out var at) ? under[at] : null);
+                if (ground && PoseEdits.Grounded(skeleton, under, import, bones, positions) is { } body)
                     next = MotionEdits.SetKey(next, layer.Key, frame, MotionHold.Body, body.ToBone(), true);
                 current.Commit(next);
                 current.SelectLayer(layer.Key, frame);
@@ -410,20 +411,20 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
     }
 
     /// <summary>
-    /// The waiting pose on the clip's skeleton, kept while the pose, the skeleton and the frames stay. A pose
-    /// file's missing bones take the clip's own pose at <paramref name="frame"/>, so null while that is read.
+    /// The waiting pose on the clip's skeleton, kept while the pose, the skeleton, the frames and <paramref name="under"/> stay.
+    /// A pose file's missing bones take <paramref name="under"/>, the pose the layers before leave at the frame, so null while that is read.
     /// </summary>
-    private PoseImport? PoseImportFor(PoseSource staged, SkeletonDescription skeleton, AnimationTimelineSource loaded, int frame)
+    private PoseImport? PoseImportFor(PoseSource staged, SkeletonDescription skeleton, MotionTransform[]? under, int frame)
     {
         if (poseImport is { } cached && ReferenceEquals(cached.Source, staged) && cached.Skeleton == skeleton.Fingerprint &&
-            cached.Frame == frame && cached.ClipFrame == staged.ClipFrame)
+            cached.Frame == frame && cached.ClipFrame == staged.ClipFrame && ReferenceEquals(cached.Under, under))
             return cached.Import;
         PoseImport import;
         if (staged.File is { } file)
         {
-            if (posing.MotionPose(loaded, frame) is not { } own)
+            if (under == null)
                 return null;
-            import = PoseImports.FromModel(skeleton, file.Bones, own.Local);
+            import = PoseImports.FromModel(skeleton, file.Bones, under);
         }
         else if (staged.Take is { } take)
             import = PoseImports.FromLocal(skeleton, TakeBones(take));
@@ -434,7 +435,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         }
         else
             return null;
-        poseImport = (staged, skeleton.Fingerprint, frame, staged.ClipFrame, import);
+        poseImport = (staged, skeleton.Fingerprint, frame, staged.ClipFrame, under, import);
         return import;
     }
 

@@ -188,7 +188,6 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private void ClickBone(string bone, SkeletonDescription skeleton) => posing.ClickBone(bone, skeleton);
     private BonePosing.BoneFrames? FramesAt(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer, int frame) =>
         posing.FramesAt(loaded, doc, layer, frame);
-    private (MotionTransform[] Local, MotionTransform[] Model)? MotionPose(AnimationTimelineSource loaded, int frame) => posing.MotionPose(loaded, frame);
     private List<PoseTarget>? Targets(MotionLayer layer, int frame, SkeletonDescription skeleton, AnimationTimelineSource loaded, TimelineDocument doc) =>
         posing.Targets(layer, frame, skeleton, loaded, doc);
     private static BoneState StateOf(string bone, MotionLayer? layer, int frame, HashSet<string>? animated, LayerBoneSets? layerBones) =>

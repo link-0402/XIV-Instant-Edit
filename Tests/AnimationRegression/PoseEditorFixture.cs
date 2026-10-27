@@ -558,5 +558,29 @@ internal static class PoseEditorFixture
         check(ReferenceEquals(PoseEdits.Paste(offset, "m1", 20, copy, false, rig, null, out _), offset) &&
               PoseEdits.Paste(pose, "m1", 20, copy, true, rig, null, out _) == null,
             "a pose copy never pastes into an offset layer, and a mirrored paste waits for the clip's own pose");
+
+        // Copy what you see: the lowest pose layer that is on, every bone but the root as the frames through it leave it.
+        var two = Doc(MotionLayerKind.Pose, new MotionKey(20, ImmutableDictionary<string, BoneTransform>.Empty.Add(Hand, hand.Value.ToBone()), [Hand]));
+        two = two with { Motion = [two.Motion[0], two.Motion[0] with { Key = "m2" }, two.Motion[0] with { Key = "m3", Enabled = false }] };
+        var lowest = PoseEdits.LowestPose(two);
+        var shown = PoseEdits.Shown(lowest!, 20, rig, local, null);
+        check(lowest?.Key == "m2" && PoseEdits.LowestPose(Doc(MotionLayerKind.Offset)) == null &&
+              shown.Kind == MotionLayerKind.Pose && !shown.Bones.Any(bone => bone.Bone == Root) && shown.Bones.Count == rig.Bones.Length - 1 &&
+              shown.Bones.All(bone => bone.Value == local[MotionEvaluator.Index(rig)[bone.Bone]]) &&
+              shown.Bones.Single(bone => bone.Bone == Hand).Moved && !shown.Bones.Single(bone => bone.Bone == Twin).Moved,
+            "Copy what you see copies every bone but the root from the lowest pose layer that is on, moving those its key moves");
+
+        // With the clip's tracks known, only the tracked bones and the ones the layers through the lowest pose key.
+        var moving = MotionSymmetry.Animated(rig, [(short)MotionEvaluator.Index(rig)[Twin]], two.Motion, 2);
+        var tracked = PoseEdits.Shown(lowest!, 20, rig, local, moving);
+        check(tracked.Bones.Select(bone => bone.Bone).Order(StringComparer.Ordinal).SequenceEqual(new[] { Hand, Twin }.Order(StringComparer.Ordinal)),
+            "Copy what you see leaves out bones the clip has no track for and no layer moves");
+
+        // Ctrl+V: the copy as one key pastes every copied bone into the lowest pose layer, moving the same ones.
+        var pastedKeys = MotionEdits.PasteKeys(two, "m2", 40, PoseEdits.AsKeys(tracked), out _);
+        var keyed = MotionEdits.Find(pastedKeys, "m2")!.Keys.Single(key => key.Frame == 40);
+        check(keyed.Bones.Count == 2 && keyed.Bones[Twin] == local[MotionEvaluator.Index(rig)[Twin]].ToBone() &&
+              keyed.Moved.Contains(Hand) && !keyed.Moved.Contains(Twin),
+            "Copy what you see pastes every copied bone with Paste keys too, moving those the copy moves");
     }
 }

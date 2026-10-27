@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
@@ -22,8 +23,8 @@ internal static class PoseEdits
     /// <summary>
     /// A bone's value in <paramref name="layer"/> at <paramref name="frame"/>, as the panels show it: its
     /// keys' (between keys the layer's way, held outside them or round a <paramref name="loop"/> the layer
-    /// covers), else no change for an offset, else <paramref name="motion"/>: the clip's own transform for
-    /// a pose, the spot the bone is at in its pin's space for a pin. Null while that is unknown.
+    /// covers), else no change for an offset, else <paramref name="motion"/>: the transform the layers before it leave
+    /// for a pose, the spot the bone is at in its pin's space for a pin. Null while that is unknown.
     /// </summary>
     public static MotionTransform? Value(MotionLayer layer, string bone, int frame, MotionTransform? motion, float loop = 0) =>
         MotionEvaluator.KeyValue(layer, bone, frame, loop) ?? (layer.Kind is MotionLayerKind.Pose or MotionLayerKind.Pin ? motion : MotionTransform.Identity);
@@ -233,7 +234,7 @@ internal static class PoseEdits
     /// <summary>
     /// Keys <paramref name="pose"/> at <paramref name="frame"/> in a pose layer for each of <paramref name="bones"/> it
     /// has: the bone's rotation, and with <paramref name="positions"/> its position where the pose moves it. The
-    /// scale and the other positions stay the clip's own (<paramref name="own"/>), so a pose never reshapes the body.
+    /// scale and the other positions stay as the layers before leave them (<paramref name="own"/>), so a pose never reshapes the body.
     /// </summary>
     public static TimelineDocument KeyPose(TimelineDocument doc, string layer, int frame, PoseImport pose, IEnumerable<string> bones, bool positions,
         Func<string, MotionTransform?> own)
@@ -248,18 +249,17 @@ internal static class PoseEdits
         return doc;
     }
 
-    /// <summary>A pose's bone as <see cref="KeyPose"/> keys it: its rotation, its position when it moves, the clip's own scale.</summary>
+    /// <summary>A pose's bone as <see cref="KeyPose"/> keys it: its rotation, its position when it moves, the scale the layers before leave.</summary>
     private static MotionTransform PoseKey(MotionTransform value, MotionTransform? clip, bool moved) =>
         new(moved || clip is not { } kept ? value.Position : kept.Position, value.Rotation, clip?.Scale ?? Vector3.One);
 
     /// <summary>
     /// The body's key that stands the pose <see cref="KeyPose"/> keys on the ground: its feet as low as in the
-    /// clip's own pose there (<paramref name="own"/>, one local transform per bone of <paramref name="skeleton"/>).
+    /// pose the layers before leave there (<paramref name="own"/>, one local transform per bone of <paramref name="skeleton"/>).
     /// Null on a skeleton without a body bone or feet.
     /// </summary>
     public static MotionTransform? Grounded(SkeletonDescription skeleton, MotionTransform[] own, PoseImport pose, IEnumerable<string> bones, bool positions)
     {
-        // shortcut: the pose is measured over the clip's own pose, not over the layers before this one; measure the evaluated pose if users stack pose layers.
         var posed = (MotionTransform[])own.Clone();
         var index = MotionEvaluator.Index(skeleton);
         foreach (var bone in bones)
@@ -298,8 +298,8 @@ internal static class PoseEdits
     }
 
     /// <summary>
-    /// Keys every bone at <paramref name="frame"/> back to the motion's own: no change for an offset, the
-    /// clip's own transform (<paramref name="motion"/>) for a pose, which then leaves the position to the clip.
+    /// Keys every bone at <paramref name="frame"/> back to the motion under the layer: no change for an offset, the
+    /// transform the layers before leave (<paramref name="motion"/>) for a pose, which then leaves the position to them.
     /// Bones whose motion is unknown are left as they are.
     /// </summary>
     public static TimelineDocument Reset(TimelineDocument doc, string layer, int frame, IEnumerable<string> bones, bool pose,
@@ -362,7 +362,7 @@ internal static class PoseEdits
     /// Gives each pair's other side the same edits, mirrored across the character's middle: every key
     /// of the bone in the layer, each read against the motion at its frame, replaces the twin's keys in
     /// the layer. The middle turns with the body: it is the skeleton's at rest, carried along by the
-    /// nearest bone above both sides. <paramref name="localAt"/> gives the clip's own pose at a frame;
+    /// nearest bone above both sides. <paramref name="localAt"/> gives the pose the layers before leave at a frame;
     /// null while it is unknown, which makes the result null too. Only offset and pose keys mirror: an
     /// amplitude has none, and a pin's hold spots, not turns.
     /// </summary>
@@ -414,7 +414,7 @@ internal static class PoseEdits
     /// <summary>
     /// Keys <paramref name="copy"/>'s bones at <paramref name="frame"/> in a layer of the kind they were copied from,
     /// as one edit. With <paramref name="mirrored"/> each goes to its twin (a middle bone onto itself), mirrored as
-    /// <see cref="Mirror"/> does: read against the clip's own pose here (<paramref name="local"/>), so a pose key's
+    /// <see cref="Mirror"/> does: read against the pose the layers before leave here (<paramref name="local"/>), so a pose key's
     /// change from that is what mirrors. Null when that pose is unknown. Bones the skeleton lacks, or for a mirrored
     /// paste whose twin it lacks, are left out and counted in <paramref name="skipped"/>.
     /// </summary>
@@ -450,6 +450,27 @@ internal static class PoseEdits
         }
         return doc;
     }
+
+    /// <summary>The lowest pose layer that is on: it applies last, so a pose pasted into it shows as copied.</summary>
+    public static MotionLayer? LowestPose(TimelineDocument doc) =>
+        doc.Motion.LastOrDefault(layer => layer.Kind == MotionLayerKind.Pose && layer.Enabled);
+
+    /// <summary>
+    /// Every bone a whole-body pose keys as <paramref name="through"/> leaves it (one local transform per bone of
+    /// <paramref name="skeleton"/>, the frames through the lowest pose <paramref name="layer"/>), for Paste pose.
+    /// Only the bones in <paramref name="moving"/> (the clip's tracks and what the layers move, see
+    /// <see cref="MotionSymmetry.Animated"/>), so a big skeleton's still and physics bones stay unkeyed; null takes every bone.
+    /// Each sets its position where that layer's key at <paramref name="frame"/> does.
+    /// </summary>
+    public static PoseCopy Shown(MotionLayer layer, int frame, SkeletonDescription skeleton, MotionTransform[] through, IReadOnlySet<int>? moving) =>
+        new(MotionLayerKind.Pose, [.. skeleton.Bones.Select((bone, at) => (bone.Name, at))
+            .Where(bone => !Unposed(bone.Name) && (moving == null || moving.Contains(bone.at)))
+            .Select(bone => new PoseTarget(bone.Name, through[bone.at], Moved(layer, bone.Name, frame)))]);
+
+    /// <summary><paramref name="copy"/> as one key for Paste keys (Ctrl+V): each bone's value, its position set where the copy moves it.</summary>
+    public static KeyCopy AsKeys(PoseCopy copy) =>
+        new(copy.Kind, [new MotionKey(0, copy.Bones.ToImmutableDictionary(bone => bone.Bone, bone => bone.Value.ToBone(), StringComparer.Ordinal),
+            [.. copy.Bones.Where(bone => bone.Moved).Select(bone => bone.Bone)])]);
 
     private static MotionTransform[] RestModel(SkeletonDescription skeleton) =>
         MotionEvaluator.ModelSpace(skeleton, skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference)).ToArray());
@@ -491,7 +512,7 @@ internal static class PoseEdits
     }
 
     /// <summary>
-    /// A pose key for the twin of a bone: the key's change from the clip's own transform
+    /// A pose key for the twin of a bone: the key's change from the transform under the layer
     /// (<paramref name="motion"/>, under a parent turned <paramref name="parent"/>), as the character makes
     /// it, mirrored across the middle of the body and made to the twin's own transform.
     /// </summary>

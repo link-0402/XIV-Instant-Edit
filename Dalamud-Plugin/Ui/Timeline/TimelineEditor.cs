@@ -1586,6 +1586,13 @@ internal sealed class TimelineEditor
         return true;
     }
 
+    /// <summary>Keeps <paramref name="copy"/> for <see cref="PasteKeys"/> in place of the last copied keys, as Copy what you see does.</summary>
+    public void CopyKeys(KeyCopy copy)
+    {
+        keyClipboard = copy;
+        clipboard = [];
+    }
+
     /// <summary>Keys the copied keys from the playhead on in the selected layer, which must be of the kind they came from, and picks them.</summary>
     public bool PasteKeys()
     {

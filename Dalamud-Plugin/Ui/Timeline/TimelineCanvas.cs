@@ -6,6 +6,7 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui.Pose;
 
 namespace InstantEdit.Ui.Timeline;
 
@@ -736,7 +737,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     }
 
     /// <summary> A bone layer's menu: its key under the pointer, turning it on or off, copying, ordering and deleting it. </summary>
-    private static void DrawLayerMenu(TimelineEditor current, MotionLayer layer, bool readOnly)
+    private void DrawLayerMenu(TimelineEditor current, MotionLayer layer, bool readOnly)
     {
         ImGui.TextColored(Theme.Label, layer.Name);
         ImGui.Separator();
@@ -758,6 +759,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.SelectLayer(layer.Key);
             current.PasteKeys();
         }
+        DrawCopyShown(current);
         if (TimelineLayout.Unfolds(layer) && ImGui.MenuItem(current.IsUnfolded(layer.Key) ? "Hide bone rows" : "Show bone rows"))
             current.SetUnfolded(layer.Key, !current.IsUnfolded(layer.Key));
         if (ImGui.MenuItem(layer.Enabled ? "Turn off" : "Turn on", "", false, !readOnly))
@@ -777,6 +779,32 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Commit(MotionEdits.Reorder(doc, layer.Key, 1));
         if (ImGui.MenuItem("Delete layer", "", false, !readOnly))
             current.Commit(MotionEdits.Remove(doc, layer.Key));
+    }
+
+    /// <summary> Copy what you see: every bone as the lowest pose layer leaves it at the playhead, for Paste pose. </summary>
+    private void DrawCopyShown(TimelineEditor current)
+    {
+        var lowest = PoseEdits.LowestPose(current.Document);
+        if (ImGui.MenuItem("Copy what you see", "", false, lowest != null && session.Source != null) && lowest != null && session.Source is { } loaded)
+        {
+            var frames = posing.FramesAt(loaded, current.Document, lowest, current.Playhead);
+            if (frames == null || session.EditingSkeleton(loaded) is not { } skeleton || frames.Through.Length != skeleton.Bones.Length)
+                current.Note("The motion is still being read. Try again in a moment.");
+            else
+            {
+                // The bones the clip has tracks for and the layers through the lowest pose move, not the whole skeleton.
+                var at = MotionEdits.IndexOf(current.Document, lowest.Key);
+                var moving = MotionSymmetry.Animated(skeleton, posing.DecodedTracks(skeleton), current.Document.Motion, at + 1);
+                var copy = PoseEdits.Shown(lowest, current.Playhead, skeleton, frames.Through, moving);
+                // Both clipboards, so Paste pose and Paste keys (Ctrl+V) each key the whole pose.
+                BoneEditor.CopyPose(copy);
+                current.CopyKeys(PoseEdits.AsKeys(copy));
+                current.Note($"Copied {copy.Bones.Count} bones as they look here. Paste into {lowest.Name} to get this pose.");
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(lowest == null ? "Add a pose layer first. The copy pastes into one."
+                : $"Copy every moving bone as it looks at the playhead. Paste keys or Paste pose into {lowest.Name}, the lowest pose layer, to get this pose at another frame.");
     }
 
     private static void DrawPasteLayers(TimelineEditor current, bool readOnly)
