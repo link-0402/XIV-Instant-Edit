@@ -257,7 +257,7 @@ internal static class TimelineEffectLooks
     /// turned or scaled (its binder has no rotation or scale), and moves only on a binder position.
     /// </summary>
     public static string? MoveRefusal(TimelineEffectLook look, TimelineEffectEdit edit) =>
-        Refusal(look.Bound, !look.BinderPositions.IsEmpty, edit);
+        Refusal(look.Bound, !look.BinderPositions.IsDefaultOrEmpty, edit);
 
     private static string? Refusal(bool bound, bool positions, TimelineEffectEdit edit) =>
         !bound ? null

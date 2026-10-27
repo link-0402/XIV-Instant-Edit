@@ -196,6 +196,14 @@ internal static partial class TmbFileFixture
             "a new axis curve goes in its place among the others and is written as VFXEditor writes one: key count, behaviours, " +
             "random type, then one linear key at frame 0");
 
+        var keyless = BinderEffects.Effect(timeline, Chunk("Bind", Chunk("PrpS", Chunk("Pos", Chunk("Y", Leaf("KeyC", 0))))));
+        var keyed = TimelineEffectLooks.Apply(keyless, new TimelineEffectEdit { Move = new Vector3(0, 2, 0) });
+        check(keyed.Length == keyless.Length + 24 && TimelineEffectLooks.Read(keyed) is { BinderPositions: [{ Keys: 1, Constant: { X: 0, Y: 2, Z: 0 } }] } &&
+              Found(keyed, "Bind", "PrpS", "Pos", "Y") is [(var yAt, var ySize)] &&
+              AnimationDependencies.Chunks(keyed, yAt, yAt + ySize).Select(c => c.Name).SequenceEqual(["KeyC", "Keys"]) &&
+              Found(keyed, "Bind", "PrpS", "Pos", "Y", "Keys") is [(var keysAt, 16)] && keyed.AsSpan(keysAt, 16).SequenceEqual(NewKey(2)),
+            "a curve without a key block gets one after its other leaves, holding the new key");
+
         var noBlocks = BinderEffects.Effect(timeline, Chunk("Bind", Leaf("BnVr", 1)));
         check(TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(noBlocks), up) == noPosition &&
               Thrown(() => TimelineEffectLooks.Apply(noBlocks, up)) == noPosition &&
