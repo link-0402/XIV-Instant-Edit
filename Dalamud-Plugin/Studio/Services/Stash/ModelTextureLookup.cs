@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
+using InstantEdit.Studio.Models;
 
 namespace InstantEdit.Studio.Services.Stash;
 
@@ -102,8 +103,10 @@ internal sealed class ModelTextureLookup
     /// <summary>
     /// The textures for one of the model's materials, by purpose, as full paths. First that has it: the
     /// Unity material the source model's remap gives the name, the stash material of the same name
-    /// (ignoring case and Blender's ".001"), the texture set the name's telling words point at (see
-    /// <see cref="TextureItemNames"/>). Empty when none does.
+    /// (ignoring case and Blender's ".001"), one named the same and more ("Thigh" → "Thigh Highs"), the
+    /// texture set the name's telling words point at (see <see cref="TextureItemNames"/>). A stash material
+    /// counts only while a texture of it fills a slot (a matcap alone fills none), and what it leaves out
+    /// comes from the texture set its textures are in. Empty when none does.
     /// </summary>
     public IReadOnlyDictionary<TexturePurpose, string> TexturesFor(string referenced)
     {
@@ -116,16 +119,73 @@ internal sealed class ModelTextureLookup
             foreach (var candidate in names)
                 foreach (var (model, unity) in remap)
                     if (string.Equals(model, candidate, StringComparison.OrdinalIgnoreCase) && MaterialNamed(unity) is { } remapped)
-                        return Absolute(remapped.Textures);
+                        return WithItsSet(remapped);
         foreach (var candidate in names)
             if (MaterialNamed(candidate) is { } named)
-                return Absolute(named.Textures);
+                return WithItsSet(named);
+        foreach (var candidate in names)
+            if (MaterialNamedLonger(candidate) is { } longer)
+                return WithItsSet(longer);
         return Absolute(ByWords(name));
     }
 
+    /// <summary>
+    /// A stash material's textures, with the purposes it leaves out taken from the item that holds most of
+    /// them: a Unity material lists only the maps its shader reads ("Thigh Highs" a diffuse and a normal,
+    /// beside the set's metallic mask).
+    /// </summary>
+    private IReadOnlyDictionary<TexturePurpose, string> WithItsSet(StashMaterial material)
+    {
+        var textures = new Dictionary<TexturePurpose, string>(material.Textures);
+        var paths = material.Textures.Values.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var (list, _) = Items();
+        var item = list.Items.Select(i => (Item: i, Holds: i.Textures.Count(t => paths.Contains(t.Path))))
+                             .Where(i => i.Holds > 0)
+                             .OrderByDescending(i => i.Holds)
+                             .Select(i => i.Item)
+                             .FirstOrDefault();
+        if (item != null)
+            foreach (var texture in item.Textures.Where(t => t.Purpose is not (TexturePurpose.Other or TexturePurpose.Matcap))
+                                                 .OrderBy(t => item.ByLayout.Contains(t) ? 1 : 0))
+                textures.TryAdd(texture.Purpose, texture.Path);
+        return Absolute(textures);
+    }
+
+    /// <summary>The first stash material of the name, the same case first, whose textures fill a slot.</summary>
     private StashMaterial? MaterialNamed(string name)
-        => Manifest!.Materials.FirstOrDefault(m => m.Name == name)
-        ?? Manifest.Materials.FirstOrDefault(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+        => Manifest!.Materials.Where(m => m.Name == name)
+                    .Concat(Manifest.Materials.Where(m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)))
+                    .FirstOrDefault(FillsASlot);
+
+    /// <summary>
+    /// A stash material named <paramref name="name"/> and more words, as a Unity creator names a model's
+    /// material's colour variants ("UV1" → "UV1 1", "UV1 Black Gold"): of several, one with a diffuse, then the
+    /// one that fills the most slots, then the first.
+    /// </summary>
+    private StashMaterial? MaterialNamedLonger(string name)
+    {
+        StashMaterial? best = null;
+        (bool Diffuse, int Slots) most = (false, 0);
+        foreach (var material in Manifest!.Materials)
+        {
+            if (material.Name.Length <= name.Length || char.IsLetterOrDigit(material.Name[name.Length])
+                || !material.Name.StartsWith(name, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var slots = Slots(material);
+            var rank = (slots.Exists(s => s.Type == TextureType.Diffuse), slots.Count);
+            if (rank.CompareTo(most) > 0)
+                (best, most) = (material, rank);
+        }
+        return best;
+    }
+
+    private bool FillsASlot(StashMaterial material) => Slots(material).Count > 0;
+
+    /// <summary>The slots a stash material's textures fill, of those on disk.</summary>
+    private List<(TextureType Type, string Path, bool Folder)> Slots(StashMaterial material)
+        => StashApply.Plan(Absolute(material.Textures), Array.Empty<TextureType>())
+                     .Where(p => p.Folder ? Directory.Exists(p.Path) : File.Exists(p.Path))
+                     .ToList();
 
     /// <summary>
     /// The textures of the item the name's telling words point at: of several, one with a diffuse, then
@@ -136,9 +196,9 @@ internal sealed class ModelTextureLookup
     private IReadOnlyDictionary<TexturePurpose, string> ByWords(string name)
     {
         var (list, names) = Items();
-        var telling = names.TellingWords(name);
-        bool Holds(StashEntry texture) => telling.All(TextureItemNames.WordsOf(texture.Path).Contains);
-        int Words(StashEntry texture) => TextureItemNames.WordsOf(texture.Path).Count;
+        var (telling, numbered) = names.TellingWords(name);
+        bool Holds(StashEntry texture) => telling.All(TextureItemNames.WordsOf(texture.Path, numbered).Contains);
+        int Words(StashEntry texture) => TextureItemNames.WordsOf(texture.Path, numbered).Count;
 
         TextureItem? best = null;
         (bool NoDiffuse, int Words) fewest = (true, int.MaxValue);

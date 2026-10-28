@@ -89,10 +89,13 @@ public static class TexturePurposes
     private static readonly Regex GuidName = new(@"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", RegexOptions.CultureInvariant);
 
     /// <summary>The words of a file stem, lower case, split on anything not a letter or digit, with trailing digits dropped.</summary>
-    internal static List<string> Words(string stem)
+    internal static List<string> Words(string stem) => Words(stem, keepDigits: false);
+
+    /// <param name="keepDigits">Keep the digits after a word's letters ("UV1" → "uv1"); a word of digits alone is still dropped.</param>
+    internal static List<string> Words(string stem, bool keepDigits)
         => new string(stem.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : ' ').ToArray())
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Select(t => t.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9'))
+            .Select(t => keepDigits && t.Any(char.IsLetter) ? t : t.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9'))
             .Where(t => t.Length > 0)
             .ToList();
 
@@ -219,10 +222,14 @@ public static class TexturePurposes
         return result;
     }
 
-    /// <summary>Words a texture set's names end in after the name of the thing they belong to ("Body_Normal", "top_id", "Shirt_Alpha").</summary>
+    /// <summary>
+    /// Words a texture set's names end in after the name of the thing they belong to ("Body_Normal", "top_id",
+    /// "Shirt_Alpha"), with the ones Substance Painter adds to a role ("Body_Normal_OpenGL", "Body_Mixed_AO").
+    /// </summary>
     private static readonly HashSet<string> SuffixWords = new(
         NormalTokens.Concat(OcclusionTokens).Concat(EmissionTokens).Concat(MaskTokens).Concat(DiffuseTokens)
-                    .Concat(new[] { "id", "index", "alpha", "opacity", "transparency", "height", "disp", "displacement" }),
+                    .Concat(new[] { "id", "index", "alpha", "opacity", "transparency", "height", "disp", "displacement" })
+                    .Concat(new[] { "opengl", "directx", "mixed" }),
         StringComparer.Ordinal);
 
     /// <summary><paramref name="stem"/> without the role words it ends in ("Body_Normal" → "Body", "top_m" → "top"); itself when it has none.</summary>

@@ -296,7 +296,7 @@ internal sealed class ModelInspector
         Gui.Label("File");
         string src = model.SourcePath;
         if (Gui.PathPicker("ModelSrc", ref src, "path to a .mdl file", PathKind.File, "Model files{.mdl}",
-                picked => { model.SourcePath = picked; model.IsVanillaDummy = false; _session.MarkDirty(); },
+                picked => { model.SourcePath = picked; model.IsVanillaDummy = false; _session.MarkDirty(); _tree.FitNewModel(item, new[] { picked }); },
                 "Local .mdl copied into the mod at the game path above.", drop: drop))
         {
             model.SourcePath = src;
@@ -575,6 +575,7 @@ internal sealed class ModelInspector
             model.VariantPaths.AddRange(picked.Where(p => !model.VariantPaths.Contains(p, StringComparer.OrdinalIgnoreCase)));
             model.IsVanillaDummy = false;
             _session.MarkDirty();
+            _tree.FitNewModel(item, picked);
         }, startFrom);
         Gui.Tooltip("Or drop .mdl files / a folder of them on this button — they are added to the list.");
         if (FileDrop.Target(drop.Reject, out var dropped))

@@ -104,9 +104,10 @@ internal sealed class PortEditor
 
     /// <summary>
     /// A stash model set on an item without materials gets one for each material it names (of several files, the
-    /// first's). A model from anywhere else keeps its own material paths.
+    /// first's). A model from anywhere else keeps its own material paths. For every way a model is set: dropped,
+    /// picked here or in the inspector.
     /// </summary>
-    private void FitNewModel(PortItem item, IReadOnlyList<string> files)
+    public void FitNewModel(PortItem item, IReadOnlyList<string> files)
     {
         if (MaterialFitJobs.FileToFit(item, files) is { } file)
             _session.FitMaterialsToModel(item, file, OtherPreset(item.Subject), onlyFromStash: true);

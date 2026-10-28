@@ -34,6 +34,9 @@ internal static class PackageImportScenarios
         PropertyBeatsFileName();
         SetNamesFollowTextureSets();
         TexturesAreSortedIntoItems(root);
+        LayoutComparesLikeWithLike(root);
+        ItemNamesKeepTheirDigits();
+        UnityMaterialsPullLooseTexturesIntoTheirSet(root);
         UnityManifestGroupsTexturesByMaterial(root);
         SimsManifestUsesCasRoles(root);
         ManifestRoundTrips(root);
@@ -73,6 +76,7 @@ internal static class PackageImportScenarios
         LookupFindsTheTextureFolder(root);
         LookupMatchesMaterials(root);
         LookupByWordsPrefersADiffuse(root);
+        LookupByLongerNames(root);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -574,6 +578,72 @@ internal static class PackageImportScenarios
             $"the set with a diffuse is picked, and of its diffuses the one in the fewest words ({shown})");
     }
 
+    /// <summary>
+    /// A Unity package whose materials are named after the model's and more ("Thigh Highs", "UV1 Black Gold"),
+    /// as VRChat creators name colour variants, with Substance Painter's texture names.
+    /// </summary>
+    private static void LookupByLongerNames(string root)
+    {
+        var stash = Path.Combine(root, "longer-stash");
+        var outfit = Path.GetFullPath(Path.Combine(stash, "Yokai"));
+        if (Directory.Exists(outfit))
+            Directory.Delete(outfit, true);
+        var manifest = new StashManifest { Source = @"C:\p\Yokai.unitypackage", SourceKind = "unity", ExtractedUtc = DateTime.UtcNow };
+        foreach (var (path, purpose) in new[]
+                 {
+                     ("Thigh/Thigh_Base_color.png", TexturePurpose.Diffuse), ("Thigh/Thigh_Normal_OpenGL.png", TexturePurpose.Normal),
+                     ("Thigh/Thigh_Metallic.png", TexturePurpose.Mask),
+                     ("UV1/UV1_White.png", TexturePurpose.Diffuse), ("UV1/UV1_Black.png", TexturePurpose.Diffuse),
+                     ("UV1/UV1_Normal2.png", TexturePurpose.Normal), ("UV1/UV1_AO.png", TexturePurpose.Occlusion),
+                     ("UV10/UV10_Red.png", TexturePurpose.Diffuse), ("UV10/UV10_Normal.png", TexturePurpose.Normal), ("UV10/UV10_Mask.png", TexturePurpose.Mask),
+                     ("b_Base_color.png", TexturePurpose.Diffuse), ("b_Normal_OpenGL.png", TexturePurpose.Normal),
+                     ("Bikini/Bikini_Base_color.png", TexturePurpose.Diffuse),
+                     ("Horns/Horns_Base_color.png", TexturePurpose.Diffuse), ("Horns/Horns_Alt_Base_color.png", TexturePurpose.Diffuse),
+                     ("Horns/Horns_Alt_Normal.png", TexturePurpose.Normal),
+                     ("Matcaps/Metal 1.png", TexturePurpose.Matcap), ("Metal/Metal_Base_color.png", TexturePurpose.Diffuse),
+                 })
+        {
+            Touch(outfit, path);
+            manifest.Entries.Add(new StashEntry { Path = path, Kind = StashKind.Texture, Purpose = purpose });
+        }
+        void Material(string name, params (TexturePurpose Purpose, string Path)[] textures)
+            => manifest.Materials.Add(new StashMaterial { Name = name, Textures = textures.ToDictionary(t => t.Purpose, t => t.Path) });
+        Material("Thigh Highs", (TexturePurpose.Diffuse, "Thigh/Thigh_Base_color.png"), (TexturePurpose.Normal, "Thigh/Thigh_Normal_OpenGL.png"));
+        Material("UV10 Red", (TexturePurpose.Diffuse, "UV10/UV10_Red.png"), (TexturePurpose.Normal, "UV10/UV10_Normal.png"), (TexturePurpose.Mask, "UV10/UV10_Mask.png"));
+        Material("UV1 1", (TexturePurpose.Diffuse, "UV1/UV1_White.png"), (TexturePurpose.Occlusion, "UV1/UV1_AO.png"));
+        Material("UV1 Black Gold", (TexturePurpose.Diffuse, "UV1/UV1_Black.png"), (TexturePurpose.Normal, "UV1/UV1_Normal2.png"), (TexturePurpose.Occlusion, "UV1/UV1_AO.png"));
+        Material("BIKINI", (TexturePurpose.Diffuse, "Bikini/Bikini_Base_color.png"));
+        Material("Horns", (TexturePurpose.Diffuse, "Horns/Horns_Base_color.png"));
+        Material("Horns Alt", (TexturePurpose.Diffuse, "Horns/Horns_Alt_Base_color.png"), (TexturePurpose.Normal, "Horns/Horns_Alt_Normal.png"));
+        Material("Metal", (TexturePurpose.Matcap, "Matcaps/Metal 1.png"));
+        Material("Metal Shiny", (TexturePurpose.Diffuse, "Metal/Metal_Base_color.png"));
+        manifest.Write(outfit);
+
+        var lookup = ModelTextureLookup.Open(SaveFromBlender(outfit, "Blender/Yokai.mdl", @"C:\elsewhere\Yokai.fbx"), new[] { stash }, Array.Empty<string>());
+        string Texture(string relative) => Path.Combine(outfit, relative.Replace('/', Path.DirectorySeparatorChar));
+        string Show(IReadOnlyDictionary<TexturePurpose, string> found) => string.Join(", ", found.Select(p => $"{p.Key}={Path.GetFileName(p.Value)}"));
+
+        var thigh = lookup.TexturesFor("/Thigh.mtrl");
+        Require(thigh.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("Thigh/Thigh_Base_color.png")
+                && thigh.GetValueOrDefault(TexturePurpose.Normal) == Texture("Thigh/Thigh_Normal_OpenGL.png"),
+            $"a material named the model's and more is taken when none is named the same ({Show(thigh)})");
+        Require(thigh.GetValueOrDefault(TexturePurpose.Mask) == Texture("Thigh/Thigh_Metallic.png"),
+            $"and what it leaves out comes from the texture set its textures are in ({Show(thigh)})");
+
+        var uv1 = lookup.TexturesFor("/UV1.mtrl");
+        Require(uv1.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("UV1/UV1_Black.png") && uv1.GetValueOrDefault(TexturePurpose.Normal) == Texture("UV1/UV1_Normal2.png"),
+            $"of several, the one that fills the most slots, though another comes first; \"UV10 Red\" is not \"UV1\" and more ({Show(uv1)})");
+        var b = lookup.TexturesFor("/b.mtrl");
+        Require(b.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("b_Base_color.png") && b.GetValueOrDefault(TexturePurpose.Normal) == Texture("b_Normal_OpenGL.png"),
+            $"\"BIKINI\" doesn't start with the word \"b\": its texture set is found by words, Substance's suffixes and all ({Show(b)})");
+        var horns = lookup.TexturesFor("/Horns.001.mtrl");
+        Require(horns.Count == 1 && horns.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("Horns/Horns_Base_color.png"),
+            $"the material named the same comes before one named longer ({Show(horns)})");
+        var metal = lookup.TexturesFor("/Metal.mtrl");
+        Require(metal.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("Metal/Metal_Base_color.png") && !metal.ContainsKey(TexturePurpose.Matcap),
+            $"a material whose textures fill no slot (a matcap alone) is passed over ({Show(metal)})");
+    }
+
     private static void StoppedReExtractKeepsTheEarlierOne(string root)
     {
         var output = Path.Combine(root, "stop-again-out");
@@ -932,6 +1002,9 @@ internal static class PackageImportScenarios
             ("baroque_top_id.tex", "baroque_top"), ("baroque_top_m.tex", "baroque_top"), ("baroque_top_n.tex", "baroque_top"),
             ("baroque_glove_n.tex", "baroque_glove"), ("Hair_Diffuse.png", "Hair"), ("Hair_Gloss.png", "Hair"),
             ("LKVK_Metal 1.png", "LKVK_Metal 1"),
+            // Substance Painter's export names.
+            ("ASA_Base_color.png", "ASA"), ("ASA_Normal_OpenGL.png", "ASA"), ("ASA_Normal_DirectX.png", "ASA"), ("ASA_Mixed_AO.png", "ASA"),
+            ("ASA_Metallic.png", "ASA"), ("ASA_Height.png", "ASA"),
         };
         var sets = TexturePurposes.SetNames(cases.Select(c => Path.Combine(folder, c.Name)));
         foreach (var (name, set) in cases)
@@ -982,6 +1055,116 @@ internal static class PackageImportScenarios
 
         var byName = TextureItems.Build(manifest, folder, layout: false);
         Require(byName.Loose.Any(t => t.Path == "tex9.png") && byName.Items.All(i => i.ByLayout.Count == 0), "without the layout pass, only names group");
+    }
+
+    /// <summary>An image painted with noise in the given quadrants of a 256 by 256 square (0 top left, 1 top right, 2 bottom left, 3 bottom right).</summary>
+    private static void PaintedImage(string folder, string name, int seed, params int[] quadrants)
+    {
+        var random = new Random(seed);
+        var path = Path.Combine(folder, name.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(256, 256);
+        foreach (var quadrant in quadrants)
+            for (int y = quadrant / 2 * 128; y < quadrant / 2 * 128 + 128; y++)
+                for (int x = quadrant % 2 * 128; x < quadrant % 2 * 128 + 128; x++)
+                    image[x, y] = new SixLabors.ImageSharp.PixelFormats.Rgba32((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256), 255);
+        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, path);
+    }
+
+    /// <summary>
+    /// Substance Painter's sets: normal maps painted nearly all over, alike in every set, so a colour variant in
+    /// another folder is held against the sets' diffuses. The same set in two folders is alike in both.
+    /// </summary>
+    private static void LayoutComparesLikeWithLike(string root)
+    {
+        var folder = Path.Combine(root, "items-substance");
+        if (Directory.Exists(folder))
+            Directory.Delete(folder, true);
+        PaintedImage(folder, "PBR/Shirt_Base_color.png", 1, 0);
+        PaintedImage(folder, "PBR/Shirt_Normal_OpenGL.png", 2, 0, 1, 3);
+        PaintedImage(folder, "PBR/Shirt_Mixed_AO.png", 3, 0);
+        PaintedImage(folder, "PBR/Gloves_Base_color.png", 4, 3);
+        PaintedImage(folder, "PBR/Gloves_Normal_OpenGL.png", 5, 0, 1, 3);
+        PaintedImage(folder, "PBR/Alt/Shirt_Base_color.png", 6, 0);
+        PaintedImage(folder, "PBR/Alt/Shirt_Normal_OpenGL.png", 7, 0, 1, 3);
+        PaintedImage(folder, "PBR/Red/Shirt_Base_color.png", 8, 0);
+        PaintedImage(folder, "PBR/Red/Gloves_Base_color.png", 9, 3);
+
+        var items = TextureItems.Build(StashManifest.Scan(folder), folder);
+        string Show() => string.Join("; ", items.Items.Select(i => $"{i.Name}: {string.Join(", ", i.Textures.Select(t => t.Path))}"));
+        var shirt = items.Items.FirstOrDefault(i => i.Textures.Any(t => t.Path == "PBR/Shirt_Base_color.png"));
+        Require(shirt != null && shirt.Textures.Any(t => t.Path == "PBR/Shirt_Normal_OpenGL.png") && shirt.Textures.Any(t => t.Path == "PBR/Shirt_Mixed_AO.png")
+                && shirt.ByLayout.Count(t => !t.Path.StartsWith("PBR/Red/", StringComparison.Ordinal)) == 0,
+            $"Substance's _Normal_OpenGL and _Mixed_AO are in their set by name ({Show()})");
+        var red = items.Items.Where(i => i.ByLayout.Any(t => t.Path.StartsWith("PBR/Red/", StringComparison.Ordinal))).ToList();
+        Require(red.Count == 2 && red.Single(i => i.ByLayout.Any(t => t.Path == "PBR/Red/Shirt_Base_color.png")).Name == "Shirt"
+                && red.Single(i => i.ByLayout.Any(t => t.Path == "PBR/Red/Gloves_Base_color.png")).Name == "Gloves" && items.Loose.Count == 0,
+            $"a colour variant joins the set whose diffuse it is painted like, though every normal map looks alike, and though its set is in two folders ({Show()})");
+    }
+
+    /// <summary>The words of material and texture names keep their digits where some item's names have them.</summary>
+    private static void ItemNamesKeepTheirDigits()
+    {
+        Require(TexturePurposes.Words("UV1_Normal2", keepDigits: true).SequenceEqual(new[] { "uv1", "normal2" })
+                && TexturePurposes.Words("Dress.001", keepDigits: true).SequenceEqual(new[] { "dress" })
+                && TexturePurposes.Words("UV1_Normal2").SequenceEqual(new[] { "uv", "normal" }),
+            "kept, a word's digits stay after its letters; a word of digits alone is still dropped");
+
+        TextureItem Item(string name, params string[] textures)
+        {
+            var item = new TextureItem { Name = name };
+            item.Textures.AddRange(textures.Select(t => new StashEntry { Path = t, Kind = StashKind.Texture }));
+            return item;
+        }
+        var uv1 = Item("UV1", "UV 1/UV1_Normal.png", "UV 1/UV1_AO.png");
+        var uv2 = Item("UV2", "UV 2/UV2_Black.png", "UV 2/UV2_Normal.png");
+        var uv3 = Item("UV3", "UV 3/UV3_Mask.png", "UV 3/UV3_AO.png");
+        var top = Item("Top", "Top_Base_color.png", "Top_Normal.png");
+        var stray = new StashEntry { Path = "UV 3/UV3_Normal_2 2.png", Kind = StashKind.Texture };
+        uv2.Textures.Add(stray);
+        uv2.ByLayout.Add(stray);
+        var names = new TextureItemNames(new[] { uv1, uv2, uv3, top });
+        Require(names.Names("UV1", uv1) && !names.Names("UV1", uv2) && names.Names("UV2.001", uv2) && !names.Names("UV2", uv1),
+            "\"UV1\" names the UV1 set only, not every set with \"uv\" in its names");
+        Require(names.Names("UV3", uv3) && !names.Names("UV3", uv2), "a texture that joined a set by its layout doesn't name it");
+        Require(names.Names("Top2", top), "a word whose digits no set's names have is read without them");
+    }
+
+    /// <summary>
+    /// A Unity package's colour variants: each material pulls the loose diffuse it uses into the texture set it
+    /// shares, and two loose textures one material uses don't make a set of their own.
+    /// </summary>
+    private static void UnityMaterialsPullLooseTexturesIntoTheirSet(string root)
+    {
+        var folder = Path.GetFullPath(Path.Combine(root, "items-unity"));
+        if (Directory.Exists(folder))
+            Directory.Delete(folder, true);
+        var manifest = new StashManifest { Source = @"C:\p\Kaihua.unitypackage", SourceKind = "unity", ExtractedUtc = DateTime.UtcNow };
+        foreach (var (path, purpose) in new[]
+                 {
+                     ("UV 1/AO/UV1_Normal2.png", TexturePurpose.Normal), ("UV 1/AO/UV1_AO.png", TexturePurpose.Occlusion),
+                     ("UV 1/UV1_Black.png", TexturePurpose.Diffuse), ("UV 1/UV2_Pink.png", TexturePurpose.Diffuse),
+                     ("Shoes/Shoes_W.png", TexturePurpose.Diffuse), ("Shoes/Normal_3.png", TexturePurpose.Normal),
+                 })
+        {
+            Touch(folder, path);
+            manifest.Entries.Add(new StashEntry { Path = path, Kind = StashKind.Texture, Purpose = purpose });
+        }
+        manifest.Materials.Add(new StashMaterial
+        {
+            Name = "UV1 Black Gold",
+            Textures = { [TexturePurpose.Diffuse] = "UV 1/UV1_Black.png", [TexturePurpose.Normal] = "UV 1/AO/UV1_Normal2.png", [TexturePurpose.Occlusion] = "UV 1/AO/UV1_AO.png" },
+        });
+        manifest.Materials.Add(new StashMaterial { Name = "UV1 Pink", Textures = { [TexturePurpose.Diffuse] = "UV 1/UV2_Pink.png", [TexturePurpose.Normal] = "UV 1/AO/UV1_Normal2.png" } });
+        manifest.Materials.Add(new StashMaterial { Name = "Shoes", Textures = { [TexturePurpose.Diffuse] = "Shoes/Shoes_W.png", [TexturePurpose.Normal] = "Shoes/Normal_3.png" } });
+
+        var items = TextureItems.Build(manifest, folder, layout: false);
+        string Show() => $"{string.Join("; ", items.Items.Select(i => $"{i.Name}: {string.Join(", ", i.Textures.Select(t => t.Path))}"))} / loose: {string.Join(", ", items.Loose.Select(t => t.Path))}";
+        Require(items.Items.Count == 1 && items.Items[0].Textures.Select(t => t.Path).Order(StringComparer.Ordinal)
+                    .SequenceEqual(new[] { "UV 1/AO/UV1_AO.png", "UV 1/AO/UV1_Normal2.png", "UV 1/UV1_Black.png", "UV 1/UV2_Pink.png" }),
+            $"each material's diffuse joins the set of the normal map it uses ({Show()})");
+        Require(items.Loose.Select(t => t.Path).Order(StringComparer.Ordinal).SequenceEqual(new[] { "Shoes/Normal_3.png", "Shoes/Shoes_W.png" }),
+            $"a material using only loose textures makes no set of them ({Show()})");
     }
 
     private static void PropertyBeatsFileName()
