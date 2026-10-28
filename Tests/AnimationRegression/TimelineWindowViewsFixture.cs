@@ -502,14 +502,16 @@ internal static class TimelineWindowViewsFixture
         var summon = Ev("s", "C198", TimelineLane.Prop, 0, "", 60, Values(("Model", 1962), ("SummonId", 1), ("AtchState", 0)));
         var grouped = summon with { Group = "p1" };
         var plays = Ev("w", "C031", TimelineLane.Prop, 5, "", 1, Values(("TargetType", 3))) with { Group = "p1" };
-        check(PropPlaceEditor.RawRow(grouped, Field("C198", "AtchState")) == PropRawRow.Hidden &&
-              PropPlaceEditor.RawRow(grouped, Field("C198", "SummonId")) == PropRawRow.ReadOnly &&
-              PropPlaceEditor.RawRow(grouped, Field("C198", "Model")) == PropRawRow.Editable &&
-              PropPlaceEditor.RawRow(plays, Field("C031", "TargetType")) == PropRawRow.ReadOnly,
+        check(PropPlaceEditor.RawRow(grouped, Field("C198", "AtchState"), true) == PropRawRow.Hidden &&
+              PropPlaceEditor.RawRow(grouped, Field("C198", "SummonId"), true) == PropRawRow.ReadOnly &&
+              PropPlaceEditor.RawRow(grouped, Field("C198", "Model"), true) == PropRawRow.Editable &&
+              PropPlaceEditor.RawRow(plays, Field("C031", "TargetType"), false) == PropRawRow.ReadOnly,
             "a grouped prop's Attach row is Place's, and its Slot and Plays on rows only read");
-        check(PropPlaceEditor.RawRow(summon, Field("C198", "AtchState")) == PropRawRow.Editable &&
-              PropPlaceEditor.RawRow(summon, Field("C198", "SummonId")) == PropRawRow.Editable &&
-              PropPlaceEditor.RawRow(plays with { Group = null }, Field("C031", "TargetType")) == PropRawRow.Editable,
+        check(PropPlaceEditor.RawRow(grouped, Field("C198", "AtchState"), false) == PropRawRow.ReadOnly,
+            "without its Place section a grouped prop's Attach row shows and only reads");
+        check(PropPlaceEditor.RawRow(summon, Field("C198", "AtchState"), false) == PropRawRow.Editable &&
+              PropPlaceEditor.RawRow(summon, Field("C198", "SummonId"), false) == PropRawRow.Editable &&
+              PropPlaceEditor.RawRow(plays with { Group = null }, Field("C031", "TargetType"), false) == PropRawRow.Editable,
             "an ungrouped prop event keeps its raw rows");
 
         var other = Ev("o", "C198", TimelineLane.Prop, 0, "", 60, Values(("Model", 1962), ("SummonId", 0))) with { Group = "p1" };
@@ -518,6 +520,15 @@ internal static class TimelineWindowViewsFixture
         check(PropPlaceEditor.SummonOf(doc, control)?.Key == "s" && PropPlaceEditor.SummonOf(doc, grouped)?.Key == "s" &&
               PropPlaceEditor.SummonOf(doc, plays) == null && PropPlaceEditor.SummonOf(doc, control with { Group = null }) == null,
             "a grouped prop control places the summon on its slot");
+        var scale = Ev("z", "C175", TimelineLane.Prop, 1, "", 0, Values(("ObjectControl", 3), ("ObjectScale", 1))) with { Group = "p1" };
+        check(PropPlaceEditor.Shows(doc, control, 101) && PropPlaceEditor.Shows(doc, grouped, 101) && !PropPlaceEditor.Shows(doc, control, null) &&
+              !PropPlaceEditor.Shows(doc, grouped with { Values = Values(("Model", 0), ("SummonId", 1)) }, 101) && !PropPlaceEditor.Shows(doc, plays, 101),
+            "Place draws for a grouped summon or control with a summon and a race");
+        check(PropPlaceEditor.RawRow(control, Field("C014", "ObjectPosition"), true) == PropRawRow.Hidden &&
+              PropPlaceEditor.RawRow(scale, Field("C175", "ObjectScale"), true) == PropRawRow.Hidden &&
+              PropPlaceEditor.RawRow(control, Field("C014", "ObjectPosition"), false) == PropRawRow.Editable &&
+              PropPlaceEditor.RawRow(control, Field("C014", "ObjectControl"), true) == PropRawRow.Editable,
+            "a grouped prop control's state row is hidden while Place shows its summon's state");
 
         var still = new TimelinePropPlace(0, false, null, Vector3.Zero, Vector3.Zero, 1);
         check(PropPlaceEditor.Settled(still, 0) == null && PropPlaceEditor.Settled(still, 1) == still &&

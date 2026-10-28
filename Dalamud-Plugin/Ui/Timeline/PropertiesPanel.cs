@@ -131,6 +131,7 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
                 }
                 DrawTiming(current, ev, editable, movable);
                 DrawPath(current, ev, kind, editable);
+                var placed = propPlace.Shows(current.Document, ev);
                 // A sound's options say what they do instead of showing its raw fields.
                 if (ev.Magic == "C063")
                     soundInspector.DrawEvent(current, ev, editable);
@@ -139,7 +140,7 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
                     {
                         // A VFX event's position, rotation and scale are in Place.
                         // A grouped prop's attach state is in Place; the rows that would split the group only read.
-                        var row = PropPlaceEditor.RawRow(ev, field);
+                        var row = PropPlaceEditor.RawRow(ev, field, placed);
                         if (EffectPlaceEditor.Placed(ev, field) || row == PropRawRow.Hidden)
                             continue;
                         TimelineUi.Fact(field.Label);

@@ -31,15 +31,25 @@ internal sealed class PropPlaceEditor(TimelineSession session)
         : entry.Scale == 1 ? entry.Bone : $"{entry.Bone}, size {entry.Scale.ToString("0.##", CultureInfo.InvariantCulture)}";
 
     /// <summary>
-    /// How a raw field row of <paramref name="ev"/> shows: on a grouped prop the Attach combo here owns a C198's
-    /// AtchState, so that row is hidden, and the rows that would split the group (a C198's Slot, a C031's Plays on) only read.
+    /// How a raw field row of <paramref name="ev"/> shows. On a grouped prop whose Place section is drawn
+    /// (<paramref name="placed"/>), its Attach combo owns the state, so a C198's AtchState and a control's state row are
+    /// hidden; without the section a C198's AtchState only reads. The rows that would split the group (a C198's Slot,
+    /// a C031's Plays on) only read.
     /// </summary>
-    public static PropRawRow RawRow(TimelineEvent ev, TimelineField field) => ev.Group == null ? PropRawRow.Editable : (ev.Magic, field.Name) switch
+    public static PropRawRow RawRow(TimelineEvent ev, TimelineField field, bool placed) => ev.Group == null ? PropRawRow.Editable : (ev.Magic, field.Name) switch
     {
-        ("C198", "AtchState") => PropRawRow.Hidden,
+        ("C198", "AtchState") => placed ? PropRawRow.Hidden : PropRawRow.ReadOnly,
+        ("C014" or "C174", "ObjectPosition") or ("C015" or "C175", "ObjectScale") when placed => PropRawRow.Hidden,
         ("C198", "SummonId") or ("C031", "TargetType") => PropRawRow.ReadOnly,
         _ => PropRawRow.Editable,
     };
+
+    /// <summary> Whether the Place section is drawn for <paramref name="ev"/>: a grouped prop summon or control with a summon, and a race known. </summary>
+    public static bool Shows(TimelineDocument doc, TimelineEvent ev, ushort? race) =>
+        ev.Lane == TimelineLane.Prop && race != null && SummonOf(doc, ev) != null;
+
+    /// <summary> <see cref="Shows"/> for the open clip. </summary>
+    public bool Shows(TimelineDocument doc, TimelineEvent ev) => Shows(doc, ev, Race());
 
     /// <summary>
     /// The summon <paramref name="ev"/> places: itself for a grouped summon, the summon of its group on its slot for a
@@ -63,7 +73,8 @@ internal sealed class PropPlaceEditor(TimelineSession session)
 
     public void Draw(TimelineEditor current, TimelineEvent ev, bool editable)
     {
-        if (ev.Lane != TimelineLane.Prop || SummonOf(current.Document, ev) is not { } summon || Race() is not { } race)
+        var race = Race();
+        if (!Shows(current.Document, ev, race) || SummonOf(current.Document, ev) is not { } summon)
             return;
         var stateOnly = summon.Key != ev.Key;
         ImGui.Spacing();
@@ -73,7 +84,7 @@ internal sealed class PropPlaceEditor(TimelineSession session)
         var code = session.Animations?.PropTypes.CodeOf((ushort)Value(summon, "Model"));
         if (code == null)
             Widgets.HintWrapped(UnlearnedHint);
-        var table = session.AttachTable(race);
+        var table = session.AttachTable(race!.Value);
         var shownState = TimelinePropPlaces.CurrentState(current.Document, summon);
         var place = summon.Place ?? new TimelinePropPlace(shownState, false, null, Vector3.Zero, Vector3.Zero, 1);
         using (ImRaii.Disabled(!editable || code == null))
