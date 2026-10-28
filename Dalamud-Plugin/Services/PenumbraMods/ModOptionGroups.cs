@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -648,5 +649,77 @@ internal static class ModOptionGroups
 
         Append(meta["DefaultData"]);
         return result;
+    }
+
+    /// <summary>
+    /// The file a mod serves for each game path under <paramref name="enabledOptions"/> (group name to picked
+    /// option names): the default files, then each group's picked options, lowest priority first so a higher
+    /// priority replaces a lower one, and of equal priority the group listed first wins. In a group a Single
+    /// serves its picked option, a Multi its picked options in the group's option order (a later one replaces
+    /// an earlier one) and a Combining the container its picked options select. A group without an entry in
+    /// <paramref name="enabledOptions"/> contributes nothing. Keys are lower case with '/', values absolute
+    /// paths under <paramref name="modFolder"/>; a mapping whose file is missing, or lies outside the mod, is skipped.
+    /// </summary>
+    internal static ImmutableDictionary<string, string> EffectiveFiles(
+        string modFolder,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> enabledOptions)
+    {
+        var meta = LoadV4ModMetadata(modFolder);
+        var root = Path.GetFullPath(modFolder);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        void Apply(JsonNode? container)
+        {
+            if (container?["Files"] is not JsonObject files)
+                return;
+            foreach (var (key, value) in files)
+            {
+                var relative = JsonString(value);
+                var gamePath = PathRules.NormalizeGamePath(key).ToLowerInvariant();
+                if (string.IsNullOrWhiteSpace(relative) || gamePath.Length == 0)
+                    continue;
+                var file = Path.Combine(root, relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar));
+                if (IsSafeModResourceFile(root, file))
+                    result[gamePath] = Path.GetFullPath(file);
+            }
+        }
+
+        Apply(meta["DefaultData"]);
+
+        var groups = ReadAllVariantGroups(modFolder)
+            .Select((group, index) => (Group: group, Index: index))
+            .OrderBy(item => JsonInt(item.Group["Priority"]))
+            .ThenByDescending(item => item.Index);
+        foreach (var (group, _) in groups)
+        {
+            var groupName = JsonString(group["Name"]);
+            var selected = enabledOptions.FirstOrDefault(pair =>
+                string.Equals(pair.Key, groupName, StringComparison.OrdinalIgnoreCase)).Value;
+            if (selected is null || group["Options"] is not JsonArray options)
+                continue;
+            bool Picked(JsonObject option)
+                => selected.Contains(JsonString(option["Name"]) ?? "", StringComparer.OrdinalIgnoreCase);
+
+            var type = JsonString(group["Type"]);
+            if (string.Equals(type, "Combining", StringComparison.OrdinalIgnoreCase))
+            {
+                if (group["Containers"] is not JsonArray containers)
+                    continue;
+                var containerIndex = 0;
+                for (var optionIndex = 0; optionIndex < options.Count && optionIndex < 31; ++optionIndex)
+                    if (options[optionIndex] is JsonObject option && Picked(option))
+                        containerIndex |= 1 << optionIndex;
+                if (containerIndex < containers.Count)
+                    Apply(containers[containerIndex]);
+                continue;
+            }
+
+            var picked = options.OfType<JsonObject>().Where(Picked);
+            if (string.Equals(type, "Single", StringComparison.OrdinalIgnoreCase))
+                picked = picked.Take(1);
+            foreach (var option in picked)
+                Apply(option);
+        }
+        return result.ToImmutableDictionary(StringComparer.Ordinal);
     }
 }
