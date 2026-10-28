@@ -554,7 +554,7 @@ internal static partial class TmbFileFixture
     /// <summary>
     /// Real effects from 25 sampled mod folders of the library at G:\Penumbra, when it is there: a stop
     /// at 120 is written into every effect with something scheduled, which then reads and kills at 120,
-    /// unless its only timelines have an item naming the clip a new KILL would be. The KILL clips and
+    /// unless its only timelines have an item naming the clip a new KILL would be or it starts after 120. The KILL clips and
     /// timeline items the writer adds are laid out as the library's own.
     /// </summary>
     private static void LibraryStops(Action<bool, string> check)
@@ -564,7 +564,7 @@ internal static partial class TmbFileFixture
             Console.WriteLine("[SKIP] effect stops: the mod library isn't at G:\\Penumbra");
             return;
         }
-        int stopped = 0, unscheduled = 0, noRoom = 0, loopsSooner = 0;
+        int stopped = 0, unscheduled = 0, noRoom = 0, loopsSooner = 0, startsLater = 0;
         var failures = new List<string>();
         var kills = new Dictionary<string, int>();
         string? realItem = null;
@@ -590,6 +590,12 @@ internal static partial class TmbFileFixture
                                                  TimelineEffectFiles.KillsAt(TimelineEffectFiles.WithKill(bytes, last)) == last)
             {
                 loopsSooner++;
+            }
+            // Its first scheduled timeline starts after 120 (WHM Nier's pulseoflifeadd9 at 161): a later stop isn't refused for that.
+            catch (InvalidDataException e) when (e.Message == TimelineEffectFiles.StopBeforeStart &&
+                                                 Refusal(() => TimelineEffectFiles.WithKill(bytes, 100_000)) != TimelineEffectFiles.StopBeforeStart)
+            {
+                startsLater++;
             }
             catch (InvalidDataException e) { failures.Add($"{Path.GetFileName(file)}: {e.Message}"); }
             // Each KILL clip's size, its four ints and four floats, and whether anything follows them.
@@ -621,9 +627,9 @@ internal static partial class TmbFileFixture
             Console.WriteLine("  " + failure);
         foreach (var (layout, count) in kills.OrderByDescending(k => k.Value).Take(6))
             Console.WriteLine($"  library KILL clip ({count}): {layout}");
-        check(files.Count > 0 && failures.Count == 0 && stopped + unscheduled + noRoom + loopsSooner == files.Count,
-            $"library effects stop at 120 unless nothing in them is scheduled, an item names the new clip, or they loop sooner and stop at the frame " +
-            $"the refusal names ({stopped} stopped, {unscheduled} with nothing scheduled, {noRoom} with no room for a kill, {loopsSooner} loop sooner, " +
+        check(files.Count > 0 && failures.Count == 0 && stopped + unscheduled + noRoom + loopsSooner + startsLater == files.Count,
+            $"library effects stop at 120 unless nothing in them is scheduled, an item names the new clip, they start later, or they loop sooner and stop at the frame " +
+            $"the refusal names ({stopped} stopped, {unscheduled} with nothing scheduled, {noRoom} with no room for a kill, {startsLater} start later, {loopsSooner} loop sooner, " +
             $"{files.Count} in 25 mod folders)");
         // The ints (the first is the fade) and the first float vary; every one is 164 bytes with nothing after the floats.
         check(kills.Count > 0 && kills.Keys.All(k => k.StartsWith("164 bytes, ints ", StringComparison.Ordinal) && !k.EndsWith(", more")) &&
