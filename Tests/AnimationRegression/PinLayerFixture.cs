@@ -26,6 +26,25 @@ internal static class PinLayerFixture
         Edits(check);
         Views(check);
         Drags(check, reject);
+        Saving(check);
+    }
+
+    /// <summary>
+    /// What a save counts as a change a layer made. A pin holds a planted foot with hip turns of a tenth of a degree,
+    /// 2.5 mm at the foot; a save that took those for none wrote the unpinned motion back and the foot jittered in game.
+    /// </summary>
+    private static void Saving(Action<bool, string> check)
+    {
+        var before = new MotionTransform(new Vector3(0.1f, 0.9f, 0), Quaternion.Normalize(new Quaternion(0.2f, -0.4f, 0.1f, 0.88f)), Vector3.One);
+        Quaternion Turned(float degrees) => Quaternion.Normalize(before.Rotation * Quaternion.CreateFromAxisAngle(Vector3.UnitX, degrees * MathF.PI / 180));
+        check(!AnimationBakeRules.Changed(before, before) && !AnimationBakeRules.Changed(before, before with { Rotation = -before.Rotation }),
+            "a save counts a bone the layers left alone, or only flipped to the other hemisphere, as unchanged");
+        check(AnimationBakeRules.Changed(before, before with { Rotation = Turned(0.158f) }) &&
+              AnimationBakeRules.Changed(before, before with { Rotation = Turned(0.01f) }),
+            "a save keeps a pin's hip turns of a tenth of a degree and less");
+        check(AnimationBakeRules.Changed(before, before with { Position = before.Position + new Vector3(0, 0, 1e-5f) }) &&
+              AnimationBakeRules.Changed(before, before with { Scale = new Vector3(1.0001f) }),
+            "a save keeps a layer's moves and scales of a hundredth of a millimetre");
     }
 
     /// <summary>The gizmo's IK drag: a solve on the pose the layers leave becomes an offset's or a pose's keys.</summary>

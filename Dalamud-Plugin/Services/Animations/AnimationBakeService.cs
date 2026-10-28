@@ -499,9 +499,10 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 token.ThrowIfCancellationRequested();
                 for (var b = 0; b < expected[f].Length; b++)
                 {
-                    var value = ToHavok(clip.Get(f, b));
+                    var layered = clip.Get(f, b);
+                    var value = ToHavok(layered);
                     AnimationNative.CheckTransform(value);
-                    if (AnimationNative.Near(value, expected[f][b], 0.000001f)) continue;
+                    if (!AnimationBakeRules.Changed(FromHavok(expected[f][b]), layered)) continue;
                     affected.Add(b);
                     expected[f][b] = value;
                 }

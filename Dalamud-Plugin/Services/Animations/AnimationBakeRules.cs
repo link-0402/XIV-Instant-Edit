@@ -198,6 +198,19 @@ internal static class AnimationBakeRules
         return [.. tracks];
     }
 
+    /// <summary>
+    /// Whether a bone layer changed a bone's value, by more than a micrometre or about 0.0001 degrees: what a save writes
+    /// and Live gives a track. A turn is measured by the vector part of the turn between the two, which floats keep precise
+    /// (as amplitude layers measure it); one minus their dot product read turns under 0.16 degrees as none, so saves dropped
+    /// a pin's small hip turns and a planted foot jumped 2.5 mm in game where Live held it.
+    /// </summary>
+    public static bool Changed(MotionTransform before, MotionTransform after)
+    {
+        var turn = Quaternion.Conjugate(Quaternion.Normalize(before.Rotation)) * Quaternion.Normalize(after.Rotation);
+        return Vector3.DistanceSquared(before.Position, after.Position) > 1e-12f || Vector3.DistanceSquared(before.Scale, after.Scale) > 1e-12f ||
+               new Vector3(turn.X, turn.Y, turn.Z).LengthSquared() > 1e-12f;
+    }
+
     /// <summary>As the bake's own comparison (AnimationNative.Near) at its 1e-6 tolerance.</summary>
     private static bool Near(MotionTransform a, MotionTransform b, float tolerance = 0.000001f) =>
         Vector3.Distance(a.Position, b.Position) <= tolerance && Vector3.Distance(a.Scale, b.Scale) <= tolerance &&

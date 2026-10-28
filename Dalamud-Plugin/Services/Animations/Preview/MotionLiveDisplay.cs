@@ -677,7 +677,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             if (tracked.Contains((short)b) || left.Contains(b))
                 continue;
             for (var i = 0; i < edited.Samples; i++)
-                if (!Near(edited.Get(i, b), basis.Get(i, b)))
+                if (AnimationBakeRules.Changed(basis.Get(i, b), edited.Get(i, b)))
                 {
                     tracks.Add(checked((short)b));
                     sources.Add(-1);
@@ -726,10 +726,6 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
             throw;
         }
     }
-
-    private static bool Near(MotionTransform a, MotionTransform b) =>
-        Vector3.DistanceSquared(a.Position, b.Position) <= 1e-12f && Vector3.DistanceSquared(a.Scale, b.Scale) <= 1e-12f &&
-        1 - Math.Abs(Quaternion.Dot(Quaternion.Normalize(a.Rotation), Quaternion.Normalize(b.Rotation))) <= 1e-6f;
 
     private static hkQsTransformf Havok(MotionTransform t)
     {
