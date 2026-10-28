@@ -4,10 +4,12 @@ using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Pose;
+using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// Key pose sources without the game: .pose files as Anamnesis, Ktisis and Brio write them, poses made
 /// local on the clip's skeleton with their moved bones and proportions, and keying them into a pose layer.
+/// The pose browser's picks replacing each other, and its folders as it reads them.
 /// </summary>
 internal static class PoseFileFixture
 {
@@ -17,6 +19,8 @@ internal static class PoseFileFixture
         Model(check);
         Local(check);
         Keys(check);
+        Trial(check);
+        Library(check);
     }
 
     private static Quaternion Q(Vector3 axis, float degrees) => Quaternion.CreateFromAxisAngle(axis, degrees * MathF.PI / 180);
@@ -169,5 +173,127 @@ internal static class PoseFileFixture
         check(PoseEdits.PoseBones(available, null, leftOut).SequenceEqual(["n_hara", "j_kosi", "j_te_l"]) &&
               PoseEdits.PoseBones(available, ["j_te_l", "j_sk_f_a_l", "j_gone"], leftOut).SequenceEqual(["j_sk_f_a_l", "j_te_l"]),
             "the whole body leaves out the root nodes, the face and the chosen groups; selected bones are keyed as chosen");
+    }
+
+    private static void Trial(Action<bool, string> check)
+    {
+        var body = Body();
+        var rest = Rest(body);
+        var bent = PoseImports.FromModel(body, File(body, Posed(body)), rest);
+        var standing = PoseImports.FromLocal(body, body.Bones.Select((bone, i) => (bone.Name, rest[i], bone.Reference.Position)));
+        var doc = new TimelineDocument(30, 30, null, [], 1)
+        {
+            Motion = [new("m1", MotionLayerKind.Pose, "P", 0, 30, 0, 0, 1, PoseComponents.All, MotionInterpolation.Linear, [], [])],
+            NextMotionKey = 2,
+        };
+        var index = MotionEvaluator.Index(body);
+        MotionTransform? Own(string bone) => index.TryGetValue(bone, out var at) ? rest[at] : null;
+        var editor = new TimelineEditor(doc);
+        var trial = new PoseTrial();
+        // As the browser keys a click: over the document from before the last pick while it still shows that pick.
+        void Pick(PoseImport pose, string path, string[] bones, int frame = 12)
+        {
+            var before = trial.Base(editor.Document, "m1", frame, out var replaces);
+            var next = PoseEdits.KeyPose(before, "m1", frame, pose, bones, true, Own);
+            if (replaces)
+                editor.Amend(next);
+            else
+                editor.Commit(next);
+            trial.Keyed(before, editor.Document, "m1", frame, path);
+        }
+
+        Pick(bent, "bent.pose", ["n_hara", "j_ude_a_l"]);
+        Pick(standing, "standing.pose", ["n_hara"]);
+        var key = editor.Document.Motion[0].Keys.Single();
+        check(key.Bones.Count == 1 && Degrees(key.Bones["n_hara"].Rotation, rest[1].Rotation) < 1e-3f,
+            "a second pick replaces the first, the bones only the first keyed included");
+        check(trial.Replacing(editor.Document, "m1", 12) == "standing.pose" && trial.Replacing(editor.Document, "m1", 13) == null &&
+              trial.Replacing(editor.Document, "m2", 12) == null, "a pick can be replaced only in its layer at its frame");
+        check(editor.History.UndoCount == 1 && editor.Undo() && ReferenceEquals(editor.Document, doc),
+            "picks replacing each other are one undo step, back to before the first");
+
+        editor.Redo();
+        editor.Commit(PoseEdits.KeyPose(editor.Document, "m1", 20, bent, ["j_kosi"], false, Own));
+        Pick(bent, "bent.pose", ["j_ude_a_l"]);
+        var kept = editor.Document.Motion[0].Keys.Single(k => k.Frame == 12);
+        check(kept.Bones.ContainsKey("n_hara") && kept.Bones.ContainsKey("j_ude_a_l") && editor.History.UndoCount == 3,
+            "after another edit the next pick keys over the last one, as an undo step of its own");
+
+        var history = new TimelineHistory(doc);
+        var keyed = PoseEdits.KeyPose(doc, "m1", 12, bent, ["n_hara"], true, Own);
+        history.Amend(keyed);
+        check(history.UndoCount == 1 && history.Undo() && ReferenceEquals(history.Current, doc), "amending with no step to fold into makes one");
+    }
+
+    private static void Library(Action<bool, string> check)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "InstantEditPoseLibrary-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            void Make(string relative, string text = "{}")
+            {
+                var path = Path.Combine(root, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                System.IO.File.WriteAllText(path, text);
+            }
+            Make("Pack A/Pack A.png");
+            Make("Pack A/x.pose");
+            Make("Pack A/y.pose");
+            Make("Pack A/y.jpg");
+            Make("Lone/only.png");
+            Make("Lone/p.pose");
+            Make("solo/z.pose");
+            Make("[Tag] Last/w.pose");
+            Make("top.pose");
+            Make("notes.txt");
+
+            var top = PoseLibrary.List(root, CancellationToken.None);
+            check(top.Select(entry => entry.Name).SequenceEqual(["Lone", "Pack A", "solo", "[Tag] Last", "top"]) &&
+                  top.Take(4).All(entry => entry.Folder) && !top[4].Folder,
+                "a folder lists its folders, then its poses, each in name order and brackets last");
+            check(top[0].Own?.EndsWith("only.png") == true && top[1].Own?.EndsWith("Pack A.png") == true && top[2].Own == null,
+                "a folder's picture is the image named like it, or the only one in it");
+            var pack = PoseLibrary.List(Path.Combine(root, "Pack A"), CancellationToken.None);
+            check(pack.Count == 2 && pack[0].Own == null && pack[0].Shared?.EndsWith("Pack A.png") == true && pack[1].Own?.EndsWith("y.jpg") == true,
+                "a pose shows the image named like it, else its folder's");
+            check(PoseLibrary.Search(root, "Y", 10, CancellationToken.None).Select(entry => entry.Name).SequenceEqual(["y"]) &&
+                  PoseLibrary.Search(root, "pack", 10, CancellationToken.None) is [{ Folder: true, Name: "Pack A" }] &&
+                  PoseLibrary.Search(root, ".pose", 10, CancellationToken.None).Count == 0 &&
+                  PoseLibrary.Search(root, "o", 2, CancellationToken.None).Count == 2,
+                "a search finds folders and poses below by name, up to its limit");
+            check(PoseLibrary.Roots([root, Path.Combine(root, "gone")], CancellationToken.None) is [{ Folder: true }, { Name: "gone", Own: null }],
+                "a library folder that is gone stays listed");
+
+            // A copy keeps its old write time but is made when it arrives: that counts.
+            void Dated(string relative, int made, int written)
+            {
+                var path = Path.Combine(root, relative);
+                System.IO.File.SetCreationTimeUtc(path, new DateTime(made, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+                System.IO.File.SetLastWriteTimeUtc(path, new DateTime(written, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            }
+            Make("Pack A/q.pose");
+            Dated("Pack A/x.pose", 2020, 2020);
+            Dated("Pack A/y.pose", 2021, 2024);
+            Dated("Pack A/q.pose", 2025, 2019);
+            var dated = PoseLibrary.List(Path.Combine(root, "Pack A"), CancellationToken.None);
+            check(PoseLibrary.Sorted(dated, true).Select(entry => entry.Name).SequenceEqual(["q", "y", "x"]) &&
+                  PoseLibrary.Sorted(dated, false).Select(entry => entry.Name).SequenceEqual(["q", "x", "y"]),
+                "newest first goes by when a pose was made or written, whichever is later; by name otherwise");
+            var mixed = PoseLibrary.Sorted(PoseLibrary.List(root, CancellationToken.None), true);
+            check(mixed.Take(4).All(entry => entry.Folder) && !mixed[4].Folder, "folders come before poses in either order");
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+        // Moving a real file would leave it in your Recycle Bin, so only the refusal is checked here.
+        var gone = InstantEdit.Services.RecycleBin.MoveAsync(Path.Combine(root, "gone.pose"));
+        check(((IAsyncResult)gone).AsyncWaitHandle.WaitOne(5000) && gone.Exception?.InnerException is FileNotFoundException,
+            "a pose that is gone can't be moved to the Recycle Bin, and says so");
+        check(PoseLibrary.EmbeddedImage(Json("""{"Base64Image":"AQID","Bones":{}}""", bom: true)) is [1, 2, 3] &&
+              PoseLibrary.EmbeddedImage(Json("""{"Base64Image":""}""")) == null &&
+              PoseLibrary.EmbeddedImage(Json("""{"Base64Image":"not base64!"}""")) == null &&
+              PoseLibrary.EmbeddedImage(Json("not a pose")) == null,
+            "a pose file's own picture is read, and none is found in one without");
     }
 }

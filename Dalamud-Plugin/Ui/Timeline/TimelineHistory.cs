@@ -53,6 +53,22 @@ internal sealed class TimelineHistory
         Set(next);
     }
 
+    /// <summary>
+    /// Makes <paramref name="next"/> current within the last undo step, so undo goes back to where that step
+    /// began; with no step to fold into, a <see cref="Commit"/>.
+    /// </summary>
+    public void Amend(TimelineDocument next)
+    {
+        End();
+        if (ReferenceEquals(next, Current))
+            return;
+        if (undo.Count == 0)
+            Push(Current);
+        else
+            redo.Clear();
+        Set(next);
+    }
+
     /// <summary>Starts a gesture; nothing is recorded until it ends.</summary>
     public void Begin() => gesture ??= Current;
 

@@ -57,6 +57,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineToolbar toolbar;
     private readonly BlenderMotionPanel blenderMotion;
     private readonly BonesWindow bonesWindow;
+    private readonly PoseBrowserWindow poseBrowserWindow;
+    private readonly PoseThumbnails poseThumbnails;
+    private readonly PoseBrowser poseBrowser;
     private readonly TimelineAutosaver autosaver;
     private readonly string? animationError;
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
@@ -103,7 +106,11 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
         posing = new BonePosing(session, decode);
         boneEditor = new BoneEditor(session, decode, posing, this);
-        poseSources = new PoseSourcePanel(session, decode, posing, recorder);
+        var poseOptions = new PoseKeyOptions(posing);
+        poseBrowserWindow = new PoseBrowserWindow(this);
+        poseThumbnails = new PoseThumbnails(textures);
+        poseBrowser = new PoseBrowser(session, decode, posing, poseOptions, poseThumbnails);
+        poseSources = new PoseSourcePanel(session, decode, posing, recorder, poseOptions, poseBrowserWindow);
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
         keys = new ShortcutKeys(keyState, framework);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
@@ -156,8 +163,18 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
     internal BonesWindow Bones => bonesWindow;
 
+    internal PoseBrowserWindow Poses => poseBrowserWindow;
+
     /// <summary>The Bones window's whole content; called from its draw.</summary>
     internal void DrawBones() => bonesPanel.Draw();
+
+    /// <summary>The pose browser's whole content; called from its draw.</summary>
+    internal void DrawPoseBrowser() => poseBrowser.Draw();
+
+    internal void PoseBrowserClosed() => poseBrowser.Closed();
+
+    /// <summary>The settings the pose browser keeps its folders in.</summary>
+    internal void AttachPoseFolders(Configuration config, Action save) => poseBrowser.Attach(config, save);
 
     /// <summary>Whether the main window keeps the listener running too; the Timeline window leaves it on then.</summary>
     internal void AttachListening(Func<bool> mainWindowListens) => mainListens = mainWindowListens;
@@ -302,6 +319,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             animations?.StopObservation();
         // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
         bonesWindow.IsOpen = false;
+        // So does the pose browser, which keys into it.
+        poseBrowserWindow.IsOpen = false;
+        poseBrowser.Forget();
         EndGizmo(true);
         timelinePreview.Stop();
         blenderMotion.Forget();
@@ -329,6 +349,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         reader.Dispose();
         decode.Forget();
         poseSources.Drop();
+        poseBrowser.Closed();
+        poseThumbnails.Dispose();
         session.LoopPose.Drop();
     }
 

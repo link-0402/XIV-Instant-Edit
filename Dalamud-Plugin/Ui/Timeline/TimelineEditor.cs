@@ -942,6 +942,15 @@ internal sealed class TimelineEditor
         return true;
     }
 
+    /// <summary>Makes <paramref name="doc"/> current within the last undo step (<see cref="TimelineHistory.Amend"/>); false when it is the current one.</summary>
+    public bool Amend(TimelineDocument doc)
+    {
+        if (gesture != TimelineGesture.None || ReferenceEquals(doc, Document))
+            return false;
+        History.Amend(TimelineEdits.ReleasePack(Document, doc, ResidentMotions));
+        return true;
+    }
+
     /// <summary>
     /// Adds events built for an Add and selects them; false with <see cref="LastError"/> when refused.
     /// Events that would start past the end move back together, so an add at the end still plays.

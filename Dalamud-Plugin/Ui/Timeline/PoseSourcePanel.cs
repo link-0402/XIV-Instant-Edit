@@ -2,6 +2,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
+using Dalamud.Interface.Windowing;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
@@ -16,9 +17,10 @@ namespace InstantEdit.Ui.Timeline;
 /// the game shows it now, and a frame of an animation (a startup's loop among them). A source is read on
 /// a task and waits in the panel, where it is keyed at the playhead for the whole body or the selected
 /// bones: rotations always, positions for the bones it moves when it was made on a body of the same
-/// proportions. Shared by the properties panel and the Bones window.
+/// proportions. Shared by the properties panel and the Bones window, with the button that opens the pose browser.
 /// </summary>
-internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode decode, BonePosing posing, AnimationRecorder recorder)
+internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode decode, BonePosing posing, AnimationRecorder recorder,
+    PoseKeyOptions options, Window poseBrowser)
 {
     private enum PoseSourceKind : byte { File, Character, Clip }
 
@@ -39,18 +41,8 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         public bool AtEnd { get; init; }
     }
 
-    // A whole-body pose leaves these groups out unless they are ticked: physics and gear move them on their own.
-    private static readonly string[] PoseGroupsLeftOut = ["Hair", "Skirt", "Armor and weapons"];
-
     private PoseSource? poseSource;
     private CancellationTokenSource? poseCancel;
-    private bool poseSelectedOnly;
-    // Left-out groups ticked back in.
-    private readonly HashSet<string> poseGroupsKept = new(StringComparer.Ordinal);
-    // Whether positions are keyed; null until chosen for the waiting pose, which then decides.
-    private bool? posePositions;
-    // Whether the body is moved so the feet stand on the ground; null until chosen.
-    private bool? poseGround;
     private string? poseKeyed;
     private string? poseLayer;
     private string? lastPoseFolder;
@@ -79,6 +71,11 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip("Key a whole pose at the playhead: from a pose file, the character as posed now, or a frame of an animation.");
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.FolderOpen, "Pose browser", null, null, null, null))
+            TimelineUi.Toggle(poseBrowser);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Browse your pose folders. A click keys a pose at the playhead, and the next one replaces it.");
         DrawPoseSourceMenu(loaded);
         if (poseSource is { } staged)
             DrawWaitingPose(current, layer, skeleton, loaded, staged, readOnly);
@@ -201,7 +198,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         Drop();
         poseCancel = new CancellationTokenSource();
         poseSource = staged;
-        posePositions = null;
+        options.NewPose();
         poseKeyed = null;
         if (read != null)
             staged.Reading = read(poseCancel.Token);
@@ -322,69 +319,14 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
             return;
         }
 
-        // Which bones: the whole body (but the left-out groups), or the selected ones.
-        List<string> available = [.. skeleton.Bones.Select(bone => bone.Name).Where(import.Local.ContainsKey)];
-        if (ImGui.RadioButton("Whole body###pose-whole", !poseSelectedOnly))
-            poseSelectedOnly = false;
-        ImGui.SameLine();
-        using (ImRaii.Disabled(posing.Selection.Count == 0))
-        {
-            if (ImGui.RadioButton($"Selected bones ({posing.Selection.Count})###pose-selected", poseSelectedOnly && posing.Selection.Count > 0))
-                poseSelectedOnly = true;
-        }
-        var selectedOnly = poseSelectedOnly && posing.Selection.Count > 0;
-        if (!selectedOnly)
-        {
-            var groups = PoseMap.Groups.Where(group => PoseGroupsLeftOut.Contains(group.Name) && available.Any(group.Contains)).ToList();
-            if (groups.Count > 0)
-            {
-                ImGui.AlignTextToFramePadding();
-                ImGui.TextColored(Theme.Muted, "Also");
-                foreach (var group in groups)
-                {
-                    ImGui.SameLine(0, Theme.Gap);
-                    var kept = poseGroupsKept.Contains(group.Name);
-                    if (ImGui.Checkbox($"{group.Name}##pose-also", ref kept))
-                    {
-                        if (kept)
-                            poseGroupsKept.Add(group.Name);
-                        else
-                            poseGroupsKept.Remove(group.Name);
-                    }
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip("Physics and gear move these on their own. Tick to key them too.");
-                }
-            }
-        }
-        var leftOut = PoseMap.Groups.Where(group => PoseGroupsLeftOut.Contains(group.Name) && !poseGroupsKept.Contains(group.Name));
-        var bones = PoseEdits.PoseBones(available, selectedOnly ? posing.Selection.Bones : null, leftOut);
-
-        // Positions: off for a pose made on a body of other proportions, unless asked for.
-        var moving = bones.Count(import.Moved.Contains);
-        var positions = posePositions ?? !import.OtherProportions;
-        using (ImRaii.Disabled(moving == 0))
-        {
-            if (ImGui.Checkbox((moving == 1 ? "Move 1 bone" : $"Move {moving} bones") + "###pose-positions", ref positions))
-                posePositions = positions;
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(moving == 0
-                ? "The pose moves none of these bones; it only turns them."
-                : "Key the positions of the bones the pose moves, like where the body is. The others only turn.");
-        if (import.OtherProportions)
-            Widgets.HintWrapped("The pose was made on a body with other proportions. Moving bones would reshape this one.");
-
-        // Feet on the ground: on by default when the clip starts from a still pose, where nothing else stands it up.
-        var ground = poseGround ?? current.Document.Replacement is { Still: true };
-        if (ImGui.Checkbox("Feet on the ground###pose-ground", ref ground))
-            poseGround = ground;
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Move the body up or down so the lowest foot stands as low as in the clip, after bent legs lift it.");
+        options.Draw(import, skeleton, current.Document, false);
+        var choice = options.For(import, skeleton, current.Document);
+        var bones = choice.Bones;
 
         var inside = frame >= layer.Start && frame <= layer.End;
         var blocked = readOnly ? "Wait for the save to finish."
             : !inside ? staged.AtEnd ? "The layer must reach the clip's end." : "Move the playhead into the layer."
-            : bones.Count == 0 ? selectedOnly ? "The pose has none of the selected bones." : "The pose has none of this skeleton's bones."
+            : bones.Count == 0 ? choice.SelectedOnly ? "The pose has none of the selected bones." : "The pose has none of this skeleton's bones."
             : under == null ? decode.Status
             : null;
         using (ImRaii.Disabled(blocked != null))
@@ -392,12 +334,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
             if (ImGui.Button((staged.AtEnd ? $"Key at the end ({TimelineWindowViews.FrameText(frame)})" : $"Key at {TimelineWindowViews.FrameText(frame)}") + "###pose-key") &&
                 under != null)
             {
-                var index = posing.BoneTree(skeleton).Index;
-                var next = PoseEdits.KeyPose(current.Document, layer.Key, frame, import, bones, positions,
-                    bone => index.TryGetValue(bone, out var at) ? under[at] : null);
-                if (ground && PoseEdits.Grounded(skeleton, under, import, bones, positions) is { } body)
-                    next = MotionEdits.SetKey(next, layer.Key, frame, MotionHold.Body, body.ToBone(), true);
-                current.Commit(next);
+                current.Commit(options.Key(current.Document, layer.Key, frame, import, choice, skeleton, under));
                 current.SelectLayer(layer.Key, frame);
                 if (staged.AtEnd)
                     current.Playhead = frame;

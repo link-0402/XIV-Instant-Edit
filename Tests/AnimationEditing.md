@@ -1781,3 +1781,27 @@ Known limit: a Symmetry layer after a hand layer skips finger pairs the clip doe
 - [ ] 8 Save hand as shape from the left hand, use it on the right: mirrored correctly; delete it, the layer
   keeps its look.
 - [ ] 9 IK drag on a clip with a Replace hand layer shows the shape while dragging.
+
+## Pose browser (pending)
+
+Pose browser beside Key a pose opens a window of your pose folders, browsed like Brio's library. A click on a
+pose keys it in the selected pose layer at the playhead; the next click there replaces it in the same undo step.
+Test folder: D:\Mods\Poses (Solo, and a pack folder with a picture such as Multi\[Chaele] Altitude).
+
+- [ ] 1 Add folder: D:\Mods\Poses. The breadcrumb reads Library > Poses; folders come first, then poses,
+  in name order. A pack folder shows its picture; its poses show it too, a pose with its own image or a Brio
+  picture inside the file shows that. Scrolling a folder of 100+ poses stays smooth.
+- [ ] 2 With a Pose layer selected and the playhead inside it, click a pose: the character takes it in Live,
+  the tile is outlined, the footer says how many bones were keyed. The window stays open.
+- [ ] 3 Click another pose: it replaces the first, nothing of the first is left (try one with hair keyed via
+  Also > Hair, then one without). One Ctrl+Z goes back to before the first click.
+- [ ] 4 Move the playhead, click a pose: a second key, the first stays. Edit a bone, click again: the edit stays.
+- [ ] 5 Untick Feet on the ground or Move bones in the footer: the shown pose is keyed again with the change.
+- [ ] 6 Search this folder finds poses in subfolders; the tooltip names their folder. Right-click a library
+  folder > Remove from the list. Close and reopen the plugin: the folder list and the last folder come back.
+- [ ] 7 No pose layer selected, or the playhead outside it: the footer says why and pose tiles are dimmed.
+- [ ] 8 Drag the picture size slider (bottom right) to the largest: pictures stay sharp, more columns as it
+  shrinks. Switch By name / Newest first: a pack you added last comes first, folders stay before poses. Both
+  choices come back after reopening the plugin.
+- [ ] 9 Right-click a pose > Move to the Recycle Bin: the tile goes, the footer says so, and the file is in the
+  Recycle Bin (restore it from there). The game doesn't hitch.
