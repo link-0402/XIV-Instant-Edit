@@ -93,7 +93,7 @@ internal sealed record MotionCuts(int Source, ImmutableArray<MotionPart> Parts, 
                    (part.Blend
                        ? i > 0 && i < Parts.Length - 1 && !Parts[i - 1].Blend && part.Frames <= TimelineDocument.MaxLength && part.Stretch == 1
                        : part.To <= Source && part.From >= end);
-            if (fits && !part.Blend)
+            if (fits && part is { Blend: false })
                 end = part.To;
         }
         if (!fits)
