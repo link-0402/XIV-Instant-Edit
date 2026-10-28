@@ -78,6 +78,8 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 ImGui.TableSetupColumn("##value", ImGuiTableColumnFlags.WidthStretch);
                 using (ImRaii.Disabled(readOnly))
                 {
+                    if (layer.Markers is { } markers)
+                        DrawMarkers(current, layer, markers, loaded);
                     if (match)
                     {
                         DrawBlendOver(current, layer);
@@ -105,8 +107,6 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         DrawComponents(current, layer);
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle))
                         DrawInterpolation(current, layer);
-                    if (layer.Markers is { } markers)
-                        DrawMarkers(current, layer, markers, loaded);
                 }
             }
         }
@@ -165,6 +165,12 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         }
         else
         {
+            // An empty Motion keys layer shows its rows only for the selected bones.
+            if (layer.Markers != null && layer.Keys.IsEmpty && posing.Selection.Count == 0)
+            {
+                Widgets.MutedWrapped("Select bones to see their markers.");
+                ImGui.Spacing();
+            }
             boneEditor.DrawPicker(skeleton, layer);
             boneEditor.Draw(current, layer, skeleton, loaded, readOnly, false);
             ImGui.Spacing();

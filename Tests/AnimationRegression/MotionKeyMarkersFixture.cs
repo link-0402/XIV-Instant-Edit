@@ -75,6 +75,12 @@ internal static class MotionKeyMarkersFixture
             "hit: another bone's markers don't count");
         var other = Hit(plain, plainKey, B1, 20, new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [20] }, [], 60, false, MarkerDetail.Normal), []);
         check(other is { Part: TimelinePart.BoneLane }, "hit: an ordinary layer's rows have no marker hits");
+
+        check(TimelineClipBand.KeyPoseText(new KeyPose(12, 5), false) == "Frame 12: 5 bones key here. Click to edit motion keys." &&
+              TimelineClipBand.KeyPoseText(new KeyPose(12, 1), false) == "Frame 12: 1 bone keys here. Click to edit motion keys." &&
+              TimelineClipBand.KeyPoseText(new KeyPose(0, 0), false) == "Frame 0. Click to edit motion keys." &&
+              TimelineClipBand.KeyPoseText(new KeyPose(12, 5), true) == "Frame 12: 5 bones key here. Click to go there.",
+            "key pose tooltip: one bone, no bones, read-only");
     }
 
     private static void Search(Action<bool, string> check)
