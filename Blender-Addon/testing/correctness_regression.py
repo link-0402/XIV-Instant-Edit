@@ -565,8 +565,67 @@ def export_refuses_empty_meshes_as_empty(addon):
     print("[PASS] Quick Export calls a well-named mesh without geometry empty, not badly named")
 
 
+def half_precision_fits_the_vertex_limit(addon):
+    exporter = importlib.import_module(f"{addon.__name__}.io.model.exporter")
+    importer = importlib.import_module(f"{addon.__name__}.io.model.importer")
+    model_module = importlib.import_module(f"{addon.__name__}.xivpy.model")
+    XIVModel, VertexType, VertexUsage = model_module.XIVModel, model_module.VertexType, model_module.VertexUsage
+
+    def flow_mesh(name):
+        obj = mesh(name)
+        obj.data.uv_layers.new(name="uv1").uv.foreach_set("vector", [0.25, 0.5, 0.75, 0.5, 0.5, 1])
+        flow = obj.data.color_attributes.new("xiv_flow", "FLOAT_COLOR", "CORNER")
+        flow.data.foreach_set("color", [1, 0.5, 0.5, 1] * 3)
+        return obj
+
+    def export(name, limit, path):
+        # Full precision is 20 + 40 bytes a vertex here (flow, two UV sets), half precision 16 + 24.
+        with temporary_scene_data(), patch.object(XIVModel, "VERTEX_BUFFER_LIMIT", limit):
+            stats = exporter.ModelExport.export_scene([flow_mesh(name)], str(path), False, [])
+        return XIVModel.from_file(str(path)), stats
+
+    def types(model):
+        return {element.usage: element.type for element in model.vertex_declarations[0].vertex_elements}
+
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-half-") as temp:
+        full, stats = export("0.0 Full", XIVModel.VERTEX_BUFFER_LIMIT, Path(temp) / "full.mdl")
+        assert types(full)[VertexUsage.POSITION] == VertexType.SINGLE3 and VertexUsage.FLOW in types(full), types(full)
+        assert not any("half precision" in message for messages in stats.values() for message in messages), stats
+
+        half, stats = export("0.0 Half", 150, Path(temp) / "half.mdl")
+        half_types = types(half)
+        assert half_types[VertexUsage.POSITION] == half_types[VertexUsage.NORMAL] == VertexType.HALF4, half_types
+        assert VertexUsage.FLOW not in half_types, half_types
+        assert list(half.meshes[0].vertex_buffer_stride[:2]) == [16, 24], half.meshes[0].vertex_buffer_stride
+        assert half.header.vert_buffer_size[0] == 3 * 40, half.header.vert_buffer_size
+        assert any("half precision" in message for messages in stats.values() for message in messages), stats
+
+        streams = {}
+        for model, key in ((full, "full"), (half, "half")):
+            with temporary_scene_data():
+                objects = importer.ModelImport.from_file(str(Path(temp) / f"{key}.mdl"), key, select_objects=False)
+                data = objects[0].data
+                positions = np.empty(len(data.vertices) * 3, dtype=np.float32)
+                data.vertices.foreach_get("co", positions)
+                uvs = [np.empty(len(data.loops) * 2, dtype=np.float32) for _layer in data.uv_layers]
+                for layer, values in zip(data.uv_layers, uvs):
+                    layer.uv.foreach_get("vector", values)
+                streams[key] = (positions, uvs)
+        assert np.allclose(streams["full"][0], streams["half"][0], atol=1e-3), streams
+        assert all(np.allclose(a, b, atol=1e-3) for a, b in zip(streams["full"][1], streams["half"][1])), streams
+
+        try:
+            export("0.0 Too Large", 100, Path(temp) / "too_large.mdl")
+        except ValueError as error:
+            assert "Vertex buffer too large" in str(error), str(error)
+        else:
+            raise AssertionError("a model over the limit even at half precision was written")
+    print("[PASS] a LOD over the vertex buffer limit is written at half precision without flow; under it, unchanged")
+
+
 def run():
     with addon_session("_xiv_ie_correctness_regression") as addon:
+        half_precision_fits_the_vertex_limit(addon)
         mashup_output_context_takes_user_meshes(addon)
         export_refuses_empty_meshes_as_empty(addon)
         duplicate_face_keeps_corner_layers_aligned(addon)

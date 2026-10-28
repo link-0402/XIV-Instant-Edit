@@ -11,6 +11,7 @@ from .weights         import sort_weights, normalise_weights, empty_vertices
 from .streams         import create_stream_arrays, get_submesh_streams, update_mesh_streams
 from .accessors       import get_weights, get_xiv_uv_layers
 from .validators      import clean_material_path, USHORT_LIMIT
+from ..com.schema     import get_array_type
 from ..com.helpers    import normalised_int_array, WEIGHT_THRESHOLD, unweighted_message
 from ..com.exceptions import XIVModelError, XIVMeshError
 
@@ -93,6 +94,34 @@ def decl_from_blend_mesh(submeshes: list[Object], export_flow=False) -> VertexDe
 
     return decl
 
+HALF_TYPES = {
+    VertexType.SINGLE2: VertexType.HALF2,
+    VertexType.SINGLE3: VertexType.HALF4,
+    VertexType.SINGLE4: VertexType.HALF4,
+}
+
+def reduce_decl_precision(decl: VertexDeclaration) -> None:
+    # As TexTools writes a model that would exceed the vertex buffer limit: half positions,
+    # normals and UVs, and no flow.
+    decl.vertex_elements = [element for element in decl.vertex_elements if element.usage != VertexUsage.FLOW]
+    for element in decl.vertex_elements:
+        if element.usage in (VertexUsage.POSITION, VertexUsage.NORMAL, VertexUsage.UV):
+            element.type = HALF_TYPES[element.type]
+    decl.update_offsets()
+
+def half_stream(array: NDArray, half_type: np.dtype) -> NDArray:
+    half_array = np.zeros(len(array), half_type)
+    for field in half_type.names:
+        if field == "position":
+            half_array[field][:, :3] = array[field]
+            half_array[field][:, 3]  = 1
+        elif field == "normal":
+            half_array[field][:, :3] = array[field]
+        else:
+            half_array[field] = array[field]
+
+    return half_array
+
 class CreateLOD:
     def __init__(self, model: XIVModel, lod_level: int, face_data: bool):
         self.model        = model
@@ -153,11 +182,34 @@ class CreateLOD:
             self.model.mdl_bounding_box = self.bbox
 
         bone_name_to_table(self.lod_bones)
-        
+
+        if sum(buffer.nbytes for buffer in self.vertex_buffers) > self.model.VERTEX_BUFFER_LIMIT:
+            self._reduce_precision(active_lod)
+
         self.model.buffers += self._lod_buffer(active_lod, self.lod_level)
 
         if self.shape_meshes:
             self._create_shape_meshes(self.lod_level)
+
+    def _reduce_precision(self, active_lod: Lod) -> None:
+        stream_offset = 0
+        for count in range(active_lod.mesh_count):
+            mesh_idx  = active_lod.mesh_idx + count
+            mesh      = self.model.meshes[mesh_idx]
+            vert_decl = self.model.vertex_declarations[mesh_idx]
+            reduce_decl_precision(vert_decl)
+
+            for stream, half_type in get_array_type(vert_decl).items():
+                buffer_idx = count * 2 + stream
+                self.vertex_buffers[buffer_idx] = half_stream(self.vertex_buffers[buffer_idx], half_type)
+
+                mesh.vertex_buffer_offset[stream] = stream_offset
+                mesh.vertex_buffer_stride[stream] = half_type.itemsize
+                stream_offset += self.vertex_buffers[buffer_idx].nbytes
+
+        self.stream_offset = stream_offset
+        self.export_stats[f"LOD {self.lod_level}"].append(
+            "Saved at half precision to fit the 8 MiB vertex limit; flow data was left out.")
 
     def _lod_buffer(self, active_lod: Lod, lod_level: int) -> bytes:
 
@@ -177,6 +229,8 @@ class CreateLOD:
             byte_buffer = buffer.tobytes()
             lod_buffer += byte_buffer
             vert_buffer_size += len(byte_buffer)
+        print(f"Vertex buffer: LOD {lod_level} total {vert_buffer_size:,} bytes "
+              f"({vert_buffer_size / 1024 / 1024:.2f} MiB) of the {self.model.VERTEX_BUFFER_LIMIT:,} byte limit")
 
         idx_offset = current_offset + vert_buffer_size
         header.vert_buffer_size[lod_level] = vert_buffer_size
@@ -300,6 +354,9 @@ class CreateLOD:
 
         mesh_streams       = create_stream_arrays(self.mesh.vertex_count, vert_decl)
         self.stream_offset = update_mesh_streams(self.mesh, mesh_streams, mesh_geo, mesh_tex, self.stream_offset, self.bone_limit)
+        print(f"Vertex buffer: LOD {self.lod_level} mesh {self.mesh_idx}: {self.mesh.vertex_count:,} vertices, "
+              f"{self.bone_limit} bone influences, strides {self.mesh.vertex_buffer_stride[0]}/{self.mesh.vertex_buffer_stride[1]}, "
+              f"{self.mesh.vertex_count * sum(self.mesh.vertex_buffer_stride[:2]):,} bytes")
 
         if self.bbox:
             self.bbox.merge(BoundingBox.from_array(mesh_streams[0]["position"]))
