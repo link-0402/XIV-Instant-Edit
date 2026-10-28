@@ -63,7 +63,7 @@ internal static class HipDragFixture
             new("n_root", -1, 0, T(Vector3.Zero)),
             new("n_hara", Root, 0, T(new Vector3(0, 1, 0))),
             new("j_kosi", Hara, 0, T(Vector3.Zero)),
-            new("j_sebo_a", Kosi, 0, T(new Vector3(0, .1f, 0))),
+            new("j_sebo_a", Hara, 0, T(new Vector3(0, .1f, 0))),
         ], [], [], []);
         check(HipSolver.Anchors(spine, []).IsEmpty, "a skeleton without the default bones has no anchors");
         var hipless = body with { Bones = body.Bones.SetItem(Kosi, body.Bones[Kosi] with { Name = "j_kosi_x" }) };
@@ -92,6 +92,15 @@ internal static class HipDragFixture
         check(anchors.All(a => Held(dm, startModel, a.Bone)), "both feet and both hands hold their spot and turn");
         check(legs.All(leg => Vector3.Dot(BendNormal(dm, leg), BendNormal(startModel, leg)) > 0), "the knees bend on the motion's side");
         check(!BackTurned(dl, start, .01f), "hands within reach leave the back alone");
+        check(new[] { (ClavicleL, HandL), (ClavicleR, HandR) }.All(arm =>
+            {
+                // The line from the clavicle to the hand, in the chest's frame, before and after.
+                Vector3 Line(MotionTransform[] model) => Vector3.Transform(startModel[arm.Item2].Position - model[arm.Item1].Position,
+                    Quaternion.Inverse(model[Chest].Rotation));
+                var swing = Degrees(PinSolver.Between(Line(startModel), Line(dm)), Quaternion.Identity);
+                return swing > 1 && Math.Abs(Degrees(dl[arm.Item1].Rotation, start[arm.Item1].Rotation) - swing * HipSolver.ClavicleShare) < .01f;
+            }),
+            "each clavicle turns by its share of its arm's swing");
         check(dl[Kosi].Rotation == start[Kosi].Rotation, "the hips never turn");
         check(MotionEvaluator.ModelSpace(body, dl).Zip(dm).All(pair => Vector3.Distance(pair.First.Position, pair.Second.Position) < 1e-5f &&
                   Degrees(pair.First.Rotation, pair.Second.Rotation) < .01f), "the solve keeps model space in step with the local pose");
@@ -145,8 +154,9 @@ internal static class HipDragFixture
         check(Solve(body, start, down, anchors).Local.SequenceEqual(dl), "the same aim from the same start gives the same pose");
         var (nl, nm) = (start.ToArray(), startModel.ToArray());
         HipSolver.Solve(body, nl, nm, Kosi, down, ReadOnlySpan<HipAnchor>.Empty, startModel);
-        check(Vector3.Distance(nm[Kosi].Position, down) < 1e-5f && Enumerable.Range(0, nl.Length).Where(b => b != Kosi).All(b => nl[b] == start[b]),
-            "with no anchors the hips move alone");
+        check(Vector3.Distance(nm[Kosi].Position, down) < 1e-5f && Vector3.Distance(nm[SpineA].Position, startModel[SpineA].Position + down - startModel[Kosi].Position) < 1e-5f &&
+              Enumerable.Range(0, nl.Length).Where(b => b != Kosi && b != SpineA).All(b => nl[b] == start[b]),
+            "with no anchors the hips move, and the back's base with them, and nothing turns");
     }
 
     /// <summary>The solve becomes an offset's or a pose's keys, beside the hips' position key that Move makes.</summary>
@@ -179,7 +189,11 @@ internal static class HipDragFixture
             var offset = layer.Kind == MotionLayerKind.Offset;
             var hips = new PoseTarget(PinChains.Hips, PoseEdits.Value(layer, PinChains.Hips, 0, offset ? null : before[Kosi])!.Value,
                 PoseEdits.Moved(layer, PinChains.Hips, 0));
-            return PoseEdits.Move(doc, "m1", 0, [hips], move / weight, bone => Space(bone, offset), offset, name => before[index[name]].Position);
+            // The back's base goes with the hips, from its key as the document holds it now.
+            var back = Keyed(doc);
+            var base_ = new PoseTarget(HipSolver.BackBase, PoseEdits.Value(back, HipSolver.BackBase, 0, offset ? null : before[SpineA])!.Value,
+                PoseEdits.Moved(back, HipSolver.BackBase, 0));
+            return PoseEdits.Move(doc, "m1", 0, [hips, base_], move / weight, bone => Space(bone, offset), offset, name => before[index[name]].Position);
         }
         // A drag of the hips by move in a fresh layer, as the overlay makes it.
         (TimelineDocument Doc, float Weight) Dragged(MotionLayerKind kind, float amount, Vector3 move, ImmutableArray<MotionKey> keys = default)
@@ -193,9 +207,9 @@ internal static class HipDragFixture
         }
 
         string[] named = ["j_kosi", "j_asi_a_l", "j_asi_b_l", "j_asi_d_l", "j_asi_a_r", "j_asi_b_r", "j_asi_d_r",
-            "j_ude_a_l", "j_ude_b_l", "j_ude_a_r", "j_ude_b_r"];
+            "j_sako_l", "j_ude_a_l", "j_ude_b_l", "j_sako_r", "j_ude_a_r", "j_ude_b_r"];
         var allowed = Names(HipSolver.Turned(anchors.AsSpan())).Append(PinChains.Hips).ToHashSet(StringComparer.Ordinal);
-        string[] back = Names([SpineA, SpineB, Chest]);
+        string[] back = Names([SpineB, Chest]);
         foreach (var kind in new[] { MotionLayerKind.Pose, MotionLayerKind.Offset })
             foreach (var amount in new[] { 1f, .5f })
             {
@@ -207,11 +221,11 @@ internal static class HipDragFixture
                 check(anchors.All(a => Vector3.Distance(landed[a.Bone].Position, beforeModel[a.Bone].Position) < .001f &&
                           Degrees(landed[a.Bone].Rotation, beforeModel[a.Bone].Rotation) < .1f),
                     $"a hip drag in {name} holds both feet and both hands where they were");
-                check(named.All(bones.ContainsKey), $"a hip drag in {name} keys the hips, the thighs, knees and feet and the upper arms and forearms");
+                check(named.All(bones.ContainsKey), $"a hip drag in {name} keys the hips, the thighs, knees and feet and the clavicles, upper arms and forearms");
                 check(bones.Keys.All(allowed.Contains), $"a hip drag in {name} keys only the hips and the bones its solve may turn");
-                check(!back.Any(bones.ContainsKey), $"a hip drag in {name} with the hands within reach keys no back bone");
+                check(!back.Any(bones.ContainsKey) && bones.ContainsKey(HipSolver.BackBase), $"a hip drag in {name} with the hands within reach keys the back's base, which goes with the hips, and no other back bone");
                 if (kind == MotionLayerKind.Offset)
-                    check(bones.All(pair => pair.Key == PinChains.Hips || pair.Value.Position == Vector3.Zero), $"a hip drag in {name} moves only the hips");
+                    check(bones.All(pair => pair.Key == PinChains.Hips || pair.Key == HipSolver.BackBase || pair.Value.Position == Vector3.Zero), $"a hip drag in {name} moves only the hips and the back's base");
                 if (kind == MotionLayerKind.Offset && amount < 1)
                     check(Vector3.Distance(bones[PinChains.Hips].Position, down * 2) < 1e-5f, "an offset at half weight keys the hips twice the move");
                 if (kind == MotionLayerKind.Pose && amount < 1)
@@ -266,8 +280,8 @@ internal static class HipDragFixture
         check(ReferenceEquals(PoseEdits.DragHips(faintDoc, faint, 0, body, before, before, before, lowered, anchors.AsSpan(), MotionEvaluator.Weight(faint, 0)), faintDoc),
             "a hip drag in a layer that barely applies keys nothing");
         var alone = PoseEdits.DragHips(stillDoc, still, 0, body, before, before, before, lowered, ReadOnlySpan<HipAnchor>.Empty, 1);
-        check(ReferenceEquals(alone, stillDoc) && Keyed(MoveHips(alone, down, 1)).Keys.Single().Bones.Keys.SequenceEqual([PinChains.Hips]),
-            "with nothing to hold a hip drag turns no bone, so only the hips' move is keyed");
+        check(ReferenceEquals(alone, stillDoc) && Keyed(MoveHips(alone, down, 1)).Keys.Single().Bones.Keys.OrderBy(k => k).SequenceEqual(new[] { PinChains.Hips, HipSolver.BackBase }.OrderBy(k => k)),
+            "with nothing to hold a hip drag turns no bone, so only the hips' and the back base's moves are keyed");
         var hipless = body with { Bones = body.Bones.SetItem(Kosi, body.Bones[Kosi] with { Name = "j_kosi_x" }) };
         reject(() => PoseEdits.DragHips(stillDoc, still, 0, hipless, before, before, before, lowered, anchors.AsSpan(), 1),
             "a hip drag on a skeleton without the hips is refused");
@@ -318,7 +332,7 @@ internal static class HipDragFixture
             new("n_root", -1, 0, T(Vector3.Zero)),
             new("n_hara", Root, 0, T(new Vector3(0, 1, 0))),
             new("j_kosi", Hara, 0, T(Vector3.Zero)),
-            new("j_sebo_a", Kosi, 0, T(new Vector3(0, .1f, 0))),
+            new("j_sebo_a", Hara, 0, T(new Vector3(0, .1f, 0))),
             new("n_throw", Hara, 0, T(new Vector3(0, .1f, .1f))),
         ], [], [], []);
         var underBody = $"{AnimationPresentation.BoneName("n_throw")} sits right under the body, so nothing can bend to drag it.";
@@ -350,7 +364,7 @@ internal static class HipDragFixture
         new("j_asi_c_r", KneeR, 0, T(new Vector3(0, -.2f, 0))),
         new("j_asi_d_r", CalfR, 0, T(new Vector3(0, -.2f, 0))),
         new("j_asi_e_r", FootR, 0, T(new Vector3(0, -.05f, .1f))),
-        new("j_sebo_a", Kosi, 0, T(new Vector3(0, .1f, 0))),
+        new("j_sebo_a", Hara, 0, T(new Vector3(0, .1f, 0))),
         new("j_sebo_b", SpineA, 0, T(new Vector3(0, .15f, 0))),
         new("j_sebo_c", SpineB, 0, T(new Vector3(0, .15f, 0))),
         new("j_sako_l", Chest, 0, T(new Vector3(.05f, .1f, 0))),

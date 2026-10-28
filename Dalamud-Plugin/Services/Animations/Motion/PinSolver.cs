@@ -421,7 +421,7 @@ internal static class PinSolver
     }
 
     /// <summary>The smallest rotation taking direction <paramref name="from"/> to direction <paramref name="to"/>.</summary>
-    private static Quaternion Between(Vector3 from, Vector3 to)
+    public static Quaternion Between(Vector3 from, Vector3 to)
     {
         from = Vector3.Normalize(from);
         to = Vector3.Normalize(to);

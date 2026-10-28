@@ -1628,7 +1628,8 @@ playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
   drag back: the arm stays straight until the gizmo is back within reach, and the hand ends under the gizmo.
   (XIV Bridge 336, 2026-10-24: 30 cm past reach in 2 cm steps, the hand never passes the reach or jumps and holds still
   in game; back in, the hand ends under the gizmo where it started.)
-- [ ] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the hips to drag them." (Changed 2026-10-27: the hips now drag, see Hip drag.)
+- [x] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the hips to drag them." (Changed 2026-10-27: the hips now drag, see Hip drag.)
+  (XIV Bridge 354, 2026-10-28: refused with that text, no move gizmo either; the hips on the same layer drag.)
 - [x] 6 Undo once after a drag: the whole drag comes back in one step.
   (XIV Bridge 333, 2026-10-24: one undo step; one Undo brings the document and the hand in game back.)
 
@@ -1641,16 +1642,30 @@ are and the legs, arms and back follow. Spec: docs/superpowers/specs/2026-10-27-
   hips, Gizmo: Drag. In GPose with Live on and paused, drag the hips forward 10 cm and up 5 cm: the feet
   and hands stay where they were, the knees and elbows straighten, the torso leans back. The layer keys
   the hips (position), both thighs, knees and feet, both arms, the clavicles and the back.
-- [ ] 2 The layer's amount at 50 %: the hips still land under the gizmo and the feet and hands still hold.
-- [ ] 3 A standing dance frame, the hips alone selected: drag down 10 cm: the knees bend, the feet and
+  Partly checked (XIV Bridge 350, 2026-10-28, Ground sit, injected drag): the hips land on the aim, feet and hands
+  hold (0.0 mm, in game too), elbows straighten (48/54 to 23/24 deg), the torso leans back (7.9 to 14.7 deg). Keyed:
+  hips, thighs, knees, feet, upper arms, forearms, hands and j_sebo_a-c; **the clavicles are not keyed**: HipSolver.Back
+  leaves them out and the arms bend at the upper arm and forearm only. Decide: key the clavicles, or drop them from this
+  item. Knees go 135/130 to 144/140 deg (the hips moved toward the feet). Not checked: a real mouse drag.
+  Changed 2026-10-28 (the user chose it): the clavicles are keyed. Each takes a third of its arm's swing, after the back
+  leans, and the arm bends the rest. Retested (XIV Bridge 350, 2026-10-28): both clavicles keyed, the hips on the aim,
+  feet and hands hold. Still not checked: a real mouse drag.
+- [x] 2 The layer's amount at 50 %: the hips still land under the gizmo and the feet and hands still hold.
+  (XIV Bridge 351, 2026-10-28: within 0.0 mm in the evaluator and in game; the hips' key carries 2x the move.)
+- [x] 3 A standing dance frame, the hips alone selected: drag down 10 cm: the knees bend, the feet and
   hands hold. Select both feet, then Ctrl+click the hips (the hint names the feet) and drag again: the
   hands now ride with the body.
-- [ ] 4 Drag the hips up past the legs' reach: the legs straighten smoothly and the feet lift, nothing
+  (XIV Bridge 352, 2026-10-28, Idle pose 3: knees 13/9 to 59/58 deg, the hint names the two feet only.)
+- [x] 4 Drag the hips up past the legs' reach: the legs straighten smoothly and the feet lift, nothing
   snaps; back down, the feet are back on the floor under the gizmo.
-- [ ] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the
+  (XIV Bridge 353, 2026-10-28: 2 cm steps, no jump; back down the feet are where they were.)
+- [x] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the
   hips to drag them."
-- [ ] 6 Undo once after a drag: the whole drag comes back in one step.
-- [ ] 7 Save (replace) and Edit again: the clip plays the posed frame the same, and the keys are back.
+  (XIV Bridge 354, 2026-10-28.)
+- [x] 6 Undo once after a drag: the whole drag comes back in one step.
+  (XIV Bridge 350, 2026-10-28: one undo step; the layer has no keys again and the body is back in game.)
+- [x] 7 Save (replace) and Edit again: the clip plays the posed frame the same, and the keys are back.
+  (XIV Bridge 355, 2026-10-28, into a test mod: the saved file within 5 mm of the layers; the keys come back.)
 
 ## Fix layer (pending)
 

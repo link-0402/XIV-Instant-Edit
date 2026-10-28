@@ -359,8 +359,16 @@ public sealed partial class TimelineWindow
                         var offset = layer.Kind == MotionLayerKind.Offset;
                         var under = offset ? null : frames.Before;
                         var (index, _) = BoneTree(skeleton);
-                        current.Change(PoseEdits.Move(changed, layer.Key, frame, [targets.First(t => t.Bone == bone)], follow.Move, frames.Space, offset,
-                            name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null));
+                        var moving = new List<PoseTarget> { targets.First(t => t.Bone == bone) };
+                        // The back's base goes with the hips, from its key as the drag has just left it.
+                        if (HipSolver.Carried(skeleton) is >= 0 and var carried && MotionEdits.Find(changed, layer.Key) is { } edited)
+                        {
+                            var name = skeleton.Bones[carried].Name;
+                            if (PoseEdits.Value(edited, name, frame, offset ? null : frames.Before[carried]) is { } value)
+                                moving.Add(new PoseTarget(name, value, PoseEdits.Moved(edited, name, frame)));
+                        }
+                        current.Change(current.WithReach(PoseEdits.Move(changed, layer.Key, frame, moving, follow.Move, frames.Space, offset,
+                            name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null)));
                     }
                     else
                     {
