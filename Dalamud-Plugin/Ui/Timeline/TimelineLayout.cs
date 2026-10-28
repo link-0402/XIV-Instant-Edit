@@ -89,8 +89,9 @@ internal sealed class TimelineLayout
     /// <summary>How many bone rows the layer at <paramref name="index"/> shows under it: none while it is folded.</summary>
     public int BoneRows(int index) => (index + 1 < layerRows.Length ? layerRows[index + 1] : MotionFirstRow + MotionRows) - layerRows[index] - 1;
 
-    /// <summary>Whether the layer can unfold into bone rows: an offset or pose with keys. Amplitudes and fixes have none.</summary>
-    public static bool Unfolds(MotionLayer layer) => layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Fix) && layer.Keys.Any(key => !key.Bones.IsEmpty);
+    /// <summary>Whether the layer can unfold into bone rows: an offset or pose with keys, or the Motion keys layer. Amplitudes and fixes have none.</summary>
+    public static bool Unfolds(MotionLayer layer) => layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Fix) &&
+        (layer.Markers != null && layer.Kind == MotionLayerKind.Offset || layer.Keys.Any(key => !key.Bones.IsEmpty));
 
     /// <summary>
     /// Lays out <paramref name="doc"/>. <paramref name="visibleLength"/> gives the frames an event
@@ -99,11 +100,12 @@ internal sealed class TimelineLayout
     /// <paramref name="motionFrames"/> gives facial motions' own lengths by name (see
     /// <see cref="TimelineDocument.PlayedFrames"/>); without it they count what they store. The layers
     /// keyed in <paramref name="unfolded"/> get a row per bone, in <paramref name="boneOrder"/> (see
-    /// <see cref="MotionEdits.KeyBones"/>).
+    /// <see cref="MotionEdits.KeyBones"/>). The Motion keys layer also gets a row for each of
+    /// <paramref name="markerBones"/> its keys don't cover, in <paramref name="boneOrder"/>, those it doesn't know last.
     /// </summary>
     public static TimelineLayout Build(TimelineDocument doc, Func<TimelineEvent, int>? visibleLength = null,
         IReadOnlyDictionary<string, int>? motionFrames = null, IReadOnlySet<string>? unfolded = null,
-        IReadOnlyDictionary<string, int>? boneOrder = null)
+        IReadOnlyDictionary<string, int>? boneOrder = null, IReadOnlyList<string>? markerBones = null)
     {
         var events = doc.Events.IsDefault ? [] : doc.Events;
         var rows = new int[events.Length];
@@ -161,8 +163,15 @@ internal sealed class TimelineLayout
             layerRows[index] = motionFirst + motion.Count;
             motion.Add(new TimelineMotionRow(index));
             if (unfolded != null && unfolded.Contains(layer.Key) && Unfolds(layer))
-                foreach (var bone in MotionEdits.KeyBones(layer, boneOrder))
+            {
+                var bones = MotionEdits.KeyBones(layer, boneOrder);
+                if (markerBones is { Count: > 0 } && layer.Markers != null && layer.Kind == MotionLayerKind.Offset)
+                    bones = [.. bones, .. markerBones.Distinct(StringComparer.Ordinal).Where(bone => !bones.Contains(bone, StringComparer.Ordinal))
+                        .Select((bone, at) => (bone, at)).OrderBy(item => boneOrder != null && boneOrder.TryGetValue(item.bone, out var place) ? place : int.MaxValue)
+                        .ThenBy(item => item.at).Select(item => item.bone)];
+                foreach (var bone in bones)
                     motion.Add(new TimelineMotionRow(index, bone));
+            }
         }
         if (!doc.Expression && motion.Count == 0)
             motion.Add(new TimelineMotionRow(-1));

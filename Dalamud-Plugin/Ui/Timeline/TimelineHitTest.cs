@@ -53,6 +53,8 @@ internal enum TimelinePart : byte
     SeamEdge,
     /// <summary>Where the loop start's ease ends, which sets its length.</summary>
     EaseEdge,
+    /// <summary>One of the motion's own markers on a Motion keys bone row.</summary>
+    BoneMarker,
 }
 
 /// <param name="Frame">The fractional frame under the pointer; the editor rounds it.</param>
@@ -121,9 +123,11 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
     /// edges before its body; where only widened grab zones reach the pointer (a marker's minimum
     /// width, an edge's tolerance) the nearest event wins, so stacked markers all stay grabbable; then
     /// the ruler; then the clip band (see <see cref="HitClip"/>), where the seam is only hit on a clip
-    /// that <paramref name="loops"/>; then empty lane space.
+    /// that <paramref name="loops"/>; then empty lane space. On the Motion keys layer's bone rows a key out of reach
+    /// leaves the nearest of the motion's own <paramref name="markers"/> within reach.
     /// </summary>
-    public TimelineHit HitTest(TimelineDocument doc, TimelineLayout layout, TimelineView view, Vector2 point, bool loops = false)
+    public TimelineHit HitTest(TimelineDocument doc, TimelineLayout layout, TimelineView view, Vector2 point, bool loops = false,
+        MotionMarkerSet? markers = null)
     {
         var x = point.X - Legend;
         var y = point.Y;
@@ -153,7 +157,7 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         if (row < 0)
             return TimelineHit.None(frame);
         if (layout.BoneAt(row) is { } boneRow)
-            return HitBone(doc.Motion[boneRow.Layer], boneRow.Bone, view, x, frame, row);
+            return HitBone(doc.Motion[boneRow.Layer], boneRow.Bone, view, x, frame, row, markers);
         if (layout.IsMotionRow(row))
             return layerIndex < 0
                 ? new TimelineHit(TimelinePart.MotionLane, frame, null, null, row)
@@ -282,8 +286,8 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             : new TimelineHit(TimelinePart.ClipRow, frame);
     }
 
-    /// <summary>One bone's row: the nearest of its keys within a marker's reach, else the empty row.</summary>
-    private TimelineHit HitBone(MotionLayer layer, string bone, TimelineView view, float x, float frame, int row)
+    /// <summary>One bone's row: the nearest of its keys within a marker's reach, else (on the Motion keys layer) the nearest marker, else the empty row.</summary>
+    private TimelineHit HitBone(MotionLayer layer, string bone, TimelineView view, float x, float frame, int row, MotionMarkerSet? markers)
     {
         var best = float.MaxValue;
         var found = -1;
@@ -298,9 +302,24 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
                 found = key.Frame;
             }
         }
-        return found >= 0
-            ? new TimelineHit(TimelinePart.BoneKey, frame, null, null, row, layer.Key, found, bone)
-            : new TimelineHit(TimelinePart.BoneLane, frame, null, null, row, layer.Key, Bone: bone);
+        if (found >= 0)
+            return new TimelineHit(TimelinePart.BoneKey, frame, null, null, row, layer.Key, found, bone);
+        if (markers != null && layer.Kind == MotionLayerKind.Offset && layer.Markers != null)
+        {
+            var nearest = -1;
+            foreach (var marker in markers.Of(bone))
+            {
+                var distance = MathF.Abs(x - view.X(marker));
+                if (distance <= Marker / 2 + 1 && distance < best)
+                {
+                    best = distance;
+                    nearest = marker;
+                }
+            }
+            if (nearest >= 0)
+                return new TimelineHit(TimelinePart.BoneMarker, frame, null, null, row, layer.Key, nearest, bone);
+        }
+        return new TimelineHit(TimelinePart.BoneLane, frame, null, null, row, layer.Key, Bone: bone);
     }
 
     /// <summary>Which part of one event's grab zones <paramref name="x"/> is in, or None.</summary>

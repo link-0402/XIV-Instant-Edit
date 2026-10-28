@@ -23,6 +23,58 @@ internal static class MotionKeyMarkersFixture
         Reach(check, reject);
         Search(check);
         Editor(check);
+        Layout(check);
+    }
+
+    private static void Layout(Action<bool, string> check)
+    {
+        var turn = T(Vector3.Zero, Q(Vector3.UnitZ, 20));
+        var order = new Dictionary<string, int> { [B1] = 0, [B2] = 1 };
+        var empty = MotionEdits.AddMotionKeys(Empty(60), out var key, out _);
+        var one = MotionEdits.SetKey(empty, key, 10, B1, turn);
+        var open = new HashSet<string> { key };
+        string[] Rows(TimelineLayout layout) =>
+            [.. Enumerable.Range(1, layout.BoneRows(0)).Select(at => layout.BoneAt(layout.LayerRow(0) + at)!.Value.Bone)];
+
+        var rows = TimelineLayout.Build(one, null, null, open, order, [B2, B1]);
+        check(Rows(rows).SequenceEqual([B1, B2]), "layout: the key bones first, then the other selected bones");
+        var late = TimelineLayout.Build(one, null, null, open, new Dictionary<string, int> { [B2] = 0, [B1] = 1 }, [B2, B1]);
+        check(Rows(late).SequenceEqual([B1, B2]), "layout: the key bones stay first whatever the bone order");
+        var unknown = TimelineLayout.Build(empty, null, null, open, order, ["x", B2, "a", B1]);
+        check(Rows(unknown).SequenceEqual([B1, B2, "x", "a"]), "layout: selected bones the order doesn't know go last, as given");
+        var none = TimelineLayout.Build(empty, null, null, open, order, [B2, B1]);
+        check(TimelineLayout.Unfolds(empty.Motion[0]) && Rows(none).SequenceEqual([B1, B2]), "layout: with no keys the layer still unfolds into the selected bones");
+        check(Rows(TimelineLayout.Build(empty, null, null, open, order)).Length == 0 && Rows(TimelineLayout.Build(empty, null, null, new HashSet<string>(), order, [B1])).Length == 0,
+            "layout: no selected bones or a folded layer show no rows");
+
+        var plain = MotionEdits.Add(Empty(60), MotionLayerKind.Offset, 0, 60, out var plainKey, out _);
+        plain = MotionEdits.SetKey(plain, plainKey, 10, B1, turn);
+        var ordinary = TimelineLayout.Build(plain, null, null, new HashSet<string> { plainKey }, order, [B2, B1]);
+        check(Rows(ordinary).SequenceEqual([B1]) && !TimelineLayout.Unfolds(MotionEdits.Add(Empty(60), MotionLayerKind.Offset, 0, 60, out _, out _).Motion[0]),
+            "layout: an ordinary offset layer ignores the selected bones");
+
+        var set = new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B2] = [0, 30, 60] }, [], 60, false, MarkerDetail.Normal);
+        var geometry = new TimelineGeometry(Legend: 100, Ruler: 24, Row: 20, Edge: 5, Marker: 9);
+        var view = new TimelineView(0, 4, 400);
+        TimelineHit Hit(TimelineDocument doc, string layerKey, string bone, float frame, MotionMarkerSet? markers, IReadOnlyList<string> bones)
+        {
+            var layout = TimelineLayout.Build(doc, null, null, new HashSet<string> { layerKey }, order, bones);
+            var row = Enumerable.Range(layout.MotionFirstRow, layout.MotionRows).First(at => layout.BoneAt(at) is { Bone: var name } && name == bone);
+            return geometry.HitTest(doc, layout, view, new Vector2(geometry.Legend + view.X(frame), geometry.RowTop(row) + 10), false, markers);
+        }
+        var marker = Hit(empty, key, B2, 30, set, [B2]);
+        check(marker is { Part: TimelinePart.BoneMarker, KeyFrame: 30, Layer: var layerKey, Bone: B2 } && layerKey == key && !marker.OnKey && !marker.OnLayer,
+            "hit: a marker on a Motion keys bone row, not a key or a layer part");
+        check(Hit(empty, key, B2, 31.25f, set, [B2]) is { Part: TimelinePart.BoneMarker, KeyFrame: 30 } && Hit(empty, key, B2, 31.5f, set, [B2]) is { Part: TimelinePart.BoneLane },
+            "hit: the marker's reach is half a marker and a pixel");
+        check(Hit(empty, key, B2, 20, set, [B2]) is { Part: TimelinePart.BoneLane }, "hit: between markers is the empty row");
+        var keyed = MotionEdits.SetKey(empty, key, 30, B2, turn);
+        check(Hit(keyed, key, B2, 30, set, [B2]) is { Part: TimelinePart.BoneKey, KeyFrame: 30 }, "hit: a key wins over the marker under it");
+        check(Hit(empty, key, B2, 30, null, [B2]) is { Part: TimelinePart.BoneLane }, "hit: no markers, no marker hit");
+        check(Hit(empty, key, B2, 30, new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [30] }, [], 60, false, MarkerDetail.Normal), [B2]) is { Part: TimelinePart.BoneLane },
+            "hit: another bone's markers don't count");
+        var other = Hit(plain, plainKey, B1, 20, new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [20] }, [], 60, false, MarkerDetail.Normal), []);
+        check(other is { Part: TimelinePart.BoneLane }, "hit: an ordinary layer's rows have no marker hits");
     }
 
     private static void Search(Action<bool, string> check)

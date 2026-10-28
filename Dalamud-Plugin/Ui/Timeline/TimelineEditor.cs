@@ -264,7 +264,7 @@ internal sealed class TimelineEditor
                 return current;
             builtStamp = layoutStamp;
             var unfolded = Document.Motion.Select(layer => layer.Key).Where(key => !folded.Contains(key)).ToHashSet(StringComparer.Ordinal);
-            return layout = TimelineLayout.Build(Document, visibleLength, motionFrames, unfolded, boneOrder);
+            return layout = TimelineLayout.Build(Document, visibleLength, motionFrames, unfolded, boneOrder, markerBones);
         }
     }
 
@@ -416,7 +416,7 @@ internal sealed class TimelineEditor
 
     public bool CanPaste => !clipboard.IsEmpty;
 
-    public TimelineHit HitTest(TimelineGeometry geometry, Vector2 point) => geometry.HitTest(Document, Layout, View, point, Loops);
+    public TimelineHit HitTest(TimelineGeometry geometry, Vector2 point) => geometry.HitTest(Document, Layout, View, point, Loops, ShownMarkers);
 
     // Pointer gestures.
 
