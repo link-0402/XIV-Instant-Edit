@@ -194,7 +194,7 @@ internal static class AtchTableFixture
     });
 
     /// <summary>A table of <paramref name="codes"/> and six states, each row from <paramref name="row"/>, bone names in a pool after the entries.</summary>
-    private static byte[] Build(string[] codes, Func<string, int, (string Bone, float Scale, Vector3 Offset, Vector3 Rotation)> row)
+    internal static byte[] Build(string[] codes, Func<string, int, (string Bone, float Scale, Vector3 Offset, Vector3 Rotation)> row)
     {
         var pool = new MemoryStream();
         var offsets = new Dictionary<string, int>();

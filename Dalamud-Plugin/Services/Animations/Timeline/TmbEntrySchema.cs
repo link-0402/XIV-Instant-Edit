@@ -42,6 +42,12 @@ internal static class TmbEntrySchema
     private static readonly ImmutableHashSet<string> PropKinds =
         ["C043", "C198", "C031", "C094", "C187", "C014", "C015", "C100", "C174", "C175", "C199", "C203"];
 
+    /// <summary>
+    /// The prop controls: Movable by <see cref="Classify"/>, but in a prop's group their attach state is edited through
+    /// the group's Place (the properties panel checks the group); their own rows still only read.
+    /// </summary>
+    internal static readonly ImmutableHashSet<string> PropControls = ["C014", "C015", "C174", "C175"];
+
     private static readonly (string Label, double Value)[] BindOrigins = [("Off", -1), ("Default", 0), ("Caster", 1), ("Target", 2)];
     private static readonly (string Label, double Value)[] BindTypes = [("Off", -1), ("Character", 0), ("Weapon", 1), ("Off hand", 2), ("Summon", 3)];
 

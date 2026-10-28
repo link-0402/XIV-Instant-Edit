@@ -9,9 +9,9 @@ namespace InstantEdit.Ui.Timeline;
 /// The properties panel: the selected event's start, length, file and fields. Each field edit is
 /// one undo step (BeginFieldEdit when it activates, a live Replace per change, EndFieldEdit when it
 /// is left). Locked and move-only events show their reason and read-only values. A bone layer, a
-/// part of the clip band, an effect's place and look and a sound's file have panels of their own, drawn here.
+/// part of the clip band, an effect's place and look, a prop's place and a sound's file have panels of their own, drawn here.
 /// </summary>
-internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor effectPlace, EffectLookEditor effectLooks, SoundInspector soundInspector, CutPanel cutPanel,
+internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor effectPlace, PropPlaceEditor propPlace, EffectLookEditor effectLooks, SoundInspector soundInspector, CutPanel cutPanel,
     LayerPanel layerPanel, TimelineTexts texts, TimelinePickers pickers)
 {
     // The File field of a sound or effect: its text while typed in, its last refusal, and where
@@ -104,6 +104,8 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
         }
         if (ev.LockReason is { Length: > 0 } why)
             Widgets.HintWrapped(ev.Access == TimelineAccess.Locked ? $"{why}. It is shown but never changed." : $"{why}. Its other values stay as they are.");
+        // A grouped prop control is Movable, yet its group's place is edited here.
+        propPlace.Draw(current, ev, !readOnly);
         if (count > 1)
             Widgets.HintWrapped($"Part of a group of {count} events. They move together.");
         if (ev.Conditional)
@@ -136,12 +138,14 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
                     foreach (var field in kind.Fields)
                     {
                         // A VFX event's position, rotation and scale are in Place.
-                        if (EffectPlaceEditor.Placed(ev, field))
+                        // A grouped prop's attach state is in Place; the rows that would split the group only read.
+                        var row = PropPlaceEditor.RawRow(ev, field);
+                        if (EffectPlaceEditor.Placed(ev, field) || row == PropRawRow.Hidden)
                             continue;
                         TimelineUi.Fact(field.Label);
                         using var id = ImRaii.PushId(field.Name);
                         var value = ev.Values?.GetValueOrDefault(field.Name) ?? 0;
-                        if (editable)
+                        if (editable && row == PropRawRow.Editable)
                             DrawField(current, ev, field, value);
                         else
                             ImGui.TextUnformatted(TimelineWindowViews.FieldText(field, value));

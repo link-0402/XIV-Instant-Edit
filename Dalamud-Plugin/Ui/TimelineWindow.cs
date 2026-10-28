@@ -109,7 +109,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         layerPanel = new LayerPanel(session, posing, boneEditor, poseSources, bonesWindow);
         keys = new ShortcutKeys(keyState, framework);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
-        properties = new PropertiesPanel(session, effectPlace, effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
+        properties = new PropertiesPanel(session, effectPlace, new PropPlaceEditor(session), effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
         soundSave = new SoundSaveCheck(session, soundFiles);
         saveFooter = new SaveFooter(session, timelinePreview, decode, effectLooks, soundFiles, soundSave, texts, () => reader.Busy,
             afterUndo =>

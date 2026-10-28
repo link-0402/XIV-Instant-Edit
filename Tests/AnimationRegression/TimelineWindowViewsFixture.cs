@@ -473,6 +473,56 @@ internal static class TimelineWindowViewsFixture
         check(turned.Y == stored.Y && turned.Z == stored.Z && MathF.Abs(turned.X - (shown.X + .5f) * MathF.PI / 180) < 1e-6f &&
               EffectPlaceEditor.Turned(stored, shown, shown) == stored,
             "a turn keeps the stored radians of the axes the drag didn't change");
+        PropPlaces(check, texts);
+    }
+
+    private static void PropPlaces(Action<bool, string> check, List<string> texts)
+    {
+        check(Enumerable.Range(0, 6).Select(PropPlaceEditor.StateName).SequenceEqual(["Drawn", "Stowed", "In use", "Switch hand", "Throw", "Switch reverse"]),
+            "Attach names the six states, Drawn first");
+        var table = AtchTable.Parse(AtchTableFixture.Build(["tsl"], (_, state) => ("n_buki_r", state == 0 ? .85f : 1f, Vector3.Zero, Vector3.Zero)));
+        check(PropPlaceEditor.BoneLine(table, "tsl", 0) == "n_buki_r, size 0.85" && PropPlaceEditor.BoneLine(table, "tsl", 1) == "n_buki_r",
+            "an attach state's vanilla bone shows its size only when it isn't 1");
+        var culture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            check(PropPlaceEditor.BoneLine(table, "tsl", 0) == "n_buki_r, size 0.85", "the vanilla size doesn't follow the user's culture");
+        }
+        finally { CultureInfo.CurrentCulture = culture; }
+
+        string[] hints = [PropPlaceEditor.RaceHint, PropPlaceEditor.SharedHint, PropPlaceEditor.OwnHint, PropPlaceEditor.UnlearnedHint];
+        texts.AddRange(hints);
+        check(hints.SequenceEqual([
+                "Changes where this prop attaches for your race. Other races get the same change when the file is rebuilt or borrowed for them.",
+                "Other emotes with the same kind of prop move too", "Uses a spare attach point no other animation shows a prop on", "Preview once to place it"]),
+            "the prop Place hints say what a place changes");
+
+        static TimelineField Field(string magic, string name) => TmbEntrySchema.Find(magic)!.Fields.First(f => f.Name == name);
+        var summon = Ev("s", "C198", TimelineLane.Prop, 0, "", 60, Values(("Model", 1962), ("SummonId", 1), ("AtchState", 0)));
+        var grouped = summon with { Group = "p1" };
+        var plays = Ev("w", "C031", TimelineLane.Prop, 5, "", 1, Values(("TargetType", 3))) with { Group = "p1" };
+        check(PropPlaceEditor.RawRow(grouped, Field("C198", "AtchState")) == PropRawRow.Hidden &&
+              PropPlaceEditor.RawRow(grouped, Field("C198", "SummonId")) == PropRawRow.ReadOnly &&
+              PropPlaceEditor.RawRow(grouped, Field("C198", "Model")) == PropRawRow.Editable &&
+              PropPlaceEditor.RawRow(plays, Field("C031", "TargetType")) == PropRawRow.ReadOnly,
+            "a grouped prop's Attach row is Place's, and its Slot and Plays on rows only read");
+        check(PropPlaceEditor.RawRow(summon, Field("C198", "AtchState")) == PropRawRow.Editable &&
+              PropPlaceEditor.RawRow(summon, Field("C198", "SummonId")) == PropRawRow.Editable &&
+              PropPlaceEditor.RawRow(plays with { Group = null }, Field("C031", "TargetType")) == PropRawRow.Editable,
+            "an ungrouped prop event keeps its raw rows");
+
+        var other = Ev("o", "C198", TimelineLane.Prop, 0, "", 60, Values(("Model", 1962), ("SummonId", 0))) with { Group = "p1" };
+        var control = Ev("c", "C014", TimelineLane.Prop, 1, "", 0, Values(("ObjectControl", 3), ("ObjectPosition", 1))) with { Group = "p1" };
+        var doc = Doc(60, 60, other, grouped, control);
+        check(PropPlaceEditor.SummonOf(doc, control)?.Key == "s" && PropPlaceEditor.SummonOf(doc, grouped)?.Key == "s" &&
+              PropPlaceEditor.SummonOf(doc, plays) == null && PropPlaceEditor.SummonOf(doc, control with { Group = null }) == null,
+            "a grouped prop control places the summon on its slot");
+
+        var still = new TimelinePropPlace(0, false, null, Vector3.Zero, Vector3.Zero, 1);
+        check(PropPlaceEditor.Settled(still, 0) == null && PropPlaceEditor.Settled(still, 1) == still &&
+              PropPlaceEditor.Settled(still with { OwnState = true }, 0) != null && PropPlaceEditor.Settled(still with { Size = 1.5f }, 0) != null,
+            "a place that changes nothing is dropped");
     }
 
     private static void Sounds(Action<bool, string> check, List<string> texts)

@@ -61,6 +61,24 @@ internal sealed class TimelineSession
     /// <summary>Files imported for the document, by game path: sounds, effects and the copies a fix or a look makes.</summary>
     public Dictionary<string, TimelineImport> Imports { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<ushort, AtchTable?> attachTables = [];
+
+    /// <summary>The game's own attach table of a race (101 for c0101), read once; null when the game has none or it can't be read.</summary>
+    public AtchTable? AttachTable(ushort race)
+    {
+        if (!attachTables.TryGetValue(race, out var table))
+        {
+            try { table = Data.GetFile(AtchTable.GamePath(race))?.Data is { } bytes ? AtchTable.Parse(bytes) : null; }
+            catch (Exception e) when (e is InvalidDataException or IOException)
+            {
+                Log.Warning(e, $"Could not read the attach table of c{race:D4}.");
+                table = null;
+            }
+            attachTables[race] = table;
+        }
+        return table;
+    }
+
     /// <summary> Whether the document must not change now: nothing to edit, or a save, undo or reload is running. </summary>
     public bool ReadOnly => Source?.Document == null || busy();
 
