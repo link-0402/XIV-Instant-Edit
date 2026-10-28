@@ -717,8 +717,8 @@ the next spawn of the effect loads the new look.
   model particles too. Above 1 it gets brighter.
   Partly checked (XIV Bridge tests/instant-edit/animations/176, 2026-10-10): the tint writes only RvR/RvG/RvB (red reads
   back 1,0,0; 2.5 is kept). Not checked: how it looks in game.
-- [ ] Size 2 doubles it, Offset Y 1 lifts it, Turn Y 90 turns it a quarter (if it
-  turns about 57x as far, the field is radians and the label must change).
+- [ ] Size 2 doubles it, Offset Y 1 lifts it, Turn Y 90 turns it a quarter (Turn is
+  radians in the file, degrees shown; if it turns about 57x as far, that is wrong).
   Partly checked (XIV Bridge tests/instant-edit/animations/176, 2026-10-10): size 2,2,2, offset 0,1,0 and turn 0,90,0
   are written as typed and nothing else changes. Evidence on the unit: of 1,501 effects read, the largest Turn value
   is 0.052 and none is above 2π, which suggests radians. Not checked: how far it turns in game.
@@ -745,6 +745,14 @@ the next spawn of the effect loads the new look.
   (XIV Bridge tests/instant-edit/animations/178, 2026-10-10: a tint drag and a hue drag each undo and redo in one step;
   the event carries the look while it is changed and drops it on Reset look or another effect file. The dot and the
   tooltip line are drawn exactly when the event has a look (TimelineWindow.Canvas.cs:539, 796); they weren't looked at.)
+
+Place and length (2026-10-27):
+Selecting an effect shows a Place section (Move in metres, Turn in degrees, Size) above Look.
+A C173 event also has Stops at, which bakes a KILL into a copy of the effect.
+- [ ] Turn Y 90 on an effect turns it a quarter, not 57 times as far.
+- [ ] Move 0,1,0 on an effect attached to a bone lifts it.
+- [ ] A C012 Position edit moves that event only, not the other uses of the effect.
+- [ ] Stops at 60 on a looping effect ends it at 2 s. Keep looping and Stops at clear each other.
 
 Length:
 - [x] Make a loop emote 1.5x longer with Scale events on. The motion, faces, sounds

@@ -233,6 +233,8 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
             var duration = ev.Duration;
             ImGui.SetNextItemWidth(Theme.Scaled(90));
             var changed = ImGui.InputInt("##duration", ref duration, 0, 0);
+            if (ev.Magic == "C012")
+                TimelineUi.Tip("Only a looping effect with triggers uses this.");
             TimelineUi.TrackField(current, changed, changed ? ev with { Duration = Math.Clamp(duration, 1, TimelineDocument.MaxFrames) } : null);
             ImGui.SameLine(0, Theme.Gap);
             ImGui.TextColored(Theme.Muted, TimelineText.Seconds(ev.Duration));
