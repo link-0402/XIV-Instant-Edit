@@ -207,7 +207,7 @@ internal static class PropModelSourcesFixture
     /// An MTRL listing <paramref name="textures"/> (path and DX11 flag) behind the shader name, with an empty
     /// shader section: enough for the texture table to read.
     /// </summary>
-    private static byte[] Material(params (string Path, bool Dx11)[] textures)
+    internal static byte[] Material(params (string Path, bool Dx11)[] textures)
     {
         var strings = new MemoryStream();
         strings.Write("character.shpk\0"u8);

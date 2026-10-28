@@ -28,6 +28,7 @@ internal static class PropCopyCommitFixture
         Directory.CreateDirectory(root);
         try
         {
+            BuiltCopy(root, check);
             NewMod(root, check);
             InPlace(root, check, reject);
             SourceGone(root, check);
@@ -49,6 +50,33 @@ internal static class PropCopyCommitFixture
               !AnimationCommitService.AddedGamePath("chara/weapon/w9001/obj/body/b9000/model/../../b0200/model/w9001b0200.mdl") &&
               !AnimationCommitService.AddedGamePath("chara/weapon/w9001/obj/body/b9000/w9001b9000.imc"),
             "a shipped body's model, gear models, escaping paths and other kinds of file are never added");
+    }
+
+    /// <summary>
+    /// Every path a built copy holds can be saved: model, material, texture and its DX11 <c>--</c> twin, and the 255
+    /// aliases, as <see cref="PropCopies.Build"/> names them.
+    /// </summary>
+    private static void BuiltCopy(string parent, Action<bool, string> check)
+    {
+        var dir = Path.Combine(parent, "Built");
+        Directory.CreateDirectory(dir);
+        const string stored = "chara/monster/m8044/obj/body/b0001/texture/v01_m8044b0001_d.tex";
+        File.WriteAllBytes(Path.Combine(dir, "a.mdl"), [1]);
+        File.WriteAllBytes(Path.Combine(dir, "a.mtrl"), PropModelSourcesFixture.Material((stored, true)));
+        File.WriteAllBytes(Path.Combine(dir, "d.tex"), [2]);
+        var texture = PropModelSources.PrivateTexturePath(Body, stored, ImmutableDictionary<string, string>.Empty);
+        var source = new TimelinePropSource("phones", "Phones", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9001, 9000,
+            ImmutableDictionary<string, string>.Empty
+                .Add(Model, "file:" + Path.Combine(dir, "a.mdl"))
+                .Add(Material, "file:" + Path.Combine(dir, "a.mtrl"))
+                .Add(texture, "file:" + Path.Combine(dir, "d.tex"))
+                .Add(InstantEdit.Services.PathRules.Dx11TexturePath(texture, 0x8000), "file:" + Path.Combine(dir, "d.tex")),
+            ImmutableDictionary<string, string>.Empty.Add(stored, texture));
+        var copy = PropCopies.Build(source, _ => null);
+        var refused = copy.Files.Keys.Concat(copy.Aliases.Keys).Where(path => !AnimationCommitService.AddedGamePath(path)).ToArray();
+        check(copy.Files.Count == 4 && copy.Files.Keys.Any(path => path.Contains("/--", StringComparison.Ordinal)) && refused.Length == 0 &&
+              AnimationEditService.KeptAliases(copy.Aliases, copy.Files, copy.Files).Count == 255,
+            $"every file and alias of a built copy, the DX11 twin included, can be added (refused: {string.Join(", ", refused)})");
     }
 
     private static ImmutableDictionary<string, byte[]> Files() => ImmutableDictionary<string, byte[]>.Empty
