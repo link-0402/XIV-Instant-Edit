@@ -117,6 +117,10 @@ internal sealed class TimelineEditor
     // those rows; either changing rebuilds the layout.
     private readonly HashSet<string> folded = new(StringComparer.Ordinal);
     private IReadOnlyDictionary<string, int>? boneOrder;
+    // The selected bones, which the Motion keys layer lists as rows even without keys; changing them rebuilds the layout.
+    private IReadOnlyList<string> markerBones = [];
+    // The zero keys WithReach added since the running gesture began from Base, by frame and bone.
+    private (TimelineDocument Base, HashSet<(int Frame, string Bone)> Keys)? reached;
     private int layoutStamp;
     private int builtStamp = -1;
 
@@ -221,6 +225,25 @@ internal sealed class TimelineEditor
             if (ReferenceEquals(value, boneOrder))
                 return;
             boneOrder = value;
+            layoutStamp++;
+        }
+    }
+
+    /// <summary>
+    /// The motion's key markers as the cuts and length play it (see <see cref="KeyMarkers"/>); null while they are
+    /// searched or unknown, when edits add no zero keys.
+    /// </summary>
+    public MotionMarkerSet? Markers { get; set; }
+
+    /// <summary>The selected bones, for the Motion keys layer's rows. A copy is kept; a different sequence rebuilds the layout.</summary>
+    public IReadOnlyList<string> MarkerBones
+    {
+        get => markerBones;
+        set
+        {
+            if (markerBones.SequenceEqual(value, StringComparer.Ordinal))
+                return;
+            markerBones = [.. value];
             layoutStamp++;
         }
     }
@@ -1491,6 +1514,56 @@ internal sealed class TimelineEditor
         SelectLayer(key);
         return true;
     }
+
+    /// <summary>
+    /// Edit motion keys: adds the Motion keys layer unless there is one (one undo step, none when it is reused, muted or
+    /// not), then moves the playhead to <paramref name="frame"/>, selects the layer and shows its bone rows.
+    /// </summary>
+    public bool EditMotionKeys(int frame)
+    {
+        LastError = null;
+        var next = MotionEdits.AddMotionKeys(Document, out var key, out var error);
+        LastError = error;
+        if (error != null)
+            return false;
+        if (!ReferenceEquals(next, Document) && !Commit(next))
+            return false;
+        Playhead = frame;
+        SelectLayer(key);
+        SetUnfolded(key, true);
+        return true;
+    }
+
+    /// <summary>
+    /// <paramref name="next"/> with the zero keys a write into the Motion keys layer reaches out to
+    /// (<see cref="MotionEdits.WithReach"/>), compared with the document the running gesture began from, so a drag adds
+    /// them once; <paramref name="next"/> itself without <see cref="Markers"/>. Zero keys an earlier preview of the same
+    /// gesture added, and the next one still holds at zero, count as there before: they never reach out themselves.
+    /// </summary>
+    public TimelineDocument WithReach(TimelineDocument next)
+    {
+        if (Markers is not { } markers || MotionEdits.MotionKeysLayer(next) is not { } layer)
+            return next;
+        var from = History.Base;
+        if (!History.InGesture || reached is not { } known || !ReferenceEquals(known.Base, from))
+            reached = known = (from, []);
+        var before = from;
+        foreach (var (frame, bone) in known.Keys)
+            if (BoneAt(layer, frame, bone) is { } value && value == ZeroKey)
+                before = MotionEdits.SetKey(before, layer.Key, frame, bone, value);
+        var result = MotionEdits.WithReach(before, next, markers);
+        if (!ReferenceEquals(result, next) && MotionEdits.MotionKeysLayer(result) is { } added)
+            foreach (var key in added.Keys)
+                foreach (var bone in key.Bones.Keys)
+                    if (BoneAt(layer, key.Frame, bone) == null)
+                        known.Keys.Add((key.Frame, bone));
+        return result;
+    }
+
+    private static readonly BoneTransform ZeroKey = MotionTransform.Identity.ToBone();
+
+    private static BoneTransform? BoneAt(MotionLayer layer, int frame, string bone) =>
+        MotionEdits.KeyIndex(layer, frame) is var at and >= 0 && layer.Keys[at].Bones.TryGetValue(bone, out var value) ? value : null;
 
     /// <summary>Adds a fix layer holding <paramref name="fix"/> (<see cref="MotionEdits.AddFix"/>) as one undo step, and selects it.</summary>
     public bool AddFix(MotionFix fix)

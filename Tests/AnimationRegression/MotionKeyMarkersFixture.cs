@@ -21,6 +21,97 @@ internal static class MotionKeyMarkersFixture
         Detection(check);
         Poses(check);
         Reach(check, reject);
+        Search(check);
+        Editor(check);
+    }
+
+    private static void Search(Action<bool, string> check)
+    {
+        var clip = Clip(61, 60, Swing);
+        var doc = Empty(60);
+        var starts = 0;
+        var inline = new MarkerSearch { Start = action => { starts++; action(); return Task.CompletedTask; } };
+        var first = inline.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false);
+        check(first is { Detail: MarkerDetail.Normal, Length: 60 } && first.Of(B1).Length > 2 && starts == 1, "search: finds the markers once");
+        check(ReferenceEquals(inline.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false), first) && starts == 1, "search: the same key starts nothing");
+        var layered = MotionEdits.AddMotionKeys(doc, out _, out _);
+        check(ReferenceEquals(inline.Find("decode", clip, layered, MarkerDetail.Normal, gesture: false), first) && starts == 1, "search: layers don't change the key");
+        check(ReferenceEquals(inline.Find("decode", clip, doc, MarkerDetail.More, gesture: true), first) && starts == 1, "search: a gesture keeps the last set and starts nothing");
+        check(inline.Find("other", clip, doc, MarkerDetail.More, gesture: true) == null, "search: the last set stands only for its decode");
+
+        var queued = new List<Action>();
+        var held = new MarkerSearch { Start = action => { queued.Add(action); return Task.CompletedTask; } };
+        check(held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false) == null && queued.Count == 1, "search: none while the first search runs");
+        var seen = held.Token;
+        check(held.Find("decode", clip, doc, MarkerDetail.More, gesture: false) == null && queued.Count == 2 && seen.IsCancellationRequested,
+            "search: a changed detail starts again and cancels the old search");
+        queued[0]();
+        queued[1]();
+        var more = held.Find("decode", clip, doc, MarkerDetail.More, gesture: false);
+        check(more is { Detail: MarkerDetail.More } && queued.Count == 2, "search: the cancelled search publishes nothing, the new one its set");
+        check(ReferenceEquals(held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false), more) && queued.Count == 3 && held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false) == more,
+            "search: while a search runs the last set of its decode stands");
+
+        var cut = doc with { Cuts = MotionCuts.WholeOf(60) };
+        check(MarkerSearch.KeyOf("decode", doc, MarkerDetail.Normal) != MarkerSearch.KeyOf("decode", cut, MarkerDetail.Normal) &&
+              MarkerSearch.KeyOf("decode", cut, MarkerDetail.Normal) != MarkerSearch.KeyOf("decode", cut with { Cuts = MotionCuts.WholeOf(60) }, MarkerDetail.Normal) &&
+              MarkerSearch.KeyOf("decode", doc, MarkerDetail.Normal) != MarkerSearch.KeyOf("decode", doc with { Length = 61 }, MarkerDetail.Normal) &&
+              MarkerSearch.KeyOf("decode", doc, MarkerDetail.Normal) != MarkerSearch.KeyOf("other", doc, MarkerDetail.Normal) &&
+              MarkerSearch.KeyOf("decode", doc, MarkerDetail.Normal) == MarkerSearch.KeyOf("decode", layered, MarkerDetail.Normal),
+            "search: the key is the decode, the cuts, the length and the detail");
+    }
+
+    private static void Editor(Action<bool, string> check)
+    {
+        var set = new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [0, 10, 20, 30, 40, 60] }, [], 60, false, MarkerDetail.Normal);
+        var turn = T(Vector3.Zero, Q(Vector3.UnitZ, 20));
+        var turn2 = T(Vector3.Zero, Q(Vector3.UnitZ, 40));
+        List<int> Frames(TimelineDocument doc) => [.. MotionEdits.MotionKeysLayer(doc)!.Keys.Where(k => k.Bones.ContainsKey(B1)).Select(k => k.Frame)];
+
+        var editor = new TimelineEditor(Empty(60)) { Markers = set };
+        check(ReferenceEquals(editor.History.Base, editor.Document), "history base: the current document outside a gesture");
+        check(editor.EditMotionKeys(25) && editor.SelectedLayer == MotionEdits.MotionKeysLayer(editor.Document)!.Key && editor.Playhead == 25 &&
+              editor.IsUnfolded(editor.SelectedLayer!) && editor.History.UndoCount == 1, "edit motion keys: adds, selects, moves the playhead");
+        var count = editor.Document.Motion.Length;
+        check(editor.EditMotionKeys(40) && editor.Document.Motion.Length == count && editor.Playhead == 40 && editor.History.UndoCount == 1, "edit motion keys: reuses the layer, no undo step");
+        var key = editor.SelectedLayer!;
+        editor.Change(MotionEdits.SetEnabled(editor.Document, key, false));
+        check(editor.EditMotionKeys(10) && !MotionEdits.Find(editor.Document, key)!.Enabled, "edit motion keys: a muted layer stays muted");
+
+        var start = editor.Document;
+        editor.BeginFieldEdit();
+        editor.Change(editor.WithReach(MotionEdits.SetKey(editor.Document, key, 25, B1, turn)));
+        check(ReferenceEquals(editor.History.Base, start), "history base: the document the gesture began from");
+        editor.Change(editor.WithReach(MotionEdits.SetKey(editor.Document, key, 25, B1, turn2)));
+        editor.EndFieldEdit();
+        check(Frames(editor.Document).SequenceEqual([20, 25, 30]) && editor.Undo() && ReferenceEquals(editor.Document, start), "drag: zero keys added once and kept through previews, one undo step");
+        editor.Redo();
+        var rebuilt = editor.Document;
+        editor.BeginFieldEdit();
+        editor.Change(editor.WithReach(MotionEdits.SetKey(rebuilt, key, 50, B1, turn)));
+        editor.Change(editor.WithReach(MotionEdits.SetKey(rebuilt, key, 50, B1, turn2)));
+        editor.EndFieldEdit();
+        check(Frames(editor.Document).SequenceEqual([20, 25, 30, 40, 50, 60]), "drag: a preview rebuilt from the gesture's start keeps its zero keys");
+
+        editor.Markers = new MotionMarkerSet(set.Bones, [], 50, false, MarkerDetail.Normal);
+        var stale = MotionEdits.SetKey(editor.Document, key, 45, B1, turn);
+        check(ReferenceEquals(editor.WithReach(stale), stale), "stale markers: no zero keys");
+        editor.Markers = null;
+        check(ReferenceEquals(editor.WithReach(stale), stale), "no markers: no zero keys");
+
+        editor.MarkerBones = ["a"];
+        var stamp = editor.Layout;
+        editor.MarkerBones = new List<string> { "a" };
+        check(ReferenceEquals(stamp, editor.Layout), "marker bones: same bones keep the layout");
+        editor.MarkerBones = ["a", "b"];
+        check(!ReferenceEquals(stamp, editor.Layout) && editor.MarkerBones.SequenceEqual(["a", "b"]), "marker bones: other bones rebuild the layout");
+        var live = new List<string> { "c" };
+        editor.MarkerBones = live;
+        live.Add("d");
+        check(editor.MarkerBones.SequenceEqual(["c"]), "marker bones: a copy is kept");
+
+        var expression = new TimelineEditor(Empty(60) with { Expression = true });
+        check(!expression.EditMotionKeys(5) && expression.LastError != null && expression.Document.Motion.IsEmpty, "edit motion keys: refused on an expression timeline");
     }
 
     private static void Reach(Action<bool, string> check, Action<Action, string> reject)

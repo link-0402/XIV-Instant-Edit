@@ -44,6 +44,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly BonesPanel bonesPanel;
     private readonly TimelineTexts texts;
     private readonly TimelineClipBand clipBand;
+    private readonly KeyMarkers keyMarkers;
     private readonly CutPanel cutPanel;
     private readonly TimelineCanvas canvas;
     private readonly ShortcutKeys keys;
@@ -99,6 +100,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         decode = new MotionDecode(session);
         texts = new TimelineTexts(session);
         clipBand = new TimelineClipBand(session, decode);
+        keyMarkers = new KeyMarkers(session, decode);
         cutPanel = new CutPanel(session, decode, clipBand);
         effectLooks = new EffectLookEditor(session);
         effectPlace = new EffectPlaceEditor(session, effectLooks);
@@ -579,6 +581,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         editor.ResidentMotions = session.Catalog.Data.ResidentMotions;
         editor.MotionPacks = session.Catalog.Data.MotionPacks;
         editor.BoneOrder = session.EditingSkeleton(source) is { } skeleton ? BoneTree(skeleton).Index : null;
+        editor.Markers = keyMarkers.For(editor, source);
+        editor.MarkerBones = posing.Selection.Bones;
 
         timelinePreview.Dragging = OverlayDragging;
         timelinePreview.Update(editor, source);

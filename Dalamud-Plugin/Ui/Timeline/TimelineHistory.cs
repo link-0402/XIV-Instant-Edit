@@ -72,6 +72,9 @@ internal sealed class TimelineHistory
     /// <summary>Starts a gesture; nothing is recorded until it ends.</summary>
     public void Begin() => gesture ??= Current;
 
+    /// <summary>The document the running gesture began from, else the current one: what a live edit compares against.</summary>
+    public TimelineDocument Base => gesture ?? Current;
+
     /// <summary>Shows <paramref name="next"/> while the gesture runs, starting one if needed.</summary>
     public void Preview(TimelineDocument next)
     {
