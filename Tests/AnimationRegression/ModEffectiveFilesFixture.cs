@@ -23,6 +23,7 @@ internal static class ModEffectiveFilesFixture
             Priority(check, dir);
             Multi(check, dir);
             Combining(check, dir);
+            Selection(check, dir);
         }
         finally
         {
@@ -182,6 +183,41 @@ internal static class ModEffectiveFilesFixture
               At(ModOptionGroups.EffectiveFiles(folder, Picks(("Parts", ["A"]))), "chara/x/part.tex", folder) == "a/part.tex" &&
               ModOptionGroups.EffectiveFiles(folder, Picks(("Parts", []))).Count == 0,
             "a Combining group serves the container its picked options select");
+    }
+
+    /// <summary>
+    /// Every group's selection for <see cref="ModOptionGroups.EffectiveFiles"/>: Penumbra's settings where it has them,
+    /// else the group's DefaultSettings (Single an index, Multi and Combining a bit per option).
+    /// </summary>
+    private static void Selection(Action<bool, string> check, string dir)
+    {
+        static JsonObject WithDefault(JsonObject group, int? value)
+        {
+            if (value is { } set)
+                group["DefaultSettings"] = set;
+            return group;
+        }
+        var combining = new JsonObject
+        {
+            ["Name"] = "Parts", ["Type"] = "Combining", ["Priority"] = 0, ["DefaultSettings"] = 2,
+            ["Options"] = new JsonArray(new JsonObject { ["Name"] = "A" }, new JsonObject { ["Name"] = "B" }),
+            ["Containers"] = new JsonArray(new JsonObject(), new JsonObject(), new JsonObject(), new JsonObject()),
+        };
+        var folder = Mod(dir, "selection", Files(), [
+            WithDefault(Group("Color", "Single", 0, Option("Red"), Option("Blue")), 1),
+            WithDefault(Group("Extras", "Multi", 0, Option("One"), Option("Two"), Option("Three")), 5),
+            combining,
+            WithDefault(Group("Plain", "Single", 0, Option("First"), Option("Second")), null),
+            WithDefault(Group("None", "Multi", 0, Option("X")), null)]);
+        static string Show(IReadOnlyDictionary<string, IReadOnlyList<string>> picks)
+            => string.Join("; ", picks.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key} = {string.Join(", ", pair.Value)}"));
+
+        var defaults = ModOptionGroups.Selection(folder, null);
+        check(Show(defaults) == "Color = Blue; Extras = One, Three; None = ; Parts = B; Plain = First",
+            $"without Penumbra's settings every group gets its default selection: {Show(defaults)}");
+        var settings = ModOptionGroups.Selection(folder, Picks(("color", ["Red"]), ("Extras", [])));
+        check(Show(settings) == "Extras = ; None = ; Parts = B; Plain = First; color = Red",
+            $"Penumbra's settings win, and a group they leave out gets its default: {Show(settings)}");
     }
 
     private static void Real(Action<bool, string> check)

@@ -52,6 +52,20 @@ internal sealed class AnimationModService
         using var mods = _ipc.GetModListAdapter();
         return mods.Select(m => (m.Identifier, m.Name, m.ModPath.FullName)).ToArray();
     });
+    /// <summary>
+    /// A mod's current option settings in <paramref name="collection"/> (group to picked options), whether the mod is
+    /// on or off; null when the collection has no settings for it. Throws when Penumbra can't tell.
+    /// </summary>
+    internal Task<IReadOnlyDictionary<string, IReadOnlyList<string>>?> ModSettingsAsync(Guid collection, string modDirectory) =>
+        _framework.RunOnFrameworkThread(() =>
+        {
+            var (code, settings) = _getCurrentModSettings.Invoke(collection, modDirectory, string.Empty, false);
+            if (code != PenumbraApiEc.Success)
+                throw new IOException($"Penumbra could not read the settings of {modDirectory} ({code}).");
+            return settings is { } found
+                ? found.Item3.ToDictionary(pair => pair.Key, pair => (IReadOnlyList<string>)pair.Value.ToArray(), StringComparer.OrdinalIgnoreCase)
+                : (IReadOnlyDictionary<string, IReadOnlyList<string>>?)null;
+        });
     internal void CheckAnimationCollectionOnFramework(ushort objectIndex, Guid collection)
     {
         var current = _getCollectionForObject.Invoke(objectIndex);

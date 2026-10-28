@@ -127,6 +127,16 @@ internal sealed partial class AnimationEditService : IDisposable
     /// <summary>Loads the saved expression set list, or builds it the first time.</summary>
     public void StartFaceLibraries() => FaceLibraries.Start(lifetime.Token);
 
+    /// <summary>Every installed mod's folder name, display name and folder on disk, by name, for the Timeline's props from mods.</summary>
+    internal async Task<ImmutableArray<(string Directory, string Name, string Root)>> InstalledModsAsync() =>
+        [.. (await animationMods.FaceLibraryRootsAsync().ConfigureAwait(false))
+            .Where(mod => mod.Directory.Length > 0 && mod.Root.Length > 0)
+            .OrderBy(mod => mod.Name, StringComparer.OrdinalIgnoreCase).ThenBy(mod => mod.Directory, StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>A mod's option settings in <paramref name="collection"/>; null when the collection has none for it (see <see cref="AnimationModService.ModSettingsAsync"/>).</summary>
+    internal Task<IReadOnlyDictionary<string, IReadOnlyList<string>>?> ModSettingsAsync(Guid collection, string modDirectory) =>
+        animationMods.ModSettingsAsync(collection, modDirectory);
+
     /// <summary>
     /// The installed expression libraries for <paramref name="race"/>'s <paramref name="face"/> that
     /// <paramref name="collection"/> plays: each game path is resolved through Penumbra. Nothing in game changes.

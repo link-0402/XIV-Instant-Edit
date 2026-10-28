@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
@@ -33,8 +34,27 @@ internal static class TimelineAutosaveFixture
             var sound = new TimelineSoundKey("sound/foot/step.scd", 1);
             check(doc.SoundEdits.TryGetValue(sound with { Path = "SOUND/foot/step.scd" }, out var edit) && edit.Volume == .5f &&
                   edit.Alternatives.Length == 2 && edit.Alternatives[1].Import == "instant_edit/step.scd", "sound edits come back by their key");
-            check(doc.Events.Length == 2 && doc.Events[1].Look is { Glow: 2, Colors.Length: 1 } look && look.Tint == new Vector3(1, 2, 3) &&
+            check(doc.Events.Length == 3 && doc.Events[1].Look is { Glow: 2, Colors.Length: 1 } look && look.Tint == new Vector3(1, 2, 3) &&
                   look.Colors[0].To == Vector3.UnitX && doc.Events[0].Values["SoundIndex"] == 1, "events come back with their values and looks");
+            var keptSource = kept.Restored.Events[2].Source!;
+            check(doc.Events[2].Source is { } source && source with { Files = keptSource.Files, Textures = keptSource.Textures } == keptSource &&
+                  source.Files.OrderBy(p => p.Key).SequenceEqual(keptSource.Files.OrderBy(p => p.Key)) &&
+                  source.Textures.OrderBy(p => p.Key).SequenceEqual(keptSource.Textures.OrderBy(p => p.Key)) &&
+                  doc.Events[0].Source == null && doc.Events[1].Source == null,
+                "a prop from a mod comes back with its source, and the other events without one");
+
+            // An autosave written before events had a source.
+            var older = JsonNode.Parse(written)!;
+            foreach (var name in new[] { "Document", "Restored" })
+                if (older[name]?["Events"] is JsonArray events)
+                    foreach (var ev in events)
+                        if (ev is JsonObject item && item.ContainsKey("Source") && item["Source"] is null)
+                            item.Remove("Source");
+            check(!older.ToJsonString().Contains("\"Source\":null", StringComparison.Ordinal), "the older autosave has no Source entries");
+            File.WriteAllText(file, older.ToJsonString());
+            var olderBack = store.LoadAutosave()!;
+            check(olderBack.Restored.Events[0].Source == null && olderBack.Restored.Events[1].Source == null &&
+                  olderBack.Restored.Events[2].Source is { Body: 9000 }, "an autosave without sources loads with none");
             check(doc.Motion is [{ Key: "m1", Keys: [{ Bones.Count: 1 }] }] && doc.NextMotionKey == 2 && doc.Cuts?.Parts.Length == 2 &&
                   doc.Cuts.Joins[0] == MotionJoin.ForCut, "bone layers and cuts come back");
             check(doc.Replacement is { Frames: 45, Report.Changed: 1, Pap: [4, 5, 6] } && doc.ExcludedBones is ["j_ude_a_l"] &&
@@ -62,9 +82,16 @@ internal static class TimelineAutosaveFixture
             ImmutableDictionary<string, double>.Empty.Add("SoundIndex", 1), Pin: "own0");
         var effect = new TimelineEvent("n1", "C173", TimelineLane.Effect, 10, 20, true, "vfx/fx.avfx", TimelineAccess.Editable, null, false,
             ImmutableDictionary<string, double>.Empty, Look: new TimelineEffectEdit { Tint = new Vector3(1, 2, 3), Glow = 2, Colors = [(Vector3.One, Vector3.UnitX)] });
+        var source = new TimelinePropSource("Telephone", "Telephone", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9001, 9000,
+            ImmutableDictionary<string, string>.Empty
+                .Add("chara/weapon/w9001/obj/body/b9000/model/w9001b9000.mdl", @"file:C:\mods\Telephone\m8044b0001.mdl")
+                .Add("chara/weapon/w9001/obj/body/b9000/texture/d.tex", "game:chara/monster/m8044/obj/body/b0001/texture/d.tex"),
+            ImmutableDictionary<string, string>.Empty.Add("chara/monster/m8044/obj/body/b0001/texture/d.tex", "chara/weapon/w9001/obj/body/b9000/texture/d.tex"));
+        var prop = new TimelineEvent("n2", "C198", TimelineLane.Prop, 20, 30, true, "", TimelineAccess.Editable, null, false,
+            ImmutableDictionary<string, double>.Empty.Add("Model", 9001).Add("Body", 9000).Add("SummonId", 1), Group: "prop-1", Source: source);
         var sound = new TimelineSoundEdit([new TimelineSoundAlternative("own0", 0, null, 50, 0, 0, null, null),
             new TimelineSoundAlternative("new1", -1, "instant_edit/step.scd", 50, 0, 1, .8f, 100)], false, Volume: .5f);
-        var doc = new TimelineDocument(90, 100, "emot/laugh", [step, effect], 2)
+        var doc = new TimelineDocument(90, 100, "emot/laugh", [step, effect, prop], 3)
         {
             Motion = [layer],
             NextMotionKey = 2,

@@ -3,6 +3,7 @@ using InstantEdit.Services;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Studio.Services;
+using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// Props from other mods: which models of a mod can be props, whether one rides a single bone, the private weapon
@@ -26,6 +27,8 @@ internal static class PropModelSourcesFixture
         Part(check, "qualification", () => Qualification(check));
         Part(check, "texture rules", () => TextureRules(check));
         Part(check, "private copy", () => PrivateCopy(check));
+        Part(check, "timeline source", () => TimelineSource(check));
+        Part(check, "body choice", () => BodyChoice(check));
         Lumina.GameData? data = null;
         try
         {
@@ -458,6 +461,134 @@ internal static class PropModelSourcesFixture
     private static TimelineEvent Prop(string key, TimelinePropSource? source)
         => new(key, "C198", TimelineLane.Prop, 0, 0, false, "", TimelineAccess.Editable, null, false,
             ImmutableDictionary<string, double>.Empty, Source: source);
+
+    private const string MonsterModel = "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl";
+
+    private static TimelinePropSource SourceAt(string mod, string model, ushort set, ushort body)
+        => new(mod, mod, model, set, body,
+            ImmutableDictionary<string, string>.Empty.Add($"chara/weapon/w{set:D4}/obj/body/b{body:D4}/model/w{set:D4}b{body:D4}.mdl", "game:" + model),
+            ImmutableDictionary<string, string>.Empty);
+
+    /// <summary>The events one Add of <paramref name="request"/> makes, keyed n1, n2, ... as the editor would.</summary>
+    private static TimelineDocument Added(TimelineDocument doc, TimelineAddRequest request)
+    {
+        var events = TimelineTemplates.Create(request).Select((ev, i) => ev with { Key = "n" + (doc.NextKey + i) }).ToArray();
+        return doc with { Events = doc.Events.AddRange(events), NextKey = doc.NextKey + events.Length };
+    }
+
+    private static TimelineEvent Summon(TimelineDocument doc) => doc.Events.Last(ev => ev.Magic == "C198");
+
+    /// <summary>
+    /// A prop from a mod on the timeline: its summon slot, the snapshot on its C198 and what an edit does to it, and
+    /// the private bodies a document already uses.
+    /// </summary>
+    private static void TimelineSource(Action<bool, string> check)
+    {
+        var empty = new TimelineDocument(100, 100, null, [], 1);
+        var source = SourceAt("Telephone", MonsterModel, 9001, 9000);
+        var request = new TimelineAddRequest(TimelineAddKind.Prop, 0, "", Prop: new TimelinePropModel(9001, 9000, 1, null, source), ClipLength: 100,
+            Summon: 1);
+        var sourced = Added(empty, request);
+        var c198 = Summon(sourced);
+        check(c198.Values["SummonId"] == 1, "a prop added on Summon 1 writes SummonId 1");
+        check(Summon(Added(empty, request with { Summon = 0 })).Values["SummonId"] == 0 &&
+              Summon(Added(empty, new TimelineAddRequest(TimelineAddKind.Prop, 0, "", Prop: new TimelinePropModel(1962, 1, 1, null)))).Values["SummonId"] == 0,
+            "a prop added without a slot writes SummonId 0");
+        check(ReferenceEquals(c198.Source, source) && sourced.Events.Count(ev => ev.Source != null) == 1,
+            "the C198 of a prop from a mod carries its source, and only the C198");
+        check(Summon(Added(empty, new TimelineAddRequest(TimelineAddKind.Prop, 0, "", Prop: new TimelinePropModel(1962, 1, 1, null)))).Source == null,
+            "a game prop's C198 has no source");
+
+        var other = TimelineEdits.Replace(sourced, c198 with { Values = c198.Values.SetItem("Model", 1962).SetItem("Body", 1) });
+        check(TimelineEdits.Find(other, c198.Key) is { Source: null } && Summon(other).Values["Model"] == 1962,
+            "giving the prop another model drops its source");
+        var body = TimelineEdits.Replace(sourced, c198 with { Values = c198.Values.SetItem("Body", 9001) });
+        check(TimelineEdits.Find(body, c198.Key) is { Source: null }, "giving the prop another body drops its source");
+        var moved = TimelineEdits.Replace(sourced, c198 with { Start = 10, Values = c198.Values.SetItem("Variant", 2) });
+        check(TimelineEdits.Find(moved, c198.Key) is { Start: 10, Source: { } kept } && ReferenceEquals(kept, source),
+            "moving the prop or changing its variant keeps its source");
+
+        check(!TimelineEdits.Same(c198, c198 with { Source = null }) && !TimelineEdits.Same(c198, c198 with { Source = source with { Body = 9001 } }) &&
+              !TimelineEdits.Same(c198, c198 with { Source = source with { SourceModel = "chara/monster/m8044/obj/body/b0002/model/m8044b0002.mdl" } }),
+            "events with another source, or none, differ");
+        check(TimelineEdits.Same(c198, c198 with { Source = source with { Files = source.Files.ToImmutableDictionary() } }),
+            "events whose sources have the same set, body and model are the same");
+        var place = new TimelinePropPlace(0, false, null, System.Numerics.Vector3.UnitY, System.Numerics.Vector3.Zero, 1);
+        check(!ReferenceEquals(TimelineEdits.Replace(sourced, c198 with { Place = place }), sourced),
+            "a changed place is an edit");
+
+        var two = Added(sourced, request with { Prop = new TimelinePropModel(528, 9000, 1, null, SourceAt("Vibrator", "chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl", 528, 9000)) });
+        var saved = two with { Events = two.Events.Add(Prop("t9", null) with { Values = ImmutableDictionary<string, double>.Empty.Add("Model", 9001).Add("Body", 9003) }) };
+        var stale = saved with { Events = saved.Events.Add(Prop("t8", SourceAt("Old", MonsterModel, 9001, 9007)) with
+        {
+            Values = ImmutableDictionary<string, double>.Empty.Add("Model", 9001).Add("Body", 9008),
+        }) };
+        var taken = PropModelSources.Taken(stale);
+        check(taken.SetEquals([(9001, 9000), (528, 9000), (9001, 9003), (9001, 9007), (9001, 9008)]),
+            $"the bodies a document uses: each source's, each sourced summon's model and body, and a private body loaded without one: {string.Join(", ", taken)}");
+        check(PropModelSources.Taken(Added(empty, new TimelineAddRequest(TimelineAddKind.Prop, 0, "", Prop: new TimelinePropModel(1962, 1, 1, null)))).Count == 0,
+            "a game prop takes no private body");
+    }
+
+    /// <summary>
+    /// The body a prop picked from a mod gets: the same mod's same model shares one, another model gets its own even
+    /// when its material has the same name, and the merged copy keeps both materials apart.
+    /// </summary>
+    private static void BodyChoice(Action<bool, string> check)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ie-prop-bodies-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var red = Path.Combine(dir, "red.mtrl");
+            var blue = Path.Combine(dir, "blue.mtrl");
+            File.WriteAllBytes(red, Material(("chara/a/texture/red.tex", false)));
+            File.WriteAllBytes(blue, Material(("chara/b/texture/blue.tex", false)));
+            const string first = "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl";
+            const string second = "chara/monster/m8044/obj/body/b0002/model/m8044b0002.mdl";
+            TimelinePropSource Picked(string model, ushort body, string material)
+            {
+                var root = $"chara/weapon/w9001/obj/body/b{body:D4}/";
+                var textures = ImmutableDictionary<string, string>.Empty;
+                foreach (var texture in TexturesOf(File.ReadAllBytes(material)))
+                    textures = textures.Add(texture, root + "texture/" + Path.GetFileName(texture));
+                return new TimelinePropSource("phones", "Phones", model, 9001, body, ImmutableDictionary<string, string>.Empty
+                    .Add($"{root}model/w9001b{body:D4}.mdl", "game:" + model)
+                    .Add($"{root}material/v0001/mt_phone_a.mtrl", "file:" + material), textures);
+            }
+            TimelineDocument With(TimelineDocument doc, TimelinePropSource source)
+                => Added(doc, new TimelineAddRequest(TimelineAddKind.Prop, 0, "", Prop: new TimelinePropModel(source.Set, source.Body, 1, null, source), ClipLength: 60));
+            Func<string, bool> shipped = path => path.EndsWith("b9000.imc", StringComparison.Ordinal);
+
+            var doc = new TimelineDocument(60, 60, null, [], 1);
+            var body1 = PropModelSources.BodyFor(doc, "phones", first, 9001, shipped);
+            check(body1 == 9001, $"the first prop gets the lowest body the game doesn't ship (got {body1})");
+            doc = With(doc, Picked(first, body1!.Value, red));
+            check(PropModelSources.BodyFor(doc, "phones", first, 9001, shipped) == body1 &&
+                  PropModelSources.BodyFor(doc, "PHONES", first.ToUpperInvariant(), 9001, shipped) == body1,
+                "a second prop from the same mod and model reuses its body");
+            var body2 = PropModelSources.BodyFor(doc, "phones", second, 9001, shipped);
+            check(body2 == 9002, $"a prop from another model gets its own body (got {body2})");
+            check(PropModelSources.BodyFor(doc, "other phones", first, 9001, shipped) == 9002,
+                "the same model from another mod gets its own body");
+            doc = With(doc, Picked(second, body2!.Value, blue));
+            var copy = PropCopies.Of(doc, path => path.EndsWith(".mdl", StringComparison.Ordinal) ? [9] : null);
+            var redCopy = copy.Files.GetValueOrDefault("chara/weapon/w9001/obj/body/b9001/material/v0001/mt_phone_a.mtrl");
+            var blueCopy = copy.Files.GetValueOrDefault("chara/weapon/w9001/obj/body/b9002/material/v0001/mt_phone_a.mtrl");
+            check(redCopy != null && blueCopy != null &&
+                  TexturesOf(redCopy).SequenceEqual(["chara/weapon/w9001/obj/body/b9001/texture/red.tex"]) &&
+                  TexturesOf(blueCopy).SequenceEqual(["chara/weapon/w9001/obj/body/b9002/texture/blue.tex"]),
+                $"two materials of one name stay apart, each under its own body: {string.Join(", ", copy.Files.Keys.Order(StringComparer.Ordinal))}");
+            var full = new TimelineDocument(60, 60, null, [.. Enumerable.Range(9000, 1000).Select(n =>
+                Prop("t" + n, SourceAt("x" + n, MonsterModel.Replace("b0001", $"b{n - 8000:D4}"), 9001, (ushort)n)))], 1);
+            check(PropModelSources.BodyFor(full, "phones", first, 9001, _ => false) is null, "no body when every private one is used");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, true);
+        }
+    }
 
     /// <summary>The Telephone's real model, material and textures, built into a private copy.</summary>
     private static void TelephoneCopy(Action<bool, string> check, Lumina.GameData? data)

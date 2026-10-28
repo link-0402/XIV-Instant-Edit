@@ -62,6 +62,47 @@ internal static partial class PropModelSources
     }
 
     /// <summary>
+    /// The private bodies <paramref name="doc"/> uses: each prop source's set and body, the model and body of each summon
+    /// with a source, and any summon on a private body (b9000..b9999) without one, such as a prop from a mod an earlier
+    /// save wrote into the animation.
+    /// </summary>
+    internal static IReadOnlySet<(ushort Set, ushort Body)> Taken(TimelineDocument doc)
+    {
+        var taken = new HashSet<(ushort, ushort)>();
+        if (doc.Events.IsDefault)
+            return taken;
+        foreach (var ev in doc.Events)
+        {
+            if (ev.Source is { } source)
+                taken.Add((source.Set, source.Body));
+            if (ev.Magic is not ("C198" or "C043") || ev.Values is not { } values)
+                continue;
+            var model = values.GetValueOrDefault("Model");
+            var body = values.GetValueOrDefault("Body");
+            if (model is > 0 and <= ushort.MaxValue && body is >= 0 and <= ushort.MaxValue &&
+                (ev.Source != null || body is >= FirstBody and <= LastBody))
+                taken.Add(((ushort)model, (ushort)body));
+        }
+        return taken;
+    }
+
+    /// <summary>
+    /// The private body a prop picked from <paramref name="sourceModel"/> of mod <paramref name="modDirectory"/> gets
+    /// under <paramref name="set"/>: the body of a prop in <paramref name="doc"/> from the same mod and model, so both
+    /// share one copy, else the lowest free one (<see cref="AllocateBody"/> past <see cref="Taken"/>); null when none is free.
+    /// </summary>
+    internal static ushort? BodyFor(TimelineDocument doc, string modDirectory, string sourceModel, ushort set, Func<string, bool> gameExists)
+    {
+        var model = Normalise(sourceModel);
+        if (!doc.Events.IsDefault)
+            foreach (var ev in doc.Events)
+                if (ev.Source is { } source && source.Set == set && source.SourceModel == model &&
+                    string.Equals(source.ModDirectory, modDirectory, StringComparison.OrdinalIgnoreCase))
+                    return source.Body;
+        return AllocateBody(set, gameExists, Taken(doc));
+    }
+
+    /// <summary>
     /// The files of the private copy of <paramref name="sourceModel"/> as weapon <paramref name="set"/> body
     /// <paramref name="body"/>: the model, each material it names (the mod's, else the game's) and each texture those
     /// materials list (the mod's, else the game's; left out of the files when neither has it).

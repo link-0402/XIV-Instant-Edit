@@ -11,7 +11,7 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// sync plays at its own pace (C010 flags 0, 0 to its length).
 /// <para>
 /// A prop follows the emote_sp pattern (sp54, sp50): the sync effect every animated emote prop
-/// uses (C173), the model (C198, summon slot 0), and with a weapon timeline the animation
+/// uses (C173), the model (C198, summon slot 0 unless the request names 1; a model from a mod carries its source), and with a weapon timeline the animation
 /// (C031 on the summon, 5 frames after the spawn) behind a hide-then-fade on the summon
 /// (C094 0 to 0 for 5 frames, then 0 to 1 over 7), so its first pose never shows. It ends as vanilla's do
 /// (sp50, sp54): a fade-out over its last 5 frames, then hidden to the clip's end (C094 1 to 0, then 0 to 0).
@@ -58,12 +58,15 @@ internal static class TimelineTemplates
                 var prop = request.Prop ?? throw new InvalidDataException("A prop needs a model.");
                 if (prop.Model is 0 or > (ushort)short.MaxValue || prop.Body > short.MaxValue)
                     throw new InvalidDataException($"Model {prop.Model} body {prop.Body} is not a valid prop.");
+                if (request.Summon is not (0 or 1))
+                    throw new InvalidDataException($"Summon {request.Summon} is not a prop slot.");
                 var group = "prop-" + Guid.NewGuid().ToString("N")[..12];
                 var events = ImmutableArray.CreateBuilder<TimelineEvent>();
                 events.Add(Event("C173", request.Start, 0, SyncEffect, new() { [TimelineEffectCheck.LoopField] = 1 }, group));
                 var length = Length(60);
                 events.Add(Event("C198", request.Start, length, "",
-                    new() { ["Model"] = prop.Model, ["Body"] = prop.Body, ["Variant"] = prop.Variant, ["SummonId"] = 0, ["AtchState"] = 0 }, group));
+                    new() { ["Model"] = prop.Model, ["Body"] = prop.Body, ["Variant"] = prop.Variant, ["SummonId"] = request.Summon, ["AtchState"] = 0 },
+                    group) with { Source = prop.Source });
                 if (prop.WeaponTimeline is { } timeline)
                 {
                     var animated = Math.Min(request.Start + AnimationDelay, TimelineDocument.MaxFrames);

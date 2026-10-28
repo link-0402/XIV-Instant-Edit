@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -71,8 +72,12 @@ internal sealed class PropPlaceEditor(TimelineSession session)
     public static TimelinePropPlace? Settled(TimelinePropPlace place, int current) =>
         place is { OwnState: false, Bone: null, Size: 1 } && place.Move == Vector3.Zero && place.Turn == Vector3.Zero && place.State == current ? null : place;
 
+    // The textures a prop from a mod lacks (or why its copy can't be built), read on a task when the prop is selected.
+    private (string Key, ushort Set, ushort Body, TimelinePropSource Source, Task<(ImmutableArray<string> Missing, string? Error)> Result)? missing;
+
     public void Draw(TimelineEditor current, TimelineEvent ev, bool editable)
     {
+        DrawMissing(current.Document, ev);
         var race = Race();
         if (!Shows(current.Document, ev, race) || SummonOf(current.Document, ev) is not { } summon)
             return;
@@ -109,6 +114,37 @@ internal sealed class PropPlaceEditor(TimelineSession session)
             if (!stateOnly)
                 DrawReset(current, summon);
         }
+    }
+
+    /// <summary>
+    /// For a prop from a mod, "Missing: path" for each texture of its copy that neither the mod nor the game has, or why
+    /// the copy can't be built. Built once each time the prop is selected, for its private body.
+    /// </summary>
+    private void DrawMissing(TimelineDocument doc, TimelineEvent ev)
+    {
+        if (SummonOf(doc, ev)?.Source is not { } source)
+            return;
+        if (missing is not { } cached || cached.Key != ev.Key || cached.Set != source.Set || cached.Body != source.Body || !ReferenceEquals(cached.Source, source))
+        {
+            Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
+            cached = (ev.Key, source.Set, source.Body, source, Task.Run(() =>
+            {
+                try { return (PropCopies.Build(source, game).Missing, (string?)null); }
+                catch (Exception e) when (e is not OutOfMemoryException)
+                {
+                    return (ImmutableArray<string>.Empty, e.Message);
+                }
+            }));
+            missing = cached;
+        }
+        if (!cached.Result.IsCompletedSuccessfully)
+            return;
+        var (paths, error) = cached.Result.Result;
+        using var wrap = ImRaii.TextWrapPos(0);
+        if (error != null)
+            ImGui.TextColored(Theme.Warning, error);
+        foreach (var path in paths)
+            ImGui.TextColored(Theme.Warning, $"Missing: {path}");
     }
 
     /// <summary> Attach: the state the place starts from, each with its vanilla bone. </summary>

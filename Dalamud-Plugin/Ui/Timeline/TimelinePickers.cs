@@ -8,6 +8,7 @@ using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.Audio;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui.Timeline;
 
@@ -39,6 +40,27 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     private string? pickerError;
     private int pickerWeapon = WeaponAsListed;
     private float importVolume = 100;
+
+    // Props from a mod: the mod list, asked again each time the picker opens; the chosen mod's models under its
+    // current settings, read on a task; the pick, resolved into a snapshot on a task and placed when it is polled.
+    private sealed record ModModel(string GamePath, string Label, bool Qualifies);
+    private sealed record ModModels(string Directory, ImmutableArray<ModModel> Models);
+    private sealed record PropPick(string Directory, string Name, string Label, ushort Set, ushort Body, int Frame, int Summon, string? Clip, int Generation);
+    private bool pickerFromMod;
+    private int pickerSummon;
+    private (string Directory, string Name, string Root)? pickerMod;
+    private string modFilter = string.Empty;
+    private ImmutableArray<(string Directory, string Name, string Root)> mods = [];
+    private Task<ImmutableArray<(string Directory, string Name, string Root)>>? modsTask;
+    private bool modsAsked;
+    private string? modsError;
+    private ModModels? modModels;
+    private Task<ModModels>? modModelsTask;
+    private string? modModelsFor;
+    private string? modModelsError;
+    private Task<TimelinePropSource>? propTask;
+    private PropPick? propPick;
+    private int pickerShownFrame = -1;
     private string gamePathText = string.Empty;
 
     // The filtered rows, rebuilt when the list, the filter or the imports change.
@@ -112,7 +134,12 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         pickerTarget = target;
         pickerError = null;
         pickerWeapon = WeaponAsListed;
+        pickerSummon = 0;
         pickerOpenRequested = true;
+        // The mods and their settings may have changed since the last look.
+        modsAsked = false;
+        modModels = null;
+        modModelsError = null;
         // The collection may have changed since the last look.
         if (kind is TimelineAddKind.Expression or TimelineAddKind.LipSync)
             installedKey = null;
@@ -155,6 +182,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         using var popup = ImRaii.Popup(PickerPopup);
         if (!popup.Success)
             return;
+        pickerShownFrame = ImGui.GetFrameCount();
         var width = Theme.Scaled(500);
         using var wrap = ImRaii.TextWrapPos(width);
         var name = TimelineWindowViews.AddKindName(pickerKind).ToLowerInvariant();
@@ -172,18 +200,39 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
                 DrawImportRow(current);
                 break;
             case TimelineAddKind.Prop when pickerTarget == null:
-                DrawWeaponChoice();
+                DrawPropSource();
+                if (pickerFromMod)
+                    DrawModChoice();
+                else
+                    DrawWeaponChoice();
                 break;
         }
 
-        Widgets.SearchBox("##timeline-picker-search", ref pickerFilter, "Search by name, emote or path");
-        var rows = PickerRows();
-        ImGui.TextColored(Theme.Muted, rows.Count == 1 ? "1 item" : rows.Count.ToString("N0", CultureInfo.InvariantCulture) + " items");
+        var fromMod = pickerKind == TimelineAddKind.Prop && pickerTarget == null && pickerFromMod;
+        Widgets.SearchBox("##timeline-picker-search", ref pickerFilter, fromMod ? "Search by file name or path" : "Search by name, emote or path");
         var picked = false;
-        using (var list = ImRaii.Child("##timeline-picker-list", new Vector2(width, Theme.Scaled(300)), true))
+        if (fromMod)
         {
+            var models = ModRows();
+            ImGui.TextColored(Theme.Muted, models.Count == 1 ? "1 item" : models.Count.ToString("N0", CultureInfo.InvariantCulture) + " items");
+            using var list = ImRaii.Child("##timeline-picker-mod-list", new Vector2(width, Theme.Scaled(300)), true);
+            if (list.Success)
+                DrawModRows(current, models);
+        }
+        else
+        {
+            var rows = PickerRows();
+            ImGui.TextColored(Theme.Muted, rows.Count == 1 ? "1 item" : rows.Count.ToString("N0", CultureInfo.InvariantCulture) + " items");
+            using var list = ImRaii.Child("##timeline-picker-list", new Vector2(width, Theme.Scaled(300)), true);
             if (list.Success)
                 picked = DrawPickerList(current, rows);
+        }
+        if (fromMod && propTask != null && propPick is { } reading)
+        {
+            Widgets.Spinner();
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, $"Reading {reading.Label}");
         }
         if (pickerError != null)
             ImGui.TextColored(Theme.Warning, pickerError);
@@ -346,6 +395,276 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         var id => (ushort)id,
     };
 
+    /// <summary> For props: the game's props, or a model from one of the user's mods. </summary>
+    private void DrawPropSource()
+    {
+        if (ImGui.RadioButton("Game props", !pickerFromMod))
+            pickerFromMod = false;
+        ImGui.SameLine(0, Theme.Scaled(12));
+        if (ImGui.RadioButton("From a mod", pickerFromMod))
+            pickerFromMod = true;
+    }
+
+    /// <summary> From a mod: the mod (Penumbra's list, with a search) and the summon slot the prop goes on. </summary>
+    private void DrawModChoice()
+    {
+        PollMods();
+        ImGui.SetNextItemWidth(Theme.Scaled(320));
+        using (var combo = ImRaii.Combo("Mod", pickerMod?.Name ?? (modsTask != null ? "Reading the mod list" : "Choose a mod")))
+        {
+            if (combo.Success)
+            {
+                if (ImGui.IsWindowAppearing())
+                    ImGui.SetKeyboardFocusHere();
+                ImGui.SetNextItemWidth(-1);
+                ImGui.InputTextWithHint("##prop-mod-filter", "Search mods", ref modFilter, 128);
+                var filter = modFilter.Trim();
+                var shown = filter.Length == 0 ? mods : [.. mods.Where(mod => mod.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                                                                            mod.Directory.Contains(filter, StringComparison.OrdinalIgnoreCase))];
+                var clipper = ImGui.ImGuiListClipper();
+                try
+                {
+                    clipper.Begin(shown.Length, -1);
+                    while (clipper.Step())
+                        for (var index = clipper.DisplayStart; index < clipper.DisplayEnd; index++)
+                        {
+                            var mod = shown[index];
+                            using var id = ImRaii.PushId(index);
+                            if (ImGui.Selectable(mod.Name, pickerMod?.Directory == mod.Directory) && pickerMod?.Directory != mod.Directory)
+                            {
+                                pickerMod = mod;
+                                modModels = null;
+                                modModelsError = null;
+                            }
+                        }
+                    clipper.End();
+                }
+                finally
+                {
+                    clipper.Destroy();
+                }
+            }
+        }
+        if (modsError != null)
+            ImGui.TextColored(Theme.Warning, modsError);
+
+        ImGui.SetNextItemWidth(Theme.Scaled(120));
+        using (var slot = ImRaii.Combo("Slot", $"Summon {pickerSummon}"))
+        {
+            if (slot.Success)
+                for (var summon = 0; summon <= 1; summon++)
+                    if (ImGui.Selectable($"Summon {summon}", pickerSummon == summon))
+                        pickerSummon = summon;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Put a second prop on Summon 1 to show both at once.");
+    }
+
+    /// <summary> Asks Penumbra for its mods once each time the picker opens in From a mod, and takes the answer once it is in. </summary>
+    private void PollMods()
+    {
+        if (modsTask is { IsCompleted: true } done)
+        {
+            modsTask = null;
+            if (done.IsCompletedSuccessfully)
+            {
+                mods = done.Result;
+                modsError = null;
+                // A mod gone from the list can't be picked from.
+                if (pickerMod is { } chosen && !mods.Any(mod => mod.Directory == chosen.Directory))
+                    pickerMod = null;
+            }
+            else
+                modsError = $"The mod list could not be read. {TimelineSession.ErrorText(done.Exception)}";
+        }
+        if (modsAsked || modsTask != null || session.Animations is not { } service)
+            return;
+        modsAsked = true;
+        modsTask = service.InstalledModsAsync();
+    }
+
+    /// <summary>
+    /// The chosen mod's models that can be props, read on a task under its current settings in the clip's collection
+    /// (<see cref="ModOptionGroups.Selection"/>: its defaults when the collection has none); filtered by the search.
+    /// </summary>
+    private List<ModModel> ModRows()
+    {
+        if (modModelsTask is { IsCompleted: true } done)
+        {
+            modModelsTask = null;
+            if (done.IsCompletedSuccessfully)
+                modModels = done.Result;
+            // Another mod may have been chosen while this one was read.
+            else if (modModelsFor == pickerMod?.Directory)
+                modModelsError = $"The mod's files could not be read. {TimelineSession.ErrorText(done.Exception)}";
+        }
+        if (pickerMod is not { } mod)
+            return [];
+        if (modModels is { } models && models.Directory == mod.Directory)
+        {
+            var filter = pickerFilter.Trim();
+            return [.. models.Models.Where(model => filter.Length == 0 || model.GamePath.Contains(filter, StringComparison.OrdinalIgnoreCase))];
+        }
+        if (modModelsTask == null && modModelsError == null && session.Animations is { } service && session.Source is { } source)
+        {
+            var collection = source.Capture.CollectionId;
+            modModelsFor = mod.Directory;
+            modModelsTask = Task.Run(async () =>
+            {
+                var effective = await EffectiveFilesAsync(service, collection, mod.Directory, mod.Root).ConfigureAwait(false);
+                var found = PropModelSources.Candidates(effective).Select(path => new ModModel(path, path[(path.LastIndexOf('/') + 1)..], Qualifies(path, effective[path])));
+                return new ModModels(mod.Directory, [.. found]);
+            });
+        }
+        return [];
+    }
+
+    /// <summary> The files a mod serves under its current settings in <paramref name="collection"/>, every group's selection given. </summary>
+    private static async Task<ImmutableDictionary<string, string>> EffectiveFilesAsync(AnimationEditService service, Guid collection, string directory, string root)
+    {
+        var settings = await service.ModSettingsAsync(collection, directory).ConfigureAwait(false);
+        return ModOptionGroups.EffectiveFiles(root, ModOptionGroups.Selection(root, settings));
+    }
+
+    private static bool Qualifies(string gamePath, string file)
+    {
+        if (gamePath.StartsWith("chara/weapon/", StringComparison.Ordinal))
+            return true;
+        try { return PropModelSources.Qualifies(gamePath, File.ReadAllBytes(file)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+    }
+
+    /// <summary> The chosen mod's models: a click resolves one into a prop; one that bends with other bones is shown but can't be picked. </summary>
+    private void DrawModRows(TimelineEditor current, List<ModModel> models)
+    {
+        if (pickerMod is not { } mod)
+        {
+            ImGui.TextColored(Theme.Hint, "Choose a mod.");
+            return;
+        }
+        if (modModelsError != null)
+        {
+            ImGui.TextColored(Theme.Warning, modModelsError);
+            if (ImGui.SmallButton("Retry"))
+                modModelsError = null;
+            return;
+        }
+        if (modModelsTask != null || modModels?.Directory != mod.Directory)
+        {
+            Widgets.Spinner();
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, "Reading the mod's files");
+            return;
+        }
+        if (models.Count == 0)
+        {
+            ImGui.TextColored(Theme.Hint, "No weapon, monster or demihuman models in this mod.");
+            return;
+        }
+        var clipper = ImGui.ImGuiListClipper();
+        try
+        {
+            clipper.Begin(models.Count, -1);
+            while (clipper.Step())
+                for (var index = clipper.DisplayStart; index < clipper.DisplayEnd; index++)
+                {
+                    var model = models[index];
+                    using var id = ImRaii.PushId(index);
+                    bool clicked;
+                    using (ImRaii.Disabled(!model.Qualifies || propTask != null || session.ReadOnly))
+                        clicked = ImGui.Selectable(model.Label);
+                    if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                        ImGui.SetTooltip(model.Qualifies ? model.GamePath : "Bends with bones a prop doesn't have");
+                    ImGui.SameLine(0, Theme.Gap);
+                    ImGui.TextColored(Theme.Muted, mod.Name);
+                    if (clicked)
+                        StartPropPick(current, mod, model);
+                }
+            clipper.End();
+        }
+        finally
+        {
+            clipper.Destroy();
+        }
+    }
+
+    /// <summary>
+    /// Picks <paramref name="model"/> of <paramref name="mod"/>: its private set and body now, so a full timeline says so at
+    /// once, then the mod's current files and the snapshot on a task (<see cref="PollPropPick"/> places it).
+    /// </summary>
+    private void StartPropPick(TimelineEditor current, (string Directory, string Name, string Root) mod, ModModel model)
+    {
+        pickerError = null;
+        if (propTask != null || session.Animations is not { } service || session.Source is not { } source)
+            return;
+        if (session.ReadOnly)
+        {
+            pickerError = "Wait for the save to finish.";
+            return;
+        }
+        var set = PropModelSources.TargetSet(model.GamePath);
+        if (PropModelSources.BodyFor(current.Document, mod.Directory, model.GamePath, set, session.GameFileExists) is not { } body)
+        {
+            pickerError = "No free model number left for this prop.";
+            return;
+        }
+        var collection = source.Capture.CollectionId;
+        propPick = new PropPick(mod.Directory, mod.Name, model.Label, set, body, pickerFrame, pickerSummon, TimelineSession.ClipKey(source), loadGeneration);
+        Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
+        propTask = Task.Run(async () =>
+        {
+            var effective = await EffectiveFilesAsync(service, collection, mod.Directory, mod.Root).ConfigureAwait(false);
+            return PropModelSources.Resolve(mod.Directory, mod.Name, model.GamePath, set, body, effective, game, session.GameFileExists);
+        });
+    }
+
+    /// <summary>
+    /// Places a resolved prop from a mod once its task is done, into the clip it was picked for, unless its body was
+    /// taken in the meantime. Closes the picker when it is still open.
+    /// </summary>
+    private void PollPropPick()
+    {
+        if (propTask is not { IsCompleted: true } task)
+            return;
+        propTask = null;
+        var pick = propPick;
+        propPick = null;
+        var open = pickerShownFrame >= ImGui.GetFrameCount() - 1;
+        void Fail(string message)
+        {
+            if (open)
+                pickerError = message;
+            else
+                importError = message;
+        }
+        if (pick == null)
+            return;
+        if (!task.IsCompletedSuccessfully)
+        {
+            Fail($"{pick.Label} could not be read. {TimelineSession.ErrorText(task.Exception)}");
+            return;
+        }
+        var source = task.Result;
+        if (session.Editor is not { } editor || session.Source is not { } loaded || TimelineSession.ClipKey(loaded) != pick.Clip || pick.Generation != loadGeneration)
+        {
+            Fail("The timeline changed. Pick the prop again.");
+            return;
+        }
+        if (PropModelSources.BodyFor(editor.Document, pick.Directory, source.SourceModel, pick.Set, session.GameFileExists) != pick.Body)
+        {
+            Fail("The timeline changed. Pick the prop again.");
+            return;
+        }
+        if (Place(editor, TimelineAddKind.Prop, pick.Frame, null, "", [], new TimelinePropModel(pick.Set, pick.Body, 1, null, source), summon: pick.Summon))
+        {
+            if (open)
+                pickerClose = true;
+        }
+        else if (!open)
+            importError = pickerError;
+    }
+
     /// <summary> The picker's rows: this kind's imports first, then the catalog's list, then the faces of the mods' expression sets, filtered. </summary>
     private List<TimelineCatalogItem> PickerRows()
     {
@@ -437,10 +756,11 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     /// <paramref name="target"/> a new path or prop model. Sets <see cref="pickerError"/> when refused.
     /// A face comes from one of the expression libraries that hold it (<paramref name="packs"/>), switching
     /// the timeline's when another holds all its faces (<see cref="TimelineEditor.ChoosePack"/>).
-    /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known.
+    /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known. A prop goes on
+    /// summon slot <paramref name="summon"/>; one from a mod stays still.
     /// </summary>
     private bool Place(TimelineEditor current, TimelineAddKind kind, int frame, string? target, string path, ImmutableArray<string> packs,
-        TimelinePropModel? prop, int frames = 0)
+        TimelinePropModel? prop, int frames = 0, int summon = 0)
     {
         pickerError = null;
         if (session.ReadOnly)
@@ -457,13 +777,13 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         var pack = choice.Pack;
         if (target != null)
             return Replace(current, kind, target, path, choice, prop);
-        if (kind == TimelineAddKind.Prop && prop != null)
+        if (kind == TimelineAddKind.Prop && prop is { Source: null })
             prop = prop with { WeaponTimeline = WeaponChoice(prop) };
         ImmutableArray<TimelineEvent> events;
         try
         {
             events = TimelineTemplates.Create(new TimelineAddRequest(kind, frame, path, kind == TimelineAddKind.LipSync ? frames : 0, pack, prop,
-                current.Document.Length));
+                current.Document.Length, kind == TimelineAddKind.Prop ? summon : 0));
         }
         catch (InvalidDataException e)
         {
@@ -562,6 +882,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
 
     public void PollImport()
     {
+        PollPropPick();
         if (importTask is not { IsCompleted: true } task)
             return;
         importTask = null;

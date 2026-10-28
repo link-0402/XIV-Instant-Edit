@@ -413,7 +413,8 @@ internal static class TimelineEdits
     /// with <paramref name="motionFrames"/>), so it keeps playing the same. Only an effect keeps a
     /// look, and only while it keeps its file: a look is made for one effect's colours. A looping face
     /// that becomes one that can't loop (<see cref="CanLoop"/>), such as a pose, stops looping. Only a
-    /// sound keeps a pin, and only while it plays the same sound of the same file.
+    /// sound keeps a pin, and only while it plays the same sound of the same file. A prop from a mod keeps its source
+    /// only while it keeps its model and body.
     /// </summary>
     public static TimelineDocument Replace(TimelineDocument doc, TimelineEvent ev, IReadOnlyDictionary<string, int>? motionFrames = null)
     {
@@ -433,6 +434,8 @@ internal static class TimelineEdits
                 Look = old.Lane == TimelineLane.Effect && ev.Path == old.Path && ev.Look is { IsEmpty: false } look ? look : null,
                 // A pin names an alternative of one sound of one file.
                 Pin = old.Lane == TimelineLane.Sound && TimelineSoundKey.Of(ev) is { } key && key == TimelineSoundKey.Of(old) ? ev.Pin : null,
+                // A prop's source is the model and body it was picked as.
+                Source = SameModel(old, ev) ? ev.Source : null,
             },
             TimelineAccess.Movable => old with { Start = start },
             _ => old,
@@ -556,7 +559,7 @@ internal static class TimelineEdits
         if (a.Key != b.Key || a.Magic != b.Magic || a.Lane != b.Lane || a.Start != b.Start || a.Duration != b.Duration ||
             a.Resizable != b.Resizable || a.Path != b.Path || a.Access != b.Access || a.LockReason != b.LockReason ||
             a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop || !Equals(a.Look, b.Look) ||
-            a.Pin != b.Pin)
+            a.Pin != b.Pin || !Equals(a.Place, b.Place) || !SameSource(a.Source, b.Source))
             return false;
         if (ReferenceEquals(a.Values, b.Values))
             return true;
@@ -567,6 +570,15 @@ internal static class TimelineEdits
                 return false;
         return true;
     }
+
+    /// <summary> Prop sources are the same by their private body and source model; their file maps are snapshots of those. </summary>
+    private static bool SameSource(TimelinePropSource? a, TimelinePropSource? b) =>
+        ReferenceEquals(a, b) || a != null && b != null && a.Set == b.Set && a.Body == b.Body && a.SourceModel == b.SourceModel;
+
+    /// <summary> Whether <paramref name="b"/> keeps <paramref name="a"/>'s Model and Body values. </summary>
+    private static bool SameModel(TimelineEvent a, TimelineEvent b) =>
+        b.Values is not { } values || a.Values is { } old &&
+        values.GetValueOrDefault("Model") == old.GetValueOrDefault("Model") && values.GetValueOrDefault("Body") == old.GetValueOrDefault("Body");
 
     /// <summary>
     /// Sets the changes to the sound <paramref name="key"/>, or drops them with null, in one document

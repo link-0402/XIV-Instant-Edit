@@ -652,6 +652,42 @@ internal static class ModOptionGroups
     }
 
     /// <summary>
+    /// A selection for every group of the mod, for <see cref="EffectiveFiles"/>: the group's entry in
+    /// <paramref name="settings"/> (Penumbra's current settings, group names in any case) when it has one, else the
+    /// group's DefaultSettings from meta.json (a Single the option at that index, a Multi or Combining the options
+    /// whose bit is set). Null <paramref name="settings"/>, for a mod Penumbra has no settings for, gives every
+    /// group its default.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, IReadOnlyList<string>> Selection(
+        string modFolder,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? settings)
+    {
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        if (settings is not null)
+            foreach (var (group, options) in settings)
+                result[group] = options;
+        foreach (var group in ReadAllVariantGroups(modFolder))
+        {
+            if (JsonString(group["Name"]) is not { } name || result.ContainsKey(name))
+                continue;
+            var options = (group["Options"] as JsonArray ?? []).OfType<JsonObject>()
+                .Select(option => JsonString(option["Name"]) ?? "").ToArray();
+            var value = DefaultSetting(group["DefaultSettings"]);
+            if (string.Equals(JsonString(group["Type"]), "Single", StringComparison.OrdinalIgnoreCase))
+                result[name] = value < (ulong)options.Length ? [options[value]] : options.Length > 0 ? [options[0]] : [];
+            else
+                result[name] = options.Where((_, index) => index < 64 && (value & (1UL << index)) != 0).ToArray();
+        }
+        return result;
+    }
+
+    private static ulong DefaultSetting(JsonNode? node)
+        => node is not JsonValue value ? 0
+            : value.TryGetValue<ulong>(out var bits) ? bits
+            : value.TryGetValue<long>(out var signed) && signed > 0 ? (ulong)signed
+            : 0;
+
+    /// <summary>
     /// The file a mod serves for each game path under <paramref name="enabledOptions"/> (group name to picked
     /// option names): the default files, then each group's picked options, lowest priority first so a higher
     /// priority replaces a lower one, and of equal priority the group listed first wins. In a group a Single

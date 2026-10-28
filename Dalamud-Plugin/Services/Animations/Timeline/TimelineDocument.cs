@@ -306,8 +306,11 @@ internal sealed record TimelineDocument(
 /// <summary>What an Add creates. Each kind makes one or more events (a prop makes several).</summary>
 internal enum TimelineAddKind : byte { Expression, LipSync, Sound, Effect, Prop }
 
-/// <summary>A weapon or prop model for a prop event, and optionally the WeaponTimeline row that animates it.</summary>
-internal sealed record TimelinePropModel(ushort Model, ushort Body, ushort Variant, ushort? WeaponTimeline);
+/// <summary>
+/// A weapon or prop model for a prop event, and optionally the WeaponTimeline row that animates it.
+/// <paramref name="Source"/> is set for a model from another mod: the snapshot the C198 carries (<see cref="TimelineEvent.Source"/>).
+/// </summary>
+internal sealed record TimelinePropModel(ushort Model, ushort Body, ushort Variant, ushort? WeaponTimeline, TimelinePropSource? Source = null);
 
 /// <summary>
 /// A model from another mod, given a private weapon body (<paramref name="Set"/>, <paramref name="Body"/>) in the
@@ -322,9 +325,10 @@ internal sealed record TimelinePropSource(string ModDirectory, string ModName, s
 /// Everything an Add needs. <paramref name="Path"/> is the motion name for expressions and lip
 /// sync ("cfxf_smile", "cfxl_lip_nor1") and the game path for sounds and effects.
 /// <paramref name="Pack"/> is the expression library a non-resident expression needs, else null.
+/// <paramref name="Summon"/> is a prop's summon slot (C198 SummonId), 0 or 1.
 /// </summary>
 internal sealed record TimelineAddRequest(TimelineAddKind Kind, int Start, string Path, int Duration = 0,
-    string? Pack = null, TimelinePropModel? Prop = null, int ClipLength = 0);
+    string? Pack = null, TimelinePropModel? Prop = null, int ClipLength = 0, int Summon = 0);
 
 internal enum TimelineFieldKind : byte { Int, Float, Bool, Choice, Flags }
 
