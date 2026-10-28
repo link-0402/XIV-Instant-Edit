@@ -581,7 +581,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         editor.ResidentMotions = session.Catalog.Data.ResidentMotions;
         editor.MotionPacks = session.Catalog.Data.MotionPacks;
         editor.BoneOrder = session.EditingSkeleton(source) is { } skeleton ? BoneTree(skeleton).Index : null;
-        editor.Markers = keyMarkers.For(editor, source);
+        (editor.Markers, editor.ShownMarkers) = keyMarkers.For(editor, source);
         editor.MarkerBones = posing.Selection.Bones;
 
         timelinePreview.Dragging = OverlayDragging;

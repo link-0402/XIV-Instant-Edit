@@ -13,18 +13,21 @@ internal sealed class KeyMarkers(TimelineSession session, MotionDecode decode)
     private readonly MarkerSearch search = new();
 
     /// <summary>
-    /// The markers of <paramref name="source"/>'s motion as <paramref name="current"/>'s cuts and length play it; null on an
-    /// expression timeline, before the motion is decoded and before the first search finishes. During a drag or a field
-    /// edit the last set stands.
+    /// The markers of <paramref name="source"/>'s motion as <paramref name="current"/>'s cuts and length play it: Current
+    /// only when found for exactly those cuts, length and detail (what edits reach with), Shown the last set found for this
+    /// decode (what the timeline draws while newer ones are searched). Both null on an expression timeline and before the
+    /// motion is decoded.
     /// </summary>
-    public MotionMarkerSet? For(TimelineEditor current, AnimationTimelineSource source)
+    public (MotionMarkerSet? Current, MotionMarkerSet? Shown) For(TimelineEditor current, AnimationTimelineSource source)
     {
         var doc = current.Document;
         if (doc.Expression || source.Standalone || session.Animations == null || decode.DecodedPose(source) is not { } decoded)
-            return null;
+            return (null, null);
         var detail = MotionEdits.MotionKeysLayer(doc)?.Markers?.Detail ?? MarkerDetail.Normal;
         // A field drag holds history open without a pointer gesture; both edit the document every frame.
         var gesture = current.Gesture != TimelineGesture.None || current.History.InGesture;
-        return search.Find(decode.DecodedKey ?? "", decode.OutputMotion(current, decoded), doc, detail, gesture);
+        var decodeKey = decode.DecodedKey ?? "";
+        var found = search.Find(decodeKey, decode.OutputMotion(current, decoded), doc, detail, gesture);
+        return (found, found ?? search.Last(decodeKey));
     }
 }

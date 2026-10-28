@@ -70,7 +70,16 @@ internal sealed class TimelineHistory
     }
 
     /// <summary>Starts a gesture; nothing is recorded until it ends.</summary>
-    public void Begin() => gesture ??= Current;
+    public void Begin()
+    {
+        if (gesture != null)
+            return;
+        gesture = Current;
+        GestureSerial++;
+    }
+
+    /// <summary>Counts the gestures begun, so what is kept for one gesture isn't taken for the next, even from the same document.</summary>
+    public int GestureSerial { get; private set; }
 
     /// <summary>The document the running gesture began from, else the current one: what a live edit compares against.</summary>
     public TimelineDocument Base => gesture ?? Current;

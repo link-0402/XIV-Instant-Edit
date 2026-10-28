@@ -119,8 +119,8 @@ internal sealed class TimelineEditor
     private IReadOnlyDictionary<string, int>? boneOrder;
     // The selected bones, which the Motion keys layer lists as rows even without keys; changing them rebuilds the layout.
     private IReadOnlyList<string> markerBones = [];
-    // The zero keys WithReach added since the running gesture began from Base, by frame and bone.
-    private (TimelineDocument Base, HashSet<(int Frame, string Bone)> Keys)? reached;
+    // The zero keys WithReach added during the running gesture (by History.GestureSerial), by frame and bone.
+    private (int Gesture, HashSet<(int Frame, string Bone)> Keys)? reached;
     private int layoutStamp;
     private int builtStamp = -1;
 
@@ -230,10 +230,17 @@ internal sealed class TimelineEditor
     }
 
     /// <summary>
-    /// The motion's key markers as the cuts and length play it (see <see cref="KeyMarkers"/>); null while they are
-    /// searched or unknown, when edits add no zero keys.
+    /// The motion's key markers found for exactly the current cuts, length and detail (see <see cref="KeyMarkers"/>), which
+    /// <see cref="WithReach"/> places zero keys by; null while they are searched, after the search failed or when unknown,
+    /// when edits add no zero keys.
     /// </summary>
     public MotionMarkerSet? Markers { get; set; }
+
+    /// <summary>
+    /// The markers to draw: <see cref="Markers"/>, or while newer ones are searched the last set found for the same
+    /// decode, which may be for other cuts, length or detail. Never used to place zero keys.
+    /// </summary>
+    public MotionMarkerSet? ShownMarkers { get; set; }
 
     /// <summary>The selected bones, for the Motion keys layer's rows. A copy is kept; a different sequence rebuilds the layout.</summary>
     public IReadOnlyList<string> MarkerBones
@@ -1538,16 +1545,16 @@ internal sealed class TimelineEditor
     /// <paramref name="next"/> with the zero keys a write into the Motion keys layer reaches out to
     /// (<see cref="MotionEdits.WithReach"/>), compared with the document the running gesture began from, so a drag adds
     /// them once; <paramref name="next"/> itself without <see cref="Markers"/>. Zero keys an earlier preview of the same
-    /// gesture added, and the next one still holds at zero, count as there before: they never reach out themselves.
+    /// gesture added, and the next one still holds at zero, count as there before: they never reach out themselves. The
+    /// limit: a write of exactly zero where the reach put a zero key earlier in the same gesture doesn't reach out either.
     /// </summary>
     public TimelineDocument WithReach(TimelineDocument next)
     {
         if (Markers is not { } markers || MotionEdits.MotionKeysLayer(next) is not { } layer)
             return next;
-        var from = History.Base;
-        if (!History.InGesture || reached is not { } known || !ReferenceEquals(known.Base, from))
-            reached = known = (from, []);
-        var before = from;
+        if (!History.InGesture || reached is not { } known || known.Gesture != History.GestureSerial)
+            reached = known = (History.GestureSerial, []);
+        var before = History.Base;
         foreach (var (frame, bone) in known.Keys)
             if (BoneAt(layer, frame, bone) is { } value && value == ZeroKey)
                 before = MotionEdits.SetKey(before, layer.Key, frame, bone, value);

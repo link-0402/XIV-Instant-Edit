@@ -8,7 +8,7 @@ namespace InstantEdit.Ui.Timeline;
 /// The motion's key markers (<see cref="MotionKeyMarkers.Find"/>), searched on a task once per decode, cuts, length and
 /// detail, never during a gesture, since a long clip on a big skeleton takes longer than a frame. The layers don't
 /// matter: the markers are on the motion before them, so editing a layer keeps them. A newer key cancels the search for
-/// an older one, and a set is kept only for the key it was found for.
+/// an older one, and a set is given only for the key it was found for; the last one stays available to show.
 /// </summary>
 internal sealed class MarkerSearch
 {
@@ -29,10 +29,20 @@ internal sealed class MarkerSearch
     internal CancellationToken Token { get; private set; }
 
     /// <summary>
+    /// The last set a search finished when it was found for <paramref name="decodeKey"/>, whatever cuts, length and
+    /// detail: the markers to show while newer ones are searched. Null before the first, or when it was for another decode.
+    /// </summary>
+    public MotionMarkerSet? Last(string decodeKey)
+    {
+        lock (gate)
+            return finished is { } done && done.Decode == decodeKey ? done.Set : null;
+    }
+
+    /// <summary>
     /// The markers of <paramref name="output"/> (the decode's motion as <paramref name="doc"/>'s cuts and length play it)
-    /// at <paramref name="detail"/>. While they are searched, or during a <paramref name="gesture"/>, the last set found for
-    /// the same decode stands, even for other cuts, length or detail; null before the first, or when the search for this
-    /// key failed, which isn't tried again. A new key cancels a search for an older one and, unless in a gesture, starts its own.
+    /// at <paramref name="detail"/>, when they were found for exactly this key; null while they are searched, during a
+    /// <paramref name="gesture"/> that changed the key, or when the search for this key failed, which isn't tried again.
+    /// A new key cancels a search for an older one and, unless in a gesture, starts its own.
     /// </summary>
     public MotionMarkerSet? Find(string decodeKey, MotionClip output, TimelineDocument doc, MarkerDetail detail, bool gesture)
     {
@@ -42,15 +52,13 @@ internal sealed class MarkerSearch
         {
             if (finished is { } done && done.Key == key)
                 return done.Set;
-            if (failedKey == key)
+            if (failedKey == key || building == key)
                 return null;
-            if (building == key)
-                return Last(decodeKey);
             // A search for another key is no longer wanted. The source isn't disposed: the task may still read its token.
             cancel?.Cancel();
             (cancel, building) = (null, null);
             if (gesture)
-                return Last(decodeKey);
+                return null;
             cancel = new CancellationTokenSource();
             building = key;
             Token = token = cancel.Token;
@@ -58,11 +66,7 @@ internal sealed class MarkerSearch
         var length = doc.Length;
         Start(() => Build(key, decodeKey, output, length, detail, token));
         lock (gate)
-        {
-            if (finished is { } now && now.Key == key)
-                return now.Set;
-            return failedKey == key ? null : Last(decodeKey);
-        }
+            return finished is { } now && now.Key == key ? now.Set : null;
     }
 
     /// <summary>
@@ -71,9 +75,6 @@ internal sealed class MarkerSearch
     /// </summary>
     public static string KeyOf(string decodeKey, TimelineDocument doc, MarkerDetail detail) =>
         $"{decodeKey}|{RuntimeHelpers.GetHashCode(doc.Cuts)}|{doc.Length}|{detail}";
-
-    /// <summary>The last set found for <paramref name="decodeKey"/>, whatever cuts, length and detail. Call under the gate.</summary>
-    private MotionMarkerSet? Last(string decodeKey) => finished is { } done && done.Decode == decodeKey ? done.Set : null;
 
     /// <summary>
     /// Searches for <paramref name="key"/> (of <paramref name="decodeKey"/>) and publishes the set unless the search was

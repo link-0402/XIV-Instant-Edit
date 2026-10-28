@@ -36,8 +36,9 @@ internal static class MotionKeyMarkersFixture
         check(ReferenceEquals(inline.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false), first) && starts == 1, "search: the same key starts nothing");
         var layered = MotionEdits.AddMotionKeys(doc, out _, out _);
         check(ReferenceEquals(inline.Find("decode", clip, layered, MarkerDetail.Normal, gesture: false), first) && starts == 1, "search: layers don't change the key");
-        check(ReferenceEquals(inline.Find("decode", clip, doc, MarkerDetail.More, gesture: true), first) && starts == 1, "search: a gesture keeps the last set and starts nothing");
-        check(inline.Find("other", clip, doc, MarkerDetail.More, gesture: true) == null, "search: the last set stands only for its decode");
+        check(inline.Find("decode", clip, doc, MarkerDetail.More, gesture: true) == null && ReferenceEquals(inline.Last("decode"), first) && starts == 1,
+            "search: a gesture starts nothing, the last set is only shown");
+        check(inline.Find("other", clip, doc, MarkerDetail.More, gesture: true) == null && inline.Last("other") == null, "search: the last set stands only for its decode");
 
         var queued = new List<Action>();
         var held = new MarkerSearch { Start = action => { queued.Add(action); return Task.CompletedTask; } };
@@ -49,10 +50,17 @@ internal static class MotionKeyMarkersFixture
         queued[1]();
         var more = held.Find("decode", clip, doc, MarkerDetail.More, gesture: false);
         check(more is { Detail: MarkerDetail.More } && queued.Count == 2, "search: the cancelled search publishes nothing, the new one its set");
-        check(ReferenceEquals(held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false), more) && queued.Count == 3 && held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false) == more,
-            "search: while a search runs the last set of its decode stands");
-
+        check(held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false) == null && queued.Count == 3 && held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false) == null &&
+              ReferenceEquals(held.Last("decode"), more), "search: a changed detail has no markers until its search finishes, the last set is only shown");
+        queued[2]();
+        var normal = held.Find("decode", clip, doc, MarkerDetail.Normal, gesture: false);
         var cut = doc with { Cuts = MotionCuts.WholeOf(60) };
+        check(normal is { Detail: MarkerDetail.Normal } && held.Find("decode", clip, cut, MarkerDetail.Normal, gesture: false) == null && queued.Count == 4 &&
+              ReferenceEquals(held.Last("decode"), normal), "search: changed cuts at the same length have no markers until their search finishes, the last set is only shown");
+        queued[3]();
+        check(held.Find("decode", clip, cut, MarkerDetail.Normal, gesture: false) is { } recut && !ReferenceEquals(recut, normal) && ReferenceEquals(held.Last("decode"), recut),
+            "search: the changed cuts' own set once found");
+
         check(MarkerSearch.KeyOf("decode", doc, MarkerDetail.Normal) != MarkerSearch.KeyOf("decode", cut, MarkerDetail.Normal) &&
               MarkerSearch.KeyOf("decode", cut, MarkerDetail.Normal) != MarkerSearch.KeyOf("decode", cut with { Cuts = MotionCuts.WholeOf(60) }, MarkerDetail.Normal) &&
               MarkerSearch.KeyOf("decode", doc, MarkerDetail.Normal) != MarkerSearch.KeyOf("decode", doc with { Length = 61 }, MarkerDetail.Normal) &&
@@ -98,6 +106,28 @@ internal static class MotionKeyMarkersFixture
         check(ReferenceEquals(editor.WithReach(stale), stale), "stale markers: no zero keys");
         editor.Markers = null;
         check(ReferenceEquals(editor.WithReach(stale), stale), "no markers: no zero keys");
+
+        var again = new TimelineEditor(Empty(60)) { Markers = set };
+        again.EditMotionKeys(0);
+        var againKey = again.SelectedLayer!;
+        var from = again.Document;
+        var zero = MotionTransform.Identity.ToBone();
+        void Drag(int frame, BoneTransform value)
+        {
+            again.BeginFieldEdit();
+            again.Change(again.WithReach(MotionEdits.SetKey(again.Document, againKey, frame, B1, value)));
+            again.EndFieldEdit();
+        }
+        Drag(25, turn);
+        var firstDrag = Frames(again.Document);
+        var undone = again.Undo() && ReferenceEquals(again.Document, from);
+        Drag(25, turn);
+        var secondDrag = Frames(again.Document);
+        undone &= again.Undo() && ReferenceEquals(again.Document, from);
+        // The first drags' reach filled frame 20; a later drag from the same start writing a zero key there reaches out on its own.
+        Drag(20, zero);
+        check(undone && firstDrag.SequenceEqual([20, 25, 30]) && secondDrag.SequenceEqual(firstDrag) && Frames(again.Document).SequenceEqual([10, 20, 30]),
+            "drag, undo, drag again from the same start: the zero keys come as on the first drag");
 
         editor.MarkerBones = ["a"];
         var stamp = editor.Layout;
