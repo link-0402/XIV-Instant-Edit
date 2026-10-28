@@ -1576,12 +1576,29 @@ playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
   drag back: the arm stays straight until the gizmo is back within reach, and the hand ends under the gizmo.
   (XIV Bridge 336, 2026-10-24: 30 cm past reach in 2 cm steps, the hand never passes the reach or jumps and holds still
   in game; back in, the hand ends under the gizmo where it started.)
-- [ ] 5 Select the waist (j_kosi, right under the body): Drag is disabled with its hint.
-  Partly checked (XIV Bridge 337, 2026-10-24): the rule disables Drag on j_kosi with "Hips sits right under the body,
-  ...", a Drag kept from the hand acts as Turn there, and a drag step changes nothing. Not checked: the radio's
-  disabled look and its tooltip on screen.
+- [ ] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the hips to drag them." (Changed 2026-10-27: the hips now drag, see Hip drag.)
 - [x] 6 Undo once after a drag: the whole drag comes back in one step.
   (XIV Bridge 333, 2026-10-24: one undo step; one Undo brings the document and the hand in game back.)
+
+## Hip drag (pending)
+
+Drag mode on the hips moves them; the other selected bones, or both feet and both hands, hold where they
+are and the legs, arms and back follow. Spec: docs/superpowers/specs/2026-10-27-hip-drag-design.md.
+
+- [ ] 1 The seated pose (hips on the floor, heels down, hands planted behind): an offset layer, select the
+  hips, Gizmo: Drag. In GPose with Live on and paused, drag the hips forward 10 cm and up 5 cm: the feet
+  and hands stay where they were, the knees and elbows straighten, the torso leans back. The layer keys
+  the hips (position), both thighs, knees and feet, both arms, the clavicles and the back.
+- [ ] 2 The layer's amount at 50 %: the hips still land under the gizmo and the feet and hands still hold.
+- [ ] 3 A standing dance frame, the hips alone selected: drag down 10 cm: the knees bend, the feet and
+  hands hold. Select both feet, then Ctrl+click the hips (the hint names the feet) and drag again: the
+  hands now ride with the body.
+- [ ] 4 Drag the hips up past the legs' reach: the legs straighten smoothly and the feet lift, nothing
+  snaps; back down, the feet are back on the floor under the gizmo.
+- [ ] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the
+  hips to drag them."
+- [ ] 6 Undo once after a drag: the whole drag comes back in one step.
+- [ ] 7 Save (replace) and Edit again: the clip plays the posed frame the same, and the keys are back.
 
 ## Fix layer (pending)
 

@@ -29,7 +29,7 @@ internal sealed record PinChain(int End, PinChainShape Shape, ImmutableArray<int
 /// </summary>
 internal static class PinChains
 {
-    public const string FootL = "j_asi_d_l", FootR = "j_asi_d_r", Body = "n_hara";
+    public const string FootL = "j_asi_d_l", FootR = "j_asi_d_r", Body = "n_hara", Hips = "j_kosi";
 
     /// <summary>The upper and lower bones of the limb a hand or a foot ends, by the end's name; null for other bones.</summary>
     private static (string Upper, string Lower)? LimbOf(string bone) => bone switch
@@ -183,7 +183,7 @@ internal static class PinChains
     }
 
     /// <summary>Whether <paramref name="bone"/> hangs below <paramref name="above"/>.</summary>
-    private static bool IsBelow(SkeletonDescription skeleton, int bone, int above)
+    public static bool IsBelow(SkeletonDescription skeleton, int bone, int above)
     {
         for (var b = (int)skeleton.Bones[bone].Parent; b >= 0; b = skeleton.Bones[b].Parent)
             if (b == above)

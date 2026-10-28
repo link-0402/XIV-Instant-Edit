@@ -95,9 +95,10 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
-    /// Why the gizmo can't drag <paramref name="primary"/> in <paramref name="layer"/>, bending the limb above it;
-    /// null when it can, and while <paramref name="skeleton"/> is unknown. <paramref name="index"/> is the skeleton's
-    /// bone index when already made (<see cref="MotionEvaluator.Index"/>), as each frame asks this several times.
+    /// Why the gizmo can't drag <paramref name="primary"/> in <paramref name="layer"/>, bending the limb above it, or for
+    /// the hips moving them and bending the body around them; null when it can, and while <paramref name="skeleton"/> is
+    /// unknown. <paramref name="index"/> is the skeleton's bone index when already made (<see cref="MotionEvaluator.Index"/>),
+    /// as each frame asks this several times.
     /// </summary>
     public static string? DragGizmo(MotionLayer layer, string? primary, SkeletonDescription? skeleton, Dictionary<string, int>? index = null)
     {
@@ -110,9 +111,26 @@ internal static partial class TimelineWindowViews
         // The overlay never offers a bone the skeleton lacks.
         if (skeleton == null || !(index ??= MotionEvaluator.Index(skeleton)).ContainsKey(primary))
             return null;
+        if (primary == PinChains.Body)
+            return "The body moves the whole character. Select the hips to drag them.";
+        // The hips' drag keys their position too.
+        if (primary == PinChains.Hips)
+            return layer.Components.HasFlag(PoseComponents.Position) ? null : "This layer doesn't move bones.";
         return PinChains.Chain(skeleton, index, new MotionPin(primary)).Shape == PinChainShape.None
             ? $"{AnimationPresentation.BoneName(primary)} sits right under the body, so nothing can bend to drag it."
             : null;
+    }
+
+    /// <summary>The hint under the gizmo radios while Drag is chosen on the hips: what holds where it is, from the selection (the hips included).</summary>
+    public static string HipDragHint(SkeletonDescription skeleton, IReadOnlyList<string> selected)
+    {
+        // The user chose the selection: when none of it can hold, the feet and hands don't come back.
+        var anchors = HipSolver.Anchors(skeleton, selected);
+        if (HipSolver.Candidates(skeleton, selected).Count == 0 && !anchors.IsEmpty)
+            return "The feet and hands hold where they are. To hold other bones instead, select them first, then Ctrl+click the hips.";
+        return anchors.IsEmpty
+            ? "Nothing holds; the hips move alone."
+            : "Holds where they are: " + string.Join(", ", anchors.Select(anchor => AnimationPresentation.BoneName(skeleton.Bones[anchor.Bone].Name))) + ".";
     }
 
     /// <summary>The bone layer rows' legend when there is no layer yet.</summary>
