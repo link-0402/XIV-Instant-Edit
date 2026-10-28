@@ -11,6 +11,7 @@ namespace InstantEdit.Services.Animations.Timeline;
 internal sealed class PropAttachTypes
 {
     private const string FileName = "prop-attach-types.json";
+    private readonly object saving = new();
     private readonly string? path;
     private readonly Action<string>? warn;
     private readonly ConcurrentDictionary<ushort, string> types = new();
@@ -49,16 +50,20 @@ internal sealed class PropAttachTypes
         types[model] = code;
         if (path == null)
             return;
-        try
+        // Two props learned at once each save every type; one at a time, so neither save is lost.
+        lock (saving)
         {
-            var saved = new SortedDictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (id, text) in types)
-                saved[id.ToString()] = text;
-            AnimationJournalStore.WriteAtomic(path, JsonSerializer.SerializeToUtf8Bytes(saved));
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            warn?.Invoke("A prop attach type could not be saved: " + e.Message);
+            try
+            {
+                var saved = new SortedDictionary<string, string>(StringComparer.Ordinal);
+                foreach (var (id, text) in types)
+                    saved[id.ToString()] = text;
+                AnimationJournalStore.WriteAtomic(path, JsonSerializer.SerializeToUtf8Bytes(saved));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                warn?.Invoke("A prop attach type could not be saved: " + e.Message);
+            }
         }
     }
 

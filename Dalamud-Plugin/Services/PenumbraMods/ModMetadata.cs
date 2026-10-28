@@ -1,6 +1,10 @@
+using System.Collections.Immutable;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Timeline;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
 
@@ -470,11 +474,13 @@ internal static class ModMetadata
     /// <summary>
     /// Adds <paramref name="manipulations"/> (Penumbra JSON) to every DefaultData, group, option and container that
     /// maps <paramref name="ownerGamePath"/>, as <see cref="AddAnimationResourceMapping"/> maps files: one there with
-    /// the same identifier (its type and every field but the entry) is replaced in its place. <paramref name="record"/>
-    /// gets the changes before meta.json is written, so a journal holds them if writing fails.
+    /// the same identifier (its type and every field but the entry) is replaced in its place. One there with the
+    /// identifier of one of <paramref name="removed"/> is taken out. <paramref name="record"/> gets the changes before
+    /// meta.json is written, so a journal holds them if writing fails.
     /// </summary>
     internal static IReadOnlyList<AnimationManipulationChange> AddAnimationManipulations(string modRoot, string ownerGamePath,
-        IReadOnlyList<string> manipulations, Action<IReadOnlyList<AnimationManipulationChange>>? record = null)
+        IReadOnlyList<string> manipulations, Action<IReadOnlyList<AnimationManipulationChange>>? record = null,
+        IReadOnlyList<string>? removed = null)
     {
         lock (Studio.Services.Project.ModFiles.Gate)
         {
@@ -495,8 +501,18 @@ internal static class ModMetadata
                     if (at < 0) list.Add(added);
                     else list[at] = added;
                 }
+                foreach (var text in removed ?? [])
+                {
+                    var at = IndexOfManipulation(list, JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object."));
+                    if (at < 0)
+                        continue;
+                    changes.Add(new AnimationManipulationChange(locator, null, list[at]!.ToJsonString()));
+                    list.RemoveAt(at);
+                }
             }
             record?.Invoke(changes);
+            if (changes.Count == 0)
+                return changes;
             TouchV4ModMetadata(meta);
             WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
             return changes;
@@ -509,18 +525,24 @@ internal static class ModMetadata
     /// </summary>
     internal static void CheckAnimationManipulations(string modRoot, IReadOnlyList<AnimationManipulationChange> changes)
     {
-        var meta = LoadV4ModMetadata(modRoot);
+        lock (Studio.Services.Project.ModFiles.Gate)
+            CheckAnimationManipulations(LoadV4ModMetadata(modRoot), changes);
+    }
+
+    private static void CheckAnimationManipulations(JsonObject meta, IReadOnlyList<AnimationManipulationChange> changes)
+    {
         foreach (var change in changes)
         {
             var now = CurrentManipulation(meta, change);
-            if (now != change.Written && now != change.Replaced)
+            if (now != Canonical(change.Written) && now != Canonical(change.Replaced))
                 throw new IOException("A manipulation this edit wrote into the mod was changed since. Undo will not overwrite it.");
         }
     }
 
     /// <summary>
     /// Undo <see cref="AddAnimationManipulations"/>, last change first: where an option still holds what was
-    /// written, the one it replaced goes back in its place, or it is removed. Nothing to undo is fine.
+    /// written, the one it replaced goes back in its place, or it is removed; one the edit took out comes back where
+    /// the option holds none there. Nothing to undo is fine.
     /// </summary>
     internal static void RemoveAnimationManipulations(string modRoot, IReadOnlyList<AnimationManipulationChange> changes)
     {
@@ -531,11 +553,26 @@ internal static class ModMetadata
             var changed = false;
             foreach (var change in changes.Reverse())
             {
-                if (!containers.TryGetValue(change.Container, out var container) || container["Manipulations"] is not JsonArray list)
+                if (!containers.TryGetValue(change.Container, out var container))
+                    continue;
+                if (change.Written == null)
+                {
+                    if (change.Replaced is not { } taken)
+                        continue;
+                    if (container["Manipulations"] is not JsonArray into)
+                        container["Manipulations"] = into = new JsonArray();
+                    var back = JsonNode.Parse(taken) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object.");
+                    if (IndexOfManipulation(into, back) >= 0)
+                        continue;
+                    into.Add(back);
+                    changed = true;
+                    continue;
+                }
+                if (container["Manipulations"] is not JsonArray list)
                     continue;
                 var written = JsonNode.Parse(change.Written) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object.");
                 var at = IndexOfManipulation(list, written);
-                if (at < 0 || list[at]!.ToJsonString() != change.Written)
+                if (at < 0 || Canonical(list[at]) != Canonical(written))
                     continue;
                 if (change.Replaced == null) list.RemoveAt(at);
                 else list[at] = JsonNode.Parse(change.Replaced);
@@ -547,22 +584,71 @@ internal static class ModMetadata
         }
     }
 
-    /// <summary>What the option <paramref name="change"/> names holds at its manipulation's identifier now, compact; null for none.</summary>
+    /// <summary>What the option <paramref name="change"/> names holds at its manipulation's identifier now, <see cref="Canonical(JsonNode?)"/>; null for none.</summary>
     private static string? CurrentManipulation(JsonObject meta, AnimationManipulationChange change)
     {
         var container = ManipulationContainers(meta).FirstOrDefault(c => c.Locator == change.Container).Container;
         if (container?["Manipulations"] is not JsonArray list)
             return null;
-        var at = IndexOfManipulation(list, JsonNode.Parse(change.Written) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object."));
-        return at < 0 ? null : list[at]!.ToJsonString();
+        var at = IndexOfManipulation(list, JsonNode.Parse(change.Written ?? change.Replaced ?? "null") as JsonObject
+            ?? throw new InvalidDataException("A manipulation is not a JSON object."));
+        return at < 0 ? null : Canonical(list[at]);
     }
 
+    /// <summary>
+    /// The attach overrides (Penumbra <c>Atch</c> manipulations) of the mod at <paramref name="modRoot"/> for the races in
+    /// <paramref name="genderRaces"/>, in the options that map <paramref name="ownerGamePath"/>: the first per race,
+    /// point and state.
+    /// </summary>
+    internal static ImmutableArray<AtchManipulation> AttachOverrides(string modRoot, string ownerGamePath, IReadOnlyList<ushort> genderRaces)
+    {
+        static float Number(JsonNode? node) => node is JsonValue value && value.TryGetValue<double>(out var number) ? (float)number : 0;
+        var names = genderRaces.ToDictionary(race => AnimationMetadata.GenderRaceNames(race), race => race);
+        var result = ImmutableArray.CreateBuilder<AtchManipulation>();
+        JsonObject meta;
+        lock (Studio.Services.Project.ModFiles.Gate)
+            meta = LoadV4ModMetadata(modRoot);
+        var owners = ManipulationContainers(meta)
+            .Where(c => c.Container["Files"] is JsonObject files && files.Any(pair => SameGamePath(pair.Key, ownerGamePath)));
+        foreach (var item in owners.SelectMany(c => (c.Container["Manipulations"] as JsonArray ?? new JsonArray()).OfType<JsonObject>()))
+        {
+            if (JsonString(item["Type"]) != "Atch" || item["Manipulation"] is not JsonObject fields || fields["Entry"] is not JsonObject entry ||
+                JsonString(fields["Type"]) is not { Length: 3 } code || JsonString(entry["Bone"]) is not { } bone ||
+                !names.TryGetValue((JsonString(fields["Gender"]) ?? "", JsonString(fields["Race"]) ?? ""), out var race))
+                continue;
+            var state = (int)Number(fields["Index"]);
+            if (result.Any(m => m.GenderRace == race && m.Code == code && m.State == state))
+                continue;
+            result.Add(new AtchManipulation(race, code, state, new AtchEntry(bone, Number(entry["Scale"]),
+                new Vector3(Number(entry["OffsetX"]), Number(entry["OffsetY"]), Number(entry["OffsetZ"])),
+                new Vector3(Number(entry["RotationX"]), Number(entry["RotationY"]), Number(entry["RotationZ"])))));
+        }
+        return result.ToImmutable();
+    }
+
+    private static string? Canonical(string? json) => json == null ? null : Canonical(JsonNode.Parse(json));
+
+    /// <summary>
+    /// JSON by meaning, for telling whether a manipulation is still the one written: keys in order and numbers by value,
+    /// since Penumbra saving the mod again writes 1.0 where this writes 1.
+    /// </summary>
+    private static string Canonical(JsonNode? node) => node switch
+    {
+        null => "null",
+        JsonObject item => "{" + string.Join(",", item.OrderBy(p => p.Key, StringComparer.Ordinal)
+            .Select(p => JsonSerializer.Serialize(p.Key) + ":" + Canonical(p.Value))) + "}",
+        JsonArray list => "[" + string.Join(",", list.Select(Canonical)) + "]",
+        JsonValue value when value.GetValueKind() == JsonValueKind.Number =>
+            value.GetValue<double>().ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+        _ => node.ToJsonString(),
+    };
+
     /// <summary>Where <paramref name="list"/> holds a manipulation with <paramref name="manipulation"/>'s identifier: its type and every field but the entry.</summary>
-    private static int IndexOfManipulation(JsonArray list, JsonObject manipulation)
+    internal static int IndexOfManipulation(JsonArray list, JsonObject manipulation)
     {
         static string Identity(JsonNode? node) => node is JsonObject { } item && item["Manipulation"] is JsonObject fields
             ? JsonString(item["Type"]) + "|" + string.Join("|", fields.Where(f => f.Key != "Entry").OrderBy(f => f.Key, StringComparer.Ordinal)
-                .Select(f => f.Key + "=" + f.Value?.ToJsonString()))
+                .Select(f => f.Key + "=" + Canonical(f.Value)))
             : "";
         var identity = Identity(manipulation);
         for (var i = 0; i < list.Count; i++)

@@ -142,6 +142,11 @@ internal static class AnimationTimelineCommitFixture
         check(recorded == changes && changes.Count == 2 && changes.Count(c => c.Replaced == old) == 1 && changes.Count(c => c.Replaced == null) == 1 &&
               changes.All(c => c.Written == written),
             "the journal learns what each option held before the meta is written");
+        var read = ModMetadata.AttachOverrides(root, pap, [801, 101]);
+        check(read.Length == 2 && read.Single(m => m.State == 2) is { GenderRace: 801, Code: "tsl", Remove: false, Entry: { Bone: "n_buki_r", Scale: .85f } } &&
+              read.Single(m => m.State == 0).Entry.Scale == 2f && ModMetadata.AttachOverrides(root, pap, [101]).IsEmpty &&
+              ModMetadata.AttachOverrides(root, "chara/x.pap", [801]).IsEmpty,
+            "the mod's attach overrides read back for the races and options that play the animation");
 
         ModMetadata.CheckAnimationManipulations(root, changes);
         ModMetadata.RemoveAnimationManipulations(root, changes);
@@ -153,6 +158,28 @@ internal static class AnimationTimelineCommitFixture
         ModMetadata.RemoveAnimationManipulations(root, changes);
         check(File.ReadAllText(metaPath) == before, "undoing overrides already undone changes nothing");
 
+        // Penumbra saving the mod again writes 0.0 where this writes 0, and indents.
+        changes = ModMetadata.AddAnimationManipulations(root, pap, [written]);
+        var penumbra = written.Replace(":0,", ":0.0,").Replace(":0}", ":0.0}");
+        var resaved = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
+        foreach (var option in resaved["Groups"]![0]!["Options"]!.AsArray().Take(2))
+            option!["Manipulations"]!.AsArray()[0] = JsonNode.Parse(penumbra);
+        File.WriteAllText(metaPath, resaved.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        ModMetadata.CheckAnimationManipulations(root, changes);
+        ModMetadata.RemoveAnimationManipulations(root, changes);
+        options = Options();
+        check(penumbra != written && Of(options[0]!).SequenceEqual([old, other]) && Of(options[1]!).Length == 0,
+            "undo still knows its override after Penumbra saved the mod again");
+
+        // A prop put back where the game has it takes the mod's override out, and undo brings it back.
+        changes = ModMetadata.AddAnimationManipulations(root, pap, [], removed: [written]);
+        options = Options();
+        check(changes is [{ Written: null, Replaced: var taken }] && taken == old && Of(options[0]!).SequenceEqual([other]) && Of(options[1]!).Length == 0,
+            "a removal takes the override at the same place out, and the journal keeps it");
+        ModMetadata.CheckAnimationManipulations(root, changes);
+        ModMetadata.RemoveAnimationManipulations(root, changes);
+        check(Of(Options()[0]!).SequenceEqual([other, old]), "undo puts a removed override back");
+
         changes = ModMetadata.AddAnimationManipulations(root, pap, [written]);
         var edited = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
         edited["Groups"]![0]!["Options"]![1]!["Manipulations"] = new JsonArray(JsonNode.Parse(Atch(2, 3f)));
@@ -163,6 +190,9 @@ internal static class AnimationTimelineCommitFixture
         var created = AnimationCommitService.CreateNewModMetadata("New", [], "[" + other + "]", added: [written]);
         check(created["DefaultData"]!["Manipulations"]!.AsArray().Select(m => m!.ToJsonString()).SequenceEqual([other, written]),
             "a new mod carries the override beside the collection's manipulations");
+        created = AnimationCommitService.CreateNewModMetadata("New", [], "[" + other + "," + old + "]", added: [written]);
+        check(created["DefaultData"]!["Manipulations"]!.AsArray().Select(m => m!.ToJsonString()).SequenceEqual([other, written]),
+            "a new mod's override replaces the collection's for the same place");
     }
 
     /// <summary>

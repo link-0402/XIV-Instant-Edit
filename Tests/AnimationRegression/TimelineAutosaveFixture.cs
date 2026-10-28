@@ -55,6 +55,10 @@ internal static class TimelineAutosaveFixture
             var olderBack = store.LoadAutosave()!;
             check(olderBack.Restored.Events[0].Source == null && olderBack.Restored.Events[1].Source == null &&
                   olderBack.Restored.Events[2].Source is { Body: 9000 }, "an autosave without sources loads with none");
+            check(doc.Events[1].Look is { Stop: 12 } placed && placed.Move == new Vector3(0, .25f, 0) && placed.Turn == new Vector3(0, MathF.PI / 2, 0) &&
+                  doc.Events[2] is { Group: "p1", Place: { State: 1, OwnState: true, Bone: "n_buki_l", Size: 1.25f } prop } &&
+                  prop.Move == new Vector3(.1f, 0, 0) && prop.Turn == new Vector3(0, 0, .5f),
+                "an effect's move, turn and stop and a prop's group and place come back");
             check(doc.Motion is [{ Key: "m1", Keys: [{ Bones.Count: 1 }] }] && doc.NextMotionKey == 2 && doc.Cuts?.Parts.Length == 2 &&
                   doc.Cuts.Joins[0] == MotionJoin.ForCut, "bone layers and cuts come back");
             check(doc.Replacement is { Frames: 45, Report.Changed: 1, Pap: [4, 5, 6] } && doc.ExcludedBones is ["j_ude_a_l"] &&
@@ -81,14 +85,20 @@ internal static class TimelineAutosaveFixture
         var step = new TimelineEvent("t1", "C063", TimelineLane.Sound, 5, 0, false, "sound/foot/step.scd", TimelineAccess.Editable, null, false,
             ImmutableDictionary<string, double>.Empty.Add("SoundIndex", 1), Pin: "own0");
         var effect = new TimelineEvent("n1", "C173", TimelineLane.Effect, 10, 20, true, "vfx/fx.avfx", TimelineAccess.Editable, null, false,
-            ImmutableDictionary<string, double>.Empty, Look: new TimelineEffectEdit { Tint = new Vector3(1, 2, 3), Glow = 2, Colors = [(Vector3.One, Vector3.UnitX)] });
+            ImmutableDictionary<string, double>.Empty, Look: new TimelineEffectEdit
+            {
+                Tint = new Vector3(1, 2, 3), Glow = 2, Colors = [(Vector3.One, Vector3.UnitX)], Move = new Vector3(0, .25f, 0),
+                Turn = new Vector3(0, MathF.PI / 2, 0), Stop = 12,
+            });
         var source = new TimelinePropSource("Telephone", "Telephone", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9001, 9000,
             ImmutableDictionary<string, string>.Empty
                 .Add("chara/weapon/w9001/obj/body/b9000/model/w9001b9000.mdl", @"file:C:\mods\Telephone\m8044b0001.mdl")
                 .Add("chara/weapon/w9001/obj/body/b9000/texture/d.tex", "game:chara/monster/m8044/obj/body/b0001/texture/d.tex"),
             ImmutableDictionary<string, string>.Empty.Add("chara/monster/m8044/obj/body/b0001/texture/d.tex", "chara/weapon/w9001/obj/body/b9000/texture/d.tex"));
-        var prop = new TimelineEvent("n2", "C198", TimelineLane.Prop, 20, 30, true, "", TimelineAccess.Editable, null, false,
-            ImmutableDictionary<string, double>.Empty.Add("Model", 9001).Add("Body", 9000).Add("SummonId", 1), Group: "prop-1", Source: source);
+        // A prop from a mod that also has a place: both come back.
+        var prop = new TimelineEvent("n2", "C198", TimelineLane.Prop, 0, 60, true, "", TimelineAccess.Editable, null, false,
+            ImmutableDictionary<string, double>.Empty.Add("Model", 9001).Add("Body", 9000).Add("SummonId", 1), Group: "p1",
+            Place: new TimelinePropPlace(1, true, "n_buki_l", new Vector3(.1f, 0, 0), new Vector3(0, 0, .5f), 1.25f), Source: source);
         var sound = new TimelineSoundEdit([new TimelineSoundAlternative("own0", 0, null, 50, 0, 0, null, null),
             new TimelineSoundAlternative("new1", -1, "instant_edit/step.scd", 50, 0, 1, .8f, 100)], false, Volume: .5f);
         var doc = new TimelineDocument(90, 100, "emot/laugh", [step, effect, prop], 3)

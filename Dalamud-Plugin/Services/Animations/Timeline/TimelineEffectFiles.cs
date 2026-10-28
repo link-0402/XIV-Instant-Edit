@@ -63,7 +63,7 @@ internal static class TimelineEffectFiles
 
     public const string StopBeforeStart = "Stops at is before the effect starts";
     public const string NothingScheduled = "This effect has nothing scheduled to stop";
-    public const string NoRoomForKill = "This effect can't take a kill: it names a clip it lacks";
+    public const string NoRoomForKill = "This effect can't be stopped early";
     public const string LoopsUntil = "This effect loops: Stops at must be by frame ";
 
     /// <summary>The first frame the effect's schedule kills it at, whether or not it would end anyway; null when it never does.</summary>
@@ -121,7 +121,7 @@ internal static class TimelineEffectFiles
             Move(avfx, output, off[0], stop, turnOn: true);
         else
             output = AddKill(avfx, output, timelines, schedulers, stop);
-        if (KillsAt(output) != stop) throw new InvalidDataException("The effect's kill could not be moved.");
+        if (KillsAt(output) != stop) throw new InvalidDataException("Stops at could not be set.");
         return output;
     }
 
@@ -265,7 +265,7 @@ internal static class TimelineEffectFiles
     private static void WriteStart(byte[] output, Entry entry, int frame)
     {
         if (!entry.Fields.TryGetValue("StTm", out var time) || time.Size < 4)
-            throw new InvalidDataException("The effect's kill has no start to move.");
+            throw new InvalidDataException("Stops at could not be set.");
         BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(time.At), frame);
     }
 

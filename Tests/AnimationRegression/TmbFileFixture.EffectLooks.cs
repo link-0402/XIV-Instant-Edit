@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Numerics;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Timeline;

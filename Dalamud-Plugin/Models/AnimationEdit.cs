@@ -189,7 +189,8 @@ internal sealed class AnimationEditJournal
 /// <summary>
 /// The meta manipulations an edit adds (Penumbra JSON, one per entry of <see cref="Added"/>). A new mod carries them in
 /// its default data. In place they go into every option of <see cref="ModRoot"/> that maps <see cref="For"/>, the
-/// edited animation; <see cref="Changes"/> records each before the meta is written, so Undo can take them out again.
+/// edited animation, and the ones there with the identifier of one of <see cref="Removed"/> go (a prop put back where
+/// the game has it); <see cref="Changes"/> records each before the meta is written, so Undo can take them back.
 /// </summary>
 internal sealed class AnimationManipulationEdit
 {
@@ -197,14 +198,16 @@ internal sealed class AnimationManipulationEdit
     public string ModDirectory { get; set; } = "";
     public string ModRoot { get; set; } = "";
     public List<string> Added { get; set; } = [];
+    public List<string> Removed { get; set; } = [];
     public List<AnimationManipulationChange> Changes { get; set; } = [];
 }
 
 /// <summary>
 /// One manipulation written into one option of a mod (<paramref name="Container"/>, see ModMetadata): what was
-/// written, and the one with the same identifier it replaced there; null when it held none.
+/// written, null when the edit took one out; and the one with the same identifier it replaced or took out there,
+/// null when it held none.
 /// </summary>
-internal sealed record AnimationManipulationChange(string Container, string Written, string? Replaced);
+internal sealed record AnimationManipulationChange(string Container, string? Written, string? Replaced);
 internal sealed record AnimationFileChange(string GamePath, string Target, string ModDirectory, string ModRoot,
     string RelativePath, string BeforeHash, string AfterHash, string Backup, string Staged,
     // Set only when an in-place rebake landed at a fresh path instead of

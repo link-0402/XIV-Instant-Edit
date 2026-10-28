@@ -1329,8 +1329,8 @@ internal sealed class TimelineEditor
     /// A properties-panel change to the event with <paramref name="ev"/>'s key, as far as its access
     /// allows (see <see cref="TimelineEdits.Replace"/>): live during a field edit, else one undo step.
     /// A prop summon's new length takes its parts along (<see cref="TimelineEdits.ResizeGroup"/>), from
-    /// where they were when the field edit began, so typing through a short length squeezes nothing.
-    /// False when nothing changed or a drag is running.
+    /// where they were when the field edit began, so typing through a short length squeezes nothing;
+    /// its new start moves them all. False when nothing changed or a drag is running.
     /// </summary>
     public bool Replace(TimelineEvent ev)
     {
@@ -1342,6 +1342,12 @@ internal sealed class TimelineEditor
             TimelineEdits.Find(from, ev.Key) is { } began && began.Group == old.Group)
             next = TimelineEdits.ResizeGroup(TimelineEdits.Replace(from, ev with { Duration = began.Duration }, motionFrames), ev.Key, false,
                 Math.Max(1, ev.Duration) - began.Duration);
+        // A new start moves its parts along, as dragging its left edge does.
+        else if (TimelineEdits.Find(Document, ev.Key) is { } moved && TimelineEdits.IsGroupSummon(moved) && ev.Start != moved.Start &&
+                 (History.InGesture ? History.GestureStart : Document) is { } origin && TimelineEdits.Find(origin, ev.Key) is { } first &&
+                 first.Group == moved.Group)
+            next = TimelineEdits.Move(TimelineEdits.Replace(origin, ev with { Start = first.Start }, motionFrames), GroupOf(origin, ev.Key),
+                ev.Start - first.Start);
         if (ReferenceEquals(next, Document))
             return false;
         next = TimelineEdits.ReleasePack(Document, next, ResidentMotions);

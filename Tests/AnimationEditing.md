@@ -717,8 +717,9 @@ the next spawn of the effect loads the new look.
   model particles too. Above 1 it gets brighter.
   Partly checked (XIV Bridge tests/instant-edit/animations/176, 2026-10-10): the tint writes only RvR/RvG/RvB (red reads
   back 1,0,0; 2.5 is kept). Not checked: how it looks in game.
-- [ ] Size 2 doubles it, Offset Y 1 lifts it, Turn Y 90 turns it a quarter (Turn is
-  radians in the file, degrees shown; if it turns about 57x as far, that is wrong).
+- [ ] Size 2 doubles it, Move Y 1 lifts it, Turn Y 90 turns it a quarter (Turn is
+  radians in the file, degrees shown; if it turns about 57x as far, that is wrong). An effect attached to a bone
+  can only be moved.
   Partly checked (XIV Bridge tests/instant-edit/animations/176, 2026-10-10): size 2,2,2, offset 0,1,0 and turn 0,90,0
   are written as typed and nothing else changes. Evidence on the unit: of 1,501 effects read, the largest Turn value
   is 0.052 and none is above 2π, which suggests radians. Not checked: how far it turns in game.
@@ -757,18 +758,25 @@ A C173 event also has Stops at, which bakes a KILL into a copy of the effect.
 Prop place and length (2026-10-27):
 Selecting a prop shows a Place section (Attach, Bone, Move, Turn, Size, Only this animation). The save writes an Atch
 override into the mod's meta.json for each race the file plays on, and the attach state into the TMB.
-- [ ] Preview Toast. The log says "Prop 1962 attaches with" a 3-letter code; Place then enables and saving no longer
+- [ ] Preview Toast. The log (Debug level) says "Prop 1962 attaches with" a 3-letter code; Place then enables and saving no longer
   says "Preview once". Navigate's second prop (frame 173) is learned too.
 - [ ] Move a prop 0,0.1,0 and Preview: it shows moved. A look or sound change during the preview keeps it there.
+  In Toast, selecting its first or its second summon shows the same place.
 - [ ] Save it, then open the mod in Penumbra: the Atch entry is there, and the prop sits moved in a normal /emote.
   Undo the save: the entry is gone (or the one it replaced is back).
+- [ ] Reopen the saved file: Place shows the saved move (Only this animation ticked if it was; Attach then shows In
+  use, as the state it started from isn't kept). Nudge it and save: the entry moves on from there. Reset place and
+  save: the entry is gone; Undo brings it back.
+- [ ] Change a prop's Atch entry in Penumbra's own editor, then reopen the file: Place shows that change (Penumbra's
+  field names are read as Instant Edit writes them; not yet checked against Penumbra's writer).
 - [ ] Without Only this animation, a vanilla emote with the same kind of prop moves too. With it on, Toast's prop
   moves and the vanilla mug emote's stays put.
 - [ ] Resize sp50 by +30 frames: the fade-out stays at the end and the prop is gone when the clip ends.
 - [ ] A file other races also play (a c0101 fallback) gets an Atch entry for each of them.
 
 XIV Bridge plan for these: dump the four weapon slots (DrawObjectData, three at +0x10, one at +0x160) during Toast and
-read the code at +32 of each (expect one such as tsl or wdm; note which slot summon 0 and summon 1 use). Then Toast
+read the code at +0x30 of each (+0x20 is a pointer; expect one such as tsl or wdm; summon 0 is the third slot, seen
+2026-10-28; note which slot summon 1 uses). Then Toast
 with Only this animation beside a vanilla mug emote, both on the GPose actor. Then sp50 resized by +30 into the
 "MCPTest" collection.
 

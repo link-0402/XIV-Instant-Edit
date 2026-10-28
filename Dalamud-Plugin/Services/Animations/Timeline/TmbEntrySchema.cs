@@ -216,11 +216,11 @@ internal static class TmbEntrySchema
             [
                 new(new TimelineField("Enabled", "On", TimelineFieldKind.Bool, 0, 1), 12, TmbStorage.Int32),
                 Choice("ObjectPosition", "Attach", 20, TmbStorage.Int32, Positions),
-                Choice("ObjectControl", "Moves", 24, TmbStorage.Int32, Targets),
+                Choice("ObjectControl", "Acts on", 24, TmbStorage.Int32, Targets),
             ],
-            ["C015"] = [Number("ObjectScale", "Size state", 20, TmbStorage.Int32, 0, 6), Choice("ObjectControl", "Sizes", 24, TmbStorage.Int32, Targets)],
-            ["C174"] = [Choice("ObjectPosition", "Attach", 20, TmbStorage.Int32, Positions), Choice("ObjectControl", "Moves", 24, TmbStorage.Int32, Targets)],
-            ["C175"] = [Number("ObjectScale", "Size state", 20, TmbStorage.Int32, 0, 6), Choice("ObjectControl", "Sizes", 24, TmbStorage.Int32, Targets)],
+            ["C015"] = [Number("ObjectScale", "Size state", 20, TmbStorage.Int32, 0, 6), Choice("ObjectControl", "Acts on", 24, TmbStorage.Int32, Targets)],
+            ["C174"] = [Choice("ObjectPosition", "Attach", 20, TmbStorage.Int32, Positions), Choice("ObjectControl", "Acts on", 24, TmbStorage.Int32, Targets)],
+            ["C175"] = [Number("ObjectScale", "Size state", 20, TmbStorage.Int32, 0, 6), Choice("ObjectControl", "Acts on", 24, TmbStorage.Int32, Targets)],
             ["C187"] = [Number("Part", "Part", 20, TmbStorage.Int32, 0, short.MaxValue)],
             ["C094"] =
             [

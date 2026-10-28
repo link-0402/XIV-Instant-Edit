@@ -20,8 +20,11 @@ internal sealed record TimelinePropPlace(int State, bool OwnState, string? Bone,
     public int Target => OwnState ? 2 : State;
 }
 
-/// <summary>A Penumbra <c>Atch</c> manipulation: the entry one race shows prop attach point <paramref name="Code"/> with in <paramref name="State"/>.</summary>
-internal sealed record AtchManipulation(ushort GenderRace, string Code, int State, AtchEntry Entry);
+/// <summary>
+/// A Penumbra <c>Atch</c> manipulation: the entry one race shows prop attach point <paramref name="Code"/> with in
+/// <paramref name="State"/>. With <paramref name="Remove"/> the mod's own one there goes instead (the entry is the game's).
+/// </summary>
+internal sealed record AtchManipulation(ushort GenderRace, string Code, int State, AtchEntry Entry, bool Remove = false);
 
 /// <summary>
 /// Turns prop places (<see cref="TimelineEvent.Place"/>) into what a save writes: an attach override per race the
@@ -51,17 +54,27 @@ internal static class TimelinePropPlaces
     /// <summary>
     /// The attach overrides <paramref name="doc"/>'s prop places make, per race in <paramref name="genderRaces"/>:
     /// the race's vanilla entry at the place's <see cref="TimelinePropPlace.State"/>, moved by its deltas, at its
-    /// <see cref="TimelinePropPlace.Target"/>. One equal to the race's vanilla entry there is left out.
+    /// <see cref="TimelinePropPlace.Target"/>. With <paramref name="loaded"/> only the places changed since it was loaded
+    /// count, since a loaded place is the mod's override already (<see cref="FromOverrides"/>); one taken off counts as
+    /// the game's entry at its target. One equal to the race's vanilla entry there removes the mod's override there
+    /// (<paramref name="modOverrides"/>), else is left out.
     /// </summary>
-    /// <param name="skipUnlearned">For the preview, which learns them: a prop whose attach point was never learned gets no override, rather than throwing.</param>
+    /// <param name="skipUnlearned">
+    /// For the preview, which learns them: a prop whose attach point was never learned gets no override, rather than
+    /// throwing; and one put back where the game has it writes the game's entry over the mod's rather than removing it.
+    /// </param>
     /// <exception cref="InvalidDataException">A prop's attach point was never learned, or a race's table lacks it.</exception>
     public static ImmutableArray<AtchManipulation> Manipulations(TimelineDocument doc, IReadOnlyList<ushort> genderRaces,
-        Func<ushort, AtchTable> tables, PropAttachTypes types, bool skipUnlearned = false)
+        Func<ushort, AtchTable> tables, PropAttachTypes types, bool skipUnlearned = false, TimelineDocument? loaded = null,
+        IReadOnlyCollection<AtchManipulation>? modOverrides = null)
     {
         var result = ImmutableArray.CreateBuilder<AtchManipulation>();
         foreach (var ev in doc.Events)
         {
-            if (ev.Place is not { } place || !IsSummon(ev))
+            if (!IsSummon(ev))
+                continue;
+            var was = loaded?.Events.FirstOrDefault(e => e.Key == ev.Key)?.Place;
+            if (loaded != null && Equals(ev.Place, was) || (ev.Place ?? was) is not { } place)
                 continue;
             var model = (ushort)ev.Values.GetValueOrDefault("Model");
             if (types.CodeOf(model) is not { } code)
@@ -73,14 +86,17 @@ internal static class TimelinePropPlaces
             foreach (var race in genderRaces)
             {
                 var table = tables(race);
-                var from = table.Entry(code, place.State);
                 var vanilla = table.Entry(code, place.Target);
+                var from = ev.Place == null ? vanilla : table.Entry(code, place.State);
                 if (from == null || vanilla == null)
                     throw new InvalidDataException($"c{race:D4} has no attach point {code} in state {(from == null ? place.State : place.Target)}.");
-                var entry = new AtchEntry(place.Bone ?? from.Bone, from.Scale * place.Size, from.Offset + place.Move, from.Rotation + place.Turn);
-                if (AtchTable.SameEntry(entry, vanilla))
+                var entry = ev.Place == null ? vanilla
+                    : new AtchEntry(place.Bone ?? from.Bone, from.Scale * place.Size, from.Offset + place.Move, from.Rotation + place.Turn);
+                // Back where the game has it: the mod's own override there goes, else there is nothing to write.
+                var back = AtchTable.SameEntry(entry, vanilla);
+                if (back && modOverrides?.Any(m => m.GenderRace == race && m.Code == code && m.State == place.Target) != true)
                     continue;
-                var manipulation = new AtchManipulation(race, code, place.Target, entry);
+                var manipulation = new AtchManipulation(race, code, place.Target, entry, back && !skipUnlearned);
                 // Two props of one kind share the race's attach point: they can't be placed apart.
                 if (result.FirstOrDefault(m => m.GenderRace == race && m.Code == code && m.State == place.Target) is { } same)
                 {
@@ -138,12 +154,50 @@ internal static class TimelinePropPlaces
         return doc with { Events = [.. events], NextKey = next };
     }
 
-    /// <summary><paramref name="doc"/> with every prop place's attach state written into the TMB side (see <see cref="ApplyState"/>).</summary>
-    public static TimelineDocument ApplyStates(TimelineDocument doc)
+    /// <summary>
+    /// <paramref name="doc"/> with every prop place's attach state written into the TMB side (see <see cref="ApplyState"/>);
+    /// with <paramref name="loaded"/> only the places changed since, as the file holds the others already.
+    /// </summary>
+    public static TimelineDocument ApplyStates(TimelineDocument doc, TimelineDocument? loaded = null)
     {
-        foreach (var placed in doc.Events.Where(e => e.Place != null).ToArray())
+        foreach (var placed in doc.Events.Where(e => e.Place != null &&
+                     (loaded == null || !Equals(e.Place, loaded.Events.FirstOrDefault(l => l.Key == e.Key)?.Place))).ToArray())
             doc = ApplyState(doc, placed);
         return doc;
+    }
+
+    /// <summary>
+    /// <paramref name="doc"/>, as read from a mod's file, with the places the mod's attach overrides
+    /// (<paramref name="overrides"/>) give its props, so the editor starts from where the mod has them. The first summon of
+    /// each group's slot whose attach point is learned takes the first race in <paramref name="genderRaces"/> the mod
+    /// overrides at the state the TMB shows: the bone, move, turn and size from the game's entry there to the mod's. State 2
+    /// is "only this animation". A summon with a place, or the mod's entry equal to the game's, stays as it is.
+    /// </summary>
+    public static TimelineDocument FromOverrides(TimelineDocument doc, IReadOnlyList<ushort> genderRaces,
+        IReadOnlyCollection<AtchManipulation> overrides, Func<ushort, AtchTable> tables, PropAttachTypes types)
+    {
+        var events = doc.Events;
+        var heads = doc.Events.Where(e => e.Group != null && IsSummon(e)).GroupBy(e => (e.Group, Slot(e))).Select(g => g.MinBy(e => e.Start)!);
+        foreach (var summon in heads)
+        {
+            if (summon.Place != null || types.CodeOf((ushort)summon.Values.GetValueOrDefault("Model")) is not { } code)
+                continue;
+            var state = CurrentState(doc, summon);
+            foreach (var race in genderRaces)
+            {
+                if (overrides.FirstOrDefault(m => !m.Remove && m.GenderRace == race && m.Code == code && m.State == state) is not { } moved)
+                    continue;
+                if (tables(race).Entry(code, state) is { } vanilla && !AtchTable.SameEntry(moved.Entry, vanilla))
+                {
+                    var place = new TimelinePropPlace(state, state == 2, moved.Entry.Bone == vanilla.Bone ? null : moved.Entry.Bone,
+                        moved.Entry.Offset - vanilla.Offset, moved.Entry.Rotation - vanilla.Rotation,
+                        vanilla.Scale == 0 ? 1 : moved.Entry.Scale / vanilla.Scale);
+                    events = events.Replace(summon, summon with { Place = place });
+                }
+                break;
+            }
+        }
+        return events == doc.Events ? doc : doc with { Events = events };
     }
 
     /// <summary>Each prop model <paramref name="doc"/> summons (C198 or C043) with the frame it first appears.</summary>
@@ -159,6 +213,9 @@ internal static class TimelinePropPlaces
     }
 
     private static bool IsSummon(TimelineEvent e) => e.Magic is "C198" or "C043" && e.Values.GetValueOrDefault("Model") > 0;
+
+    /// <summary>A summon's slot: a C198's SummonId; a C043 is always slot 0.</summary>
+    private static int Slot(TimelineEvent e) => e.Magic == "C198" ? (int)e.Values.GetValueOrDefault("SummonId") : 0;
 
     /// <summary>The first C014 or C174 of <paramref name="summon"/>'s group acting on its slot (2 for summon 0, 3 for summon 1).</summary>
     private static TimelineEvent? Control(TimelineDocument doc, TimelineEvent summon)
