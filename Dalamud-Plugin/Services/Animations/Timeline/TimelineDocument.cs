@@ -310,10 +310,11 @@ internal sealed record TimelinePropModel(ushort Model, ushort Body, ushort Varia
 /// <summary>
 /// A model from another mod, given a private weapon body (<paramref name="Set"/>, <paramref name="Body"/>) in the
 /// animation's mod. <paramref name="Files"/> maps each private game path to its source: "file:" and an absolute
-/// file, or "game:" and a game path.
+/// file, or "game:" and a game path. <paramref name="Textures"/> maps each texture the materials list (normalised
+/// stored path) to its private path; one without an entry in <paramref name="Files"/> was found nowhere.
 /// </summary>
 internal sealed record TimelinePropSource(string ModDirectory, string ModName, string SourceModel, ushort Set, ushort Body,
-    ImmutableDictionary<string, string> Files);
+    ImmutableDictionary<string, string> Files, ImmutableDictionary<string, string> Textures);
 
 /// <summary>
 /// Everything an Add needs. <paramref name="Path"/> is the motion name for expressions and lip

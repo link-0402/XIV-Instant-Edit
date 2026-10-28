@@ -24,6 +24,7 @@ internal static class PropModelSourcesFixture
         Part(check, "body allocation", () => Bodies(check));
         Part(check, "candidates", () => CandidateModels(check));
         Part(check, "qualification", () => Qualification(check));
+        Part(check, "texture rules", () => TextureRules(check));
         Lumina.GameData? data = null;
         try
         {
@@ -181,6 +182,117 @@ internal static class PropModelSourcesFixture
               normal.Contains("main install", StringComparison.OrdinalIgnoreCase),
             $"the Telephone's normal map comes from the main install");
         check(source.Files.Count == 2 + privateTextures.Length, $"the Telephone source holds only its model, material and textures");
+        check(source.Textures.Count == textures.Length &&
+              source.Textures.Values.Order(StringComparer.Ordinal).SequenceEqual(
+                  textures.Select(name => root + "texture/" + name).Order(StringComparer.Ordinal)) &&
+              source.Textures.TryGetValue("chara/monster/m8044/obj/body/b0001/texture/v01_m8044b0001_d.tex", out var named) &&
+              named == root + "texture/v01_m8044b0001_d.tex" &&
+              (data is null || source.Textures.Values.All(source.Files.ContainsKey)),
+            $"the Telephone names a private path for each texture its material lists: {string.Join(", ", source.Textures)}");
+    }
+
+    /// <summary>
+    /// An MTRL listing <paramref name="textures"/> (path and DX11 flag) behind the shader name, with an empty
+    /// shader section: enough for the texture table to read.
+    /// </summary>
+    private static byte[] Material(params (string Path, bool Dx11)[] textures)
+    {
+        var strings = new MemoryStream();
+        strings.Write("character.shpk\0"u8);
+        var offsets = new List<ushort>();
+        foreach (var (path, _) in textures)
+        {
+            offsets.Add((ushort)strings.Position);
+            strings.Write(System.Text.Encoding.UTF8.GetBytes(path + "\0"));
+        }
+        while (strings.Length % 4 != 0)
+            strings.WriteByte(0);
+        var table = strings.ToArray();
+        var bytes = new byte[16 + 4 * textures.Length + table.Length + 12];
+        BitConverter.TryWriteBytes(bytes.AsSpan(0, 4), 0x0103u);
+        BitConverter.TryWriteBytes(bytes.AsSpan(4, 2), (ushort)bytes.Length);
+        BitConverter.TryWriteBytes(bytes.AsSpan(8, 2), (ushort)table.Length);
+        bytes[12] = (byte)textures.Length;
+        for (var i = 0; i < textures.Length; ++i)
+        {
+            BitConverter.TryWriteBytes(bytes.AsSpan(16 + 4 * i, 2), offsets[i]);
+            BitConverter.TryWriteBytes(bytes.AsSpan(18 + 4 * i, 2), (ushort)(textures[i].Dx11 ? 0x8000 : 0));
+        }
+        table.CopyTo(bytes, 16 + 4 * textures.Length);
+        return bytes;
+    }
+
+    /// <summary>
+    /// The texture rules on the Telephone's real model with a made-up material and mod files: a texture the mod ships
+    /// only as its DX11 <c>--</c> file, two textures of one file name from different folders, and one found nowhere.
+    /// </summary>
+    private static void TextureRules(Action<bool, string> check)
+    {
+        if (!File.Exists(TelephoneModel))
+        {
+            Console.WriteLine($"[SKIP] props from mods: the Telephone model isn't at {TelephoneModel}, so the texture rules aren't run");
+            return;
+        }
+        var dir = Path.Combine(Path.GetTempPath(), "ie-prop-sources-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            string Put(string name, byte[] bytes)
+            {
+                var file = Path.Combine(dir, name);
+                File.WriteAllBytes(file, bytes);
+                return file;
+            }
+            var material = Put("mt.mtrl", Material(
+                ("chara/common/texture/dx11_only.tex", true),
+                ("chara/a/texture/same.tex", false),
+                ("chara/b/texture/same.tex", false),
+                ("chara/c/texture/nowhere.tex", false),
+                ("chara/a/texture/same.tex", false)));
+            const string model = "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl";
+            var dx11 = Put("dx11.tex", [1]);
+            var sameA = Put("same_a.tex", [2]);
+            var sameB = Put("same_b.tex", [3]);
+            var effective = new Dictionary<string, string>
+            {
+                [model] = TelephoneModel,
+                ["chara/monster/m8044/obj/body/b0001/material/v0001/mt_m8044b0001_a.mtrl"] = material,
+                ["chara/common/texture/--dx11_only.tex"] = dx11,
+                ["chara/a/texture/same.tex"] = sameA,
+                ["chara/b/texture/same.tex"] = sameB,
+            };
+            var source = PropModelSources.Resolve(dir, "Synthetic", model, 9001, 9000, effective, _ => null, _ => false);
+            const string root = "chara/weapon/w9001/obj/body/b9000/texture/";
+            var listing = $"{string.Join(", ", source.Textures)} | {Listing(source)}";
+            void Say(bool ok, string message) => check(ok, ok ? message : message + ": " + listing);
+            Say(source.Textures.TryGetValue("chara/common/texture/dx11_only.tex", out var dxPath) && dxPath == root + "dx11_only.tex" &&
+                  source.Files.TryGetValue(root + "dx11_only.tex", out var plain) && plain == "file:" + dx11 &&
+                  source.Files.TryGetValue(root + "--dx11_only.tex", out var twin) && twin == "file:" + dx11,
+                $"a texture the mod ships only as its DX11 file resolves, under both private names");
+            Say(source.Textures.TryGetValue("chara/a/texture/same.tex", out var first) && first == root + "same.tex" &&
+                  source.Textures.TryGetValue("chara/b/texture/same.tex", out var second) && second == root + "same_2.tex" &&
+                  source.Files.GetValueOrDefault(root + "same.tex") == "file:" + sameA &&
+                  source.Files.GetValueOrDefault(root + "same_2.tex") == "file:" + sameB,
+                $"two textures of one file name from different folders get their own private names, the later one _2");
+            Say(source.Textures.TryGetValue("chara/c/texture/nowhere.tex", out var missing) && missing == root + "nowhere.tex" &&
+                  !source.Files.ContainsKey(root + "nowhere.tex"),
+                $"a texture found nowhere has a private name but no file, so the copy can report it");
+            Say(source.Textures.Count == 4 && source.Files.Count == 2 + 4,
+                $"a texture listed twice is named once");
+            var owners = new Dictionary<string, string>
+            {
+                [root + "x.tex"] = "chara/a/x.tex",
+                [root + "x_2.tex"] = "chara/b/x.tex",
+            };
+            check(PropModelSources.PrivateTexturePath("chara/weapon/w9001/obj/body/b9000/", "chara/c/x.tex", owners) == root + "x_3.tex" &&
+                  PropModelSources.PrivateTexturePath("chara/weapon/w9001/obj/body/b9000/", "chara/b/x.tex", owners) == root + "x_2.tex",
+                "a third texture of one name gets _3, and a texture keeps the name it was given");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, true);
+        }
     }
 
     private static void Vibrator(Action<bool, string> check, Lumina.GameData? data)

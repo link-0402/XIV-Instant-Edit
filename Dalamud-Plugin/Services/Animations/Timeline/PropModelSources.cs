@@ -64,7 +64,10 @@ internal static partial class PropModelSources
     /// <summary>
     /// The files of the private copy of <paramref name="sourceModel"/> as weapon <paramref name="set"/> body
     /// <paramref name="body"/>: the model, each material it names (the mod's, else the game's) and each texture those
-    /// materials list (the mod's, else the game's; left out when neither has it).
+    /// materials list (the mod's, else the game's; left out of the files when neither has it).
+    /// <see cref="TimelinePropSource.Textures"/> names every listed texture's private path, found or not; a
+    /// texture whose material entry is flagged DX11 is looked up under its stored path, then its <c>--</c> path,
+    /// and its file is stored under both private names.
     /// </summary>
     internal static TimelinePropSource Resolve(string modDirectory, string modName, string sourceModel, ushort set, ushort body,
         IReadOnlyDictionary<string, string> effective, Func<string, byte[]?> game, Func<string, bool> gameExists)
@@ -73,12 +76,14 @@ internal static partial class PropModelSources
         var target = $"chara/weapon/w{set:D4}/obj/body/b{body:D4}/";
         var folder = SourceFolder(sourceModel);
         var files = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var textures = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var owners = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var model = effective.TryGetValue(sourceModel, out var modelFile) ? "file:" + modelFile : "game:" + sourceModel;
         files[$"{target}model/w{set:D4}b{body:D4}.mdl"] = model;
         var mdl = Bytes(model, game);
         if (mdl is null)
-            return new TimelinePropSource(modDirectory, modName, sourceModel, set, body, files.ToImmutable());
+            return new TimelinePropSource(modDirectory, modName, sourceModel, set, body, files.ToImmutable(), textures.ToImmutable());
 
         foreach (var name in VanillaModelReader.Read(mdl).MaterialNames
                      .Select(name => name.Replace('\\', '/').TrimStart('/').ToLowerInvariant())
@@ -92,16 +97,49 @@ internal static partial class PropModelSources
             foreach (var texture in MaterialPreviewBundleBuilder.ReadMaterialTextures(mtrl))
             {
                 var stored = Normalise(texture.StoredPath);
-                var key = $"{target}texture/{stored[(stored.LastIndexOf('/') + 1)..]}";
-                if (files.ContainsKey(key))
+                if (textures.ContainsKey(stored))
                     continue;
-                if (effective.TryGetValue(stored, out var textureFile))
-                    files[key] = "file:" + textureFile;
-                else if (gameExists(stored))
-                    files[key] = "game:" + stored;
+                var key = PrivateTexturePath(target, stored, owners);
+                owners[key] = stored;
+                textures[stored] = key;
+                var dx11 = Normalise(texture.Dx11Path);
+                var source = TextureSource([stored, dx11], effective, gameExists);
+                if (source is null)
+                    continue;
+                files[key] = source;
+                if (dx11 != stored)
+                    files[PathRules.Dx11TexturePath(key, 0x8000)] = source;
             }
         }
-        return new TimelinePropSource(modDirectory, modName, sourceModel, set, body, files.ToImmutable());
+        return new TimelinePropSource(modDirectory, modName, sourceModel, set, body, files.ToImmutable(), textures.ToImmutable());
+    }
+
+    /// <summary>
+    /// The private path of texture <paramref name="stored"/> in body folder <paramref name="target"/>:
+    /// <c>texture/&lt;file name&gt;</c>, with <c>_2</c>, <c>_3</c>, ... before the extension while another source
+    /// texture already holds the name (<paramref name="owners"/>: private path to the source it was given to).
+    /// </summary>
+    internal static string PrivateTexturePath(string target, string stored, IReadOnlyDictionary<string, string> owners)
+    {
+        var name = stored[(stored.LastIndexOf('/') + 1)..];
+        var dot = name.LastIndexOf('.');
+        var (stem, extension) = dot < 0 ? (name, "") : (name[..dot], name[dot..]);
+        var path = $"{target}texture/{name}";
+        for (var n = 2; owners.TryGetValue(path, out var owner) && owner != stored; ++n)
+            path = $"{target}texture/{stem}_{n}{extension}";
+        return path;
+    }
+
+    /// <summary>A texture from the mod under the first of <paramref name="paths"/> it has, else from the game the same way, else null.</summary>
+    private static string? TextureSource(string[] paths, IReadOnlyDictionary<string, string> effective, Func<string, bool> gameExists)
+    {
+        foreach (var path in paths)
+            if (effective.TryGetValue(path, out var file))
+                return "file:" + file;
+        foreach (var path in paths.Distinct(StringComparer.Ordinal))
+            if (gameExists(path))
+                return "game:" + path;
+        return null;
     }
 
     /// <summary>
