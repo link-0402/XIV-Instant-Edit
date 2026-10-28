@@ -855,6 +855,21 @@ Window:
   (XIV Bridge tests/instant-edit/animations/189, 2026-10-10: 38 field edits of sound, effect, face, lip and prop events
   each undo and redo in one step; in GPose the window stays drawn while the main window shows On Screen and Animations.)
 
+## Props from other mods (2026-10-28, pending)
+
+The prop picker's "From a mod" tab lists the models of the mods in your collection. The animation keeps a private copy
+of the model it takes, so the other mod can be off.
+- [ ] From a mod lists a mod's models. A model weighted to body bones shows disabled with "Bends with bones a prop
+  doesn't have".
+- [ ] Preview the Hanzo phone and the Telephone on swipe left: both draw with materials, and the log names `gdt`.
+- [ ] A mod with a colour option (Telephone, Moogle Pink) copies the textures of the option you have on.
+- [ ] The Vibrator under w0528 sits in the hand like the equipped lance.
+- [ ] Summon 1 shows a second prop alongside Summon 0.
+- [ ] The prop panel lists "Missing: <path>" for a texture the source lacks.
+- [ ] Save, turn the source mod off: the prop still draws.
+- [ ] Save in place, then Undo: the mod's meta.json is as before and the private files are gone.
+- [ ] Save into a new mod: its DefaultData maps the private files and 256 material folders.
+- [ ] A prop on a GPose actor that hides weapons: does hiding hide summons, and what shows them.
 ## Expressions (pending)
 
 Expression emotes (/smile, /taunt...) play a face on the face skeleton, timed by a TMB of

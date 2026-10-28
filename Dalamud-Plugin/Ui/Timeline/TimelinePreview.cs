@@ -344,6 +344,14 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             shown = sounds.Document;
             used.AddRange(sounds.Copies);
             added = TimelineWindowViews.AddedFiles(shown, used);
+            // Props from other mods play from their private copy; the preview's mod has no alias to follow, so each alias holds its target's bytes.
+            var props = TimelineWindowViews.PropAdded(shown, path => session.Data.GetFile(path)?.Data);
+            if (props.Error != null)
+            {
+                previewError = props.Error;
+                return;
+            }
+            added = added.SetItems(PropCopies.Flatten(new PropCopy(props.Files, props.Aliases, [])));
             // Placed props show in place: their attach overrides for the actor's race ride in the preview's mod. A prop
             // whose attach point is still unknown is left out; this preview learns it (see LearnProps below).
             var placed = document.Events.Any(e => e.Place != null) && session.Playback.ActorRace(index) is { } race
