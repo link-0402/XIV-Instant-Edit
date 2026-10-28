@@ -13,12 +13,72 @@ using InstantEdit.Ui.Timeline;
 /// </summary>
 internal static class MotionKeyMarkersFixture
 {
-    private const string B1 = "j_b1";
+    private const string B1 = "j_b1", B2 = "j_b2";
 
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         Data(check, reject);
+        Detection(check);
+        Poses(check);
     }
+
+    private static void Detection(Action<bool, string> check)
+    {
+        var clip = Clip(61, 60, Swing);
+        check(MotionKeyMarkers.Tolerance(MarkerDetail.Normal) == (0.5f, 0.001f, 0.005f) && MotionKeyMarkers.Tolerance(MarkerDetail.Fewer) == (2f, 0.005f, 0.02f) &&
+            MotionKeyMarkers.Tolerance(MarkerDetail.More) == (0.1f, 0.0002f, 0.001f), "markers: tolerances");
+        var normal = MotionKeyMarkers.Find(clip, 60, MarkerDetail.Normal);
+        check(!normal.Bones.ContainsKey("n_root") && normal.Of("n_root").IsEmpty, "markers: a still bone has none");
+        check(normal.Of(B2).SequenceEqual([0, 60]), "markers: a steady turn keeps only its ends");
+        check(Near(normal.Of(B1), 15) && Near(normal.Of(B1), 45) && normal.Of(B1)[0] == 0 && normal.Of(B1)[^1] == 60, "markers: a swing's turning points");
+        var fewer = MotionKeyMarkers.Find(clip, 60, MarkerDetail.Fewer);
+        var more = MotionKeyMarkers.Find(clip, 60, MarkerDetail.More);
+        check(fewer.Of(B1).All(normal.Of(B1).Contains) && normal.Of(B1).All(more.Of(B1).Contains) && more.Of(B1).Length > fewer.Of(B1).Length, "markers: finer keeps coarser");
+        var stretched = MotionKeyMarkers.Find(Clip(31, 60, Swing), 60, MarkerDetail.More);
+        check(stretched.Of(B1).SequenceEqual(stretched.Of(B1).Distinct().Order()) && stretched.Of(B1).All(f => f is >= 0 and <= 60), "markers: whole frames on a stretched clip");
+        var cancelled = false;
+        try { MotionKeyMarkers.Find(clip, 60, MarkerDetail.Normal, new CancellationToken(true)); } catch (OperationCanceledException) { cancelled = true; }
+        check(cancelled, "markers: a cancelled search stops");
+        check(normal.Poses.Select(p => p.Frame).First() == 0 && normal.Poses[^1].Frame == 60 && normal.Loops == clip.Loops && normal.Length == 60, "markers: the set's ends, loop and length");
+    }
+
+    private static void Poses(Action<bool, string> check)
+    {
+        var bones = new Dictionary<string, ImmutableArray<int>>
+        {
+            ["A"] = [0, 10, 30], ["B"] = [0, 10, 30], ["C"] = [0, 10, 30], ["D"] = [0, 11, 30],
+            ["E"] = [0, 20, 30], ["F"] = [0, 30], ["G"] = [0, 30], ["H"] = [0, 30],
+        };
+        var poses = MotionKeyMarkers.Poses(bones, 30);
+        check(poses.Select(p => p.Frame).SequenceEqual([0, 10, 30]) && poses[1].Bones == 4, "key poses: quarter threshold, merged within two frames");
+        check(MotionKeyMarkers.Poses(new Dictionary<string, ImmutableArray<int>>(), 30).SequenceEqual([new KeyPose(0, 0), new KeyPose(30, 0)]), "key poses: ends only for a still clip");
+    }
+
+    /// <summary>n_root stays still, b1 swings 30 degrees about Z once over 60 frames, b2 turns steadily to 90 degrees about X.</summary>
+    private static BoneTransform[] Swing(int sample, float frame) =>
+    [
+        T(Vector3.Zero),
+        T(Vector3.UnitX, Q(Vector3.UnitZ, 30 * MathF.Sin(2 * MathF.PI * frame / 60))),
+        T(Vector3.UnitY, Q(Vector3.UnitX, 90 * frame / 60)),
+    ];
+
+    private static bool Near(ImmutableArray<int> frames, int frame) => frames.Any(f => Math.Abs(f - frame) <= 1);
+
+    private static SkeletonDescription Rig() => new("marker-rig", "marker-rig-fingerprint",
+        [new("n_root", -1, 0, T(Vector3.Zero)), new(B1, 0, 0, T(Vector3.UnitX)), new(B2, 0, 0, T(Vector3.UnitY))], [], [], []);
+
+    private static MotionClip Clip(int samples, float frames, Func<int, float, BoneTransform[]> pose, bool loops = false)
+    {
+        var poses = Enumerable.Range(0, samples).Select(i => pose(i, frames * i / (samples - 1))).ToArray();
+        var made = MotionClip.FromPoses(Rig(), frames / TimelineDocument.Fps, poses);
+        var clip = new MotionClip(Rig(), made.Duration, made.Samples) { Loops = loops };
+        clip.CopyFrom(made);
+        return clip;
+    }
+
+    private static Quaternion Q(Vector3 axis, float degrees) => Quaternion.CreateFromAxisAngle(axis, degrees * MathF.PI / 180);
+
+    private static BoneTransform T(Vector3 position, Quaternion? rotation = null) => new(position, rotation ?? Quaternion.Identity, Vector3.One);
 
     private static void Data(Action<bool, string> check, Action<Action, string> reject)
     {
