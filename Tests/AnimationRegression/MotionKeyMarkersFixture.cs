@@ -20,6 +20,38 @@ internal static class MotionKeyMarkersFixture
         Data(check, reject);
         Detection(check);
         Poses(check);
+        Reach(check, reject);
+    }
+
+    private static void Reach(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var set = new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [0, 10, 20, 30, 40, 60] }, [], 60, false, MarkerDetail.Normal);
+        var before = MotionEdits.AddMotionKeys(Empty(60), out var key, out _);
+        var turn = T(Vector3.Zero, Q(Vector3.UnitZ, 20));
+        var turn2 = T(Vector3.Zero, Q(Vector3.UnitZ, 40));
+        var after = MotionEdits.SetKey(before, key, 25, B1, turn);
+        List<int> Frames(TimelineDocument doc, string bone = B1) =>
+            [.. MotionEdits.MotionKeysLayer(doc)!.Keys.Where(k => k.Bones.ContainsKey(bone)).Select(k => k.Frame)];
+        TimelineDocument WithReachOf(TimelineDocument doc, int n) => MotionEdits.SetMarkers(doc, key, new MotionMarkers(MarkerDetail.Normal, n));
+
+        check(Frames(MotionEdits.WithReach(before, after, set)).SequenceEqual([20, 25, 30]), "reach 1: zero keys at the next markers");
+        check(Frames(MotionEdits.WithReach(before, WithReachOf(after, 3), set)).SequenceEqual([0, 25, 60]), "reach 3: three markers each side, ends when short");
+        var tweak = MotionEdits.SetKey(MotionEdits.WithReach(before, after, set), key, 25, B1, turn2);
+        check(ReferenceEquals(MotionEdits.WithReach(MotionEdits.WithReach(before, after, set), tweak, set), tweak), "reach: a second write at the same key adds nothing");
+        var blocked = MotionEdits.SetKey(before, key, 28, B1, turn); // an earlier edit closer in
+        check(Frames(MotionEdits.WithReach(blocked, MotionEdits.SetKey(blocked, key, 25, B1, turn), set)).SequenceEqual([20, 25, 28]), "reach: a nearer key bounds the change");
+        check(Frames(MotionEdits.WithReach(before, MotionEdits.SetKey(before, key, 0, B1, turn), set)).SequenceEqual([0, 10]), "reach: no zero key before frame 0");
+        check(Frames(MotionEdits.WithReach(before, MotionEdits.SetKey(before, key, 60, B1, turn), set)).SequenceEqual([40, 60]), "reach: no zero key after the end");
+        var loop = new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [0, 10, 50, 60] }, [], 60, true, MarkerDetail.Normal);
+        check(Frames(MotionEdits.WithReach(before, MotionEdits.SetKey(before, key, 55, B1, turn), loop)).SequenceEqual([0, 50, 55]), "reach: wraps past the loop's end to frame 0");
+        var ends = new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [0, 60] }, [], 60, true, MarkerDetail.Normal);
+        var sparse = WithReachOf(MotionEdits.SetKey(before, key, 30, B1, turn), 3);
+        check(Frames(MotionEdits.WithReach(before, sparse, ends)).SequenceEqual([0, 30]), "reach: a loop with only its ends keys frame 0 once and never the edited frame again");
+        check(ReferenceEquals(MotionEdits.WithReach(before, after, new MotionMarkerSet(set.Bones, [], 50, false, MarkerDetail.Normal)), after), "reach: stale markers add nothing");
+        check(Frames(MotionEdits.WithReach(before, MotionEdits.SetKey(before, key, 25, "still", turn), set), "still").SequenceEqual([0, 25, 60]), "reach: a still bone fades out at the ends");
+        var plain = MotionEdits.Add(Empty(60), MotionLayerKind.Offset, 0, 60, out var plainKey, out _);
+        var plainAfter = MotionEdits.SetKey(plain, plainKey, 25, B1, turn);
+        check(ReferenceEquals(MotionEdits.WithReach(plain, plainAfter, set), plainAfter), "reach: other offset layers are untouched");
     }
 
     private static void Detection(Action<bool, string> check)

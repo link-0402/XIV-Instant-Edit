@@ -850,6 +850,52 @@ internal static class MotionEdits
         return doc with { Motion = doc.Motion.SetItem(index, layer with { Keys = keys }) };
     }
 
+    /// <summary>
+    /// Fades out a fresh edit of the Motion keys layer: for every bone newly keyed in <paramref name="after"/> compared with
+    /// <paramref name="before"/>, adds a zero (identity) offset at the bone's Reach-th marker on each side, so the edit dies away
+    /// along the motion. Frame 0 and the clip's end count as markers, so a side runs out at them; a loop wraps past its end to
+    /// frame 0. A side is skipped when the bone already has a key between the edit and that marker, the marker included.
+    /// Returns <paramref name="after"/> itself when nothing is added, there is no Motion keys layer or the markers are for another length.
+    /// </summary>
+    public static TimelineDocument WithReach(TimelineDocument before, TimelineDocument after, MotionMarkerSet markers)
+    {
+        if (MotionKeysLayer(after) is not { Markers: { } settings } layer || markers.Length != after.Length)
+            return after;
+        var earlier = Find(before, layer.Key);
+        var zero = MotionTransform.Identity.ToBone();
+        var result = after;
+        foreach (var key in layer.Keys)
+            foreach (var bone in key.Bones.Keys)
+            {
+                if (earlier != null && KeyIndex(earlier, key.Frame) is var at and >= 0 && earlier.Keys[at].Bones.ContainsKey(bone))
+                    continue;
+                var frames = layer.Keys.Where(item => item.Bones.ContainsKey(bone)).Select(item => item.Frame).ToArray();
+                foreach (var forward in new[] { false, true })
+                    if (ReachTarget(markers, bone, key.Frame, settings.Reach, forward) is { } target && !Between(frames, key.Frame, target, forward))
+                        result = SetKey(result, layer.Key, target, bone, zero);
+            }
+        return result;
+    }
+
+    /// <summary>The marker <paramref name="reach"/> steps from <paramref name="frame"/> on one side, the last one there is when it runs short, null when there is none.</summary>
+    private static int? ReachTarget(MotionMarkerSet markers, string bone, int frame, int reach, bool forward)
+    {
+        var points = markers.Of(bone).Concat([0, markers.Length]).Where(point => point != frame && !(markers.Loops && point == markers.Length)).Distinct().Order().ToList();
+        // Walking away from the frame, then on a loop around the end to the points on its other side.
+        var near = forward ? points.Where(point => point > frame).ToList() : points.Where(point => point < frame).Reverse().ToList();
+        if (markers.Loops)
+            near.AddRange(forward ? points.Where(point => point < frame) : points.Where(point => point > frame).Reverse());
+        return near.Count == 0 ? null : near[Math.Min(reach, near.Count) - 1];
+    }
+
+    /// <summary>Whether one of <paramref name="keys"/> lies past <paramref name="frame"/> up to and including <paramref name="target"/> walking one way, around the end on a loop.</summary>
+    private static bool Between(int[] keys, int frame, int target, bool forward)
+    {
+        if (forward)
+            return keys.Any(k => target > frame ? k > frame && k <= target : k > frame || k <= target);
+        return keys.Any(k => target < frame ? k >= target && k < frame : k >= target || k < frame);
+    }
+
     /// <summary>Takes <paramref name="bone"/> out of every key of the layer; keys left empty go.</summary>
     public static TimelineDocument ClearBone(TimelineDocument doc, string key, string bone)
     {
