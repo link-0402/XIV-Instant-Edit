@@ -71,12 +71,14 @@ internal static class TimelineTemplates
                     events.Add(Event("C094", request.Start, AnimationDelay, "", new() { ["StartVisibility"] = 0, ["EndVisibility"] = 0 }, group));
                     events.Add(Event("C094", animated, 7, "", new() { ["StartVisibility"] = 0, ["EndVisibility"] = 1 }, group));
                 }
-                // The fade-out ends with the prop; the hold keeps it hidden to the clip's end, at least a frame.
+                // The fade-out ends with the prop; the hold keeps it hidden to the clip's end, at least a frame. A prop
+                // that lasts to the clip's end gets none: it would start past the end (vanilla's never do).
                 var end = Math.Min(request.Start + length, TimelineDocument.MaxFrames);
                 var fading = Math.Max(request.Start, end - FadeOutFrames);
                 events.Add(Event("C094", fading, Math.Max(1, end - fading), "", new() { ["StartVisibility"] = 1, ["EndVisibility"] = 0 }, group));
-                events.Add(Event("C094", end, Math.Clamp(request.ClipLength - end, 1, TimelineDocument.MaxFrames), "",
-                    new() { ["StartVisibility"] = 0, ["EndVisibility"] = 0 }, group));
+                if (request.ClipLength <= 0 || end < request.ClipLength)
+                    events.Add(Event("C094", end, Math.Clamp(request.ClipLength - end, 1, TimelineDocument.MaxFrames), "",
+                        new() { ["StartVisibility"] = 0, ["EndVisibility"] = 0 }, group));
                 return events.ToImmutable();
             default:
                 throw new InvalidDataException($"Cannot add {request.Kind}.");

@@ -32,6 +32,34 @@ internal static partial class TmbFileFixture
         Vanilla(check, shapes);
         GroupResize(check);
         PropTemplates(check);
+        OlderFields(check, reject);
+    }
+
+    /// <summary>
+    /// Edits kept by an older build (an autosave) lack the fields this build reads (C198 slot and attach state):
+    /// they come from the loaded file's entry, or 0 for an added event, so saving never refuses them.
+    /// </summary>
+    private static void OlderFields(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var bytes = new Tmb().Head(94, null, 2).Actor(2, 3).Track(3, 19, 20).Summon(19, 0, 81, 0, 1922).U8(29, 3).Motion(20, 94).Build();
+        var loaded = TimelineConvert.Read(TmbFile.Parse(bytes));
+        var summon = loaded.Events[0];
+        var oldValues = summon.Values.Remove("SummonId").Remove("AtchState");
+        var kept = loaded with
+        {
+            Events = [summon with { Values = oldValues, Duration = 70 }, loaded.Events[1], summon with { Key = "n1", Values = oldValues, Group = null, Start = 10 }],
+            NextKey = 2,
+        };
+        reject(() => TimelineConvert.Apply(bytes, kept), "an event without this build's fields is refused as it is");
+        var filled = TimelineEdits.FillFields(kept, loaded);
+        check(filled.Events[0].Values["AtchState"] == 3 && filled.Events[0].Values["SummonId"] == 0 && filled.Events[2].Values["AtchState"] == 0 &&
+              filled.Events[0].Values["Model"] == 1922 && ReferenceEquals(TimelineEdits.FillFields(loaded, loaded), loaded),
+            "missing fields come from the loaded entry, or 0 for an added one; a document with all of them stays as it is");
+        var saved = TmbFile.Parse(TimelineConvert.Apply(bytes, filled));
+        var summons = saved.Entries.Where(e => e.Magic == "C198").ToList();
+        check(summons.Count == 2 && summons.Single(e => e.Time == 0) is { } first && first.Int32(12) == 70 && first.Byte(29) == 3 &&
+              summons.Single(e => e.Time == 10).Byte(29) == 0 && summons.All(e => e.Byte(28) == 0),
+            "an older autosave's prop saves, keeping the file's attach state");
     }
 
     /// <summary>The installed game's c0101 emote files group as the synthetic shapes do.</summary>
@@ -70,6 +98,10 @@ internal static partial class TmbFileFixture
         check(At(shortest, 19).Duration == 1 && At(shortest, 15) is { Start: 0, Duration: 1 } && At(shortest, 16) is { Start: 1, Duration: 5 } &&
               At(shortest, 17).Start == 5 && At(shortest, 14) is { Start: 5, Duration: 14 },
             "a prop shortened past its fade-out lasts a frame, its fade-out squeezed into it");
+        var squeezedSaved = TimelineConvert.Read(TmbFile.Parse(TimelineConvert.Apply(sp50, shortest)));
+        check(squeezedSaved.Events.Single(e => e.Magic == "C198") is { Duration: 1, Group: { } squeezedGroup } &&
+              squeezedSaved.Events.Count(e => e.Group == squeezedGroup) == 7,
+            "a prop squeezed to a frame saves and reads back with every part, its fade-in after its end included");
         var regrown = TimelineEdits.ResizeGroup(shortest, "t19", false, 80);
         check(At(regrown, 19).Duration == 81 && At(regrown, 15) is { Start: 80, Duration: 1 } && At(regrown, 16) is { Start: 81, Duration: 5 } &&
               At(regrown, 13) is { Start: 0, Duration: 5 },
@@ -130,8 +162,20 @@ internal static partial class TmbFileFixture
         check(prop.Any(e => Fade(e, 55, 5, 1, 0)) && prop.Any(e => Fade(e, 60, 140, 0, 0)) && prop.Select(e => e.Group).Distinct().Count() == 1,
             "an added prop fades out over its last 5 frames and stays hidden to the clip's end");
         var still = TimelineTemplates.Create(new(TimelineAddKind.Prop, 150, "", 60, Prop: new TimelinePropModel(1961, 1, 1, null), ClipLength: 200));
-        check(still.Any(e => Fade(e, 205, 5, 1, 0)) && still.Any(e => Fade(e, 210, 1, 0, 0)),
-            "a still prop fades out too, and its hold lasts a frame when the prop outlasts the clip");
+        check(still.Any(e => Fade(e, 205, 5, 1, 0)) && !still.Any(e => e.Magic == "C094" && e.Start >= 210),
+            "a still prop fades out too, and gets no hold when it lasts past the clip");
+        var toTheEnd = TimelineTemplates.Create(new(TimelineAddKind.Prop, 140, "", 60, Prop: new TimelinePropModel(1961, 1, 1, null), ClipLength: 200));
+        check(toTheEnd.Any(e => Fade(e, 195, 5, 1, 0)) && toTheEnd.Count(e => e.Magic == "C094") == 1,
+            "a prop that ends with the clip gets no hold after it");
+
+        // A prop shorter than its opening keeps its hide and fade-in, which start after its end.
+        var bare = new Tmb().Head(94, null, 2).Actor(2, 3).Track(3, 20).Motion(20, 94).Build();
+        var blink = TimelineTemplates.Create(new(TimelineAddKind.Prop, 0, "", 1, Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 94));
+        var blinkSaved = TimelineConvert.Read(TmbFile.Parse(TimelineConvert.Apply(bare,
+            TimelineEdits.Add(TimelineConvert.Read(TmbFile.Parse(bare)), blink, null, out _))));
+        check(blinkSaved.Events.Single(e => e.Magic == "C198") is { Duration: 1, Group: { } blinkGroup } &&
+              blinkSaved.Events.Count(e => e.Group == blinkGroup) == blink.Length && blink.Length == 7,
+            "a prop added with a length of 1 reads back with all of its parts");
         var summon = prop.Single(e => e.Magic == "C198");
         check(summon.Values["SummonId"] == 0 && summon.Values["AtchState"] == 0 && prop.Single(e => e.Magic == "C031").Values["TargetType"] == 2,
             "an added prop is summon 0 at its default attach state, animated on that summon");

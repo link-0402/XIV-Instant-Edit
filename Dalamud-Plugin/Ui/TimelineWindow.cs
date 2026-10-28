@@ -462,12 +462,13 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         // After an undo the layers stay as unsaved edits: one undo step away from the file.
         if (carried is { Unsaved: true } unsaved)
             editor.Commit(unsaved.Document);
-        // Kept edits come back the same way: one undo step away from the file.
+        // Kept edits come back the same way: one undo step away from the file. Fields an older build didn't
+        // keep come from the file, so the edits save.
         if (restore != null)
         {
             foreach (var import in restore.Imports)
                 session.Imports[import.GamePath] = import with { Files = import.Files.WithComparers(StringComparer.OrdinalIgnoreCase) };
-            editor.Commit(restore.Restored);
+            editor.Commit(TimelineEdits.FillFields(restore.Restored, doc));
         }
     }
 

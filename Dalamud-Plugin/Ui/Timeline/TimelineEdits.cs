@@ -103,6 +103,36 @@ internal static class TimelineEdits
         return doc with { Events = doc.Events.SetItem(index, ev with { Start = start, Duration = duration }) };
     }
 
+    /// <summary>
+    /// <paramref name="kept"/> (edits an older build kept, such as an autosave) with every field its events' kinds
+    /// now have and they lack: the value of the entry it was loaded from or copies (in <paramref name="loaded"/>,
+    /// the file read again), else 0. Saving refuses an event without all of its kind's fields. The same instance
+    /// when nothing is missing.
+    /// </summary>
+    public static TimelineDocument FillFields(TimelineDocument kept, TimelineDocument loaded)
+    {
+        var events = Events(kept);
+        var sources = Events(loaded).ToDictionary(ev => ev.Key, StringComparer.Ordinal);
+        ImmutableArray<TimelineEvent>.Builder? builder = null;
+        for (var index = 0; index < events.Length; index++)
+        {
+            var ev = events[index];
+            if (TmbEntrySchema.Find(ev.Magic) is not { } kind)
+                continue;
+            var values = ev.Values ?? ImmutableDictionary<string, double>.Empty;
+            var missing = kind.Fields.Where(field => !values.ContainsKey(field.Name)).ToList();
+            if (missing.Count == 0)
+                continue;
+            var from = (ev.Key.StartsWith('t') ? ev.Key : ev.CloneOf) is { } key && sources.TryGetValue(key, out var source) && source.Magic == ev.Magic
+                ? source.Values : null;
+            foreach (var field in missing)
+                values = values.Add(field.Name, from?.GetValueOrDefault(field.Name) ?? 0);
+            builder ??= events.ToBuilder();
+            builder[index] = ev with { Values = values };
+        }
+        return builder == null ? kept : kept with { Events = builder.ToImmutable() };
+    }
+
     /// <summary>Whether <paramref name="ev"/> is the summon of a prop group (a C198 or C043), whose length is the prop's.</summary>
     public static bool IsGroupSummon(TimelineEvent ev) => ev.Group != null && ev.Magic is "C198" or "C043";
 

@@ -41,7 +41,8 @@ internal static class TimelineConvert
     /// C043 given a weapon id, unk2 8) forms a group "p" + its id with: the sync effect (C173) at frame 0 or at the
     /// summon's start; a C031 playing on its slot (target 2 for summon 0, 3 for summon 1) 0 to 10 frames after a
     /// summon of the group starts; every summon-only fade (C094 filter on, flags 8) starting in the group's span
-    /// (first start to last end + 1 frame); a C187 starting in that span; a C014, C015, C174 or C175 acting on its
+    /// (first start to last end + 1 frame) or in that same window after a summon's start, so a prop shorter than its
+    /// opening keeps its hide and fade-in; a C187 starting in that span; a C014, C015, C174 or C175 acting on its
     /// slot starting in it. Summons on one slot with one model where the next starts as the last ends (Toast: C043
     /// 0..60, then C198 60..185) are one group, named after the first. With two props (Navigate) the earlier one
     /// takes a part both could have. Derived on every read, never saved.
@@ -70,8 +71,9 @@ internal static class TimelineConvert
             {
                 "C173" when string.Equals(entry.Text, TimelineTemplates.SyncEffect, StringComparison.OrdinalIgnoreCase) =>
                     props.FirstOrDefault(p => time == 0 || time == p.From),
-                "C031" => props.FirstOrDefault(p => entry.Int16(22) == p.Target && p.Summons.Any(s => time - s.Start is >= 0 and <= AnimationWindow)),
-                "C094" when entry.FilterFlags() == (1, 8) => props.FirstOrDefault(p => p.Spans(time)),
+                "C031" => props.FirstOrDefault(p => entry.Int16(22) == p.Target && p.Opens(time)),
+                // A prop shorter than its opening keeps its fade-in, which starts by the animation.
+                "C094" when entry.FilterFlags() == (1, 8) => props.FirstOrDefault(p => p.Spans(time) || p.Opens(time)),
                 "C187" => props.FirstOrDefault(p => p.Spans(time)),
                 "C014" or "C015" or "C174" or "C175" => props.FirstOrDefault(p => entry.Int32(24) == p.Target && p.Spans(time)),
                 _ => null,
@@ -104,6 +106,9 @@ internal static class TimelineConvert
         public int Target => 2 + Slot;
 
         public bool Spans(int time) => time >= From && time <= To;
+
+        /// <summary>Whether <paramref name="time"/> is 0 to <see cref="AnimationWindow"/> frames after one of its summons starts.</summary>
+        public bool Opens(int time) => Summons.Any(s => time - s.Start is >= 0 and <= AnimationWindow);
     }
 
     /// <summary>

@@ -161,6 +161,21 @@ internal static class TimelineEditorFixture
         check(squeezed is { Start: 0, Duration: 1 } && Event(typed, "s").Duration == 61 && Event(typed, "f") is { Start: 52, Duration: 9 } &&
               Event(typed, "h") is { Start: 61, Duration: 5 } && typed.History.UndoCount == 1,
             "typing a prop's length moves its fade-out from where the edit began, as one step");
+
+        // Ruling R16: no hold after a prop that lasts to the clip's end, so the Add isn't pulled back for it.
+        TimelineEvent[] AddProp(int start)
+        {
+            var adding = Editor(Doc(100, Ev("x", TimelineLane.Sound, 50)));
+            adding.Add(TimelineTemplates.Create(new(TimelineAddKind.Prop, start, "", 60, Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 100)), null);
+            return [.. adding.Document.Events.Where(e => e.Magic != "C063")];
+        }
+        var ending = AddProp(40);
+        check(ending.Single(e => e.Magic == "C198").Start == 40 && ending.All(e => e.Start < 100) &&
+              !ending.Any(e => e.Magic == "C094" && e.Values["StartVisibility"] == 0 && e.Values["EndVisibility"] == 0 && e.Start >= 95),
+            "a prop added to end with the clip lands where it was added, without a hold past the end");
+        var past = AddProp(50);
+        check(past.Single(e => e.Magic == "C198").Start == 44 && past.Max(e => e.Start) == 99 && past.Count(e => e.Magic == "C094") == 3,
+            "a prop added to outlast the clip has no hold; its fade-out, past the end, still pulls the Add back to start by the end");
     }
 
     /// <summary>
