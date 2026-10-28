@@ -124,7 +124,8 @@ internal static class TimelineTemplates
         return id;
     }
 
-    private static TimelineEvent Event(string magic, int start, int duration, string path, Dictionary<string, double> values, string? group = null)
+    /// <summary>A new event of <paramref name="magic"/>, keyed "" until the editor gives it a key.</summary>
+    internal static TimelineEvent Event(string magic, int start, int duration, string path, Dictionary<string, double> values, string? group = null)
     {
         var kind = TmbEntrySchema.Get(magic);
         var (lane, access, reason) = TmbEntrySchema.Classify(magic, path);

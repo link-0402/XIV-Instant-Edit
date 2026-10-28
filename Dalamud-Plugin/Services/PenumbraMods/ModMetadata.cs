@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using InstantEdit.Models;
 using static InstantEdit.Services.PenumbraMods.ModJson;
 using static InstantEdit.Services.PenumbraMods.ModPaths;
 
@@ -434,6 +435,132 @@ internal static class ModMetadata
             if (!removed) return;
             TouchV4ModMetadata(meta);
             WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        }
+    }
+
+    /// <summary>
+    /// Adds <paramref name="manipulations"/> (Penumbra JSON) to every DefaultData, group, option and container that
+    /// maps <paramref name="ownerGamePath"/>, as <see cref="AddAnimationResourceMapping"/> maps files: one there with
+    /// the same identifier (its type and every field but the entry) is replaced in its place. <paramref name="record"/>
+    /// gets the changes before meta.json is written, so a journal holds them if writing fails.
+    /// </summary>
+    internal static IReadOnlyList<AnimationManipulationChange> AddAnimationManipulations(string modRoot, string ownerGamePath,
+        IReadOnlyList<string> manipulations, Action<IReadOnlyList<AnimationManipulationChange>>? record = null)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            var owners = ManipulationContainers(meta)
+                .Where(c => c.Container["Files"] is JsonObject files && files.Any(pair => SameGamePath(pair.Key, ownerGamePath))).ToArray();
+            if (owners.Length == 0) throw new InvalidDataException($"The mod no longer maps {ownerGamePath}.");
+            var changes = new List<AnimationManipulationChange>();
+            foreach (var (locator, container) in owners)
+            {
+                if (container["Manipulations"] is not JsonArray list)
+                    container["Manipulations"] = list = new JsonArray();
+                foreach (var text in manipulations)
+                {
+                    var added = JsonNode.Parse(text) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object.");
+                    var at = IndexOfManipulation(list, added);
+                    changes.Add(new AnimationManipulationChange(locator, added.ToJsonString(), at < 0 ? null : list[at]!.ToJsonString()));
+                    if (at < 0) list.Add(added);
+                    else list[at] = added;
+                }
+            }
+            record?.Invoke(changes);
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+            return changes;
+        }
+    }
+
+    /// <summary>
+    /// Before undoing <paramref name="changes"/>: each option must still hold what the edit wrote, or what it replaced
+    /// (none when it replaced none), which is what undone looks like. Anything else is newer work.
+    /// </summary>
+    internal static void CheckAnimationManipulations(string modRoot, IReadOnlyList<AnimationManipulationChange> changes)
+    {
+        var meta = LoadV4ModMetadata(modRoot);
+        foreach (var change in changes)
+        {
+            var now = CurrentManipulation(meta, change);
+            if (now != change.Written && now != change.Replaced)
+                throw new IOException("A manipulation this edit wrote into the mod was changed since. Undo will not overwrite it.");
+        }
+    }
+
+    /// <summary>
+    /// Undo <see cref="AddAnimationManipulations"/>, last change first: where an option still holds what was
+    /// written, the one it replaced goes back in its place, or it is removed. Nothing to undo is fine.
+    /// </summary>
+    internal static void RemoveAnimationManipulations(string modRoot, IReadOnlyList<AnimationManipulationChange> changes)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            var containers = ManipulationContainers(meta).ToDictionary(c => c.Locator, c => c.Container, StringComparer.Ordinal);
+            var changed = false;
+            foreach (var change in changes.Reverse())
+            {
+                if (!containers.TryGetValue(change.Container, out var container) || container["Manipulations"] is not JsonArray list)
+                    continue;
+                var written = JsonNode.Parse(change.Written) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object.");
+                var at = IndexOfManipulation(list, written);
+                if (at < 0 || list[at]!.ToJsonString() != change.Written)
+                    continue;
+                if (change.Replaced == null) list.RemoveAt(at);
+                else list[at] = JsonNode.Parse(change.Replaced);
+                changed = true;
+            }
+            if (!changed) return;
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        }
+    }
+
+    /// <summary>What the option <paramref name="change"/> names holds at its manipulation's identifier now, compact; null for none.</summary>
+    private static string? CurrentManipulation(JsonObject meta, AnimationManipulationChange change)
+    {
+        var container = ManipulationContainers(meta).FirstOrDefault(c => c.Locator == change.Container).Container;
+        if (container?["Manipulations"] is not JsonArray list)
+            return null;
+        var at = IndexOfManipulation(list, JsonNode.Parse(change.Written) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object."));
+        return at < 0 ? null : list[at]!.ToJsonString();
+    }
+
+    /// <summary>Where <paramref name="list"/> holds a manipulation with <paramref name="manipulation"/>'s identifier: its type and every field but the entry.</summary>
+    private static int IndexOfManipulation(JsonArray list, JsonObject manipulation)
+    {
+        static string Identity(JsonNode? node) => node is JsonObject { } item && item["Manipulation"] is JsonObject fields
+            ? JsonString(item["Type"]) + "|" + string.Join("|", fields.Where(f => f.Key != "Entry").OrderBy(f => f.Key, StringComparer.Ordinal)
+                .Select(f => f.Key + "=" + f.Value?.ToJsonString()))
+            : "";
+        var identity = Identity(manipulation);
+        for (var i = 0; i < list.Count; i++)
+            if (Identity(list[i]) == identity)
+                return i;
+        return -1;
+    }
+
+    /// <summary>
+    /// The DefaultData, groups, options and containers of a mod that carry files, each with a name a journal can
+    /// find it by again: "DefaultData", or the group and its option or container by their Id, else by position.
+    /// </summary>
+    private static IEnumerable<(string Locator, JsonObject Container)> ManipulationContainers(JsonObject meta)
+    {
+        static string Name(JsonObject item, int index) => JsonString(item["Id"]) is { Length: > 0 } id ? id : "#" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (meta["DefaultData"] is JsonObject defaults) yield return ("DefaultData", defaults);
+        if (meta["Groups"] is not JsonArray groups) yield break;
+        for (var g = 0; g < groups.Count; g++)
+        {
+            if (groups[g] is not JsonObject group) continue;
+            var name = "Groups/" + Name(group, g);
+            if (group["Files"] is JsonObject) yield return (name, group);
+            foreach (var key in new[] { "Options", "Containers" })
+                if (group[key] is JsonArray entries)
+                    for (var o = 0; o < entries.Count; o++)
+                        if (entries[o] is JsonObject entry)
+                            yield return ($"{name}/{key}/{Name(entry, o)}", entry);
         }
     }
 

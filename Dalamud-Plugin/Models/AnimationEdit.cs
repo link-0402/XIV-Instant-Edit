@@ -181,8 +181,30 @@ internal sealed class AnimationEditJournal
     // Game paths this edit's timeline uses that an earlier edit added and this one found
     // already in place: undoing that earlier edit would take them away, so it waits for this one.
     public List<string> ReusedFiles { get; set; } = [];
+    // Meta manipulations the edit adds to the mod (a placed prop's attach overrides); null for none.
+    public AnimationManipulationEdit? Manipulations { get; set; }
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>
+/// The meta manipulations an edit adds (Penumbra JSON, one per entry of <see cref="Added"/>). A new mod carries them in
+/// its default data. In place they go into every option of <see cref="ModRoot"/> that maps <see cref="For"/>, the
+/// edited animation; <see cref="Changes"/> records each before the meta is written, so Undo can take them out again.
+/// </summary>
+internal sealed class AnimationManipulationEdit
+{
+    public string For { get; set; } = "";
+    public string ModDirectory { get; set; } = "";
+    public string ModRoot { get; set; } = "";
+    public List<string> Added { get; set; } = [];
+    public List<AnimationManipulationChange> Changes { get; set; } = [];
+}
+
+/// <summary>
+/// One manipulation written into one option of a mod (<paramref name="Container"/>, see ModMetadata): what was
+/// written, and the one with the same identifier it replaced there; null when it held none.
+/// </summary>
+internal sealed record AnimationManipulationChange(string Container, string Written, string? Replaced);
 internal sealed record AnimationFileChange(string GamePath, string Target, string ModDirectory, string ModRoot,
     string RelativePath, string BeforeHash, string AfterHash, string Backup, string Staged,
     // Set only when an in-place rebake landed at a fresh path instead of

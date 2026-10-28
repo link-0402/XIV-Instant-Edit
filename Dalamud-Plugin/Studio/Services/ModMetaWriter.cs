@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Studio.Models;
 
 namespace InstantEdit.Studio.Services;
@@ -16,7 +18,10 @@ public sealed class ModCarrier
     public List<ModEqpOverride>  Eqp  { get; } = new();
     public List<ModEstOverride>  Est  { get; } = new();
 
-    public bool HasManipulations => Eqdp.Count + Imc.Count + Eqp.Count + Est.Count > 0;
+    /// <summary>Where props attach for a race (Penumbra's Atch manipulation).</summary>
+    internal List<AtchManipulation> Atch { get; } = new();
+
+    public bool HasManipulations => Eqdp.Count + Imc.Count + Eqp.Count + Est.Count + Atch.Count > 0;
     public bool IsEmpty => Files.Count == 0 && !HasManipulations;
 }
 
@@ -271,12 +276,46 @@ public static class ModMetaWriter
             j.WriteEndObject();
         }
         if (contents.HasManipulations)
-            WriteManipulations(j, contents.Eqdp, contents.Imc, contents.Eqp, contents.Est);
+            WriteManipulations(j, contents.Eqdp, contents.Imc, contents.Eqp, contents.Est, contents.Atch);
+    }
+
+    /// <summary>One Atch manipulation as meta.json carries it, compact: what an animation save adds to an existing mod.</summary>
+    internal static string AtchJson(AtchManipulation manipulation)
+    {
+        using var stream = new MemoryStream();
+        using (var j = new Utf8JsonWriter(stream))
+            WriteAtch(j, manipulation);
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>As Penumbra's AtchManipulation serialises: the entry, then the identifier (gender, race, point code, state).</summary>
+    private static void WriteAtch(Utf8JsonWriter j, AtchManipulation o)
+    {
+        var (gender, race) = AnimationMetadata.GenderRaceNames(o.GenderRace);
+        j.WriteStartObject();
+        j.WriteString("Type", "Atch");
+        j.WriteStartObject("Manipulation");
+        j.WriteStartObject("Entry");
+        j.WriteString("Bone", o.Entry.Bone);
+        j.WriteNumber("Scale", o.Entry.Scale);
+        j.WriteNumber("OffsetX", o.Entry.Offset.X);
+        j.WriteNumber("OffsetY", o.Entry.Offset.Y);
+        j.WriteNumber("OffsetZ", o.Entry.Offset.Z);
+        j.WriteNumber("RotationX", o.Entry.Rotation.X);
+        j.WriteNumber("RotationY", o.Entry.Rotation.Y);
+        j.WriteNumber("RotationZ", o.Entry.Rotation.Z);
+        j.WriteEndObject();
+        j.WriteString("Gender", gender);
+        j.WriteString("Race", race);
+        j.WriteString("Type", o.Code);
+        j.WriteNumber("Index", o.State);
+        j.WriteEndObject();
+        j.WriteEndObject();
     }
 
     private static void WriteManipulations(Utf8JsonWriter j, IReadOnlyList<ModEqdpOverride> eqdpOverrides,
         IReadOnlyList<ModImcOverride> imcOverrides, IReadOnlyList<ModEqpOverride> eqpOverrides,
-        IReadOnlyList<ModEstOverride> estOverrides)
+        IReadOnlyList<ModEstOverride> estOverrides, IReadOnlyList<AtchManipulation> atchOverrides)
     {
         j.WriteStartArray("Manipulations");
 
@@ -344,6 +383,9 @@ public static class ModMetaWriter
             j.WriteEndObject();
             j.WriteEndObject();
         }
+
+        foreach (var o in atchOverrides)
+            WriteAtch(j, o);
 
         j.WriteEndArray();
     }

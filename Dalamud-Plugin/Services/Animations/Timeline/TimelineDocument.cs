@@ -36,6 +36,7 @@ internal enum TimelineAccess : byte
 /// <param name="Loop">A kept moving face that loops (see <see cref="TimelineDocument.Loops"/>): saved as copies of itself back to back.</param>
 /// <param name="Look">An effect's changed look (tint, place, colours, where it stops): saving writes it into a copy of the effect (<see cref="TimelineEffectLooks.Bake"/>); null when unchanged.</param>
 /// <param name="Pin">A sound event that always plays one alternative of its random set: that alternative's id (<see cref="TimelineSoundAlternative.Id"/>); null plays any. Saving gives it a copy of the file holding only that one.</param>
+/// <param name="Place">A prop summon's changed place (<see cref="TimelinePropPlaces"/>): saving writes it as an attach override into the mod; null when unchanged.</param>
 internal sealed record TimelineEvent(
     string Key,
     string Magic,
@@ -52,7 +53,8 @@ internal sealed record TimelineEvent(
     string? CloneOf = null,
     bool Loop = false,
     TimelineEffectEdit? Look = null,
-    string? Pin = null);
+    string? Pin = null,
+    TimelinePropPlace? Place = null);
 
 /// <summary>
 /// One timeline being edited. Immutable: every edit makes a new document, so undo keeps

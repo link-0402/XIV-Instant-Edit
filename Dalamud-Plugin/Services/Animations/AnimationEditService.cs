@@ -21,6 +21,8 @@ internal sealed partial class AnimationEditService : IDisposable
     private readonly AnimationCommitService commits;
     private readonly AnimationCatalog catalog;
     private readonly AnimationSkeletonIndex skeletons;
+    private readonly IDataManager data;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ushort, AtchTable> atchTables = new();
     private readonly IPluginLog log;
     private readonly CancellationTokenSource lifetime = new();
     private CancellationTokenSource? cancellation;
@@ -35,6 +37,8 @@ internal sealed partial class AnimationEditService : IDisposable
     public AnimationFiles Files { get; }
     /// <summary>The hand shapes the user saved from a posed hand.</summary>
     public HandShapeLibrary HandShapes { get; }
+    /// <summary>Which attach point each prop model is held with, learned from props seen held.</summary>
+    internal PropAttachTypes PropTypes { get; }
     public bool Busy => !work.IsCompleted;
     public bool CanCancel { get; private set; }
     public string Status { get; private set; } = "Select an animation and the offsets to bake.";
@@ -54,7 +58,7 @@ internal sealed partial class AnimationEditService : IDisposable
         ITargetManager targets, IDataManager data, ISigScanner scanner, PenumbraIpc penumbra, AnimationModService animationMods, ModelBackupStore backups,
         Configuration configuration, IPluginLog log)
     {
-        this.framework = framework; this.objects = objects; this.penumbra = penumbra; this.animationMods = animationMods; this.log = log;
+        this.framework = framework; this.objects = objects; this.penumbra = penumbra; this.animationMods = animationMods; this.log = log; this.data = data;
         native = new AnimationNative(scanner);
         poses = new LivePoseAdapter(pi, objects);
         catalog = new AnimationCatalog(data);
@@ -82,6 +86,7 @@ internal sealed partial class AnimationEditService : IDisposable
             new LoopFades(recoveryRoot, message => log.Warning("{Message}", message)));
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         HandShapes = new HandShapeLibrary(recoveryRoot, message => log.Warning("{Message}", message));
+        PropTypes = new PropAttachTypes(recoveryRoot, message => log.Warning("{Message}", message));
         Observer.CharacterChanged += Cancel;
     }
     public void Cancel() { if (CanCancel) cancellation?.Cancel(); }

@@ -16,11 +16,14 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     /// maps it too: the file <c>Owners</c> names for it (an edited copy's original), else the
     /// animation. A copy <c>Copies</c> lists is mapped only where its original is the file it was
     /// made from, and the copies made from the original's other files go beside it at the same game path.
+    /// <paramref name="manipulations"/> are attach overrides the edit adds (a placed prop's), for the edited animation
+    /// <c>For</c>: a new mod carries them, and in place every option mapping that animation gets them.
     /// </summary>
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
         ImmutableDictionary<string, byte[]> outputs, CancellationToken token,
         (string For, IReadOnlyDictionary<string, byte[]> Files, IReadOnlyDictionary<string, string>? Owners,
-            IReadOnlyDictionary<string, AddedCopies>? Copies)? added = null)
+            IReadOnlyDictionary<string, AddedCopies>? Copies)? added = null,
+        (string For, IReadOnlyList<Timeline.AtchManipulation> Atch)? manipulations = null)
     {
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
             PoseBefore = request.Operation == AnimationOperation.BakeOffsets ? request.Capture.Pose : null };
@@ -124,6 +127,20 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         }
         if (journal.Files.Select(f => f.Target).Distinct(StringComparer.OrdinalIgnoreCase).Count() != journal.Files.Count)
             throw new IOException("Several edited game paths share one source file. Use Create new mod to separate them.");
+        if (manipulations is { Atch.Count: > 0 } atch)
+        {
+            if (!files.ContainsKey(atch.For)) throw new InvalidDataException("Manipulations must belong to an edited animation.");
+            var edit = new AnimationManipulationEdit { For = atch.For, Added = [.. atch.Atch.Select(Studio.Services.ModMetaWriter.AtchJson)] };
+            if (request.Destination == AnimationDestination.NewMod)
+                (edit.ModDirectory, edit.ModRoot) = (journal.ModDirectory, journal.ModRoot);
+            else
+            {
+                var source = manifest.Resources.Single(r => r.GamePath == atch.For);
+                if (!AnimationResources.CanReplace(source)) throw new IOException($"{atch.For} has no verified writable Penumbra destination. Choose Create new mod.");
+                (edit.ModDirectory, edit.ModRoot) = (source.ModDirectory!, source.ModRoot!);
+            }
+            journal.Manipulations = edit;
+        }
         store.Save(journal);
         return journal;
 
@@ -269,12 +286,19 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                     if (file.AddedFor is { } owner && journal.Request.Destination == AnimationDestination.InPlace)
                         ModMetadata.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath, file.AddedForFile);
                 }
+                // Attach overrides play wherever the animation does; the journal learns what each option held first.
+                if (journal.Manipulations is { Added.Count: > 0 } atch && journal.Request.Destination == AnimationDestination.InPlace)
+                    ModMetadata.AddAnimationManipulations(atch.ModRoot, atch.For, atch.Added, changes =>
+                    {
+                        atch.Changes = [.. changes];
+                        store.Save(journal);
+                    });
                 if (journal.Request.Destination == AnimationDestination.NewMod)
                 {
                     var metadata = CreateNewModMetadata(journal.ModDirectory, journal.Files, manifest.ManipulationsJson,
                         journal.Request.Operation == AnimationOperation.EditTimeline
                             ? "Animation timeline edited by XIV Instant Edit."
-                            : "Animation offsets baked by XIV Instant Edit.", author?.Invoke());
+                            : "Animation offsets baked by XIV Instant Edit.", author?.Invoke(), journal.Manipulations?.Added);
                     AnimationJournalStore.WriteAtomic(
                         Path.Combine(journal.ModRoot, "meta.json"),
                         JsonSerializer.SerializeToUtf8Bytes(metadata));
@@ -323,13 +347,16 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
 
     internal static JsonObject CreateNewModMetadata(
         string modName, IEnumerable<AnimationFileChange> changes, string manipulationsJson,
-        string description = "Animation offsets baked by XIV Instant Edit.", string? author = null)
+        string description = "Animation offsets baked by XIV Instant Edit.", string? author = null, IEnumerable<string>? added = null)
     {
         var files = new JsonObject();
         foreach (var change in changes)
             files[change.GamePath] = change.RelativePath.Replace('\\', '/');
         var manipulations = JsonNode.Parse(manipulationsJson) as JsonArray
             ?? throw new InvalidDataException("Animation manipulations are not a JSON array.");
+        // The edit's own (a placed prop's attach overrides) follow the collection's.
+        foreach (var manipulation in added ?? [])
+            manipulations.Add(JsonNode.Parse(manipulation) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object."));
         return ModMetadata.CreateV4ModMetadata(
             modName,
             ModMetadata.AuthorOrDefault(author),
@@ -378,6 +405,13 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             foreach (var group in journal.Files.GroupBy(f => (f.ModDirectory, f.ModRoot)))
                 await animationMods.CheckAnimationModRootAsync(group.Key.ModDirectory, group.Key.ModRoot);
             // Preflight every backup and target before restoring any file. Restart can resume a partly completed undo.
+            var atch = journal.Manipulations is { Changes.Count: > 0 } written ? written : null;
+            if (atch != null)
+            {
+                if (!ModPaths.IsSafeModName(atch.ModDirectory)) throw new InvalidDataException("Invalid animation recovery target.");
+                await animationMods.CheckAnimationModRootAsync(atch.ModDirectory, atch.ModRoot);
+                ModMetadata.CheckAnimationManipulations(atch.ModRoot, atch.Changes);
+            }
             foreach (var file in journal.Files)
             {
                 if (file.AddedFor is not null)
@@ -414,6 +448,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 RequireHash(ResolveBackup(file), file.BeforeHash);
             }
             journal.State = "Undoing"; store.Save(journal);
+            if (atch != null) ModMetadata.RemoveAnimationManipulations(atch.ModRoot, atch.Changes);
             foreach (var file in journal.Files)
             {
                 if (file.AddedFor is not null)

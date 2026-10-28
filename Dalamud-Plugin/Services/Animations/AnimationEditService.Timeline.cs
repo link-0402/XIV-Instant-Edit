@@ -89,9 +89,15 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
 
 /// <summary>
 /// An edited clip, built and checked: the file it replaces (the animation, or an expression's
-/// timeline), its new bytes and the motion's fingerprint.
+/// timeline), its new bytes and the motion's fingerprint; with the attach overrides its placed props need (see
+/// <see cref="TimelinePropPlaces.Manipulations"/>) when built for a save.
 /// </summary>
-internal sealed record AnimationTimelineBuild(string GamePath, byte[] Bytes, string BindingFingerprint);
+internal sealed record AnimationTimelineBuild(string GamePath, byte[] Bytes, string BindingFingerprint)
+{
+    public ImmutableArray<AtchManipulation> Manipulations { get => manipulations; init => manipulations = value.IsDefault ? [] : value; }
+
+    private readonly ImmutableArray<AtchManipulation> manipulations = [];
+}
 
 internal sealed partial class AnimationEditService
 {
@@ -506,7 +512,7 @@ internal sealed partial class AnimationEditService
                 TimelineSoundUsage.CheckCopied(path, hash, now.Hash);
             }
             var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
-                journals.DirectoryFor(request.Id), token);
+                journals.DirectoryFor(request.Id), token, placeProps: true);
             // Warned of, not refused: the saved mod may be meant for characters with a bigger skeleton.
             var tooSmall = !source.Standalone && await framework.RunOnFrameworkThread(() =>
                 PlayProblem(capture.ActorIndex, source.Clip.Partial, built.Bytes, built.BindingFingerprint)) == SkeletonTooSmall;
@@ -521,7 +527,8 @@ internal sealed partial class AnimationEditService
             var journaled = motionBase == null ? request
                 : request with { Timeline = request.Timeline! with { MotionBaseHash = AnimationPap.Hash(motionBase) } };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
-                files.Count > 0 ? (edited, files, owners, copies) : null);
+                files.Count > 0 ? (edited, files, owners, copies) : null,
+                built.Manipulations.IsEmpty ? null : (built.GamePath, built.Manipulations));
             if (motionBase != null)
                 KeepMotionBase(journal.Id, motionBase);
             if (reused.Count > 0)
@@ -696,13 +703,20 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// Writes the edited timeline into the clip's file. A changed length resamples the motion and
     /// bone layers change it, both in a bake that needs the skeleton the clip was made for.
-    /// Everything else in the file must come out exactly as it went in.
+    /// Everything else in the file must come out exactly as it went in. Placed props pick the attach state their
+    /// place targets; with <paramref name="placeProps"/> (a save) the build also carries their attach overrides, one
+    /// per race that plays the file (see <see cref="PropRaces"/>).
     /// </summary>
     private async Task<AnimationTimelineBuild> BuildTimelineAsync(AnimationBakeRequest request, AnimationTimelineSource source,
-        byte[] pap, TimelineDocument document, IReadOnlyDictionary<string, int>? motionFrames, string workDirectory, CancellationToken token)
+        byte[] pap, TimelineDocument document, IReadOnlyDictionary<string, int>? motionFrames, string workDirectory, CancellationToken token,
+        bool placeProps = false)
     {
         if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
         var clip = source.Clip;
+        var manipulations = placeProps && document.Events.Any(e => e.Place != null)
+            ? TimelinePropPlaces.Manipulations(document, PropRaces(source.Resource.GamePath, catalog.PapTable, request.RepairModel), AtchTableOf, PropTypes)
+            : [];
+        document = TimelinePropPlaces.ApplyStates(document);
         var timeline = TimelineConvert.Apply(source.Tmb, document, motionFrames);
         if (source.Standalone)
         {
@@ -711,7 +725,7 @@ internal sealed partial class AnimationEditService
             if (document.MotionChanged) throw new InvalidOperationException("An expression's face can't take bone layers yet.");
             if (!pap.AsSpan().SequenceEqual(source.Tmb)) throw new IOException("The timeline file changed while saving. Open the timeline again.");
             _ = TmbFile.Parse(timeline);
-            return new AnimationTimelineBuild(source.Resource.GamePath, timeline, clip.BindingFingerprint);
+            return new AnimationTimelineBuild(source.Resource.GamePath, timeline, clip.BindingFingerprint) { Manipulations = manipulations };
         }
         // With a base (the file before the window saved layers into it) the motion comes from the base:
         // a bake applies the layers to it again, and with nothing to bake its own motion comes back.
@@ -740,8 +754,28 @@ internal sealed partial class AnimationEditService
         var fingerprint = baked || source.BaseMotion != null
             ? await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(result).GetValueOrDefault(clip.BindingIndex, ""))
             : source.MotionClip.BindingFingerprint;
-        return new AnimationTimelineBuild(source.Resource.GamePath, result, fingerprint);
+        return new AnimationTimelineBuild(source.Resource.GamePath, result, fingerprint) { Manipulations = manipulations };
     }
+
+    /// <summary>
+    /// The races (gender-race codes, 101 for c0101) a prop placed in the file at <paramref name="gamePath"/> is placed
+    /// for: those the PAP load table sends to it, else the path's own, and the race a rebuild makes it for
+    /// (<paramref name="rebuildModel"/>, such as "c0801").
+    /// </summary>
+    /// <exception cref="InvalidDataException">The file names no race, as an expression's own timeline doesn't.</exception>
+    internal static IReadOnlyList<ushort> PropRaces(string gamePath, PapLoadTable? table, string? rebuildModel)
+    {
+        var races = new List<ushort>(table?.PlayedBy(gamePath, Studio.Models.RaceInfo.PlayableCodes) ?? []);
+        if (races.Count == 0 && gamePath.Split('/') is ["chara", "human", ['c', .. var code], ..] && ushort.TryParse(code, out var own))
+            races.Add(own);
+        if (rebuildModel is ['c', .. var model] && ushort.TryParse(model, out var rebuilt) && !races.Contains(rebuilt))
+            races.Add(rebuilt);
+        return races.Count > 0 ? races : throw new InvalidDataException("Props can only be placed in a character's animation.");
+    }
+
+    /// <summary>The game's own attach table of a race (vanilla: a placed prop's deltas are against it), read once.</summary>
+    private AtchTable AtchTableOf(ushort race) => atchTables.GetOrAdd(race, r =>
+        AtchTable.Parse(data.GetFile(AtchTable.GamePath(r))?.Data ?? throw new InvalidDataException($"The game has no attach table for c{r:D4}.")));
 
     /// <summary>
     /// The edited file must differ from the original only in the edited timeline, and in the

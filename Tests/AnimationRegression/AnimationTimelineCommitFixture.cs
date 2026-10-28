@@ -90,6 +90,7 @@ internal static class AnimationTimelineCommitFixture
                 "an original the mod maps to one file keeps one copy, mapped wherever it is, as before");
 
             PerFileCopies(root, check, reject);
+            AttachOverrides(root, check, reject);
         }
         finally
         {
@@ -98,6 +99,71 @@ internal static class AnimationTimelineCommitFixture
     }
 
     private static byte[] Reverse(byte[] bytes) => [.. bytes.Reverse()];
+
+    /// <summary>
+    /// A placed prop's attach override goes into every option that maps the animation. An option that already
+    /// held one for the same race, point and state has it replaced, and undo puts it back.
+    /// </summary>
+    private static void AttachOverrides(string parent, Action<bool, string> check, Action<Action, string> reject)
+    {
+        var root = Path.Combine(parent, "Attach");
+        Directory.CreateDirectory(root);
+        const string pap = "chara/human/c0801/animation/a0001/bt_common/emote/toast.pap";
+        static string Atch(int index, float scale) => InstantEdit.Studio.Services.ModMetaWriter.AtchJson(
+            new InstantEdit.Services.Animations.Timeline.AtchManipulation(801, "tsl", index,
+                new InstantEdit.Services.Animations.Timeline.AtchEntry("n_buki_r", scale, System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero)));
+        var old = Atch(2, 1.5f);
+        var other = Atch(0, 2f);
+        var written = Atch(2, .85f);
+        var meta = ModMetadata.CreateV4ModMetadata("Attach", "Author", "Description", "1.0", new JsonObject
+        {
+            ["Files"] = new JsonObject(), ["FileSwaps"] = new JsonObject(), ["Manipulations"] = new JsonArray(),
+        });
+        meta["Groups"] = new JsonArray(new JsonObject
+        {
+            ["Type"] = "Single", ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "Mug",
+            ["Options"] = new JsonArray(
+                new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "A", ["Files"] = new JsonObject { [pap] = "files/a.pap" },
+                    ["Manipulations"] = new JsonArray(JsonNode.Parse(old), JsonNode.Parse(other)) },
+                new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "B", ["Files"] = new JsonObject { [pap] = "files/b.pap" } },
+                new JsonObject { ["Id"] = Guid.NewGuid().ToString("D"), ["Name"] = "C", ["Files"] = new JsonObject { ["chara/x.pap"] = "files/c.pap" } }),
+        });
+        var metaPath = Path.Combine(root, "meta.json");
+        File.WriteAllText(metaPath, meta.ToJsonString());
+        JsonNode Options() => JsonNode.Parse(File.ReadAllText(metaPath))!["Groups"]![0]!["Options"]!;
+        static string?[] Of(JsonNode option) => option["Manipulations"] is JsonArray list ? [.. list.Select(m => m?.ToJsonString())] : [];
+
+        IReadOnlyList<AnimationManipulationChange>? recorded = null;
+        var changes = ModMetadata.AddAnimationManipulations(root, pap, [written], c => recorded = c);
+        var options = Options();
+        check(Of(options[0]!).SequenceEqual([written, other]) && Of(options[1]!).SequenceEqual([written]) && Of(options[2]!).Length == 0 &&
+              JsonNode.Parse(File.ReadAllText(metaPath))!["DefaultData"]!["Manipulations"]!.AsArray().Count == 0,
+            "an attach override goes into every option that maps the animation, replacing one at the same place");
+        check(recorded == changes && changes.Count == 2 && changes.Count(c => c.Replaced == old) == 1 && changes.Count(c => c.Replaced == null) == 1 &&
+              changes.All(c => c.Written == written),
+            "the journal learns what each option held before the meta is written");
+
+        ModMetadata.CheckAnimationManipulations(root, changes);
+        ModMetadata.RemoveAnimationManipulations(root, changes);
+        options = Options();
+        check(Of(options[0]!).SequenceEqual([old, other]) && Of(options[1]!).Length == 0 && Of(options[2]!).Length == 0,
+            "undo puts the replaced override back and removes the added one");
+        var before = File.ReadAllText(metaPath);
+        ModMetadata.CheckAnimationManipulations(root, changes);
+        ModMetadata.RemoveAnimationManipulations(root, changes);
+        check(File.ReadAllText(metaPath) == before, "undoing overrides already undone changes nothing");
+
+        changes = ModMetadata.AddAnimationManipulations(root, pap, [written]);
+        var edited = JsonNode.Parse(File.ReadAllText(metaPath))!.AsObject();
+        edited["Groups"]![0]!["Options"]![1]!["Manipulations"] = new JsonArray(JsonNode.Parse(Atch(2, 3f)));
+        File.WriteAllText(metaPath, edited.ToJsonString());
+        reject(() => ModMetadata.CheckAnimationManipulations(root, changes), "undo refuses an override changed after the save");
+        reject(() => ModMetadata.AddAnimationManipulations(root, "chara/missing.pap", [written]), "an override can't be added for an animation the mod no longer maps");
+
+        var created = AnimationCommitService.CreateNewModMetadata("New", [], "[" + other + "]", added: [written]);
+        check(created["DefaultData"]!["Manipulations"]!.AsArray().Select(m => m!.ToJsonString()).SequenceEqual([other, written]),
+            "a new mod carries the override beside the collection's manipulations");
+    }
 
     /// <summary>
     /// An effect the mod maps to a different file in each option ("Gold", "Silver"): each option gets a copy
