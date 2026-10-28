@@ -1750,15 +1750,28 @@ doesn't wrap doesn't snap at the seam. Add > Close loop, only on a clip the game
 last frames change), Centered (the last and first frames) or After (the first frames). Spec:
 docs/superpowers/specs/2026-10-27-close-loop-fix-design.md.
 
-- [ ] 1 Open a dance loop and add an Offset layer that starts mid-clip and runs to the end, so the loop snaps at
+- [x] 1 Open a dance loop and add an Offset layer that starts mid-clip and runs to the end, so the loop snaps at
   the seam. Add > Close loop: Live and the played loop are smooth, and stay smooth after a save to a new mod.
   Fix loop on the seam panel does the same when the layers make it jump.
-- [ ] 2 Switch Place between Before, Centered and After: Before changes only the frames before the seam, After
+  Partly checked (XIV Bridge 360, 2026-10-28, Idle pose 3 with a 25 deg right upper arm offset from mid-clip): Add >
+  Close loop closes the seam (worst 25 to 0.04 deg; in Live the arm's largest step 25.0 to 2.5 deg, the saved file
+  played from a new mod 2.5 deg). **Fix loop doesn't offer it**: the badge and the seam panel say Clean, since
+  LoopSeam pops only on a mean gap of 1 deg (PopDegrees) over all tracks, and one bone's 25 deg is a 0.26 deg mean.
+  Decide whether the worst bone should count.
+  Changed 2026-10-28 (the user chose it): one bone 10 deg off or more pops too (LoopSeam.WorstPopDegrees). The game's own
+  loops stay under it (XIV Bridge survey, 31 loops: worst 6.65 deg, Eastern Dance's skirt; most under 3).
+  (XIV Bridge 360, 2026-10-28, 57 fps: the panel says Pops, Fix loop adds a selected Close loop in one undo step and the
+  seam is Clean; in Live the arm's largest step 25.0 to 3.1 deg, played from a new mod 2.7. At 11 fps the blend's steps
+  read 11 deg, so the test now compares against the snap, not the plain clip.)
+- [x] 2 Switch Place between Before, Centered and After: Before changes only the frames before the seam, After
   only the frames after it, Centered both, as the bar shows (Centered also draws a thin piece at frame 0). Drag the
   bar's inner edge, or set Blend over: the blend gets longer or shorter. Centered's inner edge follows the pointer
   and snaps. The edge on the clip's end shows a resize cursor but doesn't move.
-- [ ] 3 Pin both feet near the seam (Pin feet) and set Blend over to 8: the planted feet don't slide visibly at the
+  (XIV Bridge 361, 2026-10-28: Before 63-70, Centered 0-3 and 67-70, After 0-7; Blend over 16 and the edge drags set
+  the length. The cursor and the snap: by hand.)
+- [x] 3 Pin both feet near the seam (Pin feet) and set Blend over to 8: the planted feet don't slide visibly at the
   seam. The layer panel's hint warns that it may move pinned bones.
+  (XIV Bridge 362, 2026-10-28: the feet travel 0.0 mm more over the seam; in Live at most 2.6 mm between frames.)
 
 ## Animations from scratch (pending)
 

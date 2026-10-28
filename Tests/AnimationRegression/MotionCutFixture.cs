@@ -22,6 +22,9 @@ internal static class MotionCutFixture
         check(clean is { State: SeamState.Clean, StallFrom: null } && clean.Gap.MeanAngle < .01f, "a loop that meets itself is clean");
         var pops = LoopSeam.Analyze(Spin(101, f => 3f * f), 0, 100);       // ends at 300
         check(pops.State == SeamState.Pops && Math.Abs(pops.Gap.MeanAngle - 30) < .5f, "a pose gap pops");   // mean over 2 bones: 60 and 0
+        // One arm a layer turns 25 degrees among a hundred tracks: a 0.26 degree mean.
+        check(LoopSeam.Pops(new JoinGap(.26f, 25, "j_ude_a_r", 1, 1)) && !LoopSeam.Pops(new JoinGap(.5f, 5, "j_ude_a_r", 1, 1)),
+            "one bone's big gap pops though the mean is low; small gaps don't");
         // A swing that, from its turn at frame 88, eases into frame 0's pose and slows to a stop there, then
         // leaves at full speed: the stop is the motion arriving, so there is nothing to trim (the TikTok dance).
         var stall = LoopSeam.Analyze(EaseIntoStart(101), 0, 100);

@@ -367,7 +367,7 @@ internal static class CutEdits
         if (report.StallFrom is { } stall && cuts.Parts[^1] is var last && stall > last.From && stall < last.To)
             next = Remove(doc, cuts, cuts.Kept - (last.To - stall), cuts.Kept, out removed);
         // One or the other: the blend matches the speeds already, and an ease beside it changes what it aims at.
-        if (report.Gap.MeanAngle >= LoopSeam.PopDegrees)
+        if (LoopSeam.Pops(report.Gap))
             next = SetEase(SetSeam(next, MotionJoin.ForSeam), 0);
         else if (report.State == SeamState.Stalls)
             next = SetEase(SetSeam(next, null), MotionCuts.DefaultEase, atEnd: report.Gap.SpeedIn > report.Gap.SpeedOut);

@@ -40,6 +40,12 @@ internal static class LoopSeam
     /// <summary>A mean pose gap of this many degrees or more pops.</summary>
     public const float PopDegrees = 1f;
 
+    /// <summary>One bone's gap of this many degrees or more pops too, though the mean over every track stays low: one arm a layer turns.</summary>
+    public const float WorstPopDegrees = 10f;
+
+    /// <summary>Whether a pose gap pops: its mean or its worst bone is at the line or over it.</summary>
+    public static bool Pops(JoinGap gap) => gap.MeanAngle >= PopDegrees || gap.WorstAngle >= WorstPopDegrees;
+
     /// <summary>
     /// A loop whose typical speed is under this many degrees per frame barely moves, as idles and poses
     /// do: its seam can pop but never stalls, since a change of speed that small doesn't show.
@@ -100,7 +106,7 @@ internal static class LoopSeam
         var moves = typical >= MinSpeed;
         int? stall = moves && f <= to - HoldFrames ? f : null;
         var state = stall != null || moves && Math.Abs(gap.SpeedOut - gap.SpeedIn) > JumpShare * typical ? SeamState.Stalls
-            : gap.MeanAngle >= PopDegrees ? SeamState.Pops : SeamState.Clean;
+            : Pops(gap) ? SeamState.Pops : SeamState.Clean;
         return new SeamReport(gap, typical, stall, state);
     }
 
