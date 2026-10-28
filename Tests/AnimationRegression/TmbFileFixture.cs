@@ -31,6 +31,7 @@ internal static partial class TmbFileFixture
         EffectCopies(check, reject);
         EffectLooks(check, reject);
         Expressions(check, reject);
+        Props(check, reject);
     }
 
     /// <summary>
@@ -874,34 +875,36 @@ internal static partial class TmbFileFixture
 
         var prop = TimelineTemplates.Create(new(TimelineAddKind.Prop, 10, "", 60, Prop: new TimelinePropModel(1926, 1, 1, 274)));
         var still = TimelineTemplates.Create(new(TimelineAddKind.Prop, 10, "", 0, Prop: new TimelinePropModel(1926, 1, 1, null)));
-        check(prop.Select(x => x.Magic).SequenceEqual(["C173", "C198", "C031", "C094", "C094"]) &&
+        check(prop.Select(x => x.Magic).SequenceEqual(["C173", "C198", "C031", "C094", "C094", "C094", "C094"]) &&
               prop.Select(x => x.Group).Distinct().Single() is { } group && still.Select(x => x.Group).Distinct().Single() != group &&
-              prop[2].Start == 15 && prop[1].Duration == 60 && still.Select(x => x.Magic).SequenceEqual(["C173", "C198"]),
-            "a prop is the sync effect and model, plus an animation behind a hide and fade-in, sharing one group");
+              prop[2].Start == 15 && prop[1].Duration == 60 && still.Select(x => x.Magic).SequenceEqual(["C173", "C198", "C094", "C094"]),
+            "a prop is the sync effect and model, plus an animation behind a hide and fade-in, and a fade-out, sharing one group");
 
         var bare = Sample(null);
         var doc = TimelineConvert.Read(TmbFile.Parse(bare));
         IEnumerable<TimelineEvent> keyed = [.. prop, face, lip];
         var output = TmbFile.Parse(TimelineConvert.Apply(bare, doc with
         {
-            FacePack = "smile", Events = doc.Events.AddRange(keyed.Select((x, i) => x with { Key = "n" + (i + 1) })), NextKey = 8,
+            FacePack = "smile", Events = doc.Events.AddRange(keyed.Select((x, i) => x with { Key = "n" + (i + 1) })), NextKey = 10,
         }));
         var added = output.Entries.Skip(6).SkipLast(1).ToList();
-        check(output.FacePack == "smile" && output.Entries[^1].Magic == "TMFC" && output.Tracks.Length == 13 &&
+        check(output.FacePack == "smile" && output.Entries[^1].Magic == "TMFC" && output.Tracks.Length == 15 &&
               output.Entries.Single(x => x.Magic == "C117").Int32(TmbFile.CurveIdOffset) == output.Entries[^1].Id &&
-              added.Select(x => x.Magic).SequenceEqual(["C173", "C198", "C031", "C094", "C094", "C010", "C010"]) &&
+              added.Select(x => x.Magic).SequenceEqual(["C173", "C198", "C031", "C094", "C094", "C094", "C094", "C010", "C010"]) &&
               added[0] is { Text: TimelineTemplates.SyncEffect, Time: 10 } && added[0].Int32(12) == 1 && added[0].Int16(26) == -1 &&
               added[0].Int32(28) == 1 && added[0].Int32(32) == 1 &&
               added[1].Int16(32) == 1926 && added[1].Int16(34) == 1 && added[1].Int32(36) == 1 && added[1].Int32(12) == 60 &&
               added[2] is { Time: 15 } && added[2].UInt16(20) == 274 && added[2].Int16(22) == 2 &&
               added[3].Block(28)!.SequenceEqual(SummonFilter) && added[3].Int32(12) == 5 && added[3].Single(24) == 0 &&
               added[4] is { Time: 15 } && added[4].Int32(12) == 7 && added[4].Single(24) == 1 &&
-              added[5] is { Text: "cfxf_smile", Time: 12 } && added[5].Int32(20) == 1 && added[5].Single(28) == 1 && added[5].Int32(12) == 30 &&
-              added[6] is { Text: "cfxl_lip_nor1" } && added[6].Int32(20) == 0 && added[6].Single(28) == 40,
+              added[5] is { Time: 65 } && added[5].Int32(12) == 5 && added[5].Single(20) == 1 && added[5].Single(24) == 0 &&
+              added[6] is { Time: 70 } && added[6].Int32(12) == 1 && added[6].Single(24) == 0 && added[6].Block(28)!.SequenceEqual(SummonFilter) &&
+              added[7] is { Text: "cfxf_smile", Time: 12 } && added[7].Int32(20) == 1 && added[7].Single(28) == 1 && added[7].Int32(12) == 30 &&
+              added[8] is { Text: "cfxl_lip_nor1" } && added[8].Int32(20) == 0 && added[8].Single(28) == 40,
             "added props, faces and lip sync are written with their template bytes and the new face pack");
         var lanes = TimelineConvert.Read(output).Events.Skip(6).Select(x => x.Lane);
         check(lanes.SequenceEqual([TimelineLane.Effect, TimelineLane.Prop, TimelineLane.Prop, TimelineLane.Prop, TimelineLane.Prop,
-                  TimelineLane.Expression, TimelineLane.LipSync]),
+                  TimelineLane.Prop, TimelineLane.Prop, TimelineLane.Expression, TimelineLane.LipSync]),
             "added entries read back on their lanes");
 
         // Given time control, an added lip plays its whole motion over its length, as a loaded one does (test 172).
@@ -1099,6 +1102,28 @@ internal static partial class TmbFileFixture
         /// <summary>One curve group of two rows at frames 0 and 8 (rows: u32, time, velocity, distance, two more floats).</summary>
         public Tmb Curve(short id) => Item("TMFC", 0x20, id).I32(16, 1)
             .Point(new(12, 0, [.. Ints(1, 0, 0, 2), .. Ints(1), .. Floats(0, 0.125f, 0, 0, 0), .. Ints(1), .. Floats(8, 0, 1, 0, 0)], -1, true));
+        /// <summary>The sync effect every animated emote prop plays, as vanilla writes it: loop 1, bind -1, visibility 1, limit 1.</summary>
+        public Tmb Sync(short id, int time = 0) =>
+            Item("C173", 0x44, id, time).I32(12, 1).Text(20, TimelineTemplates.SyncEffect).I16(26, -1).I32(28, 1).I32(32, 1);
+        /// <summary>A summoned model (C198) on summon slot 0 or 1.</summary>
+        public Tmb Summon(short id, int time, int duration, int slot, int model) =>
+            Item("C198", 0x28, id, time).I32(12, duration).U8(28, slot).I16(32, model).I16(34, 1).I32(36, 1);
+        /// <summary>A summoned weapon (C043) given by its id, which vanilla marks with unk2 8.</summary>
+        public Tmb Weapon(short id, int time, int duration, int weapon) =>
+            Item("C043", 0x20, id, time).I32(12, duration).I32(20, 8).I16(24, weapon).I16(26, 1).I32(28, 1);
+        /// <summary>A summon animation (C031): a weapon timeline row played on a target (2 summon 0, 3 summon 1).</summary>
+        public Tmb Animation(short id, int time, int timeline, int target) => Item("C031", 0x18, id, time).I32(12, 1).I16(20, timeline).I16(22, target);
+        /// <summary>A fade (C094) with a filter block on for <paramref name="flags"/> (8 the summon only, 15 everything); -1 for no block.</summary>
+        public Tmb Fade(short id, int time, int frames, float from, float to, int flags = 8)
+        {
+            Item("C094", 0x20, id, time).I32(12, frames).F32(20, from).F32(24, to);
+            return flags < 0 ? this : Extra(28, [.. Ints(1, flags), .. new byte[12]]);
+        }
+        /// <summary>A removed part (C187).</summary>
+        public Tmb Part(short id, int time, int duration, int part) => Item("C187", 0x20, id, time).I32(12, duration).I32(20, part);
+        /// <summary>A C014, C015, C174 or C175: +12 1, a state at +20 and the object it acts on at +24.</summary>
+        public Tmb Control(string magic, short id, int time, int state, int target) =>
+            Item(magic, TmbEntrySchema.Get(magic).Size, id, time).I32(12, 1).I32(20, state).I32(24, target);
 
         public Tmb Item(string magic, int size, int id = -1, int time = 0)
         {

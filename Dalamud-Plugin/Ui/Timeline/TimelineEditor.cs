@@ -445,8 +445,10 @@ internal sealed class TimelineEditor
                         SelectOnly(key);
                     Primary = key;
                     var left = hit.Part == TimelinePart.LeftEdge;
+                    // A prop's summon takes its parts along (TimelineEdits.ResizeGroup), so none of them is a snap target.
+                    var resizing = TimelineEdits.IsGroupSummon(ev) ? GroupOf(doc, key) : new HashSet<string> { key };
                     BeginEdit(left ? TimelineGesture.ResizeLeft : TimelineGesture.ResizeRight, [key],
-                        [left ? ev.Start : TimelineEdits.End(ev)], TimelineSnap.Targets(doc, playhead, new HashSet<string> { key }));
+                        [left ? ev.Start : TimelineEdits.End(ev)], TimelineSnap.Targets(doc, playhead, resizing));
                     break;
                 }
                 if (ctrl)
@@ -724,7 +726,7 @@ internal sealed class TimelineEditor
                 break;
             case TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight:
                 var left = gesture == TimelineGesture.ResizeLeft;
-                next = TimelineEdits.Resize(start, gestureKeys[0], left, delta);
+                next = TimelineEdits.ResizeGroup(start, gestureKeys[0], left, delta);
                 var resized = TimelineEdits.Find(next, gestureKeys[0]);
                 landed = resized == null ? -1 : left ? resized.Start : TimelineEdits.End(resized);
                 break;
@@ -1287,6 +1289,8 @@ internal sealed class TimelineEditor
     /// <summary>
     /// A properties-panel change to the event with <paramref name="ev"/>'s key, as far as its access
     /// allows (see <see cref="TimelineEdits.Replace"/>): live during a field edit, else one undo step.
+    /// A prop summon's new length takes its parts along (<see cref="TimelineEdits.ResizeGroup"/>), from
+    /// where they were when the field edit began, so typing through a short length squeezes nothing.
     /// False when nothing changed or a drag is running.
     /// </summary>
     public bool Replace(TimelineEvent ev)
@@ -1294,6 +1298,11 @@ internal sealed class TimelineEditor
         if (gesture != TimelineGesture.None)
             return false;
         var next = TimelineEdits.Replace(Document, ev, motionFrames);
+        if (TimelineEdits.Find(Document, ev.Key) is { } old && TimelineEdits.IsGroupSummon(old) && TimelineEdits.CanResize(old) &&
+            ev.Duration != old.Duration && (History.InGesture ? History.GestureStart : Document) is { } from &&
+            TimelineEdits.Find(from, ev.Key) is { } began && began.Group == old.Group)
+            next = TimelineEdits.ResizeGroup(TimelineEdits.Replace(from, ev with { Duration = began.Duration }, motionFrames), ev.Key, false,
+                Math.Max(1, ev.Duration) - began.Duration);
         if (ReferenceEquals(next, Document))
             return false;
         next = TimelineEdits.ReleasePack(Document, next, ResidentMotions);

@@ -13,17 +13,23 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// A prop follows the emote_sp pattern (sp54, sp50): the sync effect every animated emote prop
 /// uses (C173), the model (C198, summon slot 0), and with a weapon timeline the animation
 /// (C031 on the summon, 5 frames after the spawn) behind a hide-then-fade on the summon
-/// (C094 0 to 0 for 5 frames, then 0 to 1 over 7), so its first pose never shows.
+/// (C094 0 to 0 for 5 frames, then 0 to 1 over 7), so its first pose never shows. It ends as vanilla's do
+/// (sp50, sp54): a fade-out over its last 5 frames, then hidden to the clip's end (C094 1 to 0, then 0 to 0).
 /// </para>
 /// </summary>
 internal static class TimelineTemplates
 {
     public const string SyncEffect = "vfx/common/eff/syncactiontimelineclip01t.avfx";
     public const int AnimationDelay = 5;
+    public const int FadeOutFrames = 5;
     private static readonly byte[] SummonFilter = [1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
-    /// <summary>The kinds an added ("n") event may have.</summary>
-    public static bool CanCreate(string magic) => magic is "C009" or "C010" or "C012" or "C063" or "C031" or "C094" or "C173" or "C198";
+    /// <summary>
+    /// The kinds an added ("n") event may have. A C014 (weapon position) is never offered by Add; prop placement
+    /// adds one to pick a summoned weapon's attach state.
+    /// </summary>
+    public static bool CanCreate(string magic) =>
+        magic is "C009" or "C010" or "C012" or "C063" or "C031" or "C094" or "C173" or "C198" or "C014";
 
     /// <summary>The events one Add makes, keyed "" until the editor gives them keys; a prop's share a Group.</summary>
     public static ImmutableArray<TimelineEvent> Create(TimelineAddRequest request)
@@ -55,15 +61,22 @@ internal static class TimelineTemplates
                 var group = "prop-" + Guid.NewGuid().ToString("N")[..12];
                 var events = ImmutableArray.CreateBuilder<TimelineEvent>();
                 events.Add(Event("C173", request.Start, 0, SyncEffect, new() { [TimelineEffectCheck.LoopField] = 1 }, group));
-                events.Add(Event("C198", request.Start, Length(60), "",
-                    new() { ["Model"] = prop.Model, ["Body"] = prop.Body, ["Variant"] = prop.Variant }, group));
+                var length = Length(60);
+                events.Add(Event("C198", request.Start, length, "",
+                    new() { ["Model"] = prop.Model, ["Body"] = prop.Body, ["Variant"] = prop.Variant, ["SummonId"] = 0, ["AtchState"] = 0 }, group));
                 if (prop.WeaponTimeline is { } timeline)
                 {
                     var animated = Math.Min(request.Start + AnimationDelay, TimelineDocument.MaxFrames);
-                    events.Add(Event("C031", animated, 1, "", new() { ["WeaponTimeline"] = timeline }, group));
+                    events.Add(Event("C031", animated, 1, "", new() { ["WeaponTimeline"] = timeline, ["TargetType"] = 2 }, group));
                     events.Add(Event("C094", request.Start, AnimationDelay, "", new() { ["StartVisibility"] = 0, ["EndVisibility"] = 0 }, group));
                     events.Add(Event("C094", animated, 7, "", new() { ["StartVisibility"] = 0, ["EndVisibility"] = 1 }, group));
                 }
+                // The fade-out ends with the prop; the hold keeps it hidden to the clip's end, at least a frame.
+                var end = Math.Min(request.Start + length, TimelineDocument.MaxFrames);
+                var fading = Math.Max(request.Start, end - FadeOutFrames);
+                events.Add(Event("C094", fading, Math.Max(1, end - fading), "", new() { ["StartVisibility"] = 1, ["EndVisibility"] = 0 }, group));
+                events.Add(Event("C094", end, Math.Clamp(request.ClipLength - end, 1, TimelineDocument.MaxFrames), "",
+                    new() { ["StartVisibility"] = 0, ["EndVisibility"] = 0 }, group));
                 return events.ToImmutable();
             default:
                 throw new InvalidDataException($"Cannot add {request.Kind}.");
@@ -72,7 +85,8 @@ internal static class TimelineTemplates
 
     /// <summary>
     /// Adds an entry for an added event with the bytes its fields do not cover: C010's
-    /// animation range, C031's summon target, C094's summon filter, C173's sync settings.
+    /// animation range, C031's summon target, C094's summon filter, C173's sync settings; a C014
+    /// gets its on flag, attach state and object from its values.
     /// The caller then writes the event's start, duration, path and values over it.
     /// </summary>
     internal static short AddTo(TmbFile file, TimelineEvent e)
@@ -96,6 +110,11 @@ internal static class TimelineTemplates
                 BinaryPrimitives.WriteInt16LittleEndian(span[26..], -1);
                 BinaryPrimitives.WriteInt32LittleEndian(span[28..], 1);
                 BinaryPrimitives.WriteInt32LittleEndian(span[32..], 1);
+                break;
+            case "C014":
+                BinaryPrimitives.WriteInt32LittleEndian(span[12..], (int)e.Values.GetValueOrDefault("Enabled", 1));
+                BinaryPrimitives.WriteInt32LittleEndian(span[20..], (int)e.Values.GetValueOrDefault("ObjectPosition"));
+                BinaryPrimitives.WriteInt32LittleEndian(span[24..], (int)e.Values.GetValueOrDefault("ObjectControl", 2));
                 break;
         }
         var id = file.AddEntry(e.Magic, bytes);

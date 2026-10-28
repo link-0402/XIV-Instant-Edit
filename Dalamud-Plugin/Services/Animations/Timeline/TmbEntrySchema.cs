@@ -45,6 +45,20 @@ internal static class TmbEntrySchema
     private static readonly (string Label, double Value)[] BindOrigins = [("Off", -1), ("Default", 0), ("Caster", 1), ("Target", 2)];
     private static readonly (string Label, double Value)[] BindTypes = [("Off", -1), ("Character", 0), ("Weapon", 1), ("Off hand", 2), ("Summon", 3)];
 
+    /// <summary>A summon slot (C198 SummonId): two props at most.</summary>
+    private static readonly (string Label, double Value)[] Slots = [("Prop 1", 0), ("Prop 2", 1)];
+
+    /// <summary>What a C031 animates and a C014/C015/C174/C175 controls (VFXEditor's ObjectControl): 2 and 3 are the summon slots.</summary>
+    private static readonly (string Label, double Value)[] Targets = [("Weapon", 0), ("Off hand", 1), ("Prop 1", 2), ("Prop 2", 3)];
+
+    /// <summary>A C014/C174 ObjectPosition: the attach state, Stowed (state 1) before Drawn (state 0) as the game numbers them.</summary>
+    private static readonly (string Label, double Value)[] Positions =
+        [("Stowed", 0), ("Drawn", 1), ("In use", 2), ("Switch hand", 3), ("Throw", 4), ("Switch reverse", 5)];
+
+    /// <summary>A C198 AtchState: Default, or attach state 0 to 5 as 1 to 6.</summary>
+    private static readonly (string Label, double Value)[] AttachStates =
+        [("Default", 0), ("Drawn", 1), ("Stowed", 2), ("In use", 3), ("Switch hand", 4), ("Throw", 5), ("Switch reverse", 6)];
+
     public static IReadOnlyDictionary<string, TmbEntryKind> Kinds { get; } = Build();
 
     public static TmbEntryKind? Find(string magic) => Kinds.GetValueOrDefault(magic);
@@ -177,6 +191,8 @@ internal static class TmbEntrySchema
                 Number("Model", "Model", 32, TmbStorage.Int16, 0, short.MaxValue),
                 Number("Body", "Body", 34, TmbStorage.Int16, 0, short.MaxValue),
                 Number("Variant", "Variant", 36, TmbStorage.Int32, 0, ushort.MaxValue),
+                Choice("SummonId", "Slot", 28, TmbStorage.Byte, Slots),
+                Choice("AtchState", "Attach", 29, TmbStorage.Byte, AttachStates),
             ],
             ["C043"] =
             [
@@ -184,7 +200,22 @@ internal static class TmbEntrySchema
                 Number("Body", "Body", 26, TmbStorage.Int16, 0, short.MaxValue),
                 Number("Variant", "Variant", 28, TmbStorage.Int32, 0, ushort.MaxValue),
             ],
-            ["C031"] = [Number("WeaponTimeline", "Weapon timeline", 20, TmbStorage.UInt16, 0, ushort.MaxValue)],
+            ["C031"] =
+            [
+                Number("WeaponTimeline", "Weapon timeline", 20, TmbStorage.UInt16, 0, ushort.MaxValue),
+                Choice("TargetType", "Plays on", 22, TmbStorage.Int16, Targets),
+            ],
+            // The prop controls are Movable: their fields read, and are written only on an added C014.
+            ["C014"] =
+            [
+                new(new TimelineField("Enabled", "On", TimelineFieldKind.Bool, 0, 1), 12, TmbStorage.Int32),
+                Choice("ObjectPosition", "Attach", 20, TmbStorage.Int32, Positions),
+                Choice("ObjectControl", "Moves", 24, TmbStorage.Int32, Targets),
+            ],
+            ["C015"] = [Number("ObjectScale", "Size state", 20, TmbStorage.Int32, 0, 6), Choice("ObjectControl", "Sizes", 24, TmbStorage.Int32, Targets)],
+            ["C174"] = [Choice("ObjectPosition", "Attach", 20, TmbStorage.Int32, Positions), Choice("ObjectControl", "Moves", 24, TmbStorage.Int32, Targets)],
+            ["C175"] = [Number("ObjectScale", "Size state", 20, TmbStorage.Int32, 0, 6), Choice("ObjectControl", "Sizes", 24, TmbStorage.Int32, Targets)],
+            ["C187"] = [Number("Part", "Part", 20, TmbStorage.Int32, 0, short.MaxValue)],
             ["C094"] =
             [
                 new(new TimelineField("StartVisibility", "Start visibility", TimelineFieldKind.Float, 0, 1), 20, TmbStorage.Single),

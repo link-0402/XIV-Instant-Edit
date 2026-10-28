@@ -118,6 +118,49 @@ internal static class TimelineEditorFixture
         Keys(check);
         Panel(check);
         Holding(check);
+        PropGroups(check);
+    }
+
+    /// <summary>
+    /// A prop's length drags and types as one: the fade-out follows the summon's end and the hold after it, the left
+    /// edge moves every part, and typing a length works from the length the field edit began with.
+    /// </summary>
+    private static void PropGroups(Action<bool, string> check)
+    {
+        static ImmutableDictionary<string, double> Fade(double from, double to) =>
+            NoValues.Add("StartVisibility", from).Add("EndVisibility", to);
+        var doc = Doc(100,
+            Ev("s", TimelineLane.Prop, 0, 81, true, group: "p1", magic: "C198"),
+            Ev("f", TimelineLane.Prop, 72, 9, true, group: "p1", magic: "C094") with { Values = Fade(1, 0) },
+            Ev("h", TimelineLane.Prop, 81, 5, true, group: "p1", magic: "C094") with { Values = Fade(0, 0) },
+            Ev("x", TimelineLane.Sound, 50));
+        var editor = Editor(doc);
+        var row = editor.Layout.RowOf(editor.Layout.IndexOf("s"));
+        var edge = Hit(editor, At(81, row, -1));
+        editor.Press(edge);
+        check(edge is { Part: TimelinePart.RightEdge, Key: "s" } && editor.Gesture == TimelineGesture.ResizeRight, "a prop's summon has a right edge to drag");
+        editor.Drag(edge.Frame + 10);
+        editor.Release();
+        check(Event(editor, "s").Duration == 91 && Event(editor, "f") is { Start: 82, Duration: 9 } && Event(editor, "h") is { Start: 91, Duration: 5 } &&
+              Event(editor, "x").Start == 50 && editor.History.UndoCount == 1,
+            "dragging a prop's end takes its fade-out and hold along, as one step");
+
+        var left = Hit(editor, At(0, row, 1));
+        editor.Press(left);
+        editor.Drag(left.Frame + 5);
+        editor.Release();
+        check(left.Part == TimelinePart.LeftEdge && Event(editor, "s") is { Start: 5, Duration: 91 } && Event(editor, "f").Start == 87 && Event(editor, "h").Start == 96,
+            "dragging a prop's start moves every part");
+
+        var typed = Editor(doc);
+        typed.BeginFieldEdit();
+        typed.Replace(Event(typed, "s") with { Duration = 1 });
+        var squeezed = Event(typed, "f");
+        typed.Replace(Event(typed, "s") with { Duration = 61 });
+        typed.EndFieldEdit();
+        check(squeezed is { Start: 0, Duration: 1 } && Event(typed, "s").Duration == 61 && Event(typed, "f") is { Start: 52, Duration: 9 } &&
+              Event(typed, "h") is { Start: 61, Duration: 5 } && typed.History.UndoCount == 1,
+            "typing a prop's length moves its fade-out from where the edit began, as one step");
     }
 
     /// <summary>

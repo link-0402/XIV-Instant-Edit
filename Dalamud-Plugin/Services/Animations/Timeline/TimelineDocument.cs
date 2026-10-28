@@ -311,7 +311,7 @@ internal sealed record TimelinePropModel(ushort Model, ushort Body, ushort Varia
 /// <paramref name="Pack"/> is the expression library a non-resident expression needs, else null.
 /// </summary>
 internal sealed record TimelineAddRequest(TimelineAddKind Kind, int Start, string Path, int Duration = 0,
-    string? Pack = null, TimelinePropModel? Prop = null);
+    string? Pack = null, TimelinePropModel? Prop = null, int ClipLength = 0);
 
 internal enum TimelineFieldKind : byte { Int, Float, Bool, Choice, Flags }
 

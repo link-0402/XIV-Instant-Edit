@@ -12,6 +12,7 @@ internal static class TimelineConvert
     /// <summary>
     /// One event per C-entry in item order, keyed "t" + its id. TMFC curves are not events, and a
     /// looping face (<see cref="LoopChains"/>) is one event, its first play's, without its copies.
+    /// A prop's parts share a group (<see cref="PropGroups"/>).
     /// <paramref name="motionFrames"/> is how long the clip's motion plays (its Havok duration),
     /// when known. It becomes the length when the header (TMDH) says otherwise by more than a
     /// frame, which only mods do; without it the header's length is used.
@@ -22,13 +23,87 @@ internal static class TimelineConvert
         var length = motionFrames is { } motion && motion > 0 && !TimelineDocument.SameLength(motion, file.Length) ? motion : file.Length;
         var loops = LoopChains(file);
         var copies = loops.Values.SelectMany(c => c).ToHashSet();
+        var groups = PropGroups(file);
         return new TimelineDocument(length, length, file.FacePack,
             [.. file.Entries.Where(e => e.Magic != "TMFC" && !copies.Contains(e.Id)).Select(e => loops.ContainsKey(e.Id)
-                ? Event(e, conditional.Contains(e.Id)) with { Duration = TimelineDocument.KeptDuration, Loop = true }
-                : Event(e, conditional.Contains(e.Id)))], 1)
+                ? Event(e, conditional.Contains(e.Id), null) with { Duration = TimelineDocument.KeptDuration, Loop = true }
+                : Event(e, conditional.Contains(e.Id), groups.GetValueOrDefault(e.Id)))], 1)
         {
             HeaderLength = file.Length,
         };
+    }
+
+    /// <summary>How many frames after its summon's start a prop animation (C031) may come and still belong to it.</summary>
+    internal const int AnimationWindow = 10;
+
+    /// <summary>
+    /// The props of a timeline, as the group each part belongs to, by entry id. A summon (a C198 with a model, or a
+    /// C043 given a weapon id, unk2 8) forms a group "p" + its id with: the sync effect (C173) at frame 0 or at the
+    /// summon's start; a C031 playing on its slot (target 2 for summon 0, 3 for summon 1) 0 to 10 frames after a
+    /// summon of the group starts; every summon-only fade (C094 filter on, flags 8) starting in the group's span
+    /// (first start to last end + 1 frame); a C187 starting in that span; a C014, C015, C174 or C175 acting on its
+    /// slot starting in it. Summons on one slot with one model where the next starts as the last ends (Toast: C043
+    /// 0..60, then C198 60..185) are one group, named after the first. With two props (Navigate) the earlier one
+    /// takes a part both could have. Derived on every read, never saved.
+    /// </summary>
+    internal static Dictionary<short, string> PropGroups(TmbFile file)
+    {
+        var entries = file.Entries;
+        var chains = new List<List<PropSummon>>();
+        foreach (var summon in entries.Select(PropSummon.Of).OfType<PropSummon>().OrderBy(s => s.Start).ThenBy(s => s.Id))
+        {
+            var chain = chains.FirstOrDefault(c => c[^1].Slot == summon.Slot && c[^1].Model == summon.Model && Math.Abs(summon.Start - c[^1].End) <= 1);
+            if (chain != null) chain.Add(summon);
+            else chains.Add([summon]);
+        }
+        var groups = new Dictionary<short, string>();
+        var props = chains.Select(c => new PropSpan("p" + c[0].Id, c, c[0].Slot, c[0].Start, c.Max(s => s.End) + 1)).ToList();
+        foreach (var prop in props)
+            foreach (var summon in prop.Summons)
+                groups[summon.Id] = prop.Group;
+        if (props.Count == 0) return groups;
+        foreach (var entry in entries)
+        {
+            if (groups.ContainsKey(entry.Id)) continue;
+            var time = (int)entry.Time;
+            var owner = entry.Magic switch
+            {
+                "C173" when string.Equals(entry.Text, TimelineTemplates.SyncEffect, StringComparison.OrdinalIgnoreCase) =>
+                    props.FirstOrDefault(p => time == 0 || time == p.From),
+                "C031" => props.FirstOrDefault(p => entry.Int16(22) == p.Target && p.Summons.Any(s => time - s.Start is >= 0 and <= AnimationWindow)),
+                "C094" when entry.FilterFlags() == (1, 8) => props.FirstOrDefault(p => p.Spans(time)),
+                "C187" => props.FirstOrDefault(p => p.Spans(time)),
+                "C014" or "C015" or "C174" or "C175" => props.FirstOrDefault(p => entry.Int32(24) == p.Target && p.Spans(time)),
+                _ => null,
+            };
+            if (owner != null) groups[entry.Id] = owner.Group;
+        }
+        return groups;
+    }
+
+    /// <summary>A summon: a C198 with a model, or a C043 given a weapon id (unk2 8, always slot 0).</summary>
+    private sealed record PropSummon(short Id, int Slot, int Model, int Start, int End)
+    {
+        public static PropSummon? Of(TmbFile.Entry entry)
+        {
+            var (slot, model) = entry.Magic switch
+            {
+                "C198" => ((int)entry.Byte(28), (int)entry.Int16(32)),
+                "C043" when entry.Int32(20) == 8 => (0, (int)entry.Int16(24)),
+                _ => (0, 0),
+            };
+            return model <= 0 ? null
+                : new(entry.Id, slot, model, entry.Time, (int)Math.Min(int.MaxValue - 1, (long)entry.Time + Math.Max(0, entry.Int32(12))));
+        }
+    }
+
+    /// <summary>One prop: its group, its summons in time order, its slot and its span (first start to last end + 1).</summary>
+    private sealed record PropSpan(string Group, List<PropSummon> Summons, int Slot, int From, int To)
+    {
+        /// <summary>The target a C031, C014, C015, C174 or C175 names this slot by: 2 for summon 0, 3 for summon 1.</summary>
+        public int Target => 2 + Slot;
+
+        public bool Spans(int time) => time >= From && time <= To;
     }
 
     /// <summary>
@@ -79,13 +154,13 @@ internal static class TimelineConvert
         public static Play Of(TmbFile.Entry entry) => new(entry.Int32(12), (entry.Int32(20) & 1) != 0, entry.Single(24), entry.Single(28));
     }
 
-    private static TimelineEvent Event(TmbFile.Entry entry, bool conditional)
+    private static TimelineEvent Event(TmbFile.Entry entry, bool conditional, string? group)
     {
         var kind = TmbEntrySchema.Get(entry.Magic);
         var path = entry.Text ?? "";
         var (lane, access, reason) = TmbEntrySchema.Classify(entry.Magic, path);
         return new TimelineEvent("t" + entry.Id, entry.Magic, lane, entry.Time, TmbEntrySchema.Duration(entry),
-            access == TimelineAccess.Editable && kind.HasDuration, path, access, reason, conditional, TmbEntrySchema.ReadValues(entry));
+            access == TimelineAccess.Editable && kind.HasDuration, path, access, reason, conditional, TmbEntrySchema.ReadValues(entry), group);
     }
 
     /// <summary>
@@ -328,7 +403,8 @@ internal static class TimelineConvert
     private static short Add(TmbFile file, TimelineEvent e)
     {
         var kind = TmbEntrySchema.Get(e.Magic);
-        if (!TimelineTemplates.CanCreate(e.Magic) || TmbEntrySchema.Classify(e.Magic, e.Path).Access != TimelineAccess.Editable)
+        // A Movable kind may be added (a prop's C014); a body motion never.
+        if (!TimelineTemplates.CanCreate(e.Magic) || TmbEntrySchema.Classify(e.Magic, e.Path).Access == TimelineAccess.Locked)
             throw new InvalidDataException($"Cannot add {Describe(e)}.");
         RequireFrames(e.Start, "start");
         RequireLength(e);

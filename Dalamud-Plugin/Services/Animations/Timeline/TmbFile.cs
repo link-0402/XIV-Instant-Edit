@@ -138,6 +138,14 @@ internal sealed class TmbFile
             : [];
         /// <summary>The block a filter pointer at <paramref name="offset"/> holds; null when unset.</summary>
         public byte[]? Block(int offset) => item.At(offset) is { Layout.Kind: Kind.Filter, Present: true } f ? f.Data.ToArray() : null;
+        /// <summary>
+        /// A fade's (C094) filter block: whether it is on, and the objects it applies to (character 1, weapon 2,
+        /// off hand 4, summon 8); null when the entry has no filter block.
+        /// </summary>
+        public (int Enable, int Flags)? FilterFlags() =>
+            item.Fields.FirstOrDefault(f => f.Layout.Kind == Kind.Filter) is { Present: true, Data.Length: >= 8 } f
+                ? (BinaryPrimitives.ReadInt32LittleEndian(f.Data), BinaryPrimitives.ReadInt32LittleEndian(f.Data.AsSpan(4)))
+                : null;
         private ReadOnlySpan<byte> Span(int offset, int length) =>
             offset >= 0 && offset <= item.Bytes.Length - length ? item.Bytes.AsSpan(offset, length)
                 : throw new InvalidDataException($"Offset {offset} is outside the {Magic} entry.");

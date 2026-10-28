@@ -460,7 +460,11 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         if (kind == TimelineAddKind.Prop && prop != null)
             prop = prop with { WeaponTimeline = WeaponChoice(prop) };
         ImmutableArray<TimelineEvent> events;
-        try { events = TimelineTemplates.Create(new TimelineAddRequest(kind, frame, path, kind == TimelineAddKind.LipSync ? frames : 0, pack, prop)); }
+        try
+        {
+            events = TimelineTemplates.Create(new TimelineAddRequest(kind, frame, path, kind == TimelineAddKind.LipSync ? frames : 0, pack, prop,
+                current.Document.Length));
+        }
         catch (InvalidDataException e)
         {
             pickerError = e.Message;

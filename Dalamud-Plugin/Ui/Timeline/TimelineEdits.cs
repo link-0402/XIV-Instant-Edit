@@ -103,6 +103,71 @@ internal static class TimelineEdits
         return doc with { Events = doc.Events.SetItem(index, ev with { Start = start, Duration = duration }) };
     }
 
+    /// <summary>Whether <paramref name="ev"/> is the summon of a prop group (a C198 or C043), whose length is the prop's.</summary>
+    public static bool IsGroupSummon(TimelineEvent ev) => ev.Group != null && ev.Magic is "C198" or "C043";
+
+    /// <summary>How far from the prop's start a part counts as one of its opening parts (sync effect, animation, hide, fade-in).</summary>
+    public const int OpeningFrames = 10;
+
+    /// <summary>
+    /// Drags one edge of a prop's summon (<see cref="IsGroupSummon"/>) by <paramref name="delta"/> frames, taking its
+    /// group along; any other event resizes on its own (<see cref="Resize"/>). The left edge moves every part the same
+    /// way. The right edge changes the summon's length as <see cref="Resize"/> does, and then: a fade-out (a fade
+    /// from visible to 0) keeps its distance to the end, starting no earlier than the summon; a 0 to 0 hold that
+    /// started where a fade-out ended starts where it now ends, with its length; other parts starting within
+    /// <see cref="OpeningFrames"/> of the prop's start keep their frames; the rest, past a shorter end, move inside
+    /// it, and those that can be resized end with it. A part that can only be moved keeps its length.
+    /// </summary>
+    public static TimelineDocument ResizeGroup(TimelineDocument doc, string summonKey, bool leftEdge, int delta)
+    {
+        var index = IndexOf(doc, summonKey);
+        if (index < 0 || delta == 0 || !CanResize(doc.Events[index]) || !IsGroupSummon(doc.Events[index]))
+            return Resize(doc, summonKey, leftEdge, delta);
+        var summon = doc.Events[index];
+        var group = summon.Group;
+        var events = Events(doc);
+        if (leftEdge)
+            return Move(doc, events.Where(ev => ev.Group == group).Select(ev => ev.Key).ToHashSet(StringComparer.Ordinal), delta);
+        var resized = Resize(doc, summonKey, false, delta);
+        if (ReferenceEquals(resized, doc))
+            return doc;
+        var oldEnd = End(summon);
+        var newEnd = End(resized.Events[index]);
+        var shift = newEnd - oldEnd;
+        var opening = events.Where(ev => ev.Group == group && IsGroupSummon(ev)).Min(ev => ev.Start) + OpeningFrames;
+        static bool FadesOut(TimelineEvent ev) => ev.Magic == "C094" && ev.Values?.GetValueOrDefault("StartVisibility") > 0 &&
+            ev.Values.GetValueOrDefault("EndVisibility") == 0;
+        // Where each fade-out ended before and ends now, for the holds that follow them.
+        var fadeEnds = new Dictionary<int, int>();
+        var builder = resized.Events.ToBuilder();
+        for (var i = 0; i < builder.Count; i++)
+        {
+            var ev = builder[i];
+            if (i == index || ev.Group != group || !CanMove(ev) || !FadesOut(ev))
+                continue;
+            var start = Math.Clamp(ev.Start + shift, summon.Start, TimelineDocument.MaxFrames);
+            var duration = CanResize(ev) ? Math.Max(1, End(ev) + shift - start) : ev.Duration;
+            fadeEnds.TryAdd(End(ev), (int)Math.Min(TimelineDocument.MaxFrames, (long)start + duration));
+            builder[i] = ev with { Start = start, Duration = duration };
+        }
+        for (var i = 0; i < builder.Count; i++)
+        {
+            var ev = builder[i];
+            if (i == index || ev.Group != group || !CanMove(ev) || FadesOut(ev))
+                continue;
+            var hold = ev.Magic == "C094" && ev.Values?.GetValueOrDefault("StartVisibility") == 0 && ev.Values.GetValueOrDefault("EndVisibility") == 0;
+            if (hold && fadeEnds.TryGetValue(ev.Start, out var after))
+                builder[i] = ev with { Start = after };
+            else if (ev.Start > opening && shift < 0 && End(ev) > newEnd)
+            {
+                // Past the shorter end: inside it, and ending with it when its length can change.
+                var start = Math.Max(0, Math.Min(ev.Start, newEnd - 1));
+                builder[i] = ev with { Start = start, Duration = CanResize(ev) ? Math.Max(1, newEnd - start) : ev.Duration };
+            }
+        }
+        return resized with { Events = builder.ToImmutable() };
+    }
+
     /// <summary>
     /// Puts a motion from Blender in place of the clip's. It already holds the layers and cuts the motion
     /// was sent with, so they go; the clip takes its length, the events moving as <see cref="SetLength"/> moves them.
