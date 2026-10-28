@@ -284,7 +284,7 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
             return true;
         }
         var before = trial.Base(current.Document, at.Layer.Key, at.Frame, out var replaces);
-        var next = options.Key(before, at.Layer.Key, at.Frame, import, choice, at.Skeleton, under);
+        var next = current.WithReach(before, options.Key(before, at.Layer.Key, at.Frame, import, choice, at.Skeleton, under));
         if (!(replaces ? current.Amend(next) : current.Commit(next)))
         {
             Note("The timeline is busy. Try again.", true);
