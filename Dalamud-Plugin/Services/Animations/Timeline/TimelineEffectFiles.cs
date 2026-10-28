@@ -80,13 +80,18 @@ internal static class TimelineEffectFiles
     /// a KILL clip and an Item container holding its items and one playing it. A kill that can't be
     /// moved there is past the stop already and stays, so no start goes below 0. Throws
     /// <see cref="InvalidDataException"/> with <see cref="StopBeforeStart"/> when nothing scheduled
-    /// starts by the stop, <see cref="NothingScheduled"/>, <see cref="NoRoomForKill"/> when every
+    /// (besides timelines of kills) starts by the stop, <see cref="NothingScheduled"/>, <see cref="NoRoomForKill"/> when every
     /// timeline that could take a KILL has an item naming the clip it would be, or <see cref="LoopsUntil"/>
     /// and the last frame that works when those timelines loop before the stop.
     /// </summary>
     public static byte[] WithKill(byte[] avfx, int stop)
     {
         var (timelines, schedulers) = ReadBlocks(avfx);
+        // The effect starts with its first scheduled timeline that plays more than kills; a stop before that is refused, whatever moves.
+        var starts = schedulers.SelectMany(s => s.Items.Take(s.Count))
+            .Where(e => e.Get("bEna", 1) != 0 && e.Get("TlNo", -1) is var number && number >= 0 && number < timelines.Count && !KillsOnly(timelines[number]))
+            .Select(e => e.Get("StTm", 0)).ToList();
+        if (starts.Count > 0 && stop < starts.Min()) throw new InvalidDataException(StopBeforeStart);
         var output = (byte[])avfx.Clone();
         var on = new List<ScheduledKill>();
         var off = new List<ScheduledKill>();

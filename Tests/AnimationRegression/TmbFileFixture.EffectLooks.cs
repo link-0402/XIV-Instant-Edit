@@ -459,6 +459,12 @@ internal static partial class TmbFileFixture
                   carpetFields.All(f => BitConverter.ToInt32(stopped, f.Start) == at) &&
                   Differing(carpet, stopped).All(i => carpetFields.Any(f => i >= f.Start && i < f.Start + 4))),
             "a kill on a timeline of its own moves by its scheduler item, in every Item and Trgr copy: no new blocks, the looping timeline unchanged");
+        var lateCarpet = KillEffects.Effect([KillEffects.Scheduled(1, 908, 1), KillEffects.Scheduled(1, 10, 2)],
+            KillEffects.Timeline(0, 0, KillEffects.Item(0, -1, 0, -1)), KillEffects.Timeline(0, 1, KillEffects.Item(0, 1, -1, 0)),
+            KillEffects.Timeline(455, 0, KillEffects.Item(213, 347, 1, -1)));
+        check(Refusal(() => TimelineEffectFiles.WithKill(lateCarpet, 5)) == TimelineEffectFiles.StopBeforeStart &&
+              TimelineEffectFiles.KillsAt(TimelineEffectFiles.WithKill(lateCarpet, 10)) == 10,
+            "a timeline of kills never moves to a stop before the effect starts: that is refused, as on other effects");
 
         var stop = new TimelineEffectEdit { Stop = 300 };
         check(!stop.IsEmpty && !stop.Equals(new TimelineEffectEdit()) && stop.Equals(new TimelineEffectEdit { Stop = 300 }) &&
