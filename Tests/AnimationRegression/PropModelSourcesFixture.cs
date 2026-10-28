@@ -25,6 +25,7 @@ internal static class PropModelSourcesFixture
         Part(check, "candidates", () => CandidateModels(check));
         Part(check, "qualification", () => Qualification(check));
         Part(check, "texture rules", () => TextureRules(check));
+        Part(check, "private copy", () => PrivateCopy(check));
         Lumina.GameData? data = null;
         try
         {
@@ -32,6 +33,7 @@ internal static class PropModelSourcesFixture
                 data = new Lumina.GameData(GameFolder, new Lumina.LuminaOptions { PanicOnSheetChecksumMismatch = false });
             Part(check, "telephone resolve", () => Telephone(check, data));
             Part(check, "vibrator resolve", () => Vibrator(check, data));
+            Part(check, "telephone copy", () => TelephoneCopy(check, data));
         }
         finally
         {
@@ -324,5 +326,166 @@ internal static class PropModelSourcesFixture
         var modRoot = Path.GetFullPath(VibratorMod) + Path.DirectorySeparatorChar;
         check(textures.Length > 0 && textures.All(pair => pair.Value.StartsWith("file:" + modRoot, StringComparison.OrdinalIgnoreCase)),
             $"the Vibrator's textures are the mod's files");
+    }
+
+    private const string CopyRoot = "chara/weapon/w9001/obj/body/b9000/";
+
+    private static string[] TexturesOf(byte[] material)
+        => MaterialPreviewBundleBuilder.ReadMaterialTextures(material).Select(texture => texture.StoredPath).ToArray();
+
+    /// <summary>
+    /// Building the private copy from made-up files: two materials sharing a texture, a DX11 texture, a model and
+    /// a texture from the game, one texture found nowhere.
+    /// </summary>
+    private static void PrivateCopy(Action<bool, string> check)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ie-prop-copies-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            string Put(string name, byte[] bytes)
+            {
+                var file = Path.Combine(dir, name);
+                File.WriteAllBytes(file, bytes);
+                return file;
+            }
+            var materialA = Material(("chara/a/texture/same.tex", false), ("chara/a/texture/d.tex", true));
+            var materialB = Material(("chara/a/texture/same.tex", false), ("chara/b/texture/n.tex", false));
+            var model = "game:chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl";
+            var same = Put("same.tex", [2]);
+            var files = ImmutableDictionary<string, string>.Empty
+                .Add(CopyRoot + "model/w9001b9000.mdl", model)
+                .Add(CopyRoot + "material/v0001/mt_a.mtrl", "file:" + Put("a.mtrl", materialA))
+                .Add(CopyRoot + "material/v0001/mt_b.mtrl", "file:" + Put("b.mtrl", materialB))
+                .Add(CopyRoot + "texture/same.tex", "file:" + same)
+                .Add(CopyRoot + "texture/d.tex", "game:chara/a/texture/--d.tex")
+                .Add(CopyRoot + "texture/--d.tex", "game:chara/a/texture/--d.tex");
+            var textures = ImmutableDictionary<string, string>.Empty
+                .Add("chara/a/texture/same.tex", CopyRoot + "texture/same.tex")
+                .Add("chara/a/texture/d.tex", CopyRoot + "texture/d.tex")
+                .Add("chara/b/texture/n.tex", CopyRoot + "texture/n.tex");
+            var source = new TimelinePropSource(dir, "Synthetic", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9001, 9000, files, textures);
+            var calls = new List<string>();
+            Func<string, byte[]?> game = path =>
+            {
+                calls.Add(path);
+                return path.EndsWith(".mdl", StringComparison.Ordinal) ? [9] : path.EndsWith("--d.tex", StringComparison.Ordinal) ? [4] : null;
+            };
+            var copy = PropCopies.Build(source, game);
+            var listing = string.Join(", ", copy.Files.Keys.Order(StringComparer.Ordinal));
+            check(copy.Files.Count == 6 && copy.Files.ContainsKey(CopyRoot + "model/w9001b9000.mdl") &&
+                  copy.Files.ContainsKey(CopyRoot + "material/v0001/mt_a.mtrl") && copy.Files.ContainsKey(CopyRoot + "material/v0001/mt_b.mtrl") &&
+                  copy.Files[CopyRoot + "texture/same.tex"].SequenceEqual(new byte[] { 2 }) &&
+                  copy.Files[CopyRoot + "texture/d.tex"].SequenceEqual(new byte[] { 4 }) &&
+                  copy.Files[CopyRoot + "texture/--d.tex"].SequenceEqual(new byte[] { 4 }),
+                $"the copy holds the model, both materials and each found texture once: {listing}");
+            check(copy.Missing.SequenceEqual([CopyRoot + "texture/n.tex"]),
+                $"the copy reports the texture found nowhere: {string.Join(", ", copy.Missing)}");
+
+            var versions = Enumerable.Range(0, 256).Where(n => n != 1).Select(n => $"v{n:D4}").ToArray();
+            foreach (var name in new[] { "mt_a.mtrl", "mt_b.mtrl" })
+            {
+                var target = $"{CopyRoot}material/v0001/{name}";
+                var aliases = copy.Aliases.Where(pair => pair.Key.EndsWith("/" + name, StringComparison.Ordinal)).ToArray();
+                check(aliases.Length == 255 && aliases.All(pair => pair.Value == target) &&
+                      aliases.Select(pair => pair.Key).Order(StringComparer.Ordinal).SequenceEqual(
+                          versions.Select(version => $"{CopyRoot}material/{version}/{name}").Order(StringComparer.Ordinal)),
+                    $"{name} has an alias at v0000 and v0002..v0255, each pointing at its v0001 file");
+            }
+            check(copy.Aliases.Count == 510, $"two materials make 510 aliases (got {copy.Aliases.Count})");
+
+            var inA = TexturesOf(copy.Files[CopyRoot + "material/v0001/mt_a.mtrl"]);
+            var inB = TexturesOf(copy.Files[CopyRoot + "material/v0001/mt_b.mtrl"]);
+            check(inA.SequenceEqual([CopyRoot + "texture/same.tex", CopyRoot + "texture/d.tex"]) &&
+                  inB.SequenceEqual([CopyRoot + "texture/same.tex", CopyRoot + "texture/n.tex"]),
+                $"each material names its textures under the private texture folder: {string.Join(", ", inA)} | {string.Join(", ", inB)}");
+            check(copy.Files.Keys.Count(key => key.EndsWith("/same.tex", StringComparison.Ordinal)) == 1,
+                "a texture two materials share is in the copy once");
+
+            var flat = PropCopies.Flatten(copy);
+            check(flat.Count == copy.Files.Count + copy.Aliases.Count &&
+                  copy.Aliases.All(pair => flat[pair.Key].SequenceEqual(copy.Files[pair.Value])) &&
+                  copy.Files.All(pair => flat[pair.Key].SequenceEqual(pair.Value)),
+                "Flatten has the files and each alias with its target's bytes");
+
+            var gone = source with { Files = files.SetItem(CopyRoot + "texture/same.tex", "file:" + Path.Combine(dir, "deleted.tex")) };
+            try
+            {
+                PropCopies.Build(gone, game);
+                check(false, "a file: source that doesn't exist throws");
+            }
+            catch (InvalidOperationException ex)
+            {
+                check(ex.Message == "The prop's model from Synthetic is gone. Pick it again.",
+                    $"a file: source that doesn't exist throws the spec text: {ex.Message}");
+            }
+            try
+            {
+                PropCopies.Build(source, path => path.EndsWith(".mdl", StringComparison.Ordinal) ? null : game(path));
+                check(false, "a game model the game lacks throws");
+            }
+            catch (InvalidOperationException ex)
+            {
+                check(ex.Message == "The prop's model from Synthetic is gone. Pick it again.", "a game model the game lacks throws the same text");
+            }
+            var noGameTexture = PropCopies.Build(source, path => path.EndsWith("--d.tex", StringComparison.Ordinal) ? null : game(path));
+            check(noGameTexture.Missing.SequenceEqual([CopyRoot + "texture/d.tex", CopyRoot + "texture/n.tex"]) &&
+                  !noGameTexture.Files.ContainsKey(CopyRoot + "texture/d.tex"),
+                $"a game texture the game lacks is missing, not an error: {string.Join(", ", noGameTexture.Missing)}");
+
+            var other = source with
+            {
+                Body = 9001,
+                Files = files.ToImmutableDictionary(pair => pair.Key.Replace("b9000", "b9001"), pair => pair.Value),
+                Textures = textures.ToImmutableDictionary(pair => pair.Key, pair => pair.Value.Replace("b9000", "b9001")),
+            };
+            calls.Clear();
+            var doc = new TimelineDocument(30, 30, null, [Prop("n1", source), Prop("n2", source with { }), Prop("n3", other), Prop("n4", null)], 5);
+            var merged = PropCopies.Of(doc, game);
+            check(calls.Count(path => path.EndsWith("m8044b0001.mdl", StringComparison.Ordinal)) == 2 && merged.Files.Count == 12 &&
+                  merged.Aliases.Count == 1020 && merged.Missing.Length == 2,
+                $"two events with one Source build it once and a second body adds its own files (model reads {calls.Count(path => path.EndsWith(".mdl", StringComparison.Ordinal))}, files {merged.Files.Count}, aliases {merged.Aliases.Count}, missing {merged.Missing.Length})");
+            check(PropCopies.Of(new TimelineDocument(30, 30, null, [Prop("n4", null)], 2), game) is { Files.Count: 0, Aliases.Count: 0, Missing.Length: 0 },
+                "a document without a prop from a mod has an empty copy");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, true);
+        }
+    }
+
+    private static TimelineEvent Prop(string key, TimelinePropSource? source)
+        => new(key, "C198", TimelineLane.Prop, 0, 0, false, "", TimelineAccess.Editable, null, false,
+            ImmutableDictionary<string, double>.Empty, Source: source);
+
+    /// <summary>The Telephone's real model, material and textures, built into a private copy.</summary>
+    private static void TelephoneCopy(Action<bool, string> check, Lumina.GameData? data)
+    {
+        if (!Directory.Exists(TelephoneMod))
+        {
+            Console.WriteLine($"[SKIP] props from mods: the Telephone mod isn't at {TelephoneMod}, so its copy isn't built");
+            return;
+        }
+        var effective = ModOptionGroups.EffectiveFiles(TelephoneMod, new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["(You're Not Gonna Reach My) Telephone"] = ["Main Install"],
+            ["Color Options"] = ["Moogle Pink"],
+        });
+        const string model = "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl";
+        var source = PropModelSources.Resolve(TelephoneMod, "(You're Not Gonna Reach My) Telephone", model, 9001, 9000,
+            effective, Game(data), Exists(data));
+        var copy = PropCopies.Build(source, Game(data));
+        var material = copy.Files[CopyRoot + "material/v0001/mt_m8044b0001_a.mtrl"];
+        var named = TexturesOf(material);
+        check(named.Length > 0 && named.All(path => path.StartsWith(CopyRoot + "texture/", StringComparison.Ordinal)),
+            $"the Telephone's built material names only private textures: {string.Join(", ", named)}");
+        check(copy.Files[CopyRoot + "model/w9001b9000.mdl"].SequenceEqual(File.ReadAllBytes(effective[model])),
+            "the Telephone's built model is the mod's model");
+        check(source.Textures.Values.Where(path => !source.Files.ContainsKey(path)).Order(StringComparer.Ordinal).SequenceEqual(copy.Missing),
+            $"the Telephone's missing textures are the private paths with no file: {string.Join(", ", copy.Missing)}");
+        check(named.All(path => copy.Files.ContainsKey(path) || copy.Missing.Contains(path)),
+            "every texture the Telephone's built material names is in the copy or reported missing");
+        check(PropCopies.Flatten(copy).Count == copy.Files.Count + 255, "the Telephone's flattened copy has its files and 255 aliases");
     }
 }
