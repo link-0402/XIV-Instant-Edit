@@ -42,6 +42,7 @@ Scenarios.Run(() => PinLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => HipDragFixture.Run(Check, Reject));
 Scenarios.Run(() => FixLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => CloseLoopFixture.Run(Check, Reject));
+Scenarios.Run(() => MotionKeyMarkersFixture.Run(Check, Reject));
 Scenarios.Run(() => HandShapeFixture.Run(Check, Reject));
 Scenarios.Run(() => CompanionClipFixture.Run(Check, Reject));
 Scenarios.Run(() => PoseFileFixture.Run(Check, Reject));

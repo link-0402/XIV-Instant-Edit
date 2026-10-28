@@ -96,7 +96,7 @@ internal static class MotionEvaluator
     public static void Validate(MotionLayer layer)
     {
         if (layer == null || string.IsNullOrEmpty(layer.Key) || !Enum.IsDefined(layer.Kind) || !Enum.IsDefined(layer.Interpolation) ||
-            layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From) ||
+            layer.Interpolation == MotionInterpolation.Custom || !Enum.IsDefined(layer.From) || layer.Markers is { } m && !Enum.IsDefined(m.Detail) ||
             layer.Fix is { } read && (!Enum.IsDefined(read.Kind) || (read.Axes & ~MotionAxes.All) != 0 || !Enum.IsDefined(read.Placement)))
             throw new InvalidDataException("A bone layer can't be read.");
         var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
@@ -123,6 +123,10 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} can't have a fix.");
         if (layer.Kind != MotionLayerKind.Idle && layer.Idle != null)
             throw new InvalidDataException($"{name} can't have idle motion.");
+        if (layer.Kind != MotionLayerKind.Offset && layer.Markers != null)
+            throw new InvalidDataException($"{name} can't have markers.");
+        if (layer.Markers is { Reach: < 1 or > MotionMarkers.MaxReach })
+            throw new InvalidDataException($"{name} has an invalid reach.");
         if (layer.Idle is { } idle)
             MotionIdles.Validate(idle, name);
         if (layer.Fix is { Kind: MotionFixKind.MatchLoop } match)
