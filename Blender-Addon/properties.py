@@ -55,6 +55,21 @@ class XIVIEExportSettings(PropertyGroup):
         ],
         default="EXPORT",
     )  # type: ignore
+    export_destination: EnumProperty(
+        name="Save to",
+        items=[
+            ("FOLDER", "Folder", "Save into the export folder"),
+            ("STASH", "Stash", "Save an MDL into the plugin's stash, beside the package the model came from"),
+        ],
+        default="FOLDER",
+    )  # type: ignore
+    # A folder name in the stash; empty picks it from the model (instant_edit.stash.target_folder).
+    export_stash_folder: StringProperty(
+        name="Stash Folder",
+        description="The stash folder Save to Stash writes into. Empty picks it from the model",
+        default="",
+        maxlen=255,
+    )  # type: ignore
     export_directory: StringProperty(name="Export Folder", subtype="DIR_PATH", default="")  # type: ignore
     export_name: StringProperty(name="File Name", default="model", maxlen=255)  # type: ignore
     model_format: EnumProperty(

@@ -15,9 +15,9 @@ using InstantEdit.Studio.Windows.UI;
 namespace InstantEdit.Studio.Windows.Import;
 
 /// <summary>
-/// The import window's file stash: every extraction under the output folder, and every folder of
-/// loose files the user opened, on the left; the picked one's files on the right, by kind and, for
-/// textures, by purpose. Every row drags onto a
+/// The import window's file stash: every extraction under the output folder, every folder Blender
+/// saved models into, and every folder of loose files the user opened, on the left; the picked one's
+/// files on the right, by kind and, for textures, by purpose. Every row drags onto a
 /// texture or model tile of the build window or a mod window; a material's textures can also be
 /// put into the build window's selected material in one go.
 /// </summary>
@@ -40,6 +40,9 @@ internal sealed class StashView
     private readonly StudioHost _host;
     private readonly TextureThumbnailCache _thumbnails;
 
+    /// <summary>The cache's package-imports, where Blender saves its models whatever output folder is picked; null without a cache.</summary>
+    private readonly string? _blenderDir;
+
     private IReadOnlyList<string> _folders = Array.Empty<string>();
     private IReadOnlyList<string> _opened = Array.Empty<string>();
 
@@ -48,8 +51,18 @@ internal sealed class StashView
     private string? _folder;
     private StashManifest? _manifest;
 
+    /// <summary>What Blender wrote since the folders were listed and the shown one read; looked at every couple of seconds.</summary>
+    private readonly StashWatch _watch = new();
+    private DateTime _checkedAt;
+
+    /// <summary>Whether Blender alone made the folder shown, for its header.</summary>
+    private bool _fromBlender;
+
     /// <summary>A folder without stash.json being scanned off the render thread; an opened folder can hold thousands of files.</summary>
     private Task<StashManifest?>? _scan;
+
+    /// <summary>Whether <see cref="_scan"/> reads the shown folder again: its rows stay up meanwhile, and the tab stays.</summary>
+    private bool _again;
     private StashKind _tab = StashKind.Texture;
     private string _search = string.Empty;
     private string? _pendingRemove;
@@ -66,16 +79,17 @@ internal sealed class StashView
     private List<(string File, StashKind Kind)> _lastOrder = new();
     private List<(string File, StashKind Kind)> _rowOrder = new();
 
-    public StashView(StudioHost host, TextureThumbnailCache thumbnails)
+    public StashView(StudioHost host, TextureThumbnailCache thumbnails, string? blenderDir)
     {
         _host = host;
         _thumbnails = thumbnails;
+        _blenderDir = blenderDir;
     }
 
     /// <summary>The extraction shown, or null.</summary>
     public string? Folder => _folder;
 
-    /// <summary>Whether the stash has anything to show: an extraction in the output folder, or an opened folder.</summary>
+    /// <summary>Whether the stash has anything to show: an extraction in the output folder, a folder Blender saved into, or an opened folder.</summary>
     public bool HasFolders(string outputDir)
     {
         EnsureListed(outputDir);
@@ -86,8 +100,11 @@ internal sealed class StashView
     public void Show(string folder)
     {
         _folder = folder;
-        _manifest = StashManifest.Read(folder);
+        _watch.Showing(folder);
+        _fromBlender = StashFolders.IsFromBlender(folder);
+        _manifest = Read(folder);
         _scan = _manifest == null ? Task.Run(() => SafeScan(folder)) : null;
+        _again = false;
         _listing.Invalidate();   // the list may have gained it
         _message = string.Empty;
         _marked.Clear();
@@ -95,6 +112,39 @@ internal sealed class StashView
         _imageCounts.Clear();
         _thumbnails.ForgetMemoryEntries();
         PickTab();
+    }
+
+    /// <summary>
+    /// Reads the folder shown again after Blender saved into it. The tab, search and marked rows stay,
+    /// and its rows stay up while a folder without stash.json is scanned again.
+    /// </summary>
+    private void ShowAgain(string folder)
+    {
+        if (_manifest == null)
+        {
+            Show(folder);   // nothing was shown, so nothing to keep
+            return;
+        }
+        _watch.Showing(folder);
+        _fromBlender = StashFolders.IsFromBlender(folder);
+        _exists.Clear();
+        _imageCounts.Clear();
+        if (Read(folder) is { } manifest)
+        {
+            _manifest = manifest;
+            return;
+        }
+        _scan = Task.Run(() => SafeScan(folder));
+        _again = true;
+    }
+
+    /// <summary>The folder's stash.json with the models Blender saved there added, or null when it has none.</summary>
+    private static StashManifest? Read(string folder)
+    {
+        var manifest = StashManifest.Read(folder);
+        if (manifest != null)
+            BlenderExports.Merge(manifest, folder);
+        return manifest;
     }
 
     /// <summary>Adds a folder of loose files to the stash and shows it. Returns why it wasn't added, or null.</summary>
@@ -140,7 +190,9 @@ internal sealed class StashView
             _manifest = scan.IsCompletedSuccessfully ? scan.Result : null;
             if (_manifest == null)
                 _message = "This folder could not be read.";
-            PickTab();
+            if (!_again)
+                PickTab();
+            _again = false;
         }
 
         float listW = Theme.S(230);
@@ -157,18 +209,32 @@ internal sealed class StashView
 
     private void EnsureListed(string outputDir)
     {
-        if (!_listing.Due(outputDir, DateTime.UtcNow))
-            return;
-        _folders = StashFolders.ListExtractions(outputDir);
-        _opened = StashFolders.Opened(_host.Configuration.StashOpenedFolders)
-            .Where(f => !_folders.Contains(f, StringComparer.OrdinalIgnoreCase))
-            .ToList();
-        if (_folder != null && !Directory.Exists(_folder))
+        // Every couple of seconds, what Blender saved: a new folder lists the folders again, and a new
+        // export into the folder shown reads it again. Listing goes first, so a folder that is gone isn't read.
+        var now = DateTime.UtcNow;
+        bool check = now - _checkedAt >= RecheckEvery;
+        if (check)
         {
-            _folder = null;
-            _manifest = null;
-            _scan = null;
+            _checkedAt = now;
+            if (_watch.FoldersChanged())
+                _listing.Invalidate();
         }
+        if (_listing.Due(outputDir, now))
+        {
+            _watch.Listing(outputDir, _blenderDir);
+            _folders = StashFolders.ListStash(outputDir, _blenderDir);
+            _opened = StashFolders.Opened(_host.Configuration.StashOpenedFolders)
+                .Where(f => !_folders.Contains(f, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+            if (_folder != null && !Directory.Exists(_folder))
+            {
+                _folder = null;
+                _manifest = null;
+                _scan = null;
+            }
+        }
+        if (check && _folder != null && _scan == null && _watch.ShownChanged())
+            ShowAgain(_folder);
     }
 
     private bool IsOpened(string folder) => _opened.Contains(folder, StringComparer.OrdinalIgnoreCase);
@@ -263,12 +329,14 @@ internal sealed class StashView
         }, "Delete", () =>
         {
             if (_pendingRemove == null) return;
-            var problem = StashFolders.Remove(outputDir, _pendingRemove);
+            var problem = StashFolders.Remove(StashFolders.RootOf(_pendingRemove, outputDir, _blenderDir), _pendingRemove);
             _message = problem ?? $"Removed {Path.GetFileName(_pendingRemove)}.";
             if (problem == null && string.Equals(_pendingRemove, _folder, StringComparison.OrdinalIgnoreCase))
             {
                 _folder = null;
                 _manifest = null;
+                _scan = null;
+                _again = false;
             }
             _pendingRemove = null;
             _listing.Invalidate();
@@ -281,7 +349,7 @@ internal sealed class StashView
 
     private void DrawFiles()
     {
-        if (_folder != null && _scan != null)
+        if (_folder != null && _scan != null && _manifest == null)
         {
             Gui.Icon(FontAwesomeIcon.Spinner, Theme.Accent);
             ImGui.SameLine();
@@ -364,7 +432,7 @@ internal sealed class StashView
         {
             "unity" => manifest.Sources.Count > 1 ? $"from {manifest.Sources.Count} Unity packages" : "from a Unity package",
             "sims"  => manifest.Sources.Count > 1 ? $"from {manifest.Sources.Count} Sims 4 packages" : "from a Sims 4 package",
-            _       => IsOpened(folder) ? "an opened folder; nothing is written into it" : "files in this folder",
+            _       => IsOpened(folder) ? "an opened folder; nothing is written into it" : _fromBlender ? "from Blender" : "files in this folder",
         });
         Gui.AlignRight(ImGui.GetFrameHeight());
         if (Gui.IconButton(FontAwesomeIcon.FolderOpen, "StashReveal", "Show in Explorer"))
@@ -721,8 +789,16 @@ internal sealed class StashView
 
     private static StashManifest? SafeScan(string folder)
     {
-        try { return StashManifest.Scan(folder); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
+        try
+        {
+            var manifest = StashManifest.Scan(folder);
+            BlenderExports.Merge(manifest, folder);
+            return manifest;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     internal static void Reveal(string path)

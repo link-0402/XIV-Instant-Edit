@@ -35,6 +35,7 @@ internal static class ModWriterScenarios
             await ASwitchedOffVanillaModelLosesItsEqdpBits(root);
             await ABuiltModelsPartTagsBecomeAToggleGroup(root);
             await MeshesOfOneMaterialCanBePointedApart(root);
+            await FittedMaterialsWireTheirDiffuse(root);
             AStoppedWatcherIsNoticed(root);                             // glue-6
         }
         finally
@@ -265,6 +266,71 @@ internal static class ModWriterScenarios
                 && (int?)group?["DefaultSettings"] == 3,
             "with one option per tag, both on");
         Require(meta["DefaultData"]?["Manipulations"] == null, "and no variant overrides are written for an item without materials");
+    }
+
+    /// <summary>
+    /// Materials fitted to a model, built for real: the one with the stash's diffuse is written in the
+    /// diffuse texture mode, the one with only placeholders keeps the colour table, and each mesh points
+    /// at the material fitted to its own.
+    /// </summary>
+    private static async Task FittedMaterialsWireTheirDiffuse(string root)
+    {
+        var midF = new RaceGender(PlayerRace.Midlander, PlayerGender.Female);
+        var modRoot = Path.Combine(root, "Fitted");
+        Directory.CreateDirectory(modRoot);
+        var source = Path.Combine(root, "fitted_top.mdl");
+        File.WriteAllBytes(source, ModCheckFixtures.Mdl(["/Top.mtrl", "/Gloves.mtrl"]));
+        var diffuse = Path.Combine(root, "top_d.png");
+        using (var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(8, 8, new SixLabors.ImageSharp.PixelFormats.Rgba32(200, 40, 40, 255)))
+            SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, diffuse);
+
+        var subject = new GearSubject(new GameDataService.GameItem { RowId = 1, Name = "Top", ModelId = 6000, Slot = EquipSlot.Body });
+        var none = new Dictionary<InstantEdit.Studio.Services.Stash.TexturePurpose, string>();
+        var withDiffuse = new Dictionary<InstantEdit.Studio.Services.Stash.TexturePurpose, string> { [InstantEdit.Studio.Services.Stash.TexturePurpose.Diffuse] = diffuse };
+        var fit = InstantEdit.Studio.Services.Stash.MaterialFit.Fit(ModelMaterialRewriter.ReadMeshMaterials(File.ReadAllBytes(source)),
+            name => name == "/Top.mtrl" ? withDiffuse : none, subject, midF, otherPreset: null);
+        Require(fit.Materials.Count == 2 && fit.WithDiffuse == 1, $"the model's two materials are fitted, one with a diffuse ({fit.Materials.Count}, {fit.WithDiffuse})");
+
+        var request = new BuildRequest
+        {
+            ModRoot         = modRoot,
+            ModName         = "Fitted",
+            DisplayName     = "Fitted",
+            PluginDirectory = Path.Combine(AppContext.BaseDirectory, "Studio"),
+            Meta            = new ModMetaInfo(),
+            Items           = new List<ItemBuildRequest>
+            {
+                new()
+                {
+                    Subject            = subject,
+                    Models             = new List<RaceModelEntry> { new() { Race = midF.Race, Gender = midF.Gender, SourcePath = source } },
+                    Materials          = fit.Materials.ToList(),
+                    ModelMaterialSlots = Enumerable.Range(0, fit.Materials.Count).Select(i => new ModelMaterialSlot { MaterialIndex = i }).ToList(),
+                    NativeRaces        = new HashSet<RaceGender> { midF },
+                },
+            },
+        };
+        var report = await new BuildJob(request).Task;
+        Require(report.FatalError == null && report.Failed == 0,
+            $"a build of fitted materials runs ({report.FatalError}{string.Join("; ", report.Entries.Where(e => e.Outcome == BuildOutcome.Failed).Select(e => $"{e.Label}: {e.Detail}"))})");
+
+        var mod = Path.Combine(modRoot, "Fitted");
+        uint? TextureMode(string material)
+        {
+            var file = Directory.EnumerateFiles(mod, material + ".mtrl", SearchOption.AllDirectories).SingleOrDefault();
+            return file == null ? null : MtrlReader.Read(File.ReadAllBytes(file)).ShaderKeys.FirstOrDefault(k => k.Id == 0xB616DC5A)?.Value;
+        }
+        Require(TextureMode("mt_c0201e6000_top_a") == 0x600EF9DF, "the material with the stash's diffuse is written in the diffuse texture mode");
+        var placeholders = TextureMode("mt_c0201e6000_top_b");
+        Require(Directory.EnumerateFiles(mod, "mt_c0201e6000_top_b.mtrl", SearchOption.AllDirectories).Any() && placeholders != 0x600EF9DF,
+            $"the one with only placeholders is written too, and keeps the colour table ({placeholders?.ToString("X8") ?? "the preset's default"})");
+        Require(report.Entries.Count(e => e.Category == BuildCategory.Texture && e.Detail == "flat (no bump) 16x16 dummy") == 2
+                && report.Entries.Count(e => e.Category == BuildCategory.Texture && e.Detail == "white 16x16 dummy") == 4,
+            "every empty slot gets its role's placeholder: a flat normal, a white mask and a white index");
+
+        var model = File.ReadAllBytes(Directory.EnumerateFiles(mod, "*.mdl", SearchOption.AllDirectories).Single());
+        Require(ModelMaterialRewriter.ReadMeshMaterialsStrict(model).SequenceEqual(new[] { "/mt_c0201e6000_top_a.mtrl", "/mt_c0201e6000_top_b.mtrl" }),
+            "each mesh points at the material fitted to its own");
     }
 
     private static void AStoppedWatcherIsNoticed(string root)

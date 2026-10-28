@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import count
 import re
 import uuid
 
@@ -12,6 +13,7 @@ import bpy
 from .io.model.exp.validators import clean_material_path, USHORT_LIMIT
 from .instant_edit.context import (
     MASHUP_SOURCE_MATERIAL_PROPERTY,
+    _LOD_SUFFIX,
     ContextValidationError,
     active_mesh_id_plan,
     context_id_for_object,
@@ -713,6 +715,68 @@ def _rename_mesh_targets(targets, objects=None) -> int:
             obj.name = old_name
         raise
     return len(desired)
+
+
+def rename_mesh_parts(targets, objects=None) -> int:
+    """Rename (object, mesh, part, lod, label) targets in one collision-checked pass."""
+    return _rename_mesh_targets(targets, objects)
+
+
+def split_mesh_label(obj) -> tuple[str, int]:
+    """Return the label and LOD Split by Material names `obj`'s pieces with.
+
+    A plain name such as "Top LOD1" has no mesh ID, so its LOD suffix is read here, up to
+    LOD2 as mesh names allow.
+    """
+    try:
+        lod = mesh_name_info(obj).lod
+    except ContextValidationError:
+        name = str(obj.name).strip()
+        suffix = _LOD_SUFFIX.search(name)
+        if suffix is None or int(suffix.group(1)) > 2 or not name[:suffix.start()].strip():
+            return mesh_display_name(obj), 0
+        return name[:suffix.start()].rstrip(), int(suffix.group(1))
+    return mesh_display_name(obj), lod
+
+
+def split_mesh_plan(meshes, taken) -> dict[tuple[str, str | None], tuple[int, int, int, str]]:
+    """Number the meshes Split by Material makes, one per material.
+
+    `meshes` holds (name, label, lod, materials) per selected mesh, `materials` naming
+    the materials its faces use in slot order (None for an empty slot). `taken` holds
+    the mesh numbers the other visible meshes keep. Each material gets the next free
+    number in order of first appearance, meshes by name and then slot order. Its pieces
+    are parts 0 to n-1 in name order. A LOD joins the part with its label that has no
+    piece at that LOD yet, and a split mesh's pieces add their material to the label.
+    Returns (name, material) -> (mesh, part, lod, label).
+    """
+    meshes = sorted(meshes, key=lambda mesh: mesh[0])
+    taken = set(taken)
+    free = (number for number in count() if number not in taken)
+    numbers = {}
+    for _name, _label, _lod, materials in meshes:
+        for material in materials:
+            if material not in numbers:
+                numbers[material] = next(free)
+    parts = defaultdict(int)
+    labelled = defaultdict(list)
+    filled = set()
+    plan = {}
+    for name, label, lod, materials in meshes:
+        for material in materials:
+            group = numbers[material]
+            if len(materials) > 1 and material is not None:
+                piece_label = f"{label} {material}"
+            else:
+                piece_label = label
+            part = next((part for part in labelled[group, piece_label] if (group, part, lod) not in filled), None)
+            if part is None:
+                part = parts[group]
+                parts[group] += 1
+                labelled[group, piece_label].append(part)
+            filled.add((group, part, lod))
+            plan[name, material] = (group, part, lod, piece_label)
+    return plan
 
 
 def _property(obj, name: str, default=None):

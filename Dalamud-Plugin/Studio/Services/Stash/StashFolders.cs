@@ -5,47 +5,98 @@ using System.Linq;
 
 namespace InstantEdit.Studio.Services.Stash;
 
-/// <summary>The stash's folders: extractions under the importer's output folder (listed, counted, removed) and folders the user opened.</summary>
+/// <summary>
+/// The stash's folders: extractions under the importer's output folder and Blender's under the cache's
+/// package-imports (listed, counted, removed), and folders the user opened.
+/// </summary>
 internal static class StashFolders
 {
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".dds", ".tex", ".tif", ".tiff" };
 
     /// <summary>
-    /// Every subfolder of <paramref name="outputDir"/> an extraction made, newest first. Only a folder
-    /// holding an extraction's own bookkeeping (stash.json, its report or the Sims file list) counts:
-    /// the output folder may be one the user picked, with folders of their own in it.
+    /// Every subfolder of <paramref name="outputDir"/> an extraction (or Blender) made, newest first.
+    /// Only a folder holding an extraction's own bookkeeping (stash.json, its report, the Sims file
+    /// list or Blender's list of exports) counts: the output folder may be one the user picked, with
+    /// folders of their own in it.
     /// </summary>
-    public static IReadOnlyList<string> ListExtractions(string outputDir)
+    public static IReadOnlyList<string> ListExtractions(string outputDir) => Newest(Extractions(outputDir));
+
+    /// <summary>
+    /// The stash's extractions: those under <paramref name="outputDir"/> and, when the user picked another
+    /// output folder, the folders under <paramref name="blenderDir"/> (the cache's package-imports, where
+    /// Blender always saves) that hold Blender's list of exports; newest first.
+    /// </summary>
+    public static IReadOnlyList<string> ListStash(string outputDir, string? blenderDir)
     {
-        IEnumerable<string> folders;
+        var folders = Extractions(outputDir);
+        if (blenderDir != null && !SameFolder(outputDir, blenderDir))
+            folders = folders.Concat(Extractions(blenderDir).Where(f => Holds(f, BlenderExports.FileName)));
+        return Newest(folders);
+    }
+
+    /// <summary>The folder <paramref name="folder"/> was listed from, to remove it from: <paramref name="blenderDir"/> for one of its own, else the output folder.</summary>
+    public static string RootOf(string folder, string outputDir, string? blenderDir)
+        => blenderDir != null && SameFolder(Path.GetDirectoryName(folder) ?? string.Empty, blenderDir) ? blenderDir : outputDir;
+
+    private static IEnumerable<string> Extractions(string root)
+    {
         try
         {
-            if (!Directory.Exists(outputDir))
+            if (!Directory.Exists(root))
                 return Array.Empty<string>();
-            folders = Directory.EnumerateDirectories(outputDir).ToList();
+            // An earlier run moved aside during a re-extraction is the new run's to finish or put back.
+            return Directory.EnumerateDirectories(root).ToList()
+                            .Where(d => !d.EndsWith(ExtractionFolder.AsideSuffix, StringComparison.OrdinalIgnoreCase) && IsExtraction(d));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return Array.Empty<string>();
         }
-        return folders.Where(IsExtraction)
-            .Select(d => (Folder: d, When: StashManifest.Read(d)?.ExtractedUtc is { } at && at > DateTime.MinValue ? at : SafeWriteTime(d)))
-            .OrderByDescending(x => x.When)
-            .Select(x => x.Folder)
-            .ToList();
     }
 
-    /// <summary>Whether an extraction made <paramref name="folder"/>: it holds stash.json, extract-report.txt or the Sims importer's file list.</summary>
-    public static bool IsExtraction(string folder)
+    private static IReadOnlyList<string> Newest(IEnumerable<string> folders)
+        => folders.Select(d => (Folder: d, When: StashManifest.Read(d)?.ExtractedUtc is { } at && at > DateTime.MinValue ? at : SafeWriteTime(d)))
+                  .OrderByDescending(x => x.When)
+                  .Select(x => x.Folder)
+                  .ToList();
+
+    /// <summary>
+    /// Whether an extraction made <paramref name="folder"/>: it holds stash.json, extract-report.txt, the
+    /// Sims importer's file list, or the list of models Blender saved there.
+    /// </summary>
+    public static bool IsExtraction(string folder) => HoldsImport(folder) || Holds(folder, BlenderExports.FileName);
+
+    /// <summary>
+    /// Whether Blender alone made <paramref name="folder"/>: Blender's list of exports is its only
+    /// bookkeeping, with none of an import's (stash.json, extract-report.txt, the Sims file list).
+    /// </summary>
+    public static bool IsFromBlender(string folder) => Holds(folder, BlenderExports.FileName) && !HoldsImport(folder);
+
+    private static bool HoldsImport(string folder)
+        => Holds(folder, StashManifest.FileName) || Holds(folder, "extract-report.txt") || Holds(folder, Sims.SimsPackageInspector.ManifestName);
+
+    private static bool Holds(string folder, string file)
     {
         try
         {
-            return File.Exists(Path.Combine(folder, StashManifest.FileName))
-                || File.Exists(Path.Combine(folder, "extract-report.txt"))
-                || File.Exists(Path.Combine(folder, Sims.SimsPackageInspector.ManifestName));
+            return File.Exists(Path.Combine(folder, file));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Whether two typed paths name one folder; a path that can't be read names none.</summary>
+    private static bool SameFolder(string a, string b)
+    {
+        try
+        {
+            return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             return false;
         }
@@ -100,8 +151,9 @@ internal static class StashFolders
     }
 
     /// <summary>
-    /// Deletes an extraction folder. Only a folder strictly inside <paramref name="outputDir"/> is
-    /// ever removed. Returns why it was not, or null once it is gone.
+    /// Deletes an extraction folder. Only a folder strictly inside <paramref name="outputDir"/> (the
+    /// folder it was listed from, see <see cref="RootOf"/>) is ever removed. Returns why it was not, or
+    /// null once it is gone.
     /// </summary>
     public static string? Remove(string outputDir, string folder)
     {

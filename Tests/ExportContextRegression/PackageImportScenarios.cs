@@ -1,4 +1,5 @@
 using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Services.Sims;
 using InstantEdit.Studio.Services.Stash;
 using InstantEdit.Studio.Services.Unity;
 using static InstantEdit.TestSupport.Assertions;
@@ -22,6 +23,7 @@ internal static class PackageImportScenarios
         MaterialTexturesAreRead();
         PrefabMaterialsAreRead();
         NormalMapFlagIsRead(root);
+        MaterialRemapIsRead();
         HostilePathsAreRefused(root);
         ExtractKeepsLayout(root);
         UnwantedAssetBytesAreNotKept(root);
@@ -38,8 +40,12 @@ internal static class PackageImportScenarios
         LegacyFolderIsScanned(root);
         ReExtractReplacesManifest(root);
         PackagesExtractedTogetherShareAFolder(root);
+        UnityManifestNamesModelMaterials(root);
+        MaterialNamesRoundTrip(root);
 
         StashApplyMapsPurposes(root);
+        StashApplyFillsSlots(root);
+        ItemsAreOnTheModelsTheirNamesTell(root);
         ExtractionsAreListedNewestFirst(root);
         RemoveStaysInsideTheOutputFolder(root);
 
@@ -47,8 +53,525 @@ internal static class PackageImportScenarios
         StoppedFirstExtractLeavesNothing(root);
         TypedFolderIsListedOnceSettled();
         OpenedFolderReadsUnityMetadata(root);
+        OpenedFolderNamesModelMaterials(root);
         FolderScanStopsAtItsCap(root);
         OpenedFoldersAreRememberedNotDeleted(root);
+
+        BlenderSidecarIsRead(root);
+        BlenderExportsAreMerged(root);
+        SidecarMakesAStashFolder(root);
+        FinishCarriesBlenderExportsOver(root);
+        FailedCarryOverIsTakenUpByTheNextRun(root);
+        ReExtractKeepsBlenderExports(root);
+        LeftoverEarlierRunGivesUpItsBlenderExports(root);
+        SimsReExtractKeepsBlenderExports(root);
+        BlenderFoldersAreListedBesideAPickedOutput(root);
+        SidecarOnlyFolderIsFromBlender(root);
+        BlenderWritesAreNoticed(root);
+
+        ModelMaterialNamesAreNormalized();
+        LookupFindsTheTextureFolder(root);
+        LookupMatchesMaterials(root);
+        LookupByWordsPrefersADiffuse(root);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Models saved from Blender
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static string Sidecar(string models, int version = 1) =>
+        $$"""{ "schema": "instant-edit.blender-exports", "version": {{version}}, "models": [{{models}}] }""";
+
+    private static void WriteBlenderExport(string folder)
+    {
+        Directory.CreateDirectory(Path.Combine(folder, "Blender"));
+        File.WriteAllBytes(Path.Combine(folder, "Blender", "Top.mdl"), new byte[] { 7 });
+        File.WriteAllText(Path.Combine(folder, BlenderExports.FileName), Sidecar("""{ "file": "Blender/Top.mdl", "sources": ["G:/stash/Kaihua/Models/Kaihua.fbx"] }"""));
+    }
+
+    private static void BlenderSidecarIsRead(string root)
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(root, "sidecar-read")).FullName;
+        var sidecar = Path.Combine(folder, BlenderExports.FileName);
+        Require(BlenderExports.Read(folder).Count == 0, "a folder without a sidecar lists no Blender models");
+
+        File.WriteAllText(sidecar, Sidecar("""
+            { "file": "Blender/Top.mdl", "exportedUtc": "2026-10-27T12:00:00Z", "sources": ["G:/stash/Kaihua/Models/Kaihua.fbx", "G:/stash/Kaihua/Models/Extra.fbx"] },
+            { "file": "Blender\\Legs.mdl", "exportedUtc": "2026-10-27T12:01:00Z" },
+            { "exportedUtc": "2026-10-27T12:02:00Z", "sources": ["G:/a.fbx"] },
+            { "file": 5 },
+            { "file": "../outside.mdl" },
+            { "file": "C:/elsewhere/x.mdl" },
+            "not a model"
+            """));
+        var read = BlenderExports.Read(folder);
+        Require(read.Select(m => m.File).SequenceEqual(new[] { "Blender/Top.mdl", "Blender/Legs.mdl" }),
+            $"the sidecar's models are read with '/' paths; entries without a file, or with one outside the folder, are skipped ({string.Join(", ", read.Select(m => m.File))})");
+        Require(read.Count == 2 && read[0].Sources.SequenceEqual(new[] { "G:/stash/Kaihua/Models/Kaihua.fbx", "G:/stash/Kaihua/Models/Extra.fbx" }) && read[1].Sources.Count == 0,
+            "each model keeps its source files in order; one without sources has none");
+
+        File.WriteAllText(sidecar, Sidecar("""{ "file": "Blender/Top.mdl" }""", version: 2));
+        Require(BlenderExports.Read(folder).Count == 0, "a sidecar of an unknown version is ignored");
+        File.WriteAllText(sidecar, """{ "schema": "something-else", "version": 1, "models": [{ "file": "Blender/Top.mdl" }] }""");
+        Require(BlenderExports.Read(folder).Count == 0, "a file of another schema is ignored");
+        File.WriteAllText(sidecar, """{ "models": [ not json""");
+        Require(BlenderExports.Read(folder).Count == 0, "a damaged sidecar reads as none");
+    }
+
+    private static void BlenderExportsAreMerged(string root)
+    {
+        var folder = Path.Combine(root, "sidecar-merge");
+        Directory.CreateDirectory(Path.Combine(folder, "Blender"));
+        File.WriteAllBytes(Path.Combine(folder, "Blender", "Top.mdl"), new byte[] { 1 });
+        File.WriteAllBytes(Path.Combine(folder, "Blender", "Listed.mdl"), new byte[] { 1 });
+        File.WriteAllText(Path.Combine(folder, BlenderExports.FileName), Sidecar("""
+            { "file": "Blender/Top.mdl", "sources": ["G:/stash/Kaihua/Models/Kaihua.fbx"] },
+            { "file": "blender/listed.mdl" },
+            { "file": "Blender/Gone.mdl" }
+            """));
+        var manifest = new StashManifest { Source = folder, SourceKind = "unity" };
+        manifest.Entries.Add(new StashEntry { Path = "Blender/Listed.mdl", Kind = StashKind.Model, Detail = "mine" });
+
+        BlenderExports.Merge(manifest, folder);
+        BlenderExports.Merge(manifest, folder);
+        var added = manifest.Entries.Where(e => e.Path == "Blender/Top.mdl").ToList();
+        Require(added.Count == 1 && added[0] is { Kind: StashKind.Model, Detail: "from Blender", NeedsConversion: false },
+            "a model Blender saved is listed once, as a model from Blender, however often it is merged");
+        Require(manifest.Entries.Count == 2 && manifest.Entries[0].Detail == "mine",
+            $"a file already listed is left as it is, and one that isn't there is skipped ({string.Join(", ", manifest.Entries.Select(e => e.Path))})");
+    }
+
+    private static void SidecarMakesAStashFolder(string root)
+    {
+        var output = Path.Combine(root, "sidecar-listing");
+        var folder = Path.Combine(output, "Kaihua");
+        WriteBlenderExport(folder);
+        File.WriteAllText(Path.Combine(folder, BlenderExports.FileName + ".tmp"), "{");
+        Require(StashFolders.IsExtraction(folder) && StashFolders.ListExtractions(output).Select(Path.GetFileName).SequenceEqual(new[] { "Kaihua" }),
+            "a folder holding only Blender's sidecar is listed in the stash");
+        Require(StashManifest.IsBookkeeping(BlenderExports.FileName) && StashManifest.IsBookkeeping("Blender-Exports.json.tmp"),
+            "the sidecar and its .tmp are bookkeeping");
+        Require(StashManifest.Scan(folder).Entries.Select(e => e.Path).SequenceEqual(new[] { "Blender/Top.mdl" }),
+            "a scan lists the model, not the sidecar or its .tmp");
+    }
+
+    private static void FinishCarriesBlenderExportsOver(string root)
+    {
+        var output = Path.Combine(root, "carry-out");
+        var earlier = Path.Combine(output, "pkg");
+        WriteBlenderExport(earlier);
+        Directory.CreateDirectory(Path.Combine(earlier, "Blender", "Sizes"));
+        File.WriteAllBytes(Path.Combine(earlier, "Blender", "Sizes", "Top_L.mdl"), new byte[] { 2 });
+        File.WriteAllBytes(Path.Combine(earlier, "Blender", "Shared.blend"), new byte[] { 3 });
+        File.WriteAllBytes(Path.Combine(earlier, "old.png"), PngBytes);
+
+        var claim = ExtractionFolder.Claim(output, "pkg", _ => true);
+        Require(claim.Path == earlier && Directory.Exists(earlier + ".previous"), "the earlier run is moved aside");
+        // This run's package has a Blender folder of its own.
+        Directory.CreateDirectory(Path.Combine(claim.Path, "Blender"));
+        File.WriteAllBytes(Path.Combine(claim.Path, "Blender", "Shared.blend"), new byte[] { 9 });
+        File.WriteAllBytes(Path.Combine(claim.Path, "new.png"), PngBytes);
+        claim.Finish();
+
+        Require(File.Exists(Path.Combine(earlier, "Blender", "Top.mdl")) && File.Exists(Path.Combine(earlier, "Blender", "Sizes", "Top_L.mdl"))
+                && File.Exists(Path.Combine(earlier, BlenderExports.FileName)),
+            "the models Blender saved into the earlier run, and its sidecar, move into the new run");
+        Require(File.ReadAllBytes(Path.Combine(earlier, "Blender", "Shared.blend")).SequenceEqual(new byte[] { 9 }) && File.Exists(Path.Combine(earlier, "new.png")),
+            "a file the new run wrote under the same name is kept");
+        Require(!File.Exists(Path.Combine(earlier, "old.png")) && !Directory.Exists(earlier + ".previous"), "the rest of the earlier run goes");
+    }
+
+    private static void FailedCarryOverIsTakenUpByTheNextRun(string root)
+    {
+        var output = Path.Combine(root, "carry-locked-out");
+        var folder = Path.Combine(output, "pkg");
+        var aside = folder + ".previous";
+        WriteBlenderExport(folder);
+
+        var claim = ExtractionFolder.Claim(output, "pkg", _ => true);
+        Directory.CreateDirectory(claim.Path);
+        // A model another program holds open can't be moved.
+        using (File.Open(Path.Combine(aside, "Blender", "Top.mdl"), FileMode.Open, FileAccess.Read, FileShare.None))
+            claim.Finish();
+        Require(File.Exists(Path.Combine(aside, "Blender", "Top.mdl")) && File.Exists(Path.Combine(aside, BlenderExports.FileName))
+                && !File.Exists(Path.Combine(folder, BlenderExports.FileName)),
+            "a carry-over that fails keeps the earlier run, sidecar included, so the new run lists no model it lacks");
+
+        var next = ExtractionFolder.Claim(output, "pkg", _ => true);
+        Directory.CreateDirectory(next.Path);
+        next.Finish();
+        Require(File.Exists(Path.Combine(folder, "Blender", "Top.mdl")) && File.Exists(Path.Combine(folder, BlenderExports.FileName)) && !Directory.Exists(aside),
+            "the next run takes the models left in the earlier run before clearing it");
+    }
+
+    private static void ReExtractKeepsBlenderExports(string root)
+    {
+        var output = Path.Combine(root, "blender-reextract-out");
+        var scan = UnityPackageReader.Scan(BasicPackage(root, "exported"), _ => { }, CancellationToken.None);
+        var first = UnityPackageReader.Extract(scan, output, _ => { }, CancellationToken.None);
+        WriteBlenderExport(first.RootFolder);
+
+        var again = UnityPackageReader.Extract(scan, output, _ => { }, CancellationToken.None);
+        Require(again.RootFolder == first.RootFolder && Directory.GetDirectories(output).Length == 1,
+            "re-extracting a package Blender saved models into reuses its folder");
+        Require(File.Exists(Path.Combine(again.RootFolder, "Blender", "Top.mdl")) && File.Exists(Path.Combine(again.RootFolder, BlenderExports.FileName)),
+            "the models and the sidecar survive the re-extraction");
+        var manifest = StashManifest.Read(again.RootFolder)!;
+        BlenderExports.Merge(manifest, again.RootFolder);
+        Require(manifest.Entries.Any(e => e is { Path: "Blender/Top.mdl", Detail: "from Blender" }), "and the stash lists them from Blender");
+
+        // A folder Blender made on its own holds no package's earlier run.
+        var solo = Path.Combine(output, "solo");
+        WriteBlenderExport(solo);
+        var claimed = UnityPackageReader.Extract(UnityPackageReader.Scan(BasicPackage(root, "solo"), _ => { }, CancellationToken.None), output, _ => { }, CancellationToken.None);
+        Require(claimed.RootFolder == solo + "_2" && File.Exists(Path.Combine(solo, "Blender", "Top.mdl")),
+            "a package of the same name leaves a folder of Blender exports alone and uses a numbered one");
+    }
+
+    private static void LeftoverEarlierRunGivesUpItsBlenderExports(string root)
+    {
+        // An earlier run of the package left as .previous beside the live one, holding the models Blender saved into it.
+        var output = Path.Combine(root, "leftover-out");
+        var scan = UnityPackageReader.Scan(BasicPackage(root, "leftover"), _ => { }, CancellationToken.None);
+        var live = UnityPackageReader.Extract(scan, output, _ => { }, CancellationToken.None);
+        var stale = UnityPackageReader.Extract(scan, Path.Combine(root, "leftover-stale"), _ => { }, CancellationToken.None);
+        var aside = live.RootFolder + ".previous";
+        Directory.Move(stale.RootFolder, aside);
+        WriteBlenderExport(aside);
+
+        var again = UnityPackageReader.Extract(scan, output, _ => { }, CancellationToken.None);
+        Require(again.RootFolder == live.RootFolder && File.Exists(Path.Combine(again.RootFolder, "Blender", "Top.mdl"))
+                && File.Exists(Path.Combine(again.RootFolder, BlenderExports.FileName)),
+            "re-extracting takes the Blender models out of an earlier run left beside the folder");
+        Require(!Directory.Exists(aside) && Directory.GetDirectories(output).Length == 1, "and that earlier run is cleared");
+    }
+
+    private static void SimsReExtractKeepsBlenderExports(string root)
+    {
+        var source = Directory.CreateDirectory(Path.Combine(root, "sims-blender")).FullName;
+        var output = Path.Combine(root, "sims-blender-out");
+        string Package(string name)
+        {
+            var path = Path.Combine(source, name + ".package");
+            SimsImportScenarios.WritePackage(path, new SimsImportScenarios.Res(SimsResourceType.ImgOverlay, 1, SimsImportScenarios.UncompressedDds(4, 4, pixels: 16)));
+            return path;
+        }
+
+        var scan = SimsPackageInspector.Scan(Package("dress"));
+        var first = SimsPackageInspector.Extract(scan, output);
+        WriteBlenderExport(first.RootFolder);
+        var again = SimsPackageInspector.Extract(scan, output);
+        Require(again.RootFolder == first.RootFolder && File.Exists(Path.Combine(again.RootFolder, "Blender", "Top.mdl"))
+                && File.Exists(Path.Combine(again.RootFolder, BlenderExports.FileName)),
+            "re-extracting a Sims package reuses its folder and keeps the models Blender saved into it");
+
+        var solo = Path.Combine(output, "lone");
+        WriteBlenderExport(solo);
+        var claimed = SimsPackageInspector.Extract(SimsPackageInspector.Scan(Package("lone")), output);
+        Require(claimed.RootFolder == solo + "_2" && File.Exists(Path.Combine(solo, "Blender", "Top.mdl")),
+            "a Sims package of the same name leaves a folder of Blender exports alone");
+    }
+
+    private static void BlenderFoldersAreListedBesideAPickedOutput(string root)
+    {
+        // The user picked an output folder of their own; Blender still saves into the cache's package-imports.
+        var output = Path.Combine(root, "picked-out");
+        var imports = Path.Combine(root, "picked-imports");
+        var mine = Directory.CreateDirectory(Path.Combine(output, "mine")).FullName;
+        File.WriteAllText(Path.Combine(mine, StashManifest.FileName), "{}");
+        var kaihua = Path.Combine(imports, "Kaihua");
+        WriteBlenderExport(kaihua);
+        var saved = Path.Combine(imports, "saved");
+        WriteBlenderExport(saved);
+        File.WriteAllText(Path.Combine(saved, StashManifest.FileName), "{}");
+        var plain = Directory.CreateDirectory(Path.Combine(imports, "plain")).FullName;
+        File.WriteAllText(Path.Combine(plain, StashManifest.FileName), "{}");
+        Directory.SetLastWriteTimeUtc(saved, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        Directory.SetLastWriteTimeUtc(mine, new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc));
+        Directory.SetLastWriteTimeUtc(kaihua, new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc));
+        Directory.SetLastWriteTimeUtc(plain, new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+
+        var listed = StashFolders.ListStash(output, imports);
+        Require(listed.SequenceEqual(new[] { kaihua, mine, saved }),
+            $"beside the output folder's extractions, the package-imports folders Blender saved into are listed, newest first; one it never saved into stays out ({string.Join(", ", listed.Select(Path.GetFileName))})");
+        var same = StashFolders.ListStash(imports, imports.ToUpperInvariant() + Path.DirectorySeparatorChar);
+        Require(same.Select(Path.GetFileName).SequenceEqual(new[] { "plain", "Kaihua", "saved" }),
+            $"with package-imports as the output folder, each of its extractions is listed once ({string.Join(", ", same.Select(Path.GetFileName))})");
+        Require(StashFolders.ListStash(output, null).SequenceEqual(new[] { mine }) && StashFolders.ListStash(output, Path.Combine(root, "no-imports")).SequenceEqual(new[] { mine }),
+            "without a package-imports folder, only the output folder is listed");
+
+        Require(StashFolders.RootOf(kaihua, output, imports) == imports && StashFolders.RootOf(mine, output, imports) == output
+                && StashFolders.RootOf(mine, output, null) == output,
+            "a folder belongs to the folder it was listed from");
+        Require(StashFolders.Remove(StashFolders.RootOf(kaihua, output, imports), kaihua) == null && !Directory.Exists(kaihua),
+            "a Blender folder listed beside a picked output folder can be removed");
+    }
+
+    private static void SidecarOnlyFolderIsFromBlender(string root)
+    {
+        var folder = Path.Combine(root, "from-blender");
+        WriteBlenderExport(folder);
+        Require(StashFolders.IsFromBlender(folder), "a folder whose only bookkeeping is Blender's sidecar is from Blender");
+        foreach (var marker in new[] { StashManifest.FileName, "extract-report.txt", SimsPackageInspector.ManifestName })
+        {
+            var imported = Path.Combine(root, "imported-" + Path.GetFileNameWithoutExtension(marker));
+            WriteBlenderExport(imported);
+            File.WriteAllText(Path.Combine(imported, marker), "{}");
+            Require(!StashFolders.IsFromBlender(imported), $"a folder an import made ({marker}) isn't from Blender, though Blender saved into it");
+        }
+        var plain = Directory.CreateDirectory(Path.Combine(root, "no-sidecar")).FullName;
+        File.WriteAllBytes(Path.Combine(plain, "a.png"), PngBytes);
+        Require(!StashFolders.IsFromBlender(plain) && !StashFolders.IsFromBlender(Path.Combine(root, "not-there")),
+            "a folder without the sidecar isn't from Blender");
+    }
+
+    private static void BlenderWritesAreNoticed(string root)
+    {
+        // Blender saves into the cache's package-imports; the user picked another output folder.
+        var output = Directory.CreateDirectory(Path.Combine(root, "watch-out")).FullName;
+        var imports = Path.Combine(root, "watch-imports");
+        var shown = Path.Combine(imports, "Kaihua");
+        var sidecar = Path.Combine(shown, BlenderExports.FileName);
+        WriteBlenderExport(shown);
+        var other = Path.Combine(imports, "Other");
+        WriteBlenderExport(other);
+        var imported = Directory.CreateDirectory(Path.Combine(imports, "imported")).FullName;
+        File.WriteAllText(Path.Combine(imported, StashManifest.FileName), "{}");
+
+        // Write times only tick every few milliseconds: everything is dated well back first, so each write shows.
+        var old = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var watch = new StashWatch();
+        void Settle(string folder)
+        {
+            foreach (var file in Directory.GetFiles(imports, BlenderExports.FileName, SearchOption.AllDirectories))
+                File.SetLastWriteTimeUtc(file, old);
+            foreach (var dir in new[] { output, imports }.Concat(Directory.GetDirectories(output)).Concat(Directory.GetDirectories(imports)))
+                Directory.SetLastWriteTimeUtc(dir, old);
+            watch.Listing(output, imports);
+            watch.Showing(folder);
+        }
+        void Rewrite(string path)
+        {
+            File.WriteAllText(path + ".tmp", Sidecar("""{ "file": "Blender/Top.mdl" }, { "file": "Blender/Legs.mdl" }"""));
+            File.Move(path + ".tmp", path, overwrite: true);
+        }
+
+        Settle(shown);
+        Require(!watch.FoldersChanged() && !watch.ShownChanged(), "with nothing written, nothing is read again");
+
+        // Another model into the shown folder: the model first, then the sidecar (a .tmp, then replaced).
+        File.WriteAllBytes(Path.Combine(shown, "Blender", "Legs.mdl"), new byte[] { 1 });
+        Require(!watch.ShownChanged(), "a model written before the sidecar lists it doesn't re-show the folder yet");
+        Rewrite(sidecar);
+        Require(watch.ShownChanged(), "the sidecar written again re-shows the folder shown");
+        watch.Showing(shown);
+        Require(!watch.ShownChanged(), "once shown again, it isn't re-shown until the next write");
+
+        Settle(shown);
+        Rewrite(Path.Combine(other, BlenderExports.FileName));
+        Require(!watch.ShownChanged(), "a sidecar written in another folder doesn't re-show the one shown");
+        Require(watch.FoldersChanged(), "it re-lists the folders, so the one saved into moves up");
+
+        // An import Blender saves into for the first time.
+        Settle(imported);
+        Rewrite(Path.Combine(imported, BlenderExports.FileName));
+        Require(watch.ShownChanged(), "a first sidecar in the folder shown re-shows it");
+
+        // A new folder: Blender makes it and writes the model, and only then the sidecar.
+        Settle(shown);
+        var fresh = Path.Combine(imports, "Fresh");
+        Directory.CreateDirectory(Path.Combine(fresh, "Blender"));
+        File.WriteAllBytes(Path.Combine(fresh, "Blender", "Fresh.mdl"), new byte[] { 1 });
+        Require(watch.FoldersChanged(), "a new folder in package-imports re-lists, though the user picked another output folder");
+        Settle(shown);
+        Require(!StashFolders.ListStash(output, imports).Contains(fresh), "listed before its sidecar landed, the new folder isn't in the list yet");
+        Rewrite(Path.Combine(fresh, BlenderExports.FileName));
+        Require(watch.FoldersChanged() && StashFolders.ListStash(output, imports).Contains(fresh),
+            "its sidecar landing afterwards re-lists, and then it is listed");
+        Require(!watch.ShownChanged(), "a new folder never re-shows the one shown");
+
+        Settle(shown);
+        Directory.CreateDirectory(Path.Combine(output, "new"));
+        Require(watch.FoldersChanged(), "a folder made in the output folder re-lists");
+        Settle(shown);
+        Directory.Delete(other, recursive: true);
+        Require(watch.FoldersChanged(), "a folder removed re-lists");
+
+        var none = new StashWatch();
+        Require(!none.FoldersChanged() && !none.ShownChanged(), "before anything is listed or shown, nothing is read again");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Textures for a model's materials
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static string Touch(string folder, string relative)
+    {
+        var path = Path.GetFullPath(Path.Combine(folder, relative.Replace('/', Path.DirectorySeparatorChar)));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, PngBytes);
+        return path;
+    }
+
+    /// <summary>A model Blender saved into <paramref name="folder"/>, listed in its sidecar as made from <paramref name="sources"/>.</summary>
+    private static string SaveFromBlender(string folder, string file, params string[] sources)
+    {
+        var model = Touch(folder, file);
+        var listed = string.Join(", ", sources.Select(s => $"\"{s.Replace('\\', '/')}\""));
+        File.WriteAllText(Path.Combine(folder, BlenderExports.FileName), Sidecar($$"""{ "file": "{{file}}", "sources": [{{listed}}] }"""));
+        return model;
+    }
+
+    /// <summary>
+    /// A VRChat outfit's extraction: its model's meta maps "Body" to the Unity material Mat_Skin, three
+    /// materials list their textures, and two texture sets (a shirt, gloves with a cow variant) no material lists.
+    /// </summary>
+    private static string OutfitExtraction(string stash)
+    {
+        var outfit = Path.GetFullPath(Path.Combine(stash, "Outfit"));
+        if (Directory.Exists(outfit))
+            Directory.Delete(outfit, true);
+        var manifest = new StashManifest { Source = @"C:\p\Outfit.unitypackage", SourceKind = "unity", ExtractedUtc = DateTime.UtcNow };
+        Touch(outfit, "Models/Outfit.fbx");
+        manifest.Entries.Add(new StashEntry
+        {
+            Path = "Models/Outfit.fbx", Kind = StashKind.Model, NeedsConversion = true, MaterialNames = new() { ["Body"] = "Mat_Skin" },
+        });
+        foreach (var (path, purpose) in new[]
+                 {
+                     ("Textures/skin_d.png", TexturePurpose.Diffuse), ("Textures/skin_n.png", TexturePurpose.Normal),
+                     ("Textures/body.png", TexturePurpose.Diffuse), ("Textures/hair.png", TexturePurpose.Diffuse),
+                     ("Textures/Outfit_Shirt.png", TexturePurpose.Diffuse), ("Textures/Outfit_Shirt_Normal.png", TexturePurpose.Normal),
+                     ("Textures/Outfit_Gloves.png", TexturePurpose.Diffuse), ("Textures/Outfit_Gloves_Cow.png", TexturePurpose.Diffuse),
+                     ("Textures/Outfit_Gloves_Normal.png", TexturePurpose.Normal),
+                 })
+        {
+            Touch(outfit, path);
+            manifest.Entries.Add(new StashEntry { Path = path, Kind = StashKind.Texture, Purpose = purpose });
+        }
+        manifest.Materials.Add(new StashMaterial { Name = "Mat_Skin", Textures = { [TexturePurpose.Diffuse] = "Textures/skin_d.png", [TexturePurpose.Normal] = "Textures/skin_n.png" } });
+        manifest.Materials.Add(new StashMaterial { Name = "Body", Textures = { [TexturePurpose.Diffuse] = "Textures/body.png" } });
+        manifest.Materials.Add(new StashMaterial { Name = "hair", Textures = { [TexturePurpose.Diffuse] = "Textures/hair.png" } });
+        manifest.Write(outfit);
+        return outfit;
+    }
+
+    private static void ModelMaterialNamesAreNormalized()
+    {
+        Require(ModelTextureLookup.NameOf("/Body.mtrl") == "Body" && ModelTextureLookup.NameOf(@"\Body.MTRL") == "Body",
+            "a model's material is looked up by its name, without the slash and .mtrl");
+        Require(ModelTextureLookup.NameOf("chara/equipment/e6000/material/v0001/mt_c0201e6000_top_a.mtrl") == "mt_c0201e6000_top_a",
+            "a full material path is looked up by its file name");
+        Require(ModelTextureLookup.NameOf("Mat.Skin") == "Mat.Skin" && ModelTextureLookup.NameOf("/Body.001.mtrl") == "Body.001",
+            "a dot in the name is kept: only .mtrl is dropped");
+    }
+
+    private static void LookupFindsTheTextureFolder(string root)
+    {
+        var stash = Path.Combine(root, "lookup-stash");
+        var outfit = OutfitExtraction(stash);
+        var none = Array.Empty<string>();
+
+        // Blender saved into a folder of its own, from the outfit's model.
+        var saves = Path.GetFullPath(Path.Combine(stash, "Saves"));
+        var top = SaveFromBlender(saves, "Blender/Top.mdl", Path.Combine(outfit, "Models", "Outfit.fbx"), Path.Combine(saves, "Other.fbx"));
+        Require(ModelTextureLookup.Open(top, new[] { stash }, none).Folder == outfit,
+            "a Blender export's textures come from the stash folder its first source is in");
+        Require(string.Equals(ModelTextureLookup.Open(top.ToLowerInvariant(), new[] { stash.ToUpperInvariant() }, none).Folder, outfit, StringComparison.OrdinalIgnoreCase),
+            "its sidecar entry and the stash folders are matched whatever their case");
+
+        // Its source in a folder of loose files the user opened (the deepest one that holds it).
+        var avatars = Path.GetFullPath(Path.Combine(root, "lookup-opened"));
+        var avatar = Path.Combine(avatars, "Avatar");
+        Touch(avatar, "FBX/Avatar.fbx");
+        Touch(avatar, "Textures/Avatar_Body.png");
+        Touch(avatar, "Textures/Avatar_Body_Normal.png");
+        var fromAvatar = Path.GetFullPath(Path.Combine(stash, "Avatar"));
+        var avatarModel = SaveFromBlender(fromAvatar, "Blender/Avatar.mdl", Path.Combine(avatar, "FBX", "Avatar.fbx"));
+        var opened = ModelTextureLookup.Open(avatarModel, new[] { stash }, new[] { avatars, avatar });
+        Require(opened.Folder == avatar && opened.Manifest?.SourceKind == "folder",
+            $"an export whose source is in an opened folder takes that folder's textures, scanned ({opened.Folder})");
+        Require(opened.TexturesFor("/Body.mtrl").GetValueOrDefault(TexturePurpose.Normal) == Path.Combine(avatar, "Textures", "Avatar_Body_Normal.png"),
+            "and finds them there");
+        Require(ModelTextureLookup.Open(avatarModel, new[] { stash }, none).Folder == fromAvatar,
+            "an export whose source is in no stash folder takes the textures of the folder it was saved into");
+
+        Require(ModelTextureLookup.Open(Touch(outfit, "Models/Plain.mdl"), new[] { stash }, none).Folder == outfit,
+            "a model of an extraction, not from Blender, takes its own folder's textures");
+        var loose = ModelTextureLookup.Open(Touch(root, "lookup-loose/Top.mdl"), new[] { stash }, none);
+        Require(loose.Folder == null && loose.Manifest == null && loose.TexturesFor("/Body.mtrl").Count == 0,
+            "a model in no stash folder finds no textures");
+        Require(ModelTextureLookup.Open(Touch(stash, "Mine/Top.mdl"), new[] { stash }, none).Folder == null,
+            "a folder in the stash's root that no extraction made is not a stash folder");
+    }
+
+    private static void LookupMatchesMaterials(string root)
+    {
+        var stash = Path.Combine(root, "match-stash");
+        var outfit = OutfitExtraction(stash);
+        var top = SaveFromBlender(Path.Combine(stash, "Saves"), "Blender/Top.mdl", Path.Combine(outfit, "Models", "Outfit.fbx"));
+        var lookup = ModelTextureLookup.Open(top, new[] { stash }, Array.Empty<string>());
+        string Texture(string name) => Path.Combine(outfit, "Textures", name);
+        string Show(IReadOnlyDictionary<TexturePurpose, string> found) => string.Join(", ", found.Select(p => $"{p.Key}={Path.GetFileName(p.Value)}"));
+
+        var body = lookup.TexturesFor("/Body.mtrl");
+        Require(body.Count == 2 && body.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("skin_d.png") && body.GetValueOrDefault(TexturePurpose.Normal) == Texture("skin_n.png"),
+            $"the source model's remap names the Unity material first, before one named the same; paths are full ({Show(body)})");
+        Require(lookup.TexturesFor("body.001").GetValueOrDefault(TexturePurpose.Diffuse) == Texture("skin_d.png"),
+            "the remap is read whatever the case, and without Blender's .001");
+        var hair = lookup.TexturesFor("/HAIR.001.mtrl");
+        Require(hair.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("hair.png"), $"next, the material named the same, whatever the case and without .001 ({Show(hair)})");
+
+        var shirt = lookup.TexturesFor("Shirt");
+        Require(shirt.Count == 2 && shirt.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("Outfit_Shirt.png")
+                && shirt.GetValueOrDefault(TexturePurpose.Normal) == Texture("Outfit_Shirt_Normal.png"),
+            $"next, the texture set whose names hold the material's telling words ({Show(shirt)})");
+        var cow = lookup.TexturesFor("/Cow.mtrl");
+        Require(cow.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("Outfit_Gloves_Cow.png") && cow.GetValueOrDefault(TexturePurpose.Normal) == Texture("Outfit_Gloves_Normal.png"),
+            $"of that set, the texture its words name comes first ({Show(cow)})");
+        Require(lookup.TexturesFor("Gloves").GetValueOrDefault(TexturePurpose.Diffuse) == Texture("Outfit_Gloves.png"), "else the set's own");
+        Require(lookup.TexturesFor("Unrelated").Count == 0 && lookup.TexturesFor("Outfit_Logo").Count == 0, "a name nothing tells finds nothing");
+
+        var plain = ModelTextureLookup.Open(Touch(outfit, "Models/Plain.mdl"), new[] { stash }, Array.Empty<string>());
+        Require(plain.TexturesFor("/Body.mtrl").GetValueOrDefault(TexturePurpose.Diffuse) == Texture("body.png"),
+            "a model without a remap finds the material named the same");
+
+        // Saved beside its source, in the extraction's own Blender folder, as Blender does by default.
+        var beside = ModelTextureLookup.Open(SaveFromBlender(outfit, "Blender/Top.mdl", Path.Combine(outfit, "Models", "Outfit.fbx")),
+            new[] { stash }, Array.Empty<string>());
+        Require(beside.Folder == outfit && beside.TexturesFor("/Body.mtrl").GetValueOrDefault(TexturePurpose.Diffuse) == Texture("skin_d.png"),
+            "an export saved into its package's own folder takes that folder's textures, through its source's remap");
+    }
+
+    /// <summary>
+    /// Of two texture sets the material's words name, the one with a diffuse wins, though the other's names are
+    /// shorter (an "Alternative" set of a normal and a mask); of its diffuses, the one named in the fewest words.
+    /// </summary>
+    private static void LookupByWordsPrefersADiffuse(string root)
+    {
+        var stash = Path.Combine(root, "words-stash");
+        var coat = Path.GetFullPath(Path.Combine(stash, "Coat"));
+        if (Directory.Exists(coat))
+            Directory.Delete(coat, true);
+        var manifest = new StashManifest { Source = @"C:\p\Coat.unitypackage", SourceKind = "unity", ExtractedUtc = DateTime.UtcNow };
+        foreach (var (path, purpose) in new[]
+                 {
+                     ("Alt/Coat_Normal.png", TexturePurpose.Normal), ("Alt/Coat_Mask.png", TexturePurpose.Mask),
+                     ("Main/Coat_Main_Body.png", TexturePurpose.Diffuse), ("Main/Coat_Main_Body-Zebra.png", TexturePurpose.Diffuse),
+                     ("Main/Coat_Main_Body_Normal.png", TexturePurpose.Normal),
+                     ("Gloves/Gloves.png", TexturePurpose.Diffuse), ("Gloves/Gloves_Normal.png", TexturePurpose.Normal),
+                 })
+        {
+            Touch(coat, path);
+            manifest.Entries.Add(new StashEntry { Path = path, Kind = StashKind.Texture, Purpose = purpose });
+        }
+        manifest.Write(coat);
+        var lookup = ModelTextureLookup.Open(Touch(coat, "Models/Coat.mdl"), new[] { stash }, Array.Empty<string>());
+        var found = lookup.TexturesFor("/Coat.mtrl");
+        var shown = string.Join(", ", found.Select(p => $"{p.Key}={Path.GetFileName(p.Value)}"));
+        Require(found.GetValueOrDefault(TexturePurpose.Diffuse) == Path.Combine(coat, "Main", "Coat_Main_Body.png")
+                && found.GetValueOrDefault(TexturePurpose.Normal) == Path.Combine(coat, "Main", "Coat_Main_Body_Normal.png"),
+            $"the set with a diffuse is picked, and of its diffuses the one in the fewest words ({shown})");
     }
 
     private static void StoppedReExtractKeepsTheEarlierOne(string root)
@@ -128,6 +651,26 @@ internal static class PackageImportScenarios
         Require(manifest.Entries.Any(e => e.Path == "FBX/m.fbx" && e.NeedsConversion), "its models are listed too");
     }
 
+    private static void OpenedFolderNamesModelMaterials(string root)
+    {
+        var folder = Path.Combine(root, "raw-remap");
+        Directory.CreateDirectory(Path.Combine(folder, "FBX"));
+        Directory.CreateDirectory(Path.Combine(folder, "Materials"));
+        // An avatar's .fbx meta runs long: its rig follows the remap.
+        var meta = Path.Combine(folder, "FBX", "Model.fbx.meta");
+        File.WriteAllBytes(Path.Combine(folder, "FBX", "Model.fbx"), new byte[] { 9 });
+        File.WriteAllText(meta, ModelMeta(GuidModel, ("Body", GuidMat), ("Hair", "66666666666666666666666666666666")) + Rig(600));
+        File.WriteAllBytes(Path.Combine(folder, "FBX", "Plain.fbx"), new byte[] { 8 });
+        File.WriteAllText(Path.Combine(folder, "Materials", "skin.mat"), MaterialText("Skin", GuidTex, GuidNormal));
+        File.WriteAllText(Path.Combine(folder, "Materials", "skin.mat.meta"), $"fileFormatVersion: 2\nguid: {GuidMat}\nNativeFormatImporter:\n");
+
+        var manifest = StashManifest.Scan(folder);
+        var model = manifest.Entries.FirstOrDefault(e => e.Path == "FBX/Model.fbx");
+        Require(new FileInfo(meta).Length > 64 * 1024 && model?.MaterialNames is { Count: 1 } names && names.GetValueOrDefault("Body") == "Skin",
+            $"an opened folder's model names the Unity material each of its materials maps to, found through the .mat's meta, however long its own meta runs; a GUID the folder lacks is dropped ({Show(model?.MaterialNames)})");
+        Require(manifest.Entries.Where(e => e != model).All(e => e.MaterialNames == null), "a model without a meta, and every other file, names none");
+    }
+
     private static void FolderScanStopsAtItsCap(string root)
     {
         var folder = Path.Combine(root, "big-folder");
@@ -181,12 +724,14 @@ internal static class PackageImportScenarios
         File.WriteAllText(Path.Combine(newer, "notes.txt"), "x");
         File.WriteAllText(Path.Combine(newer, "stash.json"), "{}");
         File.WriteAllBytes(Path.Combine(user, "texture.png"), PngBytes);
+        var aside = Directory.CreateDirectory(Path.Combine(output, "newer.previous")).FullName;
+        File.WriteAllText(Path.Combine(aside, "stash.json"), "{}");
         Directory.SetLastWriteTimeUtc(older, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         Directory.SetLastWriteTimeUtc(newer, new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
 
         var listed = StashFolders.ListExtractions(output);
         Require(listed.Select(Path.GetFileName).SequenceEqual(new[] { "newer", "older" }),
-            "extractions are listed newest first; empty folders and folders no extraction made are left out");
+            $"extractions are listed newest first; empty folders, folders no extraction made and one set aside during a re-extraction are left out ({string.Join(", ", listed.Select(Path.GetFileName))})");
         Require(StashFolders.CountImages(newer) == 2, "a folder's images are counted, other files not");
         Require(StashFolders.ListExtractions(Path.Combine(root, "missing")).Count == 0, "a missing output folder lists nothing");
     }
@@ -230,6 +775,55 @@ internal static class PackageImportScenarios
         var folderDiffuse = StashApply.Plan(new Dictionary<TexturePurpose, string> { [TexturePurpose.Diffuse] = Path.Combine(folder, "swatches") },
             new[] { TextureType.Diffuse });
         Require(folderDiffuse.Single() is { Type: TextureType.Diffuse, Folder: true }, "a folder of diffuse swatches goes in as variants");
+    }
+
+    private static void StashApplyFillsSlots(string root)
+    {
+        var folder = Path.Combine(root, "apply-fill");
+        var diffuse = Touch(folder, "d.png");
+        Touch(folder, "swatches/red.png");
+        Touch(folder, "swatches/blue.png");
+        var material = MaterialSetup.FromPreset(MaterialPresets.All.First(p => p.Name == "Gear"), "mt_test_a");
+        var mask = material.Textures.Single(t => t.Type == TextureType.Mask);
+        mask.UseWhiteDummy = true;
+
+        var applied = StashApply.Fill(material, new[]
+        {
+            (TextureType.Diffuse, diffuse, false), (TextureType.Normal, Path.Combine(folder, "missing.png"), false),
+            (TextureType.Mask, Path.Combine(folder, "swatches"), true),
+        });
+        Require(applied.SequenceEqual(new[] { "diffuse", "mask / multiply (2 variant(s))" }),
+            $"what went in is listed for the message; a file that isn't there is skipped ({string.Join(", ", applied)})");
+        var added = material.Textures.Last();
+        Require(added is { Type: TextureType.Diffuse, Compression: TextureCompression.Auto, UseVariants: false } && added.SourcePath == diffuse
+                && added.Postfix == MaterialNaming.DefaultPostfix(TextureType.Diffuse),
+            "a slot the material lacks is added, on Auto with the role's postfix");
+        Require(material.Textures.Single(t => t.Type == TextureType.Normal).SourcePath.Length == 0, "the slot of a skipped file is left as it was");
+        Require(mask is { UseVariants: true, UseWhiteDummy: false } && mask.SourcePath == Path.Combine(folder, "swatches"),
+            "a folder goes in as variants, and a placeholder gives way to the file");
+    }
+
+    /// <summary>Without .mtrl files, a model is on the item its materials' telling words name.</summary>
+    private static void ItemsAreOnTheModelsTheirNamesTell(string root)
+    {
+        var folder = Path.Combine(root, "items-models");
+        if (Directory.Exists(folder))
+            Directory.Delete(folder, true);
+        foreach (var name in new[] { "Outfit_Shirt.png", "Outfit_Shirt_Normal.png", "Outfit_Gloves.png", "Outfit_Gloves_Normal.png" })
+            Touch(folder, name);
+        void Model(string name, params string[] materials)
+        {
+            Directory.CreateDirectory(Path.Combine(folder, "Models"));
+            File.WriteAllBytes(Path.Combine(folder, "Models", name), ModCheckFixtures.Mdl(materials));
+        }
+        Model("Top.mdl", "/Outfit_Shirt.mtrl", "/bibo.mtrl");
+        Model("Hands.mdl", "/mt_gloves.mtrl");
+        Model("Other.mdl", "/Outfit.mtrl");
+
+        var items = TextureItems.Build(StashManifest.Scan(folder), folder, layout: false);
+        string Models(string item) => string.Join(", ", items.Items.Single(i => i.Name == item).Models);
+        Require(Models("Shirt") == "Top.mdl" && Models("Gloves") == "Hands.mdl",
+            $"a model is on the item whose texture names hold its material's telling words, \"mt\" and the outfit's shared words aside (shirt: {Models("Shirt")}; gloves: {Models("Gloves")})");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -530,6 +1124,63 @@ internal static class PackageImportScenarios
             "one of them extracted alone leaves the shared folder be and uses a numbered one");
     }
 
+    private static void UnityManifestNamesModelMaterials(string root)
+    {
+        // The models in one package, the materials the remap names (with their texture) in another.
+        // The model is an avatar's: its meta, rig and all, runs past what a scan reads of a meta.
+        const string GuidPlain = "99999999999999999999999999999999";
+        const string GuidHair = "cccccccccccccccccccccccccccccccc";
+        var meta = ModelMeta(GuidModel, ("Body", GuidMat), ("\"\\u9AEA\"", GuidHair), ("Hair", "66666666666666666666666666666666")) + Rig(2000);
+        var models = Path.Combine(root, "remap-models.unitypackage");
+        WriteUnityPackage(models,
+            (GuidModel, "Assets/A/FBX/m.fbx", new byte[] { 9, 9, 9 }, meta),
+            (GuidPlain, "Assets/A/FBX/plain.fbx", new byte[] { 8 }, null));
+        var materials = Path.Combine(root, "remap-materials.unitypackage");
+        WriteUnityPackage(materials,
+            (GuidTex, "Assets/A/Tex/body_d.png", PngBytes, TextureMeta(GuidTex, 0)),
+            (GuidMat, "Assets/A/M/skin.mat", System.Text.Encoding.UTF8.GetBytes(MaterialText("Skin", GuidTex, GuidNormal)), null),
+            (GuidHair, "Assets/A/M/hair.mat", System.Text.Encoding.UTF8.GetBytes(MaterialText("\"\\u9AEA\"", GuidTex, GuidNormal)), null));
+
+        var modelScan = UnityPackageReader.Scan(models, _ => { }, CancellationToken.None);
+        var remap = modelScan.Assets.First(a => a.Guid == GuidModel).MaterialRemap;
+        Require(System.Text.Encoding.UTF8.GetByteCount(meta) > 256 * 1024 && remap.Count == 3 && remap.GetValueOrDefault("Body") == GuidMat,
+            $"a package scan carries a model's material remap from its meta, however long the meta runs ({Show(remap)})");
+        Require(modelScan.Assets.First(a => a.Guid == GuidPlain).MaterialRemap.Count == 0, "a model without a meta has no remap");
+
+        var extraction = UnityPackageReader.Extract(new[] { modelScan, UnityPackageReader.Scan(materials, _ => { }, CancellationToken.None) },
+            Path.Combine(root, "remap-out"), _ => { }, CancellationToken.None);
+        var manifest = StashManifest.Read(extraction.RootFolder);
+        var model = manifest?.Entries.FirstOrDefault(e => e.Path == "A/FBX/m.fbx");
+        Require(model?.MaterialNames is { Count: 2 } names && names.GetValueOrDefault("Body") == "Skin" && names.GetValueOrDefault("\u9AEA") == "\u9AEA",
+            $"a model's entry names the Unity material each of its materials maps to, from the package holding it, names Unity escaped included; a GUID no package ships is dropped ({Show(model?.MaterialNames)})");
+        Require(manifest!.Materials.Any(m => m.Name == "\u9AEA") && manifest.Entries.First(e => e.Path == "A/Tex/body_d.png").Groups.Contains("\u9AEA"),
+            "a material Unity wrote an escaped name for is listed, and groups its textures, under the name itself");
+        Require(manifest.Entries.Where(e => e != model).All(e => e.MaterialNames == null), "a model without a remap, and every texture, names none");
+        Require(StashManifest.ForUnity(modelScan, extraction).Entries.First(e => e.Path == "A/FBX/m.fbx").MaterialNames == null,
+            "without the package holding its materials, a remap names none");
+    }
+
+    private static void MaterialNamesRoundTrip(string root)
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(root, "roundtrip-remap")).FullName;
+        var manifest = new StashManifest { Source = @"C:\p\x.unitypackage", SourceKind = "unity" };
+        manifest.Entries.Add(new StashEntry { Path = "FBX/m.fbx", Kind = StashKind.Model, MaterialNames = new() { ["Body"] = "Skin", ["\u9AEA"] = "Hair" } });
+        manifest.Entries.Add(new StashEntry { Path = "FBX/plain.fbx", Kind = StashKind.Model });
+        manifest.Write(folder);
+        var json = File.ReadAllText(Path.Combine(folder, StashManifest.FileName));
+        var read = StashManifest.Read(folder);
+        Require(read != null && read.Entries.Count == 2 && read.Entries[0].MaterialNames is { Count: 2 } names
+                && names.GetValueOrDefault("Body") == "Skin" && names.GetValueOrDefault("\u9AEA") == "Hair",
+            "a model's material names read back from stash.json");
+        Require(read is { Entries.Count: 2 } && read.Entries[1].MaterialNames == null && json.Split("\"MaterialNames\"").Length == 2,
+            "an entry without material names writes none and reads back with none");
+
+        File.WriteAllText(Path.Combine(folder, StashManifest.FileName),
+            """{ "Version": 1, "Source": "C:\\p\\x.unitypackage", "SourceKind": "unity", "Entries": [ { "Path": "FBX/m.fbx", "Kind": "Model", "NeedsConversion": true } ] }""");
+        Require(StashManifest.Read(folder)?.Entries.SingleOrDefault() is { Path: "FBX/m.fbx", NeedsConversion: true, MaterialNames: null },
+            "an older stash.json without material names still reads");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Unity packages
     // ─────────────────────────────────────────────────────────────────────────
@@ -554,6 +1205,24 @@ internal static class PackageImportScenarios
 
     private static string TextureMeta(string guid, int type) =>
         $"fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  serializedVersion: 12\n  spriteMode: 0\n  textureType: {type}\n";
+
+    /// <summary>An .fbx's meta as Unity writes it: the ID table, then the remap of each named material to a .mat, then the rest of the importer.</summary>
+    private static string ModelMeta(string guid, params (string Name, string Material)[] materials)
+    {
+        var text = new System.Text.StringBuilder($"fileFormatVersion: 2\nguid: {guid}\nModelImporter:\n  serializedVersion: 22200\n")
+            .Append("  internalIDToNameTable:\n  - first:\n      74: -2034478483433414484\n    second: Walk\n")
+            .Append(materials.Length == 0 ? "  externalObjects: {}\n" : "  externalObjects:\n");
+        foreach (var (name, material) in materials)
+            text.Append($"  - first:\n      type: UnityEngine:Material\n      assembly: UnityEngine.CoreModule\n      name: {name}\n")
+                .Append($"    second: {{fileID: 2100000, guid: {material}, type: 2}}\n");
+        return text.Append("  materials:\n    materialImportMode: 2\n    materialName: 0\n").ToString();
+    }
+
+    /// <summary>The skeleton of an avatar's rig, as it follows the remap in its .fbx meta: about 160 bytes a bone.</summary>
+    private static string Rig(int bones) => "  humanDescription:\n    skeleton:\n" + string.Concat(Enumerable.Range(0, bones).Select(i =>
+        $"    - name: Bone{i}\n      parentName: Armature\n      position: {{x: 0, y: 0.95, z: 0.01}}\n      rotation: {{x: 0, y: 0, z: 0, w: 1}}\n      scale: {{x: 1, y: 1, z: 1}}\n"));
+
+    private static string Show(IReadOnlyDictionary<string, string>? map) => map == null ? "none" : string.Join(", ", map.Select(p => $"{p.Key}={p.Value}"));
 
     /// <summary>Writes a gzip'd tar laid out like Unity's exporter: one folder per GUID.</summary>
     private static void WriteUnityPackage(string path, params (string Guid, string Pathname, byte[]? Asset, string? Meta)[] entries)
@@ -607,6 +1276,9 @@ internal static class PackageImportScenarios
         Require(!mat.Textures.ContainsKey("_AlphaMask") && !mat.Textures.ContainsKey("_Empty"),
             "properties without a texture, or with Unity's null GUID, are left out");
         Require(mat.Shader == "df12117ecd77c31469c224178886498e", "the shader reference is read");
+        Require(UnityYaml.ReadMaterial(GuidMat, MaterialText("\"\\u9AEA\"", GuidTex, GuidNormal))?.Name == "\u9AEA"
+                && UnityYaml.ReadMaterial(GuidMat, MaterialText("'Skin #2'", GuidTex, GuidNormal))?.Name == "Skin #2",
+            "a material's quoted or escaped name is read as the name itself");
     }
 
     private static void PrefabMaterialsAreRead()
@@ -632,6 +1304,51 @@ internal static class PackageImportScenarios
         var scan = UnityPackageReader.Scan(BasicPackage(root, "meta"), _ => { }, CancellationToken.None);
         Require(scan.Assets.First(a => a.Guid == GuidNormal).TextureType == 1, "the scan carries the normal-map flag");
         Require(scan.Materials.Count == 1 && scan.Materials[0].Textures["_MainTex"] == GuidTex, "the scan reads the package's materials");
+    }
+
+    private static void MaterialRemapIsRead()
+    {
+        // An outfit's .fbx meta: an ID table shaped like the remap, the remap with other kinds of object in it, then the rest of the importer.
+        var text =
+            $"fileFormatVersion: 2\nguid: {GuidModel}\nModelImporter:\n  serializedVersion: 22200\n" +
+            "  internalIDToNameTable:\n  - first:\n      21: 2100000\n    second: Decoy\n" +
+            "  externalObjects:\n" +
+            "  - first:\n      type: UnityEngine:Material\n      assembly: UnityEngine.CoreModule\n      name: Body\n" +
+            $"    second: {{fileID: 2100000, guid: {GuidMat}, type: 2}}\n" +
+            "  - first:\n      type: UnityEngine:AnimationClip\n      assembly: UnityEngine.AnimationModule\n      name: Walk\n" +
+            "    second: {fileID: 7400000, guid: 66666666666666666666666666666666, type: 2}\n" +
+            // Keys in another order, no assembly, extra spaces, a quoted name and a reference Unity wrapped.
+            "  - first:\n      name:    'Hair #2'  \n      type:   UnityEngine:Material\n" +
+            "    second:   {fileID: 2100000, guid: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA,\n      type: 2}\n" +
+            // Unity writes a name outside ASCII as escapes.
+            "  - first:\n      type: UnityEngine:Material\n      name: \"\\u9AEA\"\n" +
+            "    second: {fileID: 2100000, guid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, type: 2}\n" +
+            "  - first:\n      type: UnityEngine:Material\n      name: Missing\n    second: {fileID: 0}\n" +
+            "  - first:\n      type: UnityEngine:Material\n      name: Builtin\n    second: {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}\n" +
+            "  - first:\n      type: UnityEngine:Avatar\n      name: BodyAvatar\n    second: {fileID: 9000000, guid: 77777777777777777777777777777777, type: 2}\n" +
+            "  - first:\n      type: UnityEngine:Material\n      name: Body\n    second: {fileID: 2100000, guid: 88888888888888888888888888888888, type: 2}\n" +
+            "  materials:\n    materialImportMode: 2\n" +
+            // A block of the same shape under another key.
+            "  humanDescription:\n    human:\n    - first:\n        type: UnityEngine:Material\n        name: Late\n" +
+            "      second: {fileID: 2100000, guid: 99999999999999999999999999999999, type: 2}\n";
+
+        var remap = UnityYaml.ReadMaterialRemap(text);
+        Require(remap.GetValueOrDefault("Body") == GuidMat, $"a model's remap maps each of its material names to a .mat GUID; a name listed twice keeps the first ({Show(remap)})");
+        Require(remap.GetValueOrDefault("Hair #2") == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "an entry is read whatever the order of its keys, with or without an assembly, with odd spacing, a quoted name and a wrapped reference");
+        Require(remap.GetValueOrDefault("\u9AEA") == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "a name Unity escaped is read as the model has it");
+        Require(remap.Count == 3,
+            $"other kinds of object, empty or built-in references, the ID table and blocks under other keys are left out ({Show(remap)})");
+        Require(UnityYaml.ReadMaterialRemap(text.Replace("\n", "\r\n")).OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(remap.OrderBy(p => p.Key, StringComparer.Ordinal)),
+            "a meta with Windows line ends reads the same");
+        var deeper = "ModelImporter:\n  externalObjects:\n    - first:\n        type: UnityEngine:Material\n        name: Body\n" +
+                     $"      second: {{fileID: 2100000, guid: {GuidMat}, type: 2}}\n  materials:\n    materialImportMode: 2\n";
+        Require(UnityYaml.ReadMaterialRemap(deeper) is { Count: 1 } indented && indented.GetValueOrDefault("Body") == GuidMat, "entries indented under the key are read too");
+
+        Require(UnityYaml.ReadMaterialRemap(ModelMeta(GuidModel)).Count == 0, "an empty remap ({}) maps nothing");
+        Require(UnityYaml.ReadMaterialRemap($"fileFormatVersion: 2\nguid: {GuidModel}\nModelImporter:\n  materials:\n    materialImportMode: 2\n").Count == 0
+                && UnityYaml.ReadMaterialRemap(TextureMeta(GuidTex, 0)).Count == 0 && UnityYaml.ReadMaterialRemap("").Count == 0,
+            "a meta without a remap maps nothing");
     }
 
     private static void HostilePathsAreRefused(string root)

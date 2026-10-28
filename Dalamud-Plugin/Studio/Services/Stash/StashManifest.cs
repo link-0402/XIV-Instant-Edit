@@ -26,6 +26,13 @@ internal sealed class StashEntry
 
     /// <summary>A model that has to be turned into a .mdl (in Blender) before the game can use it.</summary>
     public bool NeedsConversion { get; set; }
+
+    /// <summary>
+    /// A Unity model's materials: each material name of the model → the name of the Unity material
+    /// its meta file assigns it. Null (and not written) when it has none.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string>? MaterialNames { get; set; }
 }
 
 /// <summary>A material of the source (a Unity material, a Sims CAS part) and its textures by purpose.</summary>
@@ -134,7 +141,8 @@ internal sealed class StashManifest
     /// The files a folder holds, for one without a manifest (an older extraction, or a folder of loose
     /// files the user opened): kinds by extension, purposes by folder and name. Hidden folders are
     /// skipped. Where Unity's .meta files sit beside the files, as in a VRChat avatar's resources, its
-    /// .mat materials and prefabs are read too, so textures take the purpose their material gives them.
+    /// .mat materials and prefabs are read too, so textures take the purpose their material gives them,
+    /// and a model's meta gives the Unity material each of its materials maps to.
     /// </summary>
     public static StashManifest Scan(string folder, int maxFiles = MaxScanFiles)
     {
@@ -176,6 +184,8 @@ internal sealed class StashManifest
                     ? TexturePurposes.Classify(null, TexturePurposes.MostCommon(used.Select(u => u.Purpose)), unity.TextureTypeOf(file), named)
                     : FromFolder(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(entry.Path)) ?? "") ?? named;
             }
+            else if (entry.Kind == StashKind.Model)
+                entry.MaterialNames = unity?.MaterialNamesOf(file);
             manifest.Entries.Add(entry);
         }
         if (unity != null)
@@ -207,18 +217,25 @@ internal sealed class StashManifest
         private readonly Dictionary<string, int> _textureType = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<UnityMaterial> _materials = new();
         private readonly Dictionary<string, List<(string Group, TexturePurpose? Purpose)>> _uses = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, IReadOnlyDictionary<string, string>> _remaps = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _materialNames = new(StringComparer.OrdinalIgnoreCase);
 
         public static UnityFolder Read(IReadOnlyList<string> files, IReadOnlyList<string> metas)
         {
             var unity = new UnityFolder();
             foreach (var meta in metas)
             {
-                var (guid, type) = UnityYaml.ReadMeta(ReadSmall(meta, 64 * 1024) ?? "");
                 var file = System.IO.Path.GetFullPath(meta[..^".meta".Length]);
+                // A model's meta runs long: its rig and clips follow the material remap.
+                bool model = KindOf(file) == StashKind.Model;
+                var text = ReadSmall(meta, model ? MaxYamlBytes : 64 * 1024) ?? "";
+                var (guid, type) = UnityYaml.ReadMeta(text);
                 if (guid == null || !File.Exists(file))
                     continue;
                 unity._fileByGuid[guid] = file;
                 unity._textureType[file] = type;
+                if (model)
+                    unity._remaps[file] = UnityYaml.ReadMaterialRemap(text);
             }
             var guidOf = unity._fileByGuid.ToDictionary(p => p.Value, p => p.Key, StringComparer.OrdinalIgnoreCase);
 
@@ -226,6 +243,8 @@ internal sealed class StashManifest
                 if (ReadSmall(file, MaxYamlBytes) is { } text
                     && UnityYaml.ReadMaterial(guidOf.GetValueOrDefault(System.IO.Path.GetFullPath(file)) ?? file, text) is { } material)
                     unity._materials.Add(material);
+            foreach (var material in unity._materials)
+                unity._materialNames.TryAdd(material.Guid, material.Name);
 
             var prefabsOf = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var file in files.Where(f => System.IO.Path.GetExtension(f).Equals(".prefab", StringComparison.OrdinalIgnoreCase)))
@@ -261,6 +280,9 @@ internal sealed class StashManifest
 
         public int TextureTypeOf(string file) => _textureType.GetValueOrDefault(System.IO.Path.GetFullPath(file), -1);
 
+        public Dictionary<string, string>? MaterialNamesOf(string file)
+            => ResolveMaterialNames(_remaps.GetValueOrDefault(System.IO.Path.GetFullPath(file)), _materialNames);
+
         public IEnumerable<StashMaterial> Materials(string root)
         {
             foreach (var material in _materials)
@@ -289,7 +311,8 @@ internal sealed class StashManifest
 
     /// <summary>
     /// A Unity extraction: textures by the material properties that use them, grouped under materials and
-    /// prefabs. Several packages are read as one, so a material in one can name a texture of another.
+    /// prefabs, and models with the Unity material each of their materials maps to. Several packages are
+    /// read as one, so a material in one can name a texture (or a model's remap a material) of another.
     /// </summary>
     public static StashManifest ForUnity(IReadOnlyList<UnityScanResult> scans, UnityExtraction extraction)
     {
@@ -321,6 +344,8 @@ internal sealed class StashManifest
                 if (!names.Contains(prefab.Name))
                     names.Add(prefab.Name);
             }
+        // Material GUID → name, for the models' material remaps.
+        var materialNames = materials.ToDictionary(m => m.Guid, m => m.Name, StringComparer.OrdinalIgnoreCase);
 
         var assets = scans.SelectMany(s => s.Assets).DistinctBy(a => a.Guid, StringComparer.OrdinalIgnoreCase).ToDictionary(a => a.Guid, StringComparer.OrdinalIgnoreCase);
         var byName = TexturePurposes.FromFileNames(extraction.FileByGuid.Values.Where(f => KindOf(f) == StashKind.Texture).Select(f => Relative(root, f)));
@@ -339,6 +364,8 @@ internal sealed class StashManifest
                 entry.Purpose = TexturePurposes.Classify(null, TexturePurposes.MostCommon(used.Select(u => u.Purpose)),
                     assets.GetValueOrDefault(guid)?.TextureType ?? -1, byName[entry.Path]);
             }
+            else if (entry.Kind == StashKind.Model)
+                entry.MaterialNames = ResolveMaterialNames(assets.GetValueOrDefault(guid)?.MaterialRemap, materialNames);
             manifest.Entries.Add(entry);
         }
 
@@ -352,6 +379,21 @@ internal sealed class StashManifest
                 manifest.Materials.Add(listed);
         }
         return manifest;
+    }
+
+    /// <summary>
+    /// A model's material remap (its material name → .mat GUID) with each GUID turned into that
+    /// material's name. GUIDs of materials not at hand are dropped; null when none is left.
+    /// </summary>
+    private static Dictionary<string, string>? ResolveMaterialNames(IReadOnlyDictionary<string, string>? remap, IReadOnlyDictionary<string, string> nameByGuid)
+    {
+        if (remap == null)
+            return null;
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (model, guid) in remap)
+            if (nameByGuid.TryGetValue(guid, out var name) && name.Length > 0)
+                names.TryAdd(model, name);
+        return names.Count > 0 ? names : null;
     }
 
     public static StashManifest ForSims(string packagePath, SimsPackageInspector.ExtractionResult extraction) => ForSims(new[] { packagePath }, extraction);
@@ -416,12 +458,14 @@ internal sealed class StashManifest
         };
     }
 
-    /// <summary>Files the extraction writes for itself, never listed.</summary>
+    /// <summary>Files the extraction (or Blender) writes for itself, never listed.</summary>
     public static bool IsBookkeeping(string fileName)
         => fileName.Equals(FileName, StringComparison.OrdinalIgnoreCase)
         || fileName.Equals(FileName + ".tmp", StringComparison.OrdinalIgnoreCase)
         || fileName.Equals(ReportName, StringComparison.OrdinalIgnoreCase)
-        || fileName.Equals(SimsPackageInspector.ManifestName, StringComparison.OrdinalIgnoreCase);
+        || fileName.Equals(SimsPackageInspector.ManifestName, StringComparison.OrdinalIgnoreCase)
+        || fileName.Equals(BlenderExports.FileName, StringComparison.OrdinalIgnoreCase)
+        || fileName.Equals(BlenderExports.FileName + ".tmp", StringComparison.OrdinalIgnoreCase);
 
     private static StashEntry NewEntry(string root, string file)
     {

@@ -58,7 +58,9 @@ internal static class UnityPackageReader
                     }
                     break;
                 case "asset.meta":
-                    if (ReadText(entry, MaxMetaBytes) is { } meta)
+                    // A model's meta can run far longer (its rig, its clips), but all that is read
+                    // from one (the GUID, the texture type, the material remap) comes at its start.
+                    if (ReadHead(entry, MaxMetaBytes) is { } meta)
                         metas[guid] = meta;
                     break;
                 case "preview.png":
@@ -87,16 +89,18 @@ internal static class UnityPackageReader
             if (!sizes.TryGetValue(guid, out var size))
                 continue;   // a folder: it has a path and a meta file, but no asset
             var kind = UnityAsset.KindOf(packagePath);
-            var meta = metas.TryGetValue(guid, out var m) ? UnityYaml.ReadMeta(m) : (null, -1);
+            var metaText = metas.GetValueOrDefault(guid);
+            var meta = metaText != null ? UnityYaml.ReadMeta(metaText) : (null, -1);
             result.Assets.Add(new UnityAsset
             {
-                Guid        = guid.ToLowerInvariant(),
-                PackagePath = packagePath,
-                Kind        = kind,
-                Size        = size,
-                PreviewPng  = previews.GetValueOrDefault(guid),
-                TextureType = kind == UnityAssetKind.Texture ? meta.TextureType : -1,
-                Selected    = kind is UnityAssetKind.Texture or UnityAssetKind.Model,
+                Guid          = guid.ToLowerInvariant(),
+                PackagePath   = packagePath,
+                Kind          = kind,
+                Size          = size,
+                PreviewPng    = previews.GetValueOrDefault(guid),
+                TextureType   = kind == UnityAssetKind.Texture ? meta.TextureType : -1,
+                MaterialRemap = kind == UnityAssetKind.Model && metaText != null ? UnityYaml.ReadMaterialRemap(metaText) : new Dictionary<string, string>(),
+                Selected      = kind is UnityAssetKind.Texture or UnityAssetKind.Model,
             });
 
             if (!yaml.TryGetValue(guid, out var body))
@@ -230,8 +234,9 @@ internal static class UnityPackageReader
 
     /// <summary>
     /// Whether <paramref name="folder"/> holds nothing but an earlier extraction of <paramref name="sources"/>:
-    /// its stash.json names those packages, no more and no fewer, and lists every file there. Files
-    /// someone else put there make it another's folder, which is never touched.
+    /// its stash.json names those packages, no more and no fewer, and lists every file there besides
+    /// the models Blender saved into it (which the next run keeps). Files someone else put there make
+    /// it another's folder, which is never touched.
     /// </summary>
     private static bool IsOwnRun(string folder, IReadOnlyList<string> sources)
     {
@@ -253,7 +258,7 @@ internal static class UnityPackageReader
                     owned.Add(path);
             }
             foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
-                if (!owned.Contains(Path.GetFullPath(file)))
+                if (!owned.Contains(Path.GetFullPath(file)) && !Stash.BlenderExports.IsBlenderFile(folder, file))
                     return false;
             return true;
         }
@@ -320,6 +325,16 @@ internal static class UnityPackageReader
 
     private static string? ReadText(TarEntry entry, int max)
         => ReadBytes(entry, max) is { } bytes ? Encoding.UTF8.GetString(bytes) : null;
+
+    /// <summary>The entry's text, or only its first <paramref name="max"/> bytes when it is longer.</summary>
+    private static string? ReadHead(TarEntry entry, int max)
+    {
+        if (entry.DataStream == null)
+            return null;
+        var buffer = new byte[Math.Min(entry.Length, max)];
+        entry.DataStream.ReadExactly(buffer);
+        return Encoding.UTF8.GetString(buffer);
+    }
 
     /// <summary>The entry's text when it starts like a Unity YAML file; otherwise null, having read only its first bytes.</summary>
     private static string? ReadYaml(TarEntry entry)

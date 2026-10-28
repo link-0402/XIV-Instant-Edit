@@ -81,6 +81,7 @@ internal sealed class BuildScreen
     {
         _penumbraAvailable = _host.PenumbraIpc.IsAvailable;
         _session.EnsureLoaded();
+        _session.ApplyFinishedFit();
         Revalidate();
 
         DrawToolbar();

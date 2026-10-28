@@ -35,6 +35,40 @@ internal sealed class TextureItemList
 }
 
 /// <summary>
+/// Which of a stash's items a material's name points at when no .mtrl file says: the items with a
+/// texture name that holds all the material's telling words ("Sera_Yura_Cow" → "cow"; "mt" and the
+/// words every item's names share, like the outfit's, say nothing), as
+/// "Sera_Yura_Elbow_Glove&amp;Stocking_Cow" does. Gives the models an item is on, and the textures a
+/// model's material gets (see <see cref="ModelTextureLookup"/>).
+/// </summary>
+internal sealed class TextureItemNames
+{
+    private readonly Dictionary<TextureItem, List<HashSet<string>>> _wordsOf;
+    private readonly HashSet<string> _shared;
+
+    public TextureItemNames(IReadOnlyList<TextureItem> items)
+    {
+        _wordsOf = items.ToDictionary(i => i, i => i.Textures.Select(t => WordsOf(t.Path)).ToList());
+        _shared = items.Count > 1
+            ? _wordsOf.Values.Select(l => l.SelectMany(w => w).ToHashSet()).Aggregate((a, b) => { a.IntersectWith(b); return a; })
+            : new HashSet<string>();
+    }
+
+    /// <summary>The words of a texture's file name, as <see cref="Names"/> reads them.</summary>
+    public static HashSet<string> WordsOf(string texturePath) => TexturePurposes.Words(Path.GetFileNameWithoutExtension(texturePath)).ToHashSet();
+
+    /// <summary>The words of a material's name that can tell the items apart.</summary>
+    public List<string> TellingWords(string material) => TexturePurposes.Words(material).Where(w => w != "mt" && !_shared.Contains(w)).ToList();
+
+    /// <summary>Whether the material's telling words all appear in one of the item's texture names.</summary>
+    public bool Names(string material, TextureItem item)
+    {
+        var telling = TellingWords(material);
+        return telling.Count > 0 && _wordsOf[item].Any(words => telling.All(words.Contains));
+    }
+}
+
+/// <summary>
 /// Sorts a stash's textures into items. Names come first: a texture set ("Shirt", "Shirt_Normal",
 /// "Shirt_AO") is one item. The folder's .mtrl files join textures a material uses together when
 /// their names don't (a normal map in one folder, its index map in another), and its .mdl files say
@@ -170,25 +204,14 @@ internal static class TextureItems
         if (models.Count == 0)
             return;
 
-        // Without .mtrl files, a material names an item when its telling words ("Sera_Yura_Cow" → "cow";
-        // words every item's names share, like the outfit's, say nothing) all appear in one of the
-        // item's texture names ("Sera_Yura_Elbow_Glove&Stocking_Cow").
-        var wordsOf = items.ToDictionary(i => i, i => i.Textures.Select(t => TexturePurposes.Words(Path.GetFileNameWithoutExtension(t.Path)).ToHashSet()).ToList());
-        var shared = items.Count > 1
-            ? wordsOf.Values.Select(l => l.SelectMany(w => w).ToHashSet()).Aggregate((a, b) => { a.IntersectWith(b); return a; })
-            : new HashSet<string>();
-        bool Names(string material, TextureItem item)
-        {
-            var telling = TexturePurposes.Words(material).Where(w => w != "mt" && !shared.Contains(w)).ToList();
-            return telling.Count > 0 && wordsOf[item].Any(words => telling.All(words.Contains));
-        }
-
+        // Without .mtrl files, a material names an item by its telling words (see TextureItemNames).
+        var naming = new TextureItemNames(items);
         bool linked = materialsOf.Count > 0;
         foreach (var item in items)
         {
             var used = item.Textures.SelectMany(t => materialsOf.GetValueOrDefault(t) ?? new()).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var (file, materials) in models)
-                if (linked ? materials.Any(used.Contains) : materials.Any(m => Names(m, item)))
+                if (linked ? materials.Any(used.Contains) : materials.Any(m => naming.Names(m, item)))
                     item.Models.Add(file);
         }
     }

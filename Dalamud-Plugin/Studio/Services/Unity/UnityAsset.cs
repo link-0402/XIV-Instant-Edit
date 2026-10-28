@@ -24,6 +24,9 @@ internal sealed class UnityAsset
     /// <summary>The texture importer's type: 1 for a normal map, -1 when unknown or not a texture.</summary>
     public int TextureType { get; init; } = -1;
 
+    /// <summary>A model's material remap from its meta file: each material name of the model → the .mat GUID Unity uses for it.</summary>
+    public IReadOnlyDictionary<string, string> MaterialRemap { get; init; } = new Dictionary<string, string>();
+
     /// <summary>Ticked in the UI: extracted when set. Only textures and models are ever written.</summary>
     public bool Selected { get; set; } = true;
 

@@ -712,8 +712,9 @@ public static class SimsPackageInspector
 
     /// <summary>
     /// Whether every file in <paramref name="folder"/> is one an earlier extraction of
-    /// <paramref name="sources"/> listed in its manifest. False when the manifest names other
-    /// packages (one more or one fewer included) or any other file is there.
+    /// <paramref name="sources"/> listed in its manifest, or a model Blender saved into that
+    /// extraction (the next run keeps them). False when the manifest names other packages (one more
+    /// or one fewer included) or any other file is there.
     /// </summary>
     private static bool IsOwnRun(string folder, IReadOnlyList<string> sources)
     {
@@ -722,8 +723,9 @@ public static class SimsPackageInspector
             var prefix = Path.TrimEndingDirectorySeparator(folder) + Path.DirectorySeparatorChar;
             var manifestPath = Path.Combine(folder, ManifestName);
             var owned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool listed = File.Exists(manifestPath);
 
-            if (File.Exists(manifestPath))
+            if (listed)
             {
                 var lines = File.ReadAllLines(manifestPath);
                 var from = lines.Where(l => l.StartsWith(ManifestSource, StringComparison.Ordinal))
@@ -744,8 +746,9 @@ public static class SimsPackageInspector
                 owned.Add(manifestPath);
             }
 
+            // A folder Blender made on its own is no extraction's: its models only count beside a manifest.
             foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
-                if (!owned.Contains(Path.GetFullPath(file)))
+                if (!owned.Contains(Path.GetFullPath(file)) && !(listed && Stash.BlenderExports.IsBlenderFile(folder, file)))
                     return false;
             return true;
         }

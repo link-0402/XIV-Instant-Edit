@@ -211,7 +211,7 @@ internal sealed class ItemSetupView
 
         var actions = new List<TileAction>
         {
-            new(FontAwesomeIcon.FolderOpen, subject.HasRaces ? "Pick the .mdl this race is made from" : "Pick the .mdl", () => _editor.BrowseModel(model)),
+            new(FontAwesomeIcon.FolderOpen, subject.HasRaces ? "Pick the .mdl this race is made from" : "Pick the .mdl", () => _editor.BrowseModel(item, model)),
         };
         if (subject.MultiRace && !PortSession.IsBaseRace(item, model.RaceGender))
             actions.Add(new TileAction(FontAwesomeIcon.Trash, "Remove this race (the file on disk is not touched)",

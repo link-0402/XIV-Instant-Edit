@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace InstantEdit.Studio.Services.Stash;
@@ -26,6 +27,19 @@ internal static class PackageImportPaths
         return string.Equals(Normal(saved), Normal(oldDefault), StringComparison.OrdinalIgnoreCase)
             ? DefaultOutput(cacheRoot)
             : saved;
+    }
+
+    /// <summary>
+    /// The folders the stash lists extractions from: the output folder (see <see cref="ChooseOutput"/>) and the
+    /// cache's package-imports, where Blender saves whatever output folder is picked. Without a cache (one that
+    /// can't be set up), the output folder falls back as in the import window.
+    /// </summary>
+    public static IReadOnlyList<string> StashRoots(string saved, string? cacheRoot, string tempPath)
+    {
+        var roots = new List<string> { ChooseOutput(saved, cacheRoot ?? Path.Combine(tempPath, "InstantEdit"), tempPath) };
+        if (cacheRoot != null && !string.Equals(Normal(roots[0]), Normal(DefaultOutput(cacheRoot)), StringComparison.OrdinalIgnoreCase))
+            roots.Add(DefaultOutput(cacheRoot));
+        return roots;
     }
 
     private static string Normal(string path)
