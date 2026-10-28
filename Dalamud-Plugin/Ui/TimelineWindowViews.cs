@@ -904,7 +904,16 @@ internal static partial class TimelineWindowViews
         bones == 1 ? "Live can't show 1 bone until you save." : $"Live can't show {bones} bones until you save.";
 
     /// <summary>The line while Live plays a rebuilt clip whose layers move bones other than the hips (<see cref="LiveRebuiltPositions"/>).</summary>
-    public const string LiveRebuiltPositionsNote = "Live shows position changes only on the hips while rebuilt; the others show after you save.";
+    public const string LiveRebuiltPositionsNote = "Live shows position changes only on the hips while rebuilt. Preview, then Live, shows them all.";
+
+    /// <summary>Under the preview bar while Live runs over a built preview that still shows the document.</summary>
+    public const string LiveOnPreviewHint = "Live shows your bone layers over the preview.";
+
+    /// <summary>Under the preview bar when the preview was built from another document or skeleton choice.</summary>
+    public const string PreviewStale = "Changed since the preview. Press Preview again.";
+
+    /// <summary>Under the preview bar when edits or a rebuild show on the character only once built.</summary>
+    public const string PreviewNeeded = "Press Preview to see your changes.";
 
     /// <summary>
     /// Whether <paramref name="document"/>'s layers may move a bone other than n_hara, which Live on a rebuilt clip can't

@@ -173,7 +173,7 @@ internal static class RaceRebuildFixture
               !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.UnitY, enabled: false)] }) &&
               !TimelineWindowViews.LiveRebuiltPositions(doc),
             "Live says when a rebuilt clip's moves on bones other than the hips show only after the save");
-        check(TimelineWindowViews.LiveRebuiltPositionsNote == "Live shows position changes only on the hips while rebuilt; the others show after you save.",
+        check(TimelineWindowViews.LiveRebuiltPositionsNote == "Live shows position changes only on the hips while rebuilt. Preview, then Live, shows them all.",
             "the Live line for moves it can't show");
     }
 
