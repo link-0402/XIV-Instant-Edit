@@ -1,0 +1,143 @@
+using System.Collections.Immutable;
+using System.Text.RegularExpressions;
+using InstantEdit.Studio.Services;
+
+namespace InstantEdit.Services.Animations.Timeline;
+
+/// <summary>
+/// Models from other mods as props: which of a mod's models can be one, whether it rides a single bone, the
+/// private weapon body (<c>b9000</c>..<c>b9999</c>, which the game doesn't ship) it gets in the animation's mod, and
+/// the source of every file of that private copy.
+/// </summary>
+internal static partial class PropModelSources
+{
+    private const ushort FallbackSet = 9001;
+    private const ushort FirstBody = 9000;
+    private const ushort LastBody = 9999;
+
+    private static readonly string[] CandidateRoots = ["chara/weapon/", "chara/monster/", "chara/demihuman/"];
+
+    /// <summary>The weapon, monster and demihuman models among a mod's effective files, sorted.</summary>
+    internal static ImmutableArray<string> Candidates(IReadOnlyDictionary<string, string> effective)
+        => [..effective.Keys
+            .Where(path => path.EndsWith(".mdl", StringComparison.Ordinal) &&
+                           CandidateRoots.Any(root => path.StartsWith(root, StringComparison.Ordinal)))
+            .Order(StringComparer.Ordinal)];
+
+    /// <summary>The weapon set a prop goes to: a weapon keeps its own, anything else goes to 9001.</summary>
+    internal static ushort TargetSet(string sourceModel)
+        => WeaponSet().Match(Normalise(sourceModel)) is { Success: true } match ? ushort.Parse(match.Groups[1].Value) : FallbackSet;
+
+    /// <summary>
+    /// Whether a model can be a prop: a weapon always; anything else only when its meshes are skinned to
+    /// <c>n_root</c> or <c>n_hara</c> alone, the bones a weapon model has.
+    /// </summary>
+    internal static bool Qualifies(string sourceModel, byte[] mdl)
+    {
+        if (Normalise(sourceModel).StartsWith("chara/weapon/", StringComparison.Ordinal))
+            return true;
+        VanillaModelInfo info;
+        try { info = VanillaModelReader.Read(mdl); }
+        catch { return false; }
+        foreach (var table in info.BoneTables)
+            foreach (var index in table.BoneIndex)
+            {
+                if (index >= info.BoneNames.Length)
+                    return false;
+                var bone = info.BoneNames[index];
+                if (!string.Equals(bone, "n_root", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(bone, "n_hara", StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+        return true;
+    }
+
+    /// <summary>The lowest body 9000..9999 of <paramref name="set"/> the game doesn't ship and nothing has taken.</summary>
+    internal static ushort? AllocateBody(ushort set, Func<string, bool> gameExists, IReadOnlySet<(ushort Set, ushort Body)> taken)
+    {
+        for (var body = FirstBody; body <= LastBody; ++body)
+            if (!taken.Contains((set, body)) && !gameExists($"chara/weapon/w{set:D4}/obj/body/b{body:D4}/b{body:D4}.imc"))
+                return body;
+        return null;
+    }
+
+    /// <summary>
+    /// The files of the private copy of <paramref name="sourceModel"/> as weapon <paramref name="set"/> body
+    /// <paramref name="body"/>: the model, each material it names (the mod's, else the game's) and each texture those
+    /// materials list (the mod's, else the game's; left out when neither has it).
+    /// </summary>
+    internal static TimelinePropSource Resolve(string modDirectory, string modName, string sourceModel, ushort set, ushort body,
+        IReadOnlyDictionary<string, string> effective, Func<string, byte[]?> game, Func<string, bool> gameExists)
+    {
+        sourceModel = Normalise(sourceModel);
+        var target = $"chara/weapon/w{set:D4}/obj/body/b{body:D4}/";
+        var folder = SourceFolder(sourceModel);
+        var files = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+
+        var model = effective.TryGetValue(sourceModel, out var modelFile) ? "file:" + modelFile : "game:" + sourceModel;
+        files[$"{target}model/w{set:D4}b{body:D4}.mdl"] = model;
+        var mdl = Bytes(model, game);
+        if (mdl is null)
+            return new TimelinePropSource(modDirectory, modName, sourceModel, set, body, files.ToImmutable());
+
+        foreach (var name in VanillaModelReader.Read(mdl).MaterialNames
+                     .Select(name => name.Replace('\\', '/').TrimStart('/').ToLowerInvariant())
+                     .Where(name => name.Length > 0 && !name.Contains('/'))
+                     .Distinct(StringComparer.Ordinal))
+        {
+            var material = MaterialSource(folder, name, effective);
+            files[$"{target}material/v0001/{name}"] = material;
+            if (Bytes(material, game) is not { } mtrl)
+                continue;
+            foreach (var texture in MaterialPreviewBundleBuilder.ReadMaterialTextures(mtrl))
+            {
+                var stored = Normalise(texture.StoredPath);
+                var key = $"{target}texture/{stored[(stored.LastIndexOf('/') + 1)..]}";
+                if (files.ContainsKey(key))
+                    continue;
+                if (effective.TryGetValue(stored, out var textureFile))
+                    files[key] = "file:" + textureFile;
+                else if (gameExists(stored))
+                    files[key] = "game:" + stored;
+            }
+        }
+        return new TimelinePropSource(modDirectory, modName, sourceModel, set, body, files.ToImmutable());
+    }
+
+    /// <summary>
+    /// A material the model names: under the model's folder in <c>material/v0001/</c> of the mod, else in the
+    /// mod's lowest other variant folder, else the game's <c>material/v0001/</c> file.
+    /// </summary>
+    private static string MaterialSource(string folder, string name, IReadOnlyDictionary<string, string> effective)
+    {
+        var first = $"{folder}material/v0001/{name}";
+        if (effective.TryGetValue(first, out var file))
+            return "file:" + file;
+        var variant = effective.Keys
+            .Where(path => path.StartsWith(folder, StringComparison.Ordinal) && path.EndsWith("/" + name, StringComparison.Ordinal) &&
+                           MaterialVariant().IsMatch(path[folder.Length..^name.Length]))
+            .Order(StringComparer.Ordinal)
+            .FirstOrDefault();
+        return variant is not null ? "file:" + effective[variant] : "game:" + first;
+    }
+
+    /// <summary>The model's folder up to and including <c>obj/body/bYYYY/</c> or <c>obj/equipment/eYYYY/</c>.</summary>
+    private static string SourceFolder(string sourceModel)
+        => ModelFolder().Match(sourceModel) is { Success: true } match
+            ? match.Value
+            : sourceModel[..(sourceModel.LastIndexOf("/model/", StringComparison.Ordinal) + 1)];
+
+    private static byte[]? Bytes(string source, Func<string, byte[]?> game)
+        => source.StartsWith("file:", StringComparison.Ordinal) ? File.ReadAllBytes(source[5..]) : game(source[5..]);
+
+    private static string Normalise(string gamePath) => gamePath.Replace('\\', '/').ToLowerInvariant();
+
+    [GeneratedRegex(@"^chara/weapon/w(\d{4})/")]
+    private static partial Regex WeaponSet();
+
+    [GeneratedRegex(@"^chara/(?:(?:weapon|monster)/[wm]\d{4}/obj/body/b\d{4}/|demihuman/d\d{4}/obj/equipment/e\d{4}/)")]
+    private static partial Regex ModelFolder();
+
+    [GeneratedRegex(@"^material/v\d{4}/$")]
+    private static partial Regex MaterialVariant();
+}

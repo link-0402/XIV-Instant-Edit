@@ -308,6 +308,14 @@ internal enum TimelineAddKind : byte { Expression, LipSync, Sound, Effect, Prop 
 internal sealed record TimelinePropModel(ushort Model, ushort Body, ushort Variant, ushort? WeaponTimeline);
 
 /// <summary>
+/// A model from another mod, given a private weapon body (<paramref name="Set"/>, <paramref name="Body"/>) in the
+/// animation's mod. <paramref name="Files"/> maps each private game path to its source: "file:" and an absolute
+/// file, or "game:" and a game path.
+/// </summary>
+internal sealed record TimelinePropSource(string ModDirectory, string ModName, string SourceModel, ushort Set, ushort Body,
+    ImmutableDictionary<string, string> Files);
+
+/// <summary>
 /// Everything an Add needs. <paramref name="Path"/> is the motion name for expressions and lip
 /// sync ("cfxf_smile", "cfxl_lip_nor1") and the game path for sounds and effects.
 /// <paramref name="Pack"/> is the expression library a non-resident expression needs, else null.
