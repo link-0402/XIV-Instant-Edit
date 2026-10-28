@@ -56,7 +56,8 @@ internal static class TimelineEffectCheck
     /// <summary>
     /// The C173 events whose effect stops. <paramref name="effects"/> holds what was read of each
     /// effect by game path; effects missing from it are not judged, and an effect that ends itself or
-    /// whose sound stops counts only when a copy that keeps it going could be made. An effect ends
+    /// whose sound stops counts only when a copy that keeps it going could be made, and an event with a
+    /// Stops at (<see cref="TimelineEffectEdit.Stop"/>) isn't judged. An effect ends
     /// itself too soon only when the stop can cut it short: <paramref name="clipLoops"/>, or the stop
     /// falls inside the clip.
     /// </summary>
@@ -66,8 +67,9 @@ internal static class TimelineEffectCheck
         var problems = ImmutableArray.CreateBuilder<Problem>();
         foreach (var ev in document.Events.IsDefault ? [] : document.Events)
         {
+            // An effect with a Stops at stops where the user chose, so keeping it going would undo that.
             if (ev.Magic != "C173" || ev.Values is null || !ev.Values.TryGetValue(LoopField, out var raw) ||
-                !effects.TryGetValue(ev.Path, out var effect))
+                !effects.TryGetValue(ev.Path, out var effect) || ev.Look?.Stop != null)
                 continue;
             var value = (int)raw;
             // 0 turns the entry off on purpose, and 1 at a later frame waits one frame, then plays it again.

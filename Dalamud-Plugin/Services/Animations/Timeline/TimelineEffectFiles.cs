@@ -64,20 +64,25 @@ internal static class TimelineEffectFiles
     public const string StopBeforeStart = "Stops at is before the effect starts";
     public const string NothingScheduled = "This effect has nothing scheduled to stop";
     public const string NoRoomForKill = "This effect can't take a kill: it names a clip it lacks";
+    public const string LoopsUntil = "This effect loops: Stops at must be by frame ";
 
     /// <summary>The first frame the effect's schedule kills it at, whether or not it would end anyway; null when it never does.</summary>
     internal static int? KillsAt(byte[] avfx) => ReadSchedule(avfx).Kills is { Count: > 0 } kills ? kills.Min(k => k.At) : null;
 
     /// <summary>
-    /// The effect with its schedule killing it at <paramref name="stop"/> frames after it starts. Every
-    /// KILL item a scheduled item reaches gets the start that puts it at the stop, in every Item
-    /// container; without one, a KILL the schedule reaches only while its item or scheduler entry is
-    /// off is turned on in every copy and moved; without that either, the timeline scheduled first gets
-    /// a KILL clip and an Item container holding its items and one playing it. A kill whose scheduler
-    /// item starts after the stop is past it already and stays, so no item start goes below 0. Throws
+    /// The effect with its schedule killing it at <paramref name="stop"/> frames after it starts, by a KILL
+    /// at a local frame its timeline plays (see <see cref="Reaches"/>). Moving a KILL beats adding one:
+    /// a KILL on a timeline of its own (all it plays are kills, as Red Carpet's at 908) moves by its
+    /// scheduler item's start, in every Item and Trgr copy; another moves by its own start, in every Item
+    /// container, when its scheduler item starts by the stop. Without a KILL the schedule reaches, one
+    /// reached only while its item or scheduler entry is off is turned on in every copy and moved the
+    /// same way; without that either, the first timeline scheduled by the stop that plays the frame gets
+    /// a KILL clip and an Item container holding its items and one playing it. A kill that can't be
+    /// moved there is past the stop already and stays, so no start goes below 0. Throws
     /// <see cref="InvalidDataException"/> with <see cref="StopBeforeStart"/> when nothing scheduled
-    /// starts by the stop, <see cref="NothingScheduled"/>, or <see cref="NoRoomForKill"/> when every
-    /// timeline that could take a KILL has an item naming the clip it would be.
+    /// starts by the stop, <see cref="NothingScheduled"/>, <see cref="NoRoomForKill"/> when every
+    /// timeline that could take a KILL has an item naming the clip it would be, or <see cref="LoopsUntil"/>
+    /// and the last frame that works when those timelines loop before the stop.
     /// </summary>
     public static byte[] WithKill(byte[] avfx, int stop)
     {
@@ -90,27 +95,74 @@ internal static class TimelineEffectFiles
             {
                 var entry = scheduler.Items[index];
                 var number = entry.Get("TlNo", -1);
-                var start = entry.Get("StTm", 0);
-                if (number < 0 || number >= timelines.Count || start > stop)
+                if (number < 0 || number >= timelines.Count)
                     continue;
                 var timeline = timelines[number];
-                for (var item = 0; item < timeline.Items.Count; item++)
-                    if (Kills(timeline, timeline.Items[item]))
-                        (entry.Get("bEna", 1) != 0 && timeline.Items[item].Get("bEna", 1) != 0 ? on : off)
-                            .Add(new ScheduledKill(scheduler, index, start, timeline, item));
+                var kills = Enumerable.Range(0, timeline.Items.Count).Where(i => Kills(timeline, timeline.Items[i])).ToList();
+                // A timeline of kills moves by its scheduler item, so one of them (the first to play) does.
+                if (KillsOnly(timeline) && kills.Count > 0)
+                    kills = [kills.OrderBy(i => timeline.Items[i].Get("bEna", 1) == 0).ThenBy(i => timeline.Items[i].Get("StTm", 0)).First()];
+                foreach (var item in kills)
+                {
+                    var kill = new ScheduledKill(scheduler, index, entry.Get("StTm", 0), timeline, item);
+                    if (Movable(kill, stop))
+                        (entry.Get("bEna", 1) != 0 && timeline.Items[item].Get("bEna", 1) != 0 ? on : off).Add(kill);
+                }
             }
         if (on.Count > 0)
             foreach (var kill in on)
-                MoveKill(avfx, output, kill, stop, turnOn: false);
+                Move(avfx, output, kill, stop, turnOn: false);
         else if (off.Count > 0)
-        {
-            TurnOn(avfx, output, off[0].Scheduler, off[0].Index);
-            MoveKill(avfx, output, off[0], stop, turnOn: true);
-        }
+            Move(avfx, output, off[0], stop, turnOn: true);
         else
             output = AddKill(avfx, output, timelines, schedulers, stop);
         if (KillsAt(output) != stop) throw new InvalidDataException("The effect's kill could not be moved.");
         return output;
+    }
+
+    /// <summary>
+    /// Whether a timeline plays its local frame <paramref name="frame"/>: one that doesn't loop plays
+    /// every frame, a looping one only those before its loop end (LpEd), since it goes back to its loop
+    /// start there. The mod library has no KILL on a looping timeline at all (124 of 124 sampled are on
+    /// timelines that don't loop), so nothing says a later one fires.
+    /// </summary>
+    private static bool Reaches(TimelineBlock timeline, int frame) =>
+        frame >= 0 && (!Loops(timeline) || frame < timeline.Fields.Get("LpEd", 0));
+
+    private static bool Loops(TimelineBlock timeline) =>
+        timeline.Fields.Get("LpEd", 0) > timeline.Fields.Get("LpSt", 0) && timeline.Fields.Get("LpSt", 0) >= 0;
+
+    /// <summary>Whether every item a timeline plays is a kill, so moving its scheduler item moves nothing else.</summary>
+    private static bool KillsOnly(TimelineBlock timeline) => timeline.Items.All(i => i.Get("bEna", 1) == 0 || Kills(timeline, i));
+
+    /// <summary>
+    /// Whether a scheduled kill can be put at <paramref name="stop"/>: on a timeline of kills, by a
+    /// scheduler start of 0 or later; else by a local start its timeline plays, with its scheduler item
+    /// starting by the stop.
+    /// </summary>
+    private static bool Movable(ScheduledKill kill, int stop)
+    {
+        var local = kill.Timeline.Items[kill.Item].Get("StTm", 0);
+        return KillsOnly(kill.Timeline)
+            ? stop - local >= 0 && Reaches(kill.Timeline, local)
+            : kill.Start <= stop && Reaches(kill.Timeline, stop - kill.Start);
+    }
+
+    /// <summary>A scheduled kill put at <paramref name="stop"/> (see <see cref="Movable"/>), its scheduler item and KILL item turned on too when asked.</summary>
+    private static void Move(byte[] avfx, byte[] output, ScheduledKill kill, int stop, bool turnOn)
+    {
+        if (KillsOnly(kill.Timeline))
+        {
+            WriteScheduled(avfx, output, kill.Scheduler, kill.Index, stop - kill.Timeline.Items[kill.Item].Get("StTm", 0), turnOn);
+            if (turnOn)
+                MoveKill(avfx, output, kill, null, turnOn: true);
+        }
+        else
+        {
+            if (turnOn)
+                WriteScheduled(avfx, output, kill.Scheduler, kill.Index, null, turnOn: true);
+            MoveKill(avfx, output, kill, stop - kill.Start, turnOn);
+        }
     }
 
     /// <summary>A scheduler item (by its index) that starts a timeline at <paramref name="Start"/>, and that timeline's KILL item.</summary>
@@ -169,8 +221,8 @@ internal static class TimelineEffectFiles
     private static bool Kills(TimelineBlock timeline, Entry item) =>
         item.Get("ClNo", -1) is var clip && clip >= 0 && clip < timeline.Clips.Count && timeline.Clips[clip] == KillClip;
 
-    /// <summary>A KILL item's start set so it plays at <paramref name="stop"/>, in every Item container that holds it; turned on too when asked.</summary>
-    private static void MoveKill(byte[] avfx, byte[] output, ScheduledKill kill, int stop, bool turnOn)
+    /// <summary>A KILL item's local start set to <paramref name="local"/> (null keeps it), in every Item container that holds it; turned on too when asked.</summary>
+    private static void MoveKill(byte[] avfx, byte[] output, ScheduledKill kill, int? local, bool turnOn)
     {
         var last = kill.Timeline.Items[kill.Item];
         foreach (var (start, size) in kill.Timeline.Containers)
@@ -181,26 +233,35 @@ internal static class TimelineEffectFiles
             var copy = entries[kill.Item];
             if (copy.Get("ClNo", -1) != last.Get("ClNo", -1) || copy.Get("StTm", 0) != last.Get("StTm", 0))
                 continue;
-            if (!copy.Fields.TryGetValue("StTm", out var time) || time.Size < 4)
-                throw new InvalidDataException("The effect's kill has no start to move.");
-            BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(time.At), stop - kill.Start);
+            if (local is { } frame)
+                WriteStart(output, copy, frame);
             if (turnOn && copy.Fields.TryGetValue("bEna", out var enabled))
                 TurnOn(output, enabled);
         }
     }
 
-    /// <summary>A scheduler item turned on in every Item and Trgr chunk that repeats it.</summary>
-    private static void TurnOn(byte[] avfx, byte[] output, SchedulerBlock scheduler, int index)
+    /// <summary>A scheduler item's start set to <paramref name="start"/> (null keeps it) in every Item and Trgr chunk that repeats it; turned on too when asked.</summary>
+    private static void WriteScheduled(byte[] avfx, byte[] output, SchedulerBlock scheduler, int index, int? start, bool turnOn)
     {
         var item = scheduler.Items[index];
-        foreach (var (start, size) in scheduler.Copies)
+        foreach (var (at, size) in scheduler.Copies)
         {
-            var entries = Entries(avfx, start, size);
-            if (index < Math.Min(entries.Count, scheduler.Count) && entries[index] is var entry &&
-                entry.Get("StTm", 0) == item.Get("StTm", 0) && entry.Get("TlNo", -1) == item.Get("TlNo", -1) &&
-                entry.Fields.TryGetValue("bEna", out var enabled))
+            var entries = Entries(avfx, at, size);
+            if (index >= Math.Min(entries.Count, scheduler.Count) || entries[index] is not { } entry ||
+                entry.Get("StTm", 0) != item.Get("StTm", 0) || entry.Get("TlNo", -1) != item.Get("TlNo", -1))
+                continue;
+            if (start is { } frame)
+                WriteStart(output, entry, frame);
+            if (turnOn && entry.Fields.TryGetValue("bEna", out var enabled))
                 TurnOn(output, enabled);
         }
+    }
+
+    private static void WriteStart(byte[] output, Entry entry, int frame)
+    {
+        if (!entry.Fields.TryGetValue("StTm", out var time) || time.Size < 4)
+            throw new InvalidDataException("The effect's kill has no start to move.");
+        BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(time.At), frame);
     }
 
     private static void TurnOn(byte[] output, (int Value, int At, int Size) field)
@@ -211,7 +272,7 @@ internal static class TimelineEffectFiles
 
     /// <summary>
     /// The effect with a KILL clip added to the timeline scheduled first (the first of those starting
-    /// together) that has no playing item naming the new clip's index, and an Item container after its
+    /// together) that plays the stop's local frame and has no playing item naming the new clip's index, and an Item container after its
     /// last one holding its items and one that plays the clip at <paramref name="stop"/>; its item and
     /// clip counts and the sizes around them grow.
     /// </summary>
@@ -223,20 +284,24 @@ internal static class TimelineEffectFiles
         if (scheduled.Count == 0) throw new InvalidDataException(NothingScheduled);
         if (stop < scheduled[0].Get("StTm", 0)) throw new InvalidDataException(StopBeforeStart);
         // An item may name a clip its timeline lacks; the new clip must not be the one an item that plays names, or that item would kill the effect.
-        var first = scheduled.FirstOrDefault(e => e.Get("StTm", 0) <= stop && timelines[e.Get("TlNo", -1)] is var candidate &&
-                                                  candidate.Items.All(i => i.Get("bEna", 1) == 0 || i.Get("ClNo", -1) != candidate.Clips.Count))
-                    ?? throw new InvalidDataException(NoRoomForKill);
+        var roomy = scheduled.Where(e => e.Get("StTm", 0) <= stop && timelines[e.Get("TlNo", -1)] is var candidate &&
+                                         candidate.Items.All(i => i.Get("bEna", 1) == 0 || i.Get("ClNo", -1) != candidate.Clips.Count)).ToList();
+        if (roomy.Count == 0) throw new InvalidDataException(NoRoomForKill);
+        // A looping timeline goes back before its loop end, so the kill must come before it.
+        var first = roomy.FirstOrDefault(e => Reaches(timelines[e.Get("TlNo", -1)], stop - e.Get("StTm", 0)))
+                    ?? throw new InvalidDataException(LoopsUntil + roomy.Max(e => e.Get("StTm", 0) + timelines[e.Get("TlNo", -1)].Fields.Get("LpEd", 0) - 1));
         var start = first.Get("StTm", 0);
         var timeline = timelines[first.Get("TlNo", -1)];
         if (!timeline.Fields.Fields.TryGetValue("TICn", out var itemCount) || !timeline.Fields.Fields.TryGetValue("CpCn", out var clipCount))
             throw new InvalidDataException("The effect's timeline has no item or clip count.");
         BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(itemCount.At), timeline.Items.Count + 1);
         BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(clipCount.At), timeline.Clips.Count + 1);
-        // The new item's fields as library items that name a clip have them (bEna is 4 bytes), after the items before it in a new container.
+        // The new item's fields as library items that name a clip have them (bEna is 4 bytes; a KILL ends a frame after it starts),
+        // after the items before it in a new container.
         var at = stop - start;
         byte[] item =
         [
-            .. TimelineEffectLooks.Leaf("bEna", 1), .. TimelineEffectLooks.Leaf("StTm", at), .. TimelineEffectLooks.Leaf("EdTm", at),
+            .. TimelineEffectLooks.Leaf("bEna", 1), .. TimelineEffectLooks.Leaf("StTm", at), .. TimelineEffectLooks.Leaf("EdTm", at + 1),
             .. TimelineEffectLooks.Leaf("BdNo", -1), .. TimelineEffectLooks.Leaf("EfNo", -1), .. TimelineEffectLooks.Leaf("EmNo", -1),
             .. TimelineEffectLooks.Leaf("Plfm", 0), .. TimelineEffectLooks.Leaf("ClNo", timeline.Clips.Count),
         ];
@@ -251,14 +316,13 @@ internal static class TimelineEffectFiles
         ]);
     }
 
-    /// <summary>A KILL clip as VFXEditor writes one: its type, then ints (0, 0, 0, 1), floats (-1, -1, 0, 0) and 128 zero bytes.</summary>
+    /// <summary>A KILL clip: its type, then ints (0, 0, 0, 1) (no fade, hide), floats (-1, 0, 0, 0) as most library KILLs have, and 128 zero bytes.</summary>
     private static byte[] KillPayload()
     {
         var payload = new byte[164];
         BinaryPrimitives.WriteInt32LittleEndian(payload, KillClip);
         BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(16), 1);
         BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(20), -1);
-        BinaryPrimitives.WriteSingleLittleEndian(payload.AsSpan(24), -1);
         return payload;
     }
 
