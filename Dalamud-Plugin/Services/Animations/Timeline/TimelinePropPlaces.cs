@@ -90,9 +90,10 @@ internal static class TimelinePropPlaces
 
     /// <summary>
     /// <paramref name="doc"/> with the attach state <paramref name="summon"/>'s place targets written into the TMB
-    /// side, on every summon of its group: a C198 gets AtchState target + 1; a C043 gets a C014 at its spawn + 1 on
-    /// its slot (Enabled 1, ObjectPosition the target), in place of the group's first C014 on that slot. The same
-    /// document when the summon has no place.
+    /// side, on it and the summons of its group without a place of their own: a C198 gets AtchState target + 1; a C043
+    /// gets a C014 at its spawn + 1 on its slot (Enabled 1, ObjectPosition the target), in place of the group's C014 on
+    /// that slot at its spawn or spawn + 1. A later C014 (a switch, a stow) is kept. The same document when the summon
+    /// has no place.
     /// </summary>
     public static TimelineDocument ApplyState(TimelineDocument doc, TimelineEvent summon)
     {
@@ -104,7 +105,9 @@ internal static class TimelinePropPlaces
         var next = Math.Max(0, doc.NextKey);
         var keys = doc.Events.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
         var added = new HashSet<string>(StringComparer.Ordinal);
-        TimelineEvent[] summons = [.. (current.Group == null ? [current] : doc.Events.Where(e => e.Group == current.Group)).Where(IsSummon)];
+        // A summon of the group with a place of its own gets its own state from its own call.
+        TimelineEvent[] summons = [.. (current.Group == null ? [current] : doc.Events.Where(e => e.Group == current.Group && (e.Key == current.Key || e.Place == null)))
+            .Where(IsSummon)];
         foreach (var each in summons)
         {
             if (each.Magic == "C198")
@@ -114,8 +117,10 @@ internal static class TimelinePropPlaces
                 continue;
             }
             const int slot = 2; // A C043 is always summon slot 0, which a C014 names 2.
+            // Only the C014 that picks the state as the prop appears; one later switches it (or another summon's).
             if (each.Group != null && events.Where(e => e.Magic == "C014" && e.Group == each.Group && !added.Contains(e.Key) &&
-                    (int)e.Values.GetValueOrDefault("ObjectControl") == slot).OrderBy(e => e.Start).FirstOrDefault() is { } replaced)
+                    e.Start >= each.Start && e.Start <= each.Start + 1 &&
+                    (int)e.Values.GetValueOrDefault("ObjectControl") == slot).OrderBy(e => e.Start).LastOrDefault() is { } replaced)
                 events.Remove(replaced);
             string key;
             do key = "n" + (next++).ToString(CultureInfo.InvariantCulture);

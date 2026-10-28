@@ -103,17 +103,31 @@ internal static class AtchTableFixture
         var weapon = new TimelineDocument(100, 100, null,
         [
             Event("t0", "C043", 10, 60, "p0", ("Model", 1962), ("Body", 1), ("Variant", 1)),
-            Event("t1", "C014", 12, 0, "p0", ("Enabled", 1), ("ObjectPosition", 3), ("ObjectControl", 2)),
+            Event("t1", "C014", 11, 0, "p0", ("Enabled", 1), ("ObjectPosition", 3), ("ObjectControl", 2)),
             Event("t2", "C014", 12, 0, null, ("Enabled", 1), ("ObjectPosition", 4), ("ObjectControl", 0)),
+            Event("t6", "C014", 60, 0, "p0", ("Enabled", 1), ("ObjectPosition", 0), ("ObjectControl", 2)),
         ], 5);
         var inUse = TimelinePropPlaces.ApplyState(Placed(weapon, "t0", new TimelinePropPlace(2, false, null, up, Vector3.Zero, 1)), weapon.Events[0]);
-        var c014 = inUse.Events.Where(e => e.Magic == "C014" && e.Values["ObjectControl"] == 2).ToArray();
+        var c014 = inUse.Events.Where(e => e.Magic == "C014" && e.Values["ObjectControl"] == 2 && e.Start < 60).ToArray();
         check(c014 is [{ Key: "n5", Group: "p0", Start: 11 } added] && added.Values["Enabled"] == 1 && added.Values["ObjectPosition"] == 2 &&
               inUse.NextKey == 6 && inUse.Events.Any(e => e.Key == "t2"),
             "a C043 prop gets a C014 at spawn + 1 on its slot, in place of the group's own");
+        var lateOnly = weapon with { Events = [.. weapon.Events.Where(e => e.Key != "t1")] };
+        check(inUse.Events.Single(e => e.Key == "t6") == weapon.Events[3] &&
+              TimelinePropPlaces.ApplyState(Placed(lateOnly, "t0", new TimelinePropPlace(2, false, null, up, Vector3.Zero, 1)), weapon.Events[0])
+                  .Events.Count(e => e.Key == "t6" || e.Magic == "C014" && e.Start == 11) == 2,
+            "a later C014 that stows the prop is kept as it was");
         var drawn = TimelinePropPlaces.ApplyState(Placed(weapon, "t0", new TimelinePropPlace(0, false, null, up, Vector3.Zero, 1)), weapon.Events[0]);
-        check(drawn.Events.Single(e => e.Magic == "C014" && e.Values["ObjectControl"] == 2).Values["ObjectPosition"] == 1,
+        check(drawn.Events.Single(e => e.Magic == "C014" && e.Values["ObjectControl"] == 2 && e.Start == 11).Values["ObjectPosition"] == 1,
             "attach state 0 is written as position 1, Drawn");
+        var twice = new TimelineDocument(100, 100, null,
+        [
+            Event("t0", "C043", 0, 30, "p0", ("Model", 1962)) with { Place = new TimelinePropPlace(2, false, null, up, Vector3.Zero, 1) },
+            Event("t7", "C043", 30, 30, "p0", ("Model", 1962)) with { Place = new TimelinePropPlace(3, false, null, up, Vector3.Zero, 1) },
+        ], 1);
+        check(TimelinePropPlaces.ApplyStates(twice).Events.Where(e => e.Magic == "C014").Select(e => (e.Start, (int)e.Values["ObjectPosition"]))
+                .OrderBy(e => e.Start).SequenceEqual([(1, 2), (31, 3)]),
+            "two placed summons of one prop each get their own C014 at their own spawn");
         check(TimelinePropPlaces.ApplyState(weapon, weapon.Events[0]) == weapon, "a prop without a place keeps its state");
 
         check(AnimationEditService.PropRaces("chara/human/c0101/animation/a0001/bt_common/emote/toast.pap", null, "c0801").SequenceEqual(new ushort[] { 101, 801 }) &&
