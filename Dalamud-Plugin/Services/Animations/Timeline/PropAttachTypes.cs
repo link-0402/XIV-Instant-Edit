@@ -62,5 +62,23 @@ internal sealed class PropAttachTypes
         }
     }
 
+    /// <summary>
+    /// The attach point code a held prop's draw object names (4 bytes at +32 of its <c>DrawObjectData</c>): 3 printable
+    /// ASCII characters stored reversed, then a NUL. Null for anything else, as for a slot that holds no prop.
+    /// </summary>
+    public static string? CodeFrom(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 4 || bytes[3] != 0)
+            return null;
+        Span<char> code = stackalloc char[3];
+        for (var i = 0; i < 3; i++)
+        {
+            if (bytes[i] is < (byte)'!' or > (byte)'~')
+                return null;
+            code[2 - i] = (char)bytes[i];
+        }
+        return new string(code);
+    }
+
     private static bool Valid(ushort model, string code) => model != 0 && code is { Length: 3 };
 }

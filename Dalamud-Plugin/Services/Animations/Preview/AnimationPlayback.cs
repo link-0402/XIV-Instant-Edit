@@ -1,11 +1,13 @@
 ﻿using System.Buffers.Binary;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.Havok.Animation.Playback.Control.Default;
 using InstantEdit.Models;
+using InstantEdit.Services.Animations.Timeline;
 using Lumina.Excel.Sheets;
 
 namespace InstantEdit.Services.Animations.Preview;
@@ -227,6 +229,59 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     // The skeleton ActorSkeleton described last, with the Havok skeleton and bone array it came from: identities only.
     private (nint Skeleton, nint Bones, SkeletonDescription Description)? _actorSkeleton;
 
+    /// <summary>The race code (801 for c0801) of the GPose character at <paramref name="index"/>; null when it isn't a drawn human.</summary>
+    public ushort? ActorRace(ushort index)
+    {
+        RequireFrameworkThread();
+        return AnimationRuntime.RaceCode(GPoseCharacter(index)) is ['c', .. var digits] && ushort.TryParse(digits, out var race) ? race : null;
+    }
+
+    // A prop watch LearnProps started: the actor (an identity key only), the models still unknown and when it ends.
+    private sealed record PropWatch(ushort ObjectIndex, nint Address, HashSet<ushort> Models, long UntilTicks, Action<ushort, string> Learn);
+    private PropWatch? _propWatch;
+    // Where DrawObjectData keeps the attach point code of what it holds (no field in ClientStructs names it).
+    private const int AttachCodeOffset = 32;
+
+    /// <summary>
+    /// Watches the GPose character at <paramref name="index"/> for <paramref name="duration"/>: every frame, a weapon slot
+    /// (the three of DrawData and the fourth after them) whose model is one of <paramref name="models"/> hands
+    /// <paramref name="learn"/> the attach point its draw object names (see <see cref="PropAttachTypes.CodeFrom"/>). Ends
+    /// sooner once every model is learned, or the character leaves; a new watch replaces the last.
+    /// </summary>
+    public void LearnProps(ushort index, IReadOnlyCollection<ushort> models, TimeSpan duration, Action<ushort, string> learn)
+    {
+        RequireFrameworkThread();
+        _propWatch = models.Count > 0 && GPoseCharacter(index) is { } actor
+            ? new PropWatch(index, actor.Address, [.. models], Environment.TickCount64 + (long)duration.TotalMilliseconds, learn)
+            : null;
+    }
+
+    private void WatchProps()
+    {
+        if (_propWatch is not { } watch)
+            return;
+        if (Environment.TickCount64 > watch.UntilTicks || GPoseCharacter(watch.ObjectIndex) is not { } actor || actor.Address != watch.Address)
+        {
+            _propWatch = null;
+            return;
+        }
+        var drawData = &((Character*)actor.Address)->DrawData;
+        for (var i = 0; i < drawData->WeaponData.Length + drawData->UnkWeaponData.Length; i++)
+        {
+            ref var slot = ref i < drawData->WeaponData.Length ? ref drawData->WeaponData[i] : ref drawData->UnkWeaponData[i - drawData->WeaponData.Length];
+            if (!watch.Models.Contains(slot.ModelId.Id) ||
+                PropAttachTypes.CodeFrom(new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref slot) + AttachCodeOffset, 4)) is not { } code)
+                continue;
+            var model = slot.ModelId.Id;
+            watch.Models.Remove(model);
+            _log.Debug("Prop {Model} attaches with {Code}.", model, code);
+            // Learning saves a file: off the framework thread.
+            _ = Task.Run(() => watch.Learn(model, code));
+        }
+        if (watch.Models.Count == 0)
+            _propWatch = null;
+    }
+
     /// <summary>
     /// Reads the body skeleton of the GPose character at <paramref name="index"/> as the game shows it this
     /// frame into <paramref name="pose"/>, for the bones the Bones window draws on it. False outside GPose,
@@ -418,6 +473,12 @@ internal sealed unsafe class AnimationPlayback : IDisposable
 
     private void OnUpdate(IFramework framework)
     {
+        try { WatchProps(); }
+        catch (Exception e)
+        {
+            _log.Warning(e, "Could not read the preview's props.");
+            _propWatch = null;
+        }
         var session = _session;
         if (session == null)
             return;

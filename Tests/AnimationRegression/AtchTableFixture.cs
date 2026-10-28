@@ -70,6 +70,17 @@ internal static class AtchTableFixture
             "a place that changes nothing writes no override");
         check(Throws(() => TimelinePropPlaces.Manipulations(moved, both, Tables, new PropAttachTypes(null)), "Preview once to place 1962"),
             "a prop whose attach point was never seen asks for a preview");
+        // The preview skips such a prop (it learns its point while playing) and still places the known one.
+        var mixed = moved with
+        {
+            Events = [.. moved.Events, Event("u1", "C198", 90, 60, "p4", ("Model", 4321), ("SummonId", 1), ("AtchState", 0)) with
+            {
+                Place = new TimelinePropPlace(0, false, null, up, Vector3.Zero, 1),
+            }],
+        };
+        check(TimelinePropPlaces.Manipulations(mixed, [801], Tables, types, skipUnlearned: true) is [{ GenderRace: 801, Code: "tsl", Entry.Scale: .85f }] &&
+              Throws(() => TimelinePropPlaces.Manipulations(mixed, [801], Tables, types), "Preview once to place 4321"),
+            "the preview places the props whose attach point is known and leaves the others; a save still refuses them");
         check(TimelinePropPlaces.Manipulations(moved, [801], Tables, types) is [{ GenderRace: 801, Entry.Scale: .85f }],
             "a clip rebuilt for another race moves that race's own entry");
 
@@ -280,5 +291,12 @@ internal static class AtchTableFixture
             check(new PropAttachTypes(temp, message => warned = message).All.Count == 0 && warned != null, "an unreadable file starts empty and says so");
         }
         finally { Directory.Delete(temp, true); }
+
+        // A held prop's draw object names its attach point at +32: the 3-character code reversed and NUL ended.
+        check(PropAttachTypes.CodeFrom("lst\0"u8) == "tsl" && PropAttachTypes.CodeFrom("rdg\0"u8) == "gdr",
+            "a draw object's reversed code reads as the attach point");
+        check(PropAttachTypes.CodeFrom(new byte[4]) == null && PropAttachTypes.CodeFrom("abcd"u8) == null && PropAttachTypes.CodeFrom("ab\0\0"u8) == null &&
+              PropAttachTypes.CodeFrom("l\u0001t\0"u8.ToArray()) == null && PropAttachTypes.CodeFrom("ls"u8) == null,
+            "an empty, unended, short or unprintable code is not read as one");
     }
 }

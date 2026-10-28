@@ -182,7 +182,7 @@ internal sealed class MaterialPreviewService : IMaterialPreview, IDisposable
 
             try
             {
-                var added = await framework.RunOnFrameworkThread(() => penumbra.AddTemporaryModOnFramework(tag, collection.Id, redirects, Priority))
+                var added = await framework.RunOnFrameworkThread(() => penumbra.AddTemporaryModOnFramework(tag, collection.Id, redirects, string.Empty, Priority))
                     .ConfigureAwait(false);
                 if (added != PenumbraApiEc.Success)
                     throw new IOException($"Penumbra could not add the preview ({added}).");

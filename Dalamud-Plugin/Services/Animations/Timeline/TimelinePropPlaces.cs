@@ -53,9 +53,10 @@ internal static class TimelinePropPlaces
     /// the race's vanilla entry at the place's <see cref="TimelinePropPlace.State"/>, moved by its deltas, at its
     /// <see cref="TimelinePropPlace.Target"/>. One equal to the race's vanilla entry there is left out.
     /// </summary>
+    /// <param name="skipUnlearned">For the preview, which learns them: a prop whose attach point was never learned gets no override, rather than throwing.</param>
     /// <exception cref="InvalidDataException">A prop's attach point was never learned, or a race's table lacks it.</exception>
     public static ImmutableArray<AtchManipulation> Manipulations(TimelineDocument doc, IReadOnlyList<ushort> genderRaces,
-        Func<ushort, AtchTable> tables, PropAttachTypes types)
+        Func<ushort, AtchTable> tables, PropAttachTypes types, bool skipUnlearned = false)
     {
         var result = ImmutableArray.CreateBuilder<AtchManipulation>();
         foreach (var ev in doc.Events)
@@ -63,7 +64,12 @@ internal static class TimelinePropPlaces
             if (ev.Place is not { } place || !IsSummon(ev))
                 continue;
             var model = (ushort)ev.Values.GetValueOrDefault("Model");
-            var code = types.CodeOf(model) ?? throw new InvalidDataException($"Preview once to place {model}");
+            if (types.CodeOf(model) is not { } code)
+            {
+                if (skipUnlearned)
+                    continue;
+                throw new InvalidDataException($"Preview once to place {model}");
+            }
             foreach (var race in genderRaces)
             {
                 var table = tables(race);
@@ -138,6 +144,18 @@ internal static class TimelinePropPlaces
         foreach (var placed in doc.Events.Where(e => e.Place != null).ToArray())
             doc = ApplyState(doc, placed);
         return doc;
+    }
+
+    /// <summary>Each prop model <paramref name="doc"/> summons (C198 or C043) with the frame it first appears.</summary>
+    public static IReadOnlyDictionary<ushort, int> PropStarts(TimelineDocument doc)
+    {
+        var starts = new Dictionary<ushort, int>();
+        foreach (var e in doc.Events.Where(IsSummon))
+        {
+            var model = (ushort)e.Values.GetValueOrDefault("Model");
+            starts[model] = starts.TryGetValue(model, out var start) ? Math.Min(start, e.Start) : e.Start;
+        }
+        return starts;
     }
 
     private static bool IsSummon(TimelineEvent e) => e.Magic is "C198" or "C043" && e.Values.GetValueOrDefault("Model") > 0;

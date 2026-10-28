@@ -161,7 +161,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             try
             {
                 var added = await framework.RunOnFrameworkThread(() =>
-                    penumbra.AddTemporaryModOnFramework(Tag, collection.Id, new Dictionary<string, string> { [gamePath] = file }, Priority)).ConfigureAwait(false);
+                    penumbra.AddTemporaryModOnFramework(Tag, collection.Id, new Dictionary<string, string> { [gamePath] = file }, string.Empty, Priority)).ConfigureAwait(false);
                 if (added != PenumbraApiEc.Success)
                     throw new IOException($"Penumbra could not add the preview ({added}).");
                 await VerifyAsync(collection.Id, gamePath, file).ConfigureAwait(false);
@@ -295,7 +295,7 @@ internal sealed class PhysicsPreviewService : IDisposable
     {
         log.Warning($"Physics preview lost after the redraw: Penumbra resolves {gamePath} to {resolved ?? "nothing"} instead of {file}. Adding it again.");
         var added = await framework.RunOnFrameworkThread(() =>
-            penumbra.AddTemporaryModOnFramework(Tag, collection, new Dictionary<string, string> { [gamePath] = file }, Priority)).ConfigureAwait(false);
+            penumbra.AddTemporaryModOnFramework(Tag, collection, new Dictionary<string, string> { [gamePath] = file }, string.Empty, Priority)).ConfigureAwait(false);
         if (added != PenumbraApiEc.Success)
             return $"Penumbra dropped the preview after the redraw and could not add it again ({added}).";
         try { await VerifyAsync(collection, gamePath, file).ConfigureAwait(false); }

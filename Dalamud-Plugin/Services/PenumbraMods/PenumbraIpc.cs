@@ -484,13 +484,14 @@ internal sealed class PenumbraIpc : IDisposable
 
     /// <summary>
     /// Registers, or with the same tag and priority updates in place, a temporary mod in one
-    /// collection. Rooted values are file redirects; no meta manipulations.
+    /// collection. Rooted values are file redirects; <paramref name="manipulations"/> are meta manipulations in
+    /// Penumbra's encoded form (see <see cref="PenumbraMetaEncoder"/>), empty for none.
     /// </summary>
-    internal PenumbraApiEc AddTemporaryModOnFramework(string tag, Guid collection, IReadOnlyDictionary<string, string> paths, int priority)
+    internal PenumbraApiEc AddTemporaryModOnFramework(string tag, Guid collection, IReadOnlyDictionary<string, string> paths, string manipulations, int priority)
     {
         if (collection == Guid.Empty)
             throw new InvalidDataException("The temporary mod is invalid.");
-        return (_addTemporaryMod ??= new AddTemporaryMod(_pi)).Invoke(tag, collection, Redirects(tag, paths), string.Empty, priority);
+        return (_addTemporaryMod ??= new AddTemporaryMod(_pi)).Invoke(tag, collection, Redirects(tag, paths), manipulations, priority);
     }
 
     /// <summary>

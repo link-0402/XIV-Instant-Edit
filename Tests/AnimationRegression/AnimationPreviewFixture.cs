@@ -1,5 +1,11 @@
-﻿using InstantEdit.Services;
+﻿using System.Buffers.Binary;
+using System.IO.Compression;
+using System.Numerics;
+using InstantEdit.Services;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Preview;
+using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The in-game animation preview writes every revision to a new cache folder, because the game and
@@ -18,6 +24,44 @@ internal static class AnimationPreviewFixture
         Times(check);
         Records(check);
         OwnedCacheEntry(check);
+        MetaManipulations(check);
+    }
+
+    private static byte[] Gunzip(string encoded)
+    {
+        using var zipped = new MemoryStream(Convert.FromBase64String(encoded));
+        using var gzip = new GZipStream(zipped, CompressionMode.Decompress);
+        using var raw = new MemoryStream();
+        gzip.CopyTo(raw);
+        return raw.ToArray();
+    }
+
+    /// <summary>
+    /// A placed prop's attach override rides in the preview's temporary mod as Penumbra's binary meta string: version 1,
+    /// META0001, a count per kind (IMC, EQP, EQDP, EST, RSP, GMP, global EQP, Atch, Shp, Atr), Atch records of an 8-byte
+    /// identifier and a 64-byte entry.
+    /// </summary>
+    private static void MetaManipulations(Action<bool, string> check)
+    {
+        var empty = Gunzip(PenumbraMetaEncoder.Encode([]));
+        check(empty.Length == 9 + 10 * 4 && empty[0] == 1 && empty.AsSpan(1, 8).SequenceEqual("META0001"u8) && empty.AsSpan(9).IndexOfAnyExcept((byte)0) < 0,
+            "no attach overrides encode as version 1, META0001 and ten zero counts");
+
+        var moved = new AtchManipulation(801, "tsl", 2, new AtchEntry("n_buki_r", 1, new Vector3(0, .05f, 0), Vector3.Zero));
+        var encoded = PenumbraMetaEncoder.Encode([moved]);
+        var bytes = Gunzip(encoded);
+        var atch = 9 + 7 * 4;
+        var record = bytes.AsSpan(atch + 4);
+        var entry = record[8..];
+        check(BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(atch)) == 1 && bytes.Length == atch + 4 + 72 + 8 &&
+              BinaryPrimitives.ReadUInt32LittleEndian(record) == (('t' << 16) | ('s' << 8) | 'l') &&
+              BinaryPrimitives.ReadUInt16LittleEndian(record[4..]) == 801 && BinaryPrimitives.ReadUInt16LittleEndian(record[6..]) == 2,
+            "an attach override's identifier is the code as a number, the race and the state");
+        check(entry[..35].SequenceEqual("n_buki_r"u8.ToArray().Concat(new byte[27]).ToArray()) && entry[35] == 8 &&
+              BinaryPrimitives.ReadSingleLittleEndian(entry[36..]) == 1 && BinaryPrimitives.ReadSingleLittleEndian(entry[40..]) == 0 &&
+              BinaryPrimitives.ReadSingleLittleEndian(entry[44..]) == .05f && entry[48..64].IndexOfAnyExcept((byte)0) < 0,
+            "an attach override's entry is the NUL padded bone, its length, then scale, offset and rotation");
+        check(AnimationMetadata.DecodeEqdp(encoded).Count == 0, "the plugin's own Penumbra meta reader takes the encoded string");
     }
 
     private static void GamePaths(Action<bool, string> check, Action<Action, string> reject)

@@ -8,6 +8,7 @@ using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Services.PenumbraMods;
 
 namespace InstantEdit.Ui.Timeline;
 
@@ -60,6 +61,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     // whenever the effect starts, so a changed look shows then, without building the clip again.
     // The preview's files without the looks, and the previewed document without the looks it redirects.
     private ImmutableDictionary<string, byte[]>? previewBaseFiles;
+    // The placed props' attach overrides the preview's mod carries, encoded; a look update keeps them.
+    private string previewManipulations = string.Empty;
     private TimelineDocument? previewRest;
     private ImmutableDictionary<string, TimelineEffectEdit> shownLooks = ImmutableDictionary<string, TimelineEffectEdit>.Empty;
     // The same for sound changes: each one-sound file's own path points at the edited file (TimelineSoundEdits.Redirectable).
@@ -288,6 +291,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         TimelineDocument rest, shown;
         ImmutableDictionary<string, byte[]> added, lookFiles, soundRedirects;
         ImmutableDictionary<string, TimelineEffectEdit> looks;
+        string manipulations;
+        var types = session.Animations!.PropTypes;
         try
         {
             if ((effectLooks.LookMissing(document) ?? soundFiles.SoundMissing(document) ?? soundFiles.SoundCutMissing(document)) is { } missing)
@@ -305,6 +310,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             shown = sounds.Document;
             used.AddRange(sounds.Copies);
             added = TimelineWindowViews.AddedFiles(shown, used);
+            // Placed props show in place: their attach overrides for the actor's race ride in the preview's mod. A prop
+            // whose attach point is still unknown is left out; this preview learns it (see LearnProps below).
+            var placed = document.Events.Any(e => e.Place != null) && session.Playback.ActorRace(index) is { } race
+                ? TimelinePropPlaces.Manipulations(document, [race],
+                    r => session.AttachTable(r) ?? throw new InvalidDataException($"The game has no attach table for c{r:D4}."), types, skipUnlearned: true)
+                : [];
+            manipulations = placed.IsEmpty ? string.Empty : PenumbraMetaEncoder.Encode(placed);
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentException)
         {
@@ -328,7 +340,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 await session.Framework.RunOnFrameworkThread(() => service.PlayProblem(index, clip.Partial, built.Bytes, built.BindingFingerprint)) is { } problem)
                 throw new InvalidOperationException(problem);
             var baseFiles = added.SetItem(built.GamePath, built.Bytes);
-            await session.Preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundRedirects), token);
+            await session.Preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundRedirects), manipulations, token);
             if (generation != previewGeneration)
             {
                 // Stopped or replaced while it was being built: take it down again.
@@ -345,6 +357,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 if (generation != previewGeneration)
                     return false;
                 previewBaseFiles = baseFiles;
+                previewManipulations = manipulations;
                 shownLooks = looks;
                 shownSounds = soundRedirects;
                 previewFingerprint = built.BindingFingerprint;
@@ -356,6 +369,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                     return false;
                 if (Math.Abs(speed - 1) > .001f)
                     session.Playback.SetSpeed(speed);
+                // The props whose attach point is unknown are watched as they appear, to 2 s after the last one does.
+                var starts = TimelinePropPlaces.PropStarts(document);
+                var unknown = starts.Keys.Where(model => types.CodeOf(model) == null).ToArray();
+                if (unknown.Length > 0)
+                    session.Playback.LearnProps(index, unknown,
+                        TimeSpan.FromSeconds(unknown.Max(model => starts[model]) / (double)TimelineDocument.Fps / Math.Max(speed, .1f) + 2), types.Learn);
                 return true;
             });
             return played ? redraw == null ? "Preview playing." : "Preview playing. " + redraw : "Preview on. " + session.Playback.Error;
@@ -760,6 +779,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     {
         lookGeneration++;
         previewBaseFiles = null;
+        previewManipulations = string.Empty;
         previewRest = null;
         shownLooks = ImmutableDictionary<string, TimelineEffectEdit>.Empty;
         shownSounds = ImmutableDictionary<string, byte[]>.Empty;
@@ -846,7 +866,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         }
         lookSyncing = (looks, sounds, live, lookGeneration);
         // Live without looks needs no temporary mod.
-        lookSync = files.Count == 0 ? session.Preview.StopAsync() : session.Preview.ShowAsync(actor, files, CancellationToken.None);
+        lookSync = files.Count == 0 ? session.Preview.StopAsync() : session.Preview.ShowAsync(actor, files, previewing ? previewManipulations : string.Empty, CancellationToken.None);
     }
 
     /// <summary> Whether two sets of files by game path hold the same bytes. </summary>

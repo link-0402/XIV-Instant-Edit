@@ -130,23 +130,25 @@ internal sealed class AnimationPreviewService : IDisposable
     /// <paramref name="objectIndex"/>: writes them to a new revision folder, saves the record,
     /// registers or updates the temporary mod, checks Penumbra resolves every game path to its new
     /// file, then deletes the older revisions. Any failure after Penumbra was called ends the preview.
+    /// <paramref name="manipulations"/> are meta manipulations the mod carries too, encoded (see <see cref="PenumbraMetaEncoder"/>),
+    /// empty for none, such as placed props' attach overrides; like the files, the character shows them once redrawn.
     /// </summary>
-    public Task<AnimationPreviewRevision> ShowAsync(ushort objectIndex, IReadOnlyDictionary<string, byte[]> files, CancellationToken token)
+    public Task<AnimationPreviewRevision> ShowAsync(ushort objectIndex, IReadOnlyDictionary<string, byte[]> files, string manipulations, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(files);
         ObjectDisposedException.ThrowIf(_disposed, this);
         // Off the caller's thread: from ImGui draw, framework calls would otherwise run inline with the file work.
-        return Task.Run(() => ShowCoreAsync(objectIndex, files, token), CancellationToken.None);
+        return Task.Run(() => ShowCoreAsync(objectIndex, files, manipulations, token), CancellationToken.None);
     }
 
-    private async Task<AnimationPreviewRevision> ShowCoreAsync(ushort objectIndex, IReadOnlyDictionary<string, byte[]> files, CancellationToken token)
+    private async Task<AnimationPreviewRevision> ShowCoreAsync(ushort objectIndex, IReadOnlyDictionary<string, byte[]> files, string manipulations, CancellationToken token)
     {
         await _startup.ConfigureAwait(false);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, _life.Token);
         await _gate.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
-            var shown = await ShowLockedAsync(objectIndex, files, linked.Token).ConfigureAwait(false);
+            var shown = await ShowLockedAsync(objectIndex, files, manipulations, linked.Token).ConfigureAwait(false);
             SetMessages(shown.CollectionShared ? "Preview on. Others using this collection see it too." : "Preview on.", string.Empty);
             return shown;
         }
@@ -193,7 +195,7 @@ internal sealed class AnimationPreviewService : IDisposable
         }
     }
 
-    private async Task<AnimationPreviewRevision> ShowLockedAsync(ushort objectIndex, IReadOnlyDictionary<string, byte[]> files, CancellationToken token)
+    private async Task<AnimationPreviewRevision> ShowLockedAsync(ushort objectIndex, IReadOnlyDictionary<string, byte[]> files, string manipulations, CancellationToken token)
     {
         var bytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         long total = 0;
@@ -298,7 +300,7 @@ internal sealed class AnimationPreviewService : IDisposable
             var added = await _framework.RunOnFrameworkThread(() =>
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                return _penumbra.AddTemporaryModOnFramework(Tag, collection.Id, plan, Priority);
+                return _penumbra.AddTemporaryModOnFramework(Tag, collection.Id, plan, manipulations, Priority);
             }).ConfigureAwait(false);
             if (added != PenumbraApiEc.Success)
                 throw new IOException($"Penumbra could not add the preview ({added}).");
