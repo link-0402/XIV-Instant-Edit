@@ -197,8 +197,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Playhead = match.Frame;
             return;
         }
-        // A key pose's tick goes there and shows the Motion keys layer; read-only, it only moves the playhead.
-        if (clipBand.KeyPoseAt(io.MousePos) is { } pose)
+        // A key pose's tick goes there and shows the Motion keys layer; read-only, it only moves the playhead. The clip
+        // band's trim and blend edges keep their presses: the end ticks sit on them.
+        if (!OnBandEdge(hit) && clipBand.KeyPoseAt(io.MousePos) is { } pose)
         {
             if (readOnly)
                 current.Playhead = pose.Frame;
@@ -535,6 +536,10 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             drawList.AddLine(new Vector2(min.X, y), new Vector2(max.X, y), TimelineUi.U32(Theme.WithAlpha(Theme.TreeLine, .8f)), Math.Max(1, MathF.Floor(Theme.Scale)));
     }
 
+    /// <summary>Whether <paramref name="hit"/> is on one of the clip band's trim or blend edges, which key pose ticks give way to.</summary>
+    private static bool OnBandEdge(TimelineHit hit) =>
+        hit.Part is TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.JoinEdge or TimelinePart.SeamEdge or TimelinePart.EaseEdge;
+
     private void DrawTooltip(TimelineEditor current, TimelineHit hit, bool hovering, bool readOnly)
     {
         if (!hovering || current.Gesture != TimelineGesture.None)
@@ -576,7 +581,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             ImGui.TextColored(Theme.Hint, readOnly ? "Click to go here." : TimelineWindowViews.MatchHint);
             return;
         }
-        if (clipBand.DrawKeyPoseTooltip())
+        if (!OnBandEdge(hit) && clipBand.DrawKeyPoseTooltip(readOnly))
             return;
         if (TimelineClipBand.DrawTooltip(hit, CutEdits.CutsOf(current.Document), readOnly))
             return;

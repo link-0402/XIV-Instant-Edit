@@ -169,11 +169,20 @@ internal static class MotionKeyMarkers
         }
     }
 
-    /// <summary>How far two transforms are apart in tolerances: the largest of the turn, the move and the scale change.</summary>
+    /// <summary>
+    /// How far two transforms are apart in tolerances: the largest of the turn, the move and the scale change. The turn is
+    /// the angle of the rotation from <paramref name="a"/> to <paramref name="b"/> by atan2, which stays exact for tiny turns
+    /// and doesn't care whether the rotations are quite unit length (an acos of their dot does neither).
+    /// </summary>
     private static float Error(MotionTransform a, MotionTransform b, (float Degrees, float Metres, float Scale) tolerance)
     {
-        var dot = Math.Min(1.0, Math.Abs((double)a.Rotation.X * b.Rotation.X + (double)a.Rotation.Y * b.Rotation.Y + (double)a.Rotation.Z * b.Rotation.Z + (double)a.Rotation.W * b.Rotation.W));
-        var degrees = 2 * Math.Acos(dot) * 180 / Math.PI;
+        var (p, q) = (a.Rotation, b.Rotation);
+        // conjugate(a) * b
+        var w = (double)p.W * q.W + (double)p.X * q.X + (double)p.Y * q.Y + (double)p.Z * q.Z;
+        var x = (double)p.W * q.X - (double)q.W * p.X - ((double)p.Y * q.Z - (double)p.Z * q.Y);
+        var y = (double)p.W * q.Y - (double)q.W * p.Y - ((double)p.Z * q.X - (double)p.X * q.Z);
+        var z = (double)p.W * q.Z - (double)q.W * p.Z - ((double)p.X * q.Y - (double)p.Y * q.X);
+        var degrees = 2 * Math.Atan2(Math.Sqrt(x * x + y * y + z * z), Math.Abs(w)) * 180 / Math.PI;
         var error = (float)(degrees / tolerance.Degrees);
         error = Math.Max(error, Vector3.Distance(a.Position, b.Position) / tolerance.Metres);
         return Math.Max(error, Math.Max(Ratio(a.Scale.X, b.Scale.X), Math.Max(Ratio(a.Scale.Y, b.Scale.Y), Ratio(a.Scale.Z, b.Scale.Z))) / tolerance.Scale);

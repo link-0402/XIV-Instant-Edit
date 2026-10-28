@@ -851,39 +851,48 @@ internal static class MotionEdits
     }
 
     /// <summary>
-    /// Fades out a fresh edit of the Motion keys layer: for every bone newly keyed in <paramref name="after"/> compared with
-    /// <paramref name="before"/>, adds a zero (identity) offset at the bone's Reach-th marker on each side, so the edit dies away
-    /// along the motion. Frame 0 and the clip's end count as markers, so a side runs out at them; a loop wraps past its end to
-    /// frame 0. A side is skipped when the bone already has a key between the edit and that marker, the marker included.
-    /// Returns <paramref name="after"/> itself when nothing is added, there is no Motion keys layer or the markers are for another length.
+    /// Fades out an edit of the Motion keys layer: for every bone whose value in <paramref name="after"/> differs from
+    /// <paramref name="before"/> (a new key or a changed one), adds a zero (identity) offset at the bone's Reach-th marker on
+    /// each side, so the edit dies away along the motion. Frame 0 and the clip's end count as markers, so a side runs out at
+    /// them, and a zero key stays inside the layer. Where the layer wraps round a loop (<see cref="MotionEvaluator.Wraps"/>)
+    /// the search wraps too, and the loop's end is its frame 0. A side is skipped when the bone already has a key between the
+    /// edit and that marker, the marker included. Returns <paramref name="after"/> itself when nothing is added, there is no
+    /// Motion keys layer or the markers are for another length.
     /// </summary>
     public static TimelineDocument WithReach(TimelineDocument before, TimelineDocument after, MotionMarkerSet markers)
     {
         if (MotionKeysLayer(after) is not { Markers: { } settings } layer || markers.Length != after.Length)
             return after;
         var earlier = Find(before, layer.Key);
+        var wraps = markers.Loops && MotionEvaluator.Wraps(layer, after.Length);
+        int Seam(int frame) => wraps && frame == markers.Length ? 0 : frame;
         var zero = MotionTransform.Identity.ToBone();
         var result = after;
         foreach (var key in layer.Keys)
-            foreach (var bone in key.Bones.Keys)
+            foreach (var (bone, value) in key.Bones)
             {
-                if (earlier != null && KeyIndex(earlier, key.Frame) is var at and >= 0 && earlier.Keys[at].Bones.ContainsKey(bone))
+                if (earlier != null && KeyIndex(earlier, key.Frame) is var at and >= 0 && earlier.Keys[at].Bones.TryGetValue(bone, out var had) && had == value)
                     continue;
-                var frames = layer.Keys.Where(item => item.Bones.ContainsKey(bone)).Select(item => item.Frame).ToArray();
+                var frame = Seam(key.Frame);
+                var frames = layer.Keys.Where(item => item.Bones.ContainsKey(bone)).Select(item => Seam(item.Frame)).ToArray();
                 foreach (var forward in new[] { false, true })
-                    if (ReachTarget(markers, bone, key.Frame, settings.Reach, forward) is { } target && !Between(frames, key.Frame, target, forward))
+                    if (ReachTarget(markers, wraps, bone, frame, settings.Reach, forward) is { } found && Math.Clamp(found, layer.Start, layer.End) is var target &&
+                        target != frame && (wraps || forward == target > frame) && !Between(frames, frame, target, forward))
                         result = SetKey(result, layer.Key, target, bone, zero);
             }
         return result;
     }
 
-    /// <summary>The marker <paramref name="reach"/> steps from <paramref name="frame"/> on one side, the last one there is when it runs short, null when there is none.</summary>
-    private static int? ReachTarget(MotionMarkerSet markers, string bone, int frame, int reach, bool forward)
+    /// <summary>
+    /// The marker <paramref name="reach"/> steps from <paramref name="frame"/> on one side, the last one there is when it runs
+    /// short, null when there is none; past the end round to the start when <paramref name="wraps"/>.
+    /// </summary>
+    private static int? ReachTarget(MotionMarkerSet markers, bool wraps, string bone, int frame, int reach, bool forward)
     {
-        var points = markers.Of(bone).Concat([0, markers.Length]).Where(point => point != frame && !(markers.Loops && point == markers.Length)).Distinct().Order().ToList();
+        var points = markers.Of(bone).Concat([0, markers.Length]).Where(point => point != frame && !(wraps && point == markers.Length)).Distinct().Order().ToList();
         // Walking away from the frame, then on a loop around the end to the points on its other side.
         var near = forward ? points.Where(point => point > frame).ToList() : points.Where(point => point < frame).Reverse().ToList();
-        if (markers.Loops)
+        if (wraps)
             near.AddRange(forward ? points.Where(point => point < frame) : points.Where(point => point > frame).Reverse());
         return near.Count == 0 ? null : near[Math.Min(reach, near.Count) - 1];
     }

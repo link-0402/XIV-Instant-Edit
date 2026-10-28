@@ -271,14 +271,26 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     }
 
     /// <summary>The tooltip of the key pose tick under the pointer; whether there is one.</summary>
-    public bool DrawKeyPoseTooltip()
+    public bool DrawKeyPoseTooltip(bool readOnly)
     {
         if (KeyPoseAt(ImGui.GetIO().MousePos) is not { } pose)
             return false;
         ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
         if (Widgets.HoverDelay($"key-pose:{pose.Frame}"))
-            ImGui.SetTooltip($"Frame {pose.Frame}: {pose.Bones} bones key here. Click to edit motion keys.");
+            ImGui.SetTooltip(KeyPoseText(pose, readOnly));
         return true;
+    }
+
+    /// <summary>A key pose tick's tooltip: its frame, how many bones key there, and what a click does.</summary>
+    public static string KeyPoseText(KeyPose pose, bool readOnly)
+    {
+        var at = pose.Bones switch
+        {
+            0 => $"Frame {pose.Frame}.",
+            1 => $"Frame {pose.Frame}: 1 bone keys here.",
+            _ => $"Frame {pose.Frame}: {pose.Bones} bones key here.",
+        };
+        return at + (readOnly ? " Click to go there." : " Click to edit motion keys.");
     }
 
     /// <summary>While the motion is read, how far along on the band's right; why it failed when it did.</summary>
@@ -383,7 +395,8 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
                     !readOnly && (blend || CutEdits.CanBlend(cuts, selected))))
                 current.ToggleSelectedBlend();
         }
-        if (ImGui.MenuItem("Edit motion keys", "", false, !readOnly))
+        // Without markers (still read, failed, or a standalone source) the layer would have nothing to fade out over.
+        if (ImGui.MenuItem("Edit motion keys", "", false, !readOnly && current.ShownMarkers != null))
             current.EditMotionKeys(frame);
         ImGui.Separator();
         if (ImGui.MenuItem("Fit", "F"))

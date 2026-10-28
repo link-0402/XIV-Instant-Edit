@@ -1567,6 +1567,14 @@ internal sealed class TimelineEditor
         return result;
     }
 
+    /// <summary>
+    /// <paramref name="next"/> with the zero keys a write into the Motion keys layer reaches out to, compared with
+    /// <paramref name="from"/>, the document the write was made on; for a write that replaces an earlier one (the pose
+    /// browser's trial picks), not the document shown. <paramref name="next"/> itself without <see cref="Markers"/>.
+    /// </summary>
+    public TimelineDocument WithReach(TimelineDocument from, TimelineDocument next) =>
+        Markers is { } markers ? MotionEdits.WithReach(from, next, markers) : next;
+
     private static readonly BoneTransform ZeroKey = MotionTransform.Identity.ToBone();
 
     private static BoneTransform? BoneAt(MotionLayer layer, int frame, string bone) =>

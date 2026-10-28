@@ -75,6 +75,12 @@ internal static class MotionKeyMarkersFixture
             "hit: another bone's markers don't count");
         var other = Hit(plain, plainKey, B1, 20, new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [20] }, [], 60, false, MarkerDetail.Normal), []);
         check(other is { Part: TimelinePart.BoneLane }, "hit: an ordinary layer's rows have no marker hits");
+
+        check(TimelineClipBand.KeyPoseText(new KeyPose(12, 5), false) == "Frame 12: 5 bones key here. Click to edit motion keys." &&
+              TimelineClipBand.KeyPoseText(new KeyPose(12, 1), false) == "Frame 12: 1 bone keys here. Click to edit motion keys." &&
+              TimelineClipBand.KeyPoseText(new KeyPose(0, 0), false) == "Frame 0. Click to edit motion keys." &&
+              TimelineClipBand.KeyPoseText(new KeyPose(12, 5), true) == "Frame 12: 5 bones key here. Click to go there.",
+            "key pose tooltip: one bone, no bones, read-only");
     }
 
     private static void Search(Action<bool, string> check)
@@ -181,6 +187,24 @@ internal static class MotionKeyMarkersFixture
         check(undone && firstDrag.SequenceEqual([20, 25, 30]) && secondDrag.SequenceEqual(firstDrag) && Frames(again.Document).SequenceEqual([10, 20, 30]),
             "drag, undo, drag again from the same start: the zero keys come as on the first drag");
 
+        var retouch = new TimelineEditor(Empty(60)) { Markers = set };
+        retouch.EditMotionKeys(0);
+        var retouchKey = retouch.SelectedLayer!;
+        var trialBase = retouch.Document;
+        retouch.Commit(retouch.WithReach(MotionEdits.SetKey(retouch.Document, retouchKey, 25, B1, turn)));
+        var keyed = retouch.Document;
+        retouch.BeginFieldEdit();
+        retouch.Change(retouch.WithReach(MotionEdits.SetKey(retouch.Document, retouchKey, 20, B1, turn)));
+        retouch.Change(retouch.WithReach(MotionEdits.SetKey(retouch.Document, retouchKey, 20, B1, turn2)));
+        retouch.EndFieldEdit();
+        check(Frames(retouch.Document).SequenceEqual([10, 20, 25, 30]) && retouch.Undo() && ReferenceEquals(retouch.Document, keyed),
+            "drag on an earlier zero key: it fades out over its own markers, once, one undo step");
+
+        // A pose pick replacing the last one keys onto the document from before it, so it reaches out from there.
+        var repick = MotionEdits.SetKey(trialBase, retouchKey, 25, B1, turn);
+        check(Frames(retouch.WithReach(trialBase, repick)).SequenceEqual([20, 25, 30]) && Frames(retouch.WithReach(repick)).SequenceEqual([25]),
+            "pose pick: reaches out from the replaced pick's base, not the shown document");
+
         editor.MarkerBones = ["a"];
         var stamp = editor.Layout;
         editor.MarkerBones = new List<string> { "a" };
@@ -220,6 +244,16 @@ internal static class MotionKeyMarkersFixture
         var ends = new MotionMarkerSet(new Dictionary<string, ImmutableArray<int>> { [B1] = [0, 60] }, [], 60, true, MarkerDetail.Normal);
         var sparse = WithReachOf(MotionEdits.SetKey(before, key, 30, B1, turn), 3);
         check(Frames(MotionEdits.WithReach(before, sparse, ends)).SequenceEqual([0, 30]), "reach: a loop with only its ends keys frame 0 once and never the edited frame again");
+        check(Frames(MotionEdits.WithReach(before, MotionEdits.SetKey(before, key, 60, B1, turn), loop)).SequenceEqual([10, 50, 60]),
+            "reach: an edit at a loop's end fades out as one at frame 0, not to frame 0");
+        var trimmed = before with { Motion = before.Motion.SetItem(0, before.Motion[0] with { End = 55 }) };
+        check(Frames(MotionEdits.WithReach(trimmed, MotionEdits.SetKey(trimmed, key, 52, B1, turn), loop)).SequenceEqual([50, 52, 55]),
+            "reach: a trimmed layer on a loop doesn't wrap, and its zero keys stay inside it");
+        var late = before with { Motion = before.Motion.SetItem(0, before.Motion[0] with { Start = 5 }) };
+        check(Frames(MotionEdits.WithReach(late, MotionEdits.SetKey(late, key, 8, B1, turn), set)).SequenceEqual([5, 8, 10]), "reach: a zero key past the layer's start goes at its start");
+        var first = MotionEdits.WithReach(before, after, set);
+        check(Frames(MotionEdits.WithReach(first, MotionEdits.SetKey(first, key, 20, B1, turn), set)).SequenceEqual([10, 20, 25, 30]),
+            "reach: editing an earlier zero key fades it out over its own markers");
         check(ReferenceEquals(MotionEdits.WithReach(before, after, new MotionMarkerSet(set.Bones, [], 50, false, MarkerDetail.Normal)), after), "reach: stale markers add nothing");
         check(Frames(MotionEdits.WithReach(before, MotionEdits.SetKey(before, key, 25, "still", turn), set), "still").SequenceEqual([0, 25, 60]), "reach: a still bone fades out at the ends");
         var plain = MotionEdits.Add(Empty(60), MotionLayerKind.Offset, 0, 60, out var plainKey, out _);
@@ -251,6 +285,13 @@ internal static class MotionKeyMarkersFixture
         var cancelled = false;
         try { MotionKeyMarkers.Find(clip, 60, MarkerDetail.Normal, new CancellationToken(true)); } catch (OperationCanceledException) { cancelled = true; }
         check(cancelled, "markers: a cancelled search stops");
+        // b2 turns steadily by only 0.15 degrees: the straight line between its ends matches it, so rounding near no turn must not split it.
+        var tiny = MotionKeyMarkers.Find(Clip(61, 60, (_, frame) => [T(Vector3.Zero), T(Vector3.UnitX), T(Vector3.UnitY, Q(Vector3.UnitX, .15f * frame / 60))]), 60, MarkerDetail.More);
+        check(tiny.Of(B2).SequenceEqual([0, 60]), "markers: a tiny steady turn keeps only its ends at More");
+        // The same turn with its stored rotations a few float steps off unit length, as a decode can leave them.
+        var drift = MotionKeyMarkers.Find(Clip(61, 60, (_, frame) => [T(Vector3.Zero), T(Vector3.UnitX),
+            T(Vector3.UnitY, Q(Vector3.UnitX, .15f * frame / 60) * .999998f)]), 60, MarkerDetail.More);
+        check(drift.Of(B2).SequenceEqual([0, 60]), "markers: rotations a hair off unit length don't read as a turn");
         check(normal.Poses.Select(p => p.Frame).First() == 0 && normal.Poses[^1].Frame == 60 && normal.Loops == clip.Loops && normal.Length == 60, "markers: the set's ends, loop and length");
     }
 
