@@ -62,9 +62,17 @@ internal sealed class PropAttachTypes
         }
     }
 
+    /// <summary>Where a weapon slot (<c>DrawObjectData</c>, 0x70 bytes) keeps the attach point code of what it holds; no ClientStructs field names it.</summary>
+    public const int SlotCodeOffset = 0x30;
+
+    /// <summary>The attach point code of a weapon slot's image (see <see cref="CodeFrom"/>); null when the image is too short to hold one.</summary>
+    public static string? CodeInSlot(ReadOnlySpan<byte> slot) =>
+        slot.Length < SlotCodeOffset + 4 ? null : CodeFrom(slot.Slice(SlotCodeOffset, 4));
+
     /// <summary>
-    /// The attach point code a held prop's draw object names (4 bytes at +32 of its <c>DrawObjectData</c>): 3 printable
-    /// ASCII characters stored reversed, then a NUL. Null for anything else, as for a slot that holds no prop.
+    /// The attach point code a held prop's draw object names (the 4 bytes at <see cref="SlotCodeOffset"/> of its
+    /// <c>DrawObjectData</c>): 3 printable ASCII characters stored reversed, then a NUL. Null for anything else, as for a
+    /// slot that holds no prop.
     /// </summary>
     public static string? CodeFrom(ReadOnlySpan<byte> bytes)
     {

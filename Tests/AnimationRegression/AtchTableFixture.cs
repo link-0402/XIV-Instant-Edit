@@ -292,11 +292,16 @@ internal static class AtchTableFixture
         }
         finally { Directory.Delete(temp, true); }
 
-        // A held prop's draw object names its attach point at +32: the 3-character code reversed and NUL ended.
+        // A held prop's draw object names its attach point: the 3-character code reversed and NUL ended.
         check(PropAttachTypes.CodeFrom("lst\0"u8) == "tsl" && PropAttachTypes.CodeFrom("rdg\0"u8) == "gdr",
             "a draw object's reversed code reads as the attach point");
         check(PropAttachTypes.CodeFrom(new byte[4]) == null && PropAttachTypes.CodeFrom("abcd"u8) == null && PropAttachTypes.CodeFrom("ab\0\0"u8) == null &&
               PropAttachTypes.CodeFrom("l\u0001t\0"u8.ToArray()) == null && PropAttachTypes.CodeFrom("ls"u8) == null,
             "an empty, unended, short or unprintable code is not read as one");
+
+        // A weapon slot (DrawObjectData, 0x70 bytes) as measured in game: a book in DrawData slot 0.
+        var book = Convert.FromHexString("A906040001000000702B6D142302000018E971F9F67F0000702B6D142302000090026D142302000090C27E13230200006B6232000100000005000000000000000100000001000000000000003333333F3333333F0000803F0000803F000080BF02000000030002000000040000000000");
+        check(PropAttachTypes.CodeInSlot(book) == "2bk", "the attach code sits at +0x30 of a weapon slot (a book reads 2bk)");
+        check(PropAttachTypes.CodeInSlot(book.AsSpan(0, 0x20)) == null, "a slot image too short for the code reads nothing");
     }
 }

@@ -239,8 +239,6 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     // A prop watch LearnProps started: the actor (an identity key only), the models still unknown and when it ends.
     private sealed record PropWatch(ushort ObjectIndex, nint Address, HashSet<ushort> Models, long UntilTicks, Action<ushort, string> Learn);
     private PropWatch? _propWatch;
-    // Where DrawObjectData keeps the attach point code of what it holds (no field in ClientStructs names it).
-    private const int AttachCodeOffset = 32;
 
     /// <summary>
     /// Watches the GPose character at <paramref name="index"/> for <paramref name="duration"/>: every frame, a weapon slot
@@ -270,7 +268,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         {
             ref var slot = ref i < drawData->WeaponData.Length ? ref drawData->WeaponData[i] : ref drawData->UnkWeaponData[i - drawData->WeaponData.Length];
             if (!watch.Models.Contains(slot.ModelId.Id) ||
-                PropAttachTypes.CodeFrom(new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref slot) + AttachCodeOffset, 4)) is not { } code)
+                PropAttachTypes.CodeInSlot(new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref slot), sizeof(DrawObjectData))) is not { } code)
                 continue;
             var model = slot.ModelId.Id;
             watch.Models.Remove(model);
