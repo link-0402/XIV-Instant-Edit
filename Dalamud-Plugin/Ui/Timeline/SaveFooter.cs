@@ -249,6 +249,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         ImmutableDictionary<string, TimelineSoundReplacement> replaced;
         ImmutableDictionary<string, string> copied;
         ImmutableDictionary<string, string> cutSounds;
+        ImmutableDictionary<string, string> aliases;
         try
         {
             (saved, var used) = effectLooks.WithLooks(document);
@@ -263,6 +264,15 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             added = TimelineWindowViews.AddedFiles(saved, used);
             beside = TimelineWindowViews.AddedBeside(saved, used);
             rebuild = TimelineWindowViews.AddedRebuild(saved, used);
+            // Props from other mods are saved as private copies of their snapshot, packaged like imports.
+            var props = TimelineWindowViews.PropAdded(saved, path => session.Data.GetFile(path)?.Data);
+            if (props.Error != null)
+            {
+                saveError = props.Error;
+                return;
+            }
+            added = added.SetItems(props.Files);
+            aliases = props.Aliases;
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentException)
         {
@@ -289,7 +299,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             {
                 session.Playback.Stop();
                 return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild,
-                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds);
+                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds, aliases.IsEmpty ? null : aliases);
             });
         });
     }

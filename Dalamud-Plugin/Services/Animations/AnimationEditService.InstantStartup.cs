@@ -96,7 +96,7 @@ internal sealed partial class AnimationEditService
             var bytes = ImmutableDictionary<string, byte[]>.Empty.Add(startupPath, built.Bytes);
             var journal = own
                 ? await commits.PrepareAsync(request, manifest, bytes, token)
-                : await commits.PrepareAsync(request, manifest, ImmutableDictionary<string, byte[]>.Empty, token, (loopPath, bytes, null, null));
+                : await commits.PrepareAsync(request, manifest, ImmutableDictionary<string, byte[]>.Empty, token, (loopPath, bytes, null, null, null));
             recovery = recovery.Insert(0, journal);
             await commits.CommitAsync(journal, manifest, async () =>
             {

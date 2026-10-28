@@ -729,6 +729,25 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
+    /// The private copies of the props <paramref name="doc"/> took from other mods (see <see cref="PropCopies.Of"/>), which
+    /// a save packages beside the animation: their files, and the material version folders that share each material.
+    /// A snapshot file gone or unreadable gives <c>Error</c>, the save's failure text, and nothing to add.
+    /// </summary>
+    public static (ImmutableDictionary<string, byte[]> Files, ImmutableDictionary<string, string> Aliases, string? Error) PropAdded(
+        TimelineDocument doc, Func<string, byte[]?> game)
+    {
+        try
+        {
+            var copy = PropCopies.Of(doc, game);
+            return (copy.Files, copy.Aliases, null);
+        }
+        catch (Exception e) when (e is InvalidOperationException or InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return (ImmutableDictionary<string, byte[]>.Empty, ImmutableDictionary<string, string>.Empty, e.Message);
+        }
+    }
+
+    /// <summary>
     /// For the files <see cref="AddedFiles"/> packages that are edited copies, the game path of the
     /// file each copies (<see cref="TimelineImport.Beside"/>), so a save maps them where it is.
     /// </summary>

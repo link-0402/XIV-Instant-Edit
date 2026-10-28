@@ -470,7 +470,9 @@ internal sealed partial class AnimationEditService
     /// <see cref="TimelineSoundEdits.Bake"/>): they are read, checked and journaled with the animation,
     /// so Undo restores them too. <paramref name="copied"/> are the sounds copies were made from, by
     /// game path, with the hash of the bytes they were made from (see <see cref="TimelineSoundBake.Bases"/>):
-    /// each must still be what the collection gives.
+    /// each must still be what the collection gives. <paramref name="aliases"/> are game paths that share an
+    /// <paramref name="added"/> file (alias to that file's game path: a prop material's other version folders, see
+    /// <see cref="Timeline.PropCopy.Aliases"/>); they are mapped to that one file and go with it.
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
@@ -478,7 +480,7 @@ internal sealed partial class AnimationEditService
         IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null,
         IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null,
         IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null, IReadOnlyDictionary<string, string>? copied = null,
-        IReadOnlyDictionary<string, string>? cutSounds = null)
+        IReadOnlyDictionary<string, string>? cutSounds = null, IReadOnlyDictionary<string, string>? aliases = null)
     {
         if (Busy) return null;
         var request = TimelineRequest(source, document, destination, modName.Trim(), repair, cutSounds);
@@ -516,7 +518,7 @@ internal sealed partial class AnimationEditService
             // Warned of, not refused: the saved mod may be meant for characters with a bigger skeleton.
             var tooSmall = !source.Standalone && await framework.RunOnFrameworkThread(() =>
                 PlayProblem(capture.ActorIndex, source.Clip.Partial, built.Bytes, built.BindingFingerprint)) == SkeletonTooSmall;
-            var (files, reused, owners, copies) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, token);
+            var (files, reused, owners, copies, kept) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, aliases, token);
             var outputs = AnimationBakeRules.WithCompanion(ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes),
                 manifest, source.Resource, companion);
             // The mod's own sounds the edit changes are written over like the animation, at a fresh path.
@@ -527,7 +529,7 @@ internal sealed partial class AnimationEditService
             var journaled = motionBase == null ? request
                 : request with { Timeline = request.Timeline! with { MotionBaseHash = AnimationPap.Hash(motionBase) } };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
-                files.Count > 0 ? (edited, files, owners, copies) : null,
+                files.Count > 0 ? (edited, files, owners, copies, kept) : null,
                 built.Manipulations.IsEmpty ? null : (built.GamePath, built.Manipulations));
             if (motionBase != null)
                 KeepMotionBase(journal.Id, motionBase);
@@ -807,12 +809,14 @@ internal sealed partial class AnimationEditService
     /// <c>Owners</c> holds the copies mapped beside their original: those whose original the
     /// edited animation's mod maps itself. Every other file is mapped with the animation.
     /// <c>Copies</c> holds those whose original the mod maps to several files (see <see cref="OwnCopies"/>).
+    /// <c>Aliases</c> are the <paramref name="aliases"/> whose file is packaged (see <see cref="KeptAliases"/>); they are
+    /// not read from the collection, since each is its file's bytes at another path.
     /// </summary>
     private async Task<(IReadOnlyDictionary<string, byte[]> Files, List<string> Reused, IReadOnlyDictionary<string, string> Owners,
-            IReadOnlyDictionary<string, AnimationCommitService.AddedCopies> Copies)>
+            IReadOnlyDictionary<string, AnimationCommitService.AddedCopies> Copies, IReadOnlyDictionary<string, string> Aliases)>
         AddedFilesAsync(AnimationCapture capture, AnimationDestination destination, AnimationResource edited,
             IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, string>? beside,
-            IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild, CancellationToken token)
+            IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild, IReadOnlyDictionary<string, string>? aliases, CancellationToken token)
     {
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var reused = new List<string>();
@@ -826,15 +830,8 @@ internal sealed partial class AnimationEditService
                 try
                 {
                     var (resource, _) = await resources.ReadAsync(capture.CollectionId, gamePath, token);
-                    if (resource.Hash == AnimationPap.Hash(bytes))
-                    {
-                        if (resource.ModDirectory != null) reused.Add(gamePath);
+                    if (Given(gamePath, bytes, resource, edited, reused))
                         continue;
-                    }
-                    if (resource.ModDirectory != null)
-                        throw new IOException(resource.ModDirectory == edited.ModDirectory
-                            ? $"This mod already has a different {gamePath}. Choose Create new mod."
-                            : $"Another mod already provides {gamePath}. Choose Create new mod.");
                 }
                 catch (FileNotFoundException) { }
                 // A copy follows its original's options (a toggle that turns the original off turns it off too).
@@ -860,7 +857,45 @@ internal sealed partial class AnimationEditService
             }
             result[gamePath] = bytes;
         }
-        return (result, reused, owners, copies);
+        return (result, reused, owners, copies, KeptAliases(aliases, added, result));
+    }
+
+    /// <summary>
+    /// In place: whether the collection already gives <paramref name="gamePath"/> as <paramref name="bytes"/>
+    /// (<paramref name="current"/>, an import or prop copy saved before), so it is left as it is; listed in
+    /// <paramref name="reused"/> when a mod provides it. A mod providing a different file there is refused.
+    /// </summary>
+    internal static bool Given(string gamePath, byte[] bytes, AnimationResource current, AnimationResource edited, List<string> reused)
+    {
+        if (current.Hash == AnimationPap.Hash(bytes))
+        {
+            if (current.ModDirectory != null) reused.Add(gamePath);
+            return true;
+        }
+        if (current.ModDirectory != null)
+            throw new IOException(current.ModDirectory == edited.ModDirectory
+                ? $"This mod already has a different {gamePath}. Choose Create new mod."
+                : $"Another mod already provides {gamePath}. Choose Create new mod.");
+        return false;
+    }
+
+    /// <summary>
+    /// The <paramref name="aliases"/> to save: those whose file is <paramref name="packaged"/>. One whose file the
+    /// collection already gives (a save made before) stays as that save mapped it. Each must share an
+    /// <paramref name="added"/> file and be no added path itself.
+    /// </summary>
+    internal static ImmutableDictionary<string, string> KeptAliases(IReadOnlyDictionary<string, string>? aliases,
+        IReadOnlyDictionary<string, byte[]> added, IReadOnlyDictionary<string, byte[]> packaged)
+    {
+        var kept = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var (alias, target) in aliases ?? ImmutableDictionary<string, string>.Empty)
+        {
+            if (!AnimationCommitService.AddedGamePath(alias) || !added.ContainsKey(target) || added.ContainsKey(alias))
+                throw new InvalidDataException($"{alias} can't be added to the mod.");
+            if (packaged.ContainsKey(target))
+                kept[alias] = target;
+        }
+        return kept.ToImmutable();
     }
 
     /// <summary>

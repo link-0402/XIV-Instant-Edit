@@ -219,4 +219,9 @@ internal sealed record AnimationFileChange(string GamePath, string Target, strin
     // options: the mod-relative file it was made from. Only the options mapping AddedFor to
     // that file map this copy; the copies of the others share its game path. Null maps it
     // wherever AddedFor is, as journals written before this existed did.
-    string? AddedForFile = null);
+    string? AddedForFile = null,
+    // Set for an added game path that shares another added file (a prop material's other
+    // version folders): the game path of that file, whose Target, RelativePath and Staged
+    // this entry carries. Nothing is staged or written for it; commit maps it with its
+    // file and undo removes that mapping, never the file. Null for every other entry.
+    string? AliasOf = null);

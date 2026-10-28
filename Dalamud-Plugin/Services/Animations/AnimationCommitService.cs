@@ -18,11 +18,13 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     /// made from, and the copies made from the original's other files go beside it at the same game path.
     /// <paramref name="manipulations"/> are attach overrides the edit adds (a placed prop's), for the edited animation
     /// <c>For</c>: a new mod carries them, and in place every option mapping that animation gets them.
+    /// <c>Aliases</c> are added game paths that share one of the added <c>Files</c> (alias to that file's game path, a
+    /// prop material's other version folders): journaled with that file's target, never staged, mapped beside it.
     /// </summary>
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
         ImmutableDictionary<string, byte[]> outputs, CancellationToken token,
         (string For, IReadOnlyDictionary<string, byte[]> Files, IReadOnlyDictionary<string, string>? Owners,
-            IReadOnlyDictionary<string, AddedCopies>? Copies)? added = null,
+            IReadOnlyDictionary<string, AddedCopies>? Copies, IReadOnlyDictionary<string, string>? Aliases)? added = null,
         (string For, IReadOnlyList<Timeline.AtchManipulation> Atch)? manipulations = null)
     {
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
@@ -124,8 +126,10 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                     await StageAddedAsync(gamePath, copy, mod, root,
                         $"{Path.ChangeExtension(relative, null)}_{++number}{Path.GetExtension(relative)}", owner, from);
             }
+            // The game paths that share an added file go after it, naming its target and staged copy.
+            journal.Files.AddRange(Aliased(journal.Files, extra.Aliases, request));
         }
-        if (journal.Files.Select(f => f.Target).Distinct(StringComparer.OrdinalIgnoreCase).Count() != journal.Files.Count)
+        if (SharesTarget(journal.Files))
             throw new IOException("Several edited game paths share one source file. Use Create new mod to separate them.");
         if (manipulations is { Atch.Count: > 0 } atch)
         {
@@ -170,14 +174,94 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     internal const string AddedFolder = "instant_edit/";
 
     /// <summary>
-    /// The kinds of file an edit may add: sounds, effects and what effects use, and for a timeline edit of
+    /// The kinds of file an edit may add: sounds, effects and what effects use, a prop's private copy (the model,
+    /// materials and textures of a weapon body in b9000..b9999, which the game doesn't ship), and for a timeline edit of
     /// <paramref name="request"/>'s startup that startup's own animation (an instant startup beside its loop).
     /// </summary>
     internal static bool AddedGamePath(string gamePath, AnimationBakeRequest? request = null) => AnimationDependencies.SafeGamePath(gamePath) &&
         (Path.GetExtension(gamePath).ToLowerInvariant() is ".scd" or ".avfx" or ".atex" or ".tmb" ||
+         Path.GetExtension(gamePath).ToLowerInvariant() is ".mdl" or ".mtrl" or ".tex" && PrivatePropBody.IsMatch(gamePath) ||
          request is { Operation: AnimationOperation.EditTimeline, Timeline.Startup: true, Capture.Startup: { } startup } &&
          string.Equals(gamePath, startup.GamePath, StringComparison.OrdinalIgnoreCase) &&
          gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase));
+
+    private static readonly System.Text.RegularExpressions.Regex PrivatePropBody = new(@"^chara/weapon/w\d{4}/obj/body/b9\d{3}/",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// The journal entries of <paramref name="aliases"/> (alias game path to the added game path it shares): each is its
+    /// file's entry at the alias's game path, so it names the same target, relative path and staged copy. Refused unless
+    /// the alias may be added, is no path the edit writes already, and shares exactly one added file of the same kind.
+    /// </summary>
+    internal static List<AnimationFileChange> Aliased(IReadOnlyList<AnimationFileChange> files, IReadOnlyDictionary<string, string>? aliases,
+        AnimationBakeRequest? request = null)
+    {
+        var result = new List<AnimationFileChange>();
+        foreach (var (alias, target) in (aliases ?? ImmutableDictionary<string, string>.Empty).OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            if (!AddedGamePath(alias, request) || files.Any(f => ModPaths.SameGamePath(f.GamePath, alias)) ||
+                !string.Equals(Path.GetExtension(alias), Path.GetExtension(target), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"{alias} can't be added to the mod.");
+            var shared = files.Where(f => f.AddedFor != null && f.AliasOf == null && string.Equals(f.GamePath, target, StringComparison.Ordinal)).ToArray();
+            if (shared.Length != 1) throw new InvalidDataException($"{alias} must share one file the edit adds.");
+            result.Add(shared[0] with { GamePath = alias, AliasOf = target });
+        }
+        return result;
+    }
+
+    /// <summary>Whether two entries that write a file write the same one; aliases write none.</summary>
+    internal static bool SharesTarget(IEnumerable<AnimationFileChange> files)
+    {
+        var written = files.Where(f => f.AliasOf == null).Select(f => f.Target).ToArray();
+        return written.Distinct(StringComparer.OrdinalIgnoreCase).Count() != written.Length;
+    }
+
+    /// <summary>The game paths that map to <paramref name="file"/>'s target: its own, then its aliases'.</summary>
+    private static List<(string GamePath, string RelativePath)> Mappings(AnimationFileChange file, IReadOnlyList<AnimationFileChange> files) =>
+    [
+        (file.GamePath, file.RelativePath),
+        .. files.Where(f => f.AliasOf is { } of && string.Equals(of, file.GamePath, StringComparison.Ordinal) &&
+                string.Equals(f.Target, file.Target, StringComparison.OrdinalIgnoreCase))
+            .Select(f => (f.GamePath, f.RelativePath)),
+    ];
+
+    /// <summary>
+    /// Commits a file the edit added: writes it from its staged copy and, in place, maps it and the aliases that
+    /// share it wherever its owner is, in one write of meta.json. An alias is written and mapped with its file.
+    /// </summary>
+    internal static void WriteAdded(AnimationFileChange file, IReadOnlyList<AnimationFileChange> files, bool inPlace)
+    {
+        if (file.AddedFor is not { } owner || file.BeforeHash.Length > 0) throw new InvalidDataException("Invalid animation recovery target.");
+        if (file.AliasOf != null) return;
+        if (File.Exists(file.Target)) throw new IOException($"Another operation created {file.Target}.");
+        RequireHash(file.Staged, file.AfterHash);
+        Directory.CreateDirectory(Path.GetDirectoryName(file.Target)!);
+        AnimationJournalStore.WriteAtomic(file.Target, File.ReadAllBytes(file.Staged));
+        // An added file plays wherever its owner is: every option that maps the
+        // animation, or the original of a copy, maps it too. A new mod's metadata maps it.
+        if (inPlace)
+            ModMetadata.AddAnimationResourceMappings(file.ModRoot, owner, Mappings(file, files), file.AddedForFile);
+    }
+
+    /// <summary>Before an in-place undo writes anything: an added file still there must be what this edit wrote. An alias has no file of its own.</summary>
+    internal static void CheckAddedUndo(AnimationFileChange file)
+    {
+        // Gone already means undone; otherwise only remove what this edit wrote.
+        if (file.AliasOf == null && File.Exists(file.Target)) RequireHash(file.Target, file.AfterHash);
+    }
+
+    /// <summary>
+    /// Undoes an added file in place: the mappings of its aliases and its own go in one write of meta.json, then the file.
+    /// An alias's mapping goes with its file's, and it deletes nothing. True when a file was deleted.
+    /// </summary>
+    internal static bool UndoAdded(AnimationFileChange file, IReadOnlyList<AnimationFileChange> files)
+    {
+        if (file.AliasOf != null) return false;
+        ModMetadata.RemoveAnimationResourceMappings(file.ModRoot, Mappings(file, files));
+        if (!File.Exists(file.Target)) return false;
+        File.Delete(file.Target);
+        return true;
+    }
 
     internal static AnimationBakeRequest RecoveryRequest(AnimationBakeRequest request)
     {
@@ -252,6 +336,11 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 for (var i = 0; i < journal.Files.Count; i++)
                 {
                     var file = journal.Files[i]; ValidateTarget(journal, file);
+                    if (file.AddedFor != null)
+                    {
+                        WriteAdded(file, journal.Files, journal.Request.Destination == AnimationDestination.InPlace);
+                        continue;
+                    }
                     // A renamed output writes to a fresh path, so the file carrying the
                     // pre-edit bytes to verify and back up is the old path, not the target.
                     var renamed = file.RenamedFromRelativePath is { Length: > 0 };
@@ -281,10 +370,6 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                         if (!stillReferenced)
                             try { File.Delete(preEditTarget); } catch (IOException) { }
                     }
-                    // An added file plays wherever its owner is: every option that maps the
-                    // animation, or the original of a copy, maps it too. A new mod's metadata maps it below.
-                    if (file.AddedFor is { } owner && journal.Request.Destination == AnimationDestination.InPlace)
-                        ModMetadata.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath, file.AddedForFile);
                 }
                 // Attach overrides play wherever the animation does; the journal learns what each option held first.
                 if (journal.Manipulations is { Added.Count: > 0 } atch && journal.Request.Destination == AnimationDestination.InPlace)
@@ -329,8 +414,21 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         Func<string, Task<string>> resolve, Action<AnimationFileChange> validate, Func<Task> redraw)
     {
         var checkedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var checkedAliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
+            // An alias shares a file checked by its own entry, and is mapped in the same write of meta.json as every other
+            // alias of that file: one of them resolving shows the write landed, without a framework tick for each of 255.
+            if (file.AliasOf is { } of)
+            {
+                if (checkedAliases.Add(of))
+                {
+                    var aliased = await resolve(file.GamePath);
+                    if (!PathRules.SamePhysicalPath(aliased, file.Target))
+                        throw new IOException($"Activation failed: {file.GamePath} resolves to {aliased}, expected {file.Target}.");
+                }
+                continue;
+            }
             // Copies of one added file made from each of its original's files share its game path, which resolves
             // to the first: the one made from the file the collection resolves now. The others only need to be intact.
             if (file.AddedForFile == null || checkedPaths.Add(file.GamePath))
@@ -390,7 +488,8 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             if (!File.Exists(marker)) throw new IOException("The created mod's ownership marker is missing.");
             using var json = JsonDocument.Parse(File.ReadAllText(marker));
             if (json.RootElement.GetProperty("Id").GetGuid() != journal.Id) throw new IOException("The mod belongs to another animation job.");
-            foreach (var file in journal.Files.Where(f => File.Exists(f.Target))) RequireHash(file.Target, file.AfterHash);
+            // An alias shares its file, which its file's own entry checks.
+            foreach (var file in journal.Files.Where(f => f.AliasOf == null && File.Exists(f.Target))) RequireHash(file.Target, file.AfterHash);
             if (journal.ModFileHashes.Count > 0)
             {
                 var current = ModHashes(journal.ModRoot);
@@ -416,8 +515,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             {
                 if (file.AddedFor is not null)
                 {
-                    // Gone already means undone; otherwise only remove what this edit wrote.
-                    if (File.Exists(file.Target)) RequireHash(file.Target, file.AfterHash);
+                    CheckAddedUndo(file);
                     continue;
                 }
                 if (file.RenamedFromRelativePath is { Length: > 0 })
@@ -453,8 +551,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             {
                 if (file.AddedFor is not null)
                 {
-                    ModMetadata.RemoveAnimationResourceMapping(file.ModRoot, file.GamePath, file.RelativePath);
-                    if (File.Exists(file.Target)) File.Delete(file.Target);
+                    UndoAdded(file, journal.Files);
                     continue;
                 }
                 if (file.RenamedFromRelativePath is { Length: > 0 })
@@ -497,12 +594,19 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         if (!PathRules.IsPathWithin(path, file.ModRoot)) throw new InvalidDataException("Invalid animation recovery target.");
         return path;
     }
-    private void ValidateTarget(AnimationEditJournal journal, AnimationFileChange file)
+    internal void ValidateTarget(AnimationEditJournal journal, AnimationFileChange file)
     {
         var safeRelative = file.AddedFor is null
-            ? AnimationResources.SafeModRelativePath(file.RelativePath, file.GamePath)
+            ? AnimationResources.SafeModRelativePath(file.RelativePath, file.GamePath) && file.AliasOf == null
             : AddedGamePath(file.GamePath, journal.Request) && AnimationDependencies.SafeGamePath(file.AddedFor) &&
               ModPaths.IsSafeGameResourcePath(file.RelativePath.Replace('\\', '/'), Path.GetExtension(file.GamePath));
+        // An alias names the file of one added entry of this journal, in the same mod, for the same owner.
+        if (file.AliasOf is { } of && journal.Files.Count(f => f.AliasOf == null && f.AddedFor != null &&
+                string.Equals(f.GamePath, of, StringComparison.Ordinal) && string.Equals(f.Target, file.Target, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(f.RelativePath, file.RelativePath, StringComparison.Ordinal) && f.ModDirectory == file.ModDirectory &&
+                string.Equals(f.ModRoot, file.ModRoot, StringComparison.OrdinalIgnoreCase) && f.AddedFor == file.AddedFor &&
+                f.AddedForFile == file.AddedForFile) != 1)
+            throw new InvalidDataException("Invalid animation recovery target.");
         if (!ModPaths.IsSafeModName(file.ModDirectory) || !AnimationDependencies.SafeGamePath(file.GamePath) ||
             !safeRelative ||
             !string.Equals(Path.GetFullPath(Path.Combine(file.ModRoot, file.RelativePath)), Path.GetFullPath(file.Target), StringComparison.OrdinalIgnoreCase) ||

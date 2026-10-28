@@ -382,17 +382,28 @@ internal static class ModMetadata
 
     private static string? NormalizedModFile(string? value) => value?.Replace('\\', '/').Trim().TrimStart('/');
 
+    /// <summary>A game path as <see cref="SameGamePath"/> compares it, for a dictionary that ignores case.</summary>
+    private static string GamePathKey(string gamePath) => gamePath.Replace('\\', '/');
+
     /// <summary>
     /// Map <paramref name="gamePath"/> to <paramref name="relativePath"/> in every DefaultData,
     /// group, option and container that maps <paramref name="ownerGamePath"/>, so a file an
     /// animation edit added (an imported sound) plays wherever that animation does, or a copy
-    /// wherever its original is. Refuses when the mod already maps <paramref name="gamePath"/> anywhere.
+    /// wherever its original is. Refuses when the mod already maps <paramref name="gamePath"/> anywhere
+    /// to another file; a mapping to this same file is kept as it is (a save made again).
     /// With <paramref name="ownerFile"/>, only where the owner is that mod-relative file: a copy made
     /// from one of the files a mod's options map its original to. Then only those must not map
     /// <paramref name="gamePath"/> yet, since the other files' own copies take it in the others.
     /// </summary>
     internal static void AddAnimationResourceMapping(string modRoot, string ownerGamePath, string gamePath, string relativePath,
-        string? ownerFile = null)
+        string? ownerFile = null) => AddAnimationResourceMappings(modRoot, ownerGamePath, [(gamePath, relativePath)], ownerFile);
+
+    /// <summary>
+    /// <see cref="AddAnimationResourceMapping"/> for several game paths at once, in one write of meta.json: a file
+    /// and the game paths that share it (a prop material's 256 version folders). Nothing is written when one is refused.
+    /// </summary>
+    internal static void AddAnimationResourceMappings(string modRoot, string ownerGamePath,
+        IReadOnlyList<(string GamePath, string RelativePath)> mappings, string? ownerFile = null)
     {
         lock (Studio.Services.Project.ModFiles.Gate)
         {
@@ -402,11 +413,24 @@ internal static class ModMetadata
                 (ownerFile == null || string.Equals(NormalizedModFile(JsonString(pair.Value)), NormalizedModFile(ownerFile),
                     StringComparison.OrdinalIgnoreCase))))
                 .ToArray();
-            if ((ownerFile == null ? containers : owners).Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))))
-                throw new InvalidDataException($"The mod already maps {gamePath}.");
+            // By game path as SameGamePath compares them, so a mod with thousands of files is read once per container.
+            var wanted = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (gamePath, relativePath) in mappings)
+                if (!wanted.TryAdd(GamePathKey(gamePath), NormalizedModFile(relativePath)))
+                    throw new InvalidDataException($"{gamePath} is mapped twice.");
+            foreach (var files in ownerFile == null ? containers : owners)
+                foreach (var pair in files)
+                    if (wanted.TryGetValue(GamePathKey(pair.Key), out var file) &&
+                        !string.Equals(NormalizedModFile(JsonString(pair.Value)), file, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException($"The mod already maps {pair.Key}.");
             if (owners.Length == 0) throw new InvalidDataException($"The mod no longer maps {ownerGamePath}{(ownerFile == null ? "" : $" to {ownerFile}")}.");
             foreach (var files in owners)
-                files[gamePath] = relativePath;
+            {
+                var mapped = files.Select(pair => GamePathKey(pair.Key)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var (gamePath, relativePath) in mappings)
+                    if (!mapped.Contains(GamePathKey(gamePath)))
+                        files[gamePath] = relativePath;
+            }
             TouchV4ModMetadata(meta);
             WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
         }
@@ -418,16 +442,21 @@ internal static class ModMetadata
     /// before it mapped anything.
     /// </summary>
     internal static void RemoveAnimationResourceMapping(string modRoot, string gamePath, string relativePath)
+        => RemoveAnimationResourceMappings(modRoot, [(gamePath, relativePath)]);
+
+    /// <summary><see cref="RemoveAnimationResourceMapping"/> for several game paths at once, in one write of meta.json.</summary>
+    internal static void RemoveAnimationResourceMappings(string modRoot, IReadOnlyList<(string GamePath, string RelativePath)> mappings)
     {
-        var normalized = relativePath.Replace('\\', '/').Trim();
+        var dropped = new HashSet<(string, string)>(mappings.Select(m => (GamePathKey(m.GamePath).ToUpperInvariant(),
+            m.RelativePath.Replace('\\', '/').Trim().ToUpperInvariant())));
         lock (Studio.Services.Project.ModFiles.Gate)
         {
             var meta = LoadV4ModMetadata(modRoot);
             var removed = false;
             foreach (var files in AnimationMappingContainers(meta))
                 foreach (var pair in files.ToArray())
-                    if (SameGamePath(pair.Key, gamePath) && JsonString(pair.Value) is { } value &&
-                        string.Equals(value.Replace('\\', '/').Trim(), normalized, StringComparison.OrdinalIgnoreCase))
+                    if (JsonString(pair.Value) is { } value &&
+                        dropped.Contains((GamePathKey(pair.Key).ToUpperInvariant(), value.Replace('\\', '/').Trim().ToUpperInvariant())))
                     {
                         files.Remove(pair.Key);
                         removed = true;
