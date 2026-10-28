@@ -365,8 +365,8 @@ public sealed partial class TimelineWindow
                     else
                     {
                         dragLimb ??= PoseEdits.Limb(skeleton, bone);
-                        current.Change(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
-                            from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb));
+                        current.Change(current.WithReach(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
+                            from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb)));
                     }
                 }
             }
@@ -376,11 +376,11 @@ public sealed partial class TimelineWindow
                 // A pin key is a spot in the pin's space: it moves from where it is, never from where the layers before leave the bone.
                 var under = offset || layer.Kind == MotionLayerKind.Pin ? null : frames.Before;
                 var (index, _) = BoneTree(skeleton);
-                current.Change(PoseEdits.Move(current.Document, layer.Key, frame, turned, follow.Move, frames.Space, offset,
-                    name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null));
+                current.Change(current.WithReach(PoseEdits.Move(current.Document, layer.Key, frame, turned, follow.Move, frames.Space, offset,
+                    name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null)));
             }
             else
-                current.Change(PoseEdits.Turn(current.Document, layer.Key, frame, turned, follow.Turn, frames.Space));
+                current.Change(current.WithReach(PoseEdits.Turn(current.Document, layer.Key, frame, turned, follow.Turn, frames.Space)));
         }
         gizmoHeld = weight >= PoseEdits.MinFollowWeight ? (layer.Key, bone, frame, matrix, 0, 0) : null;
         if (!dragging)

@@ -153,7 +153,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         using (ImRaii.Disabled(readOnly || !inside))
         {
             if (ImGui.Button("Key"))
-                current.Commit(PoseEdits.Key(current.Document, layer.Key, frame, targets, pose));
+                current.Commit(current.WithReach(PoseEdits.Key(current.Document, layer.Key, frame, targets, pose)));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(several ? "Key the selected bones as they are now, at the playhead." : "Key the bone as it is now, at the playhead.");
@@ -173,8 +173,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             if (ImGui.Button("Reset"))
             {
                 var before = pose ? posing.FramesAt(loaded, current.Document, layer, frame)?.Before : null;
-                current.Commit(PoseEdits.Reset(current.Document, layer.Key, frame, bones, pose,
-                    bone => before != null && index.TryGetValue(bone, out var at) ? before[at] : null));
+                current.Commit(current.WithReach(PoseEdits.Reset(current.Document, layer.Key, frame, bones, pose,
+                    bone => before != null && index.TryGetValue(bone, out var at) ? before[at] : null)));
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -189,7 +189,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             // The motion as the layers before this one leave it, as Paste mirrored reads it.
             if (ImGui.Button("Mirror") && PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton,
                     at => posing.FramesAt(loaded, current.Document, layer, at)?.Before) is { } mirrored)
-                current.Commit(mirrored);
+                current.Commit(current.WithReach(mirrored));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(pairs.Count == 0 ? "Select a bone with keys in this layer and a twin on the other side."
@@ -322,8 +322,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (changed)
         {
             turnEdit = (id, degrees);
-            current.Change(PoseEdits.Set(current.Document, layer.Key, frame, primary,
-                primary.Value with { Rotation = MotionAngles.FromEuler(degrees) }, others, space, !pose));
+            current.Change(current.WithReach(PoseEdits.Set(current.Document, layer.Key, frame, primary,
+                primary.Value with { Rotation = MotionAngles.FromEuler(degrees) }, others, space, !pose)));
         }
         if (ImGui.IsItemDeactivated())
         {
@@ -367,8 +367,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemActivated())
             current.BeginFieldEdit();
         if (changed)
-            current.Change(PoseEdits.Set(current.Document, layer.Key, frame, primary, primary.Value with { Position = centimetres / 100 }, others,
-                space, !pose, pose ? true : null, own));
+            current.Change(current.WithReach(PoseEdits.Set(current.Document, layer.Key, frame, primary, primary.Value with { Position = centimetres / 100 }, others,
+                space, !pose, pose ? true : null, own)));
         if (ImGui.IsItemDeactivated())
             current.EndFieldEdit();
         if (ImGui.IsItemHovered())
@@ -388,9 +388,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemActivated())
             current.BeginFieldEdit();
         if (changed)
-            current.Change(PoseEdits.Set(current.Document, layer.Key, frame, primary,
+            current.Change(current.WithReach(PoseEdits.Set(current.Document, layer.Key, frame, primary,
                 primary.Value with { Scale = Vector3.Clamp(percent / 100, new Vector3(MotionEvaluator.MinScale), new Vector3(MotionEvaluator.MaxScale)) },
-                others, space, !pose));
+                others, space, !pose)));
         if (ImGui.IsItemDeactivated())
             current.EndFieldEdit();
         if (ImGui.IsItemHovered())
@@ -567,7 +567,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ballEditing = true;
         }
         if (result.Turn is { } turn && frames != null && bone is { } axes)
-            current.Change(PoseEdits.Turn(current.Document, layer.Key, frame, turned, character ? turn : PoseEdits.Around(axes, turn), frames.Space));
+            current.Change(current.WithReach(PoseEdits.Turn(current.Document, layer.Key, frame, turned, character ? turn : PoseEdits.Around(axes, turn), frames.Space)));
         if (result.Ended && ballEditing)
         {
             current.EndFieldEdit();

@@ -334,7 +334,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
             if (ImGui.Button((staged.AtEnd ? $"Key at the end ({TimelineWindowViews.FrameText(frame)})" : $"Key at {TimelineWindowViews.FrameText(frame)}") + "###pose-key") &&
                 under != null)
             {
-                current.Commit(options.Key(current.Document, layer.Key, frame, import, choice, skeleton, under));
+                current.Commit(current.WithReach(options.Key(current.Document, layer.Key, frame, import, choice, skeleton, under)));
                 current.SelectLayer(layer.Key, frame);
                 if (staged.AtEnd)
                     current.Playhead = frame;
