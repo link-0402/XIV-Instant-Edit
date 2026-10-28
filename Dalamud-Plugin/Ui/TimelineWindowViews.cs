@@ -56,6 +56,7 @@ internal static partial class TimelineWindowViews
     public const string HandShapeHint = "Set a hand's fingers to a shape.";
     public const string ResetRootName = "Reset root turn";
     public const string ResetRootHint = "Turn the character back to face forward on the ticked axes, for poses with a turn baked into them.";
+    public const string MotionKeysHint = "Changes the motion at its own key poses. Each edit fades out over the next markers.";
 
     /// <summary>A root reset's axis checkboxes, in order, with what turning about each does.</summary>
     public static readonly ImmutableArray<(MotionAxes Axis, string Label, string Tip)> ResetAxes =
@@ -184,7 +185,7 @@ internal static partial class TimelineWindowViews
     };
 
     /// <summary>What a layer does, for its panel: a fix layer says which fix.</summary>
-    public static string LayerHint(MotionLayer layer) => layer.Fix?.Kind switch
+    public static string LayerHint(MotionLayer layer) => layer.Markers != null ? MotionKeysHint : layer.Fix?.Kind switch
     {
         MotionFixKind.MatchLoop => MatchLoopHint,
         MotionFixKind.CloseLoop => CloseLoopHint + " " + CloseLoopPinNote,

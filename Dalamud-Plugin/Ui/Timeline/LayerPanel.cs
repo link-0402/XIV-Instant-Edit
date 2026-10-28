@@ -17,7 +17,7 @@ namespace InstantEdit.Ui.Timeline;
 /// limited to, and a match's length and loop. A field's changes until it is left are one undo step, and Live shows each change as it
 /// is made.
 /// </summary>
-internal sealed class LayerPanel(TimelineSession session, BonePosing posing, BoneEditor boneEditor, PoseSourcePanel poseSources, Window bonesWindow)
+internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, BonePosing posing, BoneEditor boneEditor, PoseSourcePanel poseSources, Window bonesWindow)
 {
     // The layer the selection last started on: a newly chosen layer with nothing selected starts on its first bone.
     private string? selectionLayer;
@@ -105,6 +105,8 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                         DrawComponents(current, layer);
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle))
                         DrawInterpolation(current, layer);
+                    if (layer.Markers is { } markers)
+                        DrawMarkers(current, layer, markers, loaded);
                 }
             }
         }
@@ -574,6 +576,51 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("How bones go from one key to the next. A key can have its own way.");
+    }
+
+    // The Detail choices in the order they are listed, which is not the enum's.
+    private static readonly MarkerDetail[] Details = [MarkerDetail.Fewer, MarkerDetail.Normal, MarkerDetail.More];
+
+    /// <summary>
+    /// The Motion keys layer's markers: how closely they follow the motion and how many an edit fades out over. They
+    /// are found on the decoded motion, so until it is read the rows give way to its progress.
+    /// </summary>
+    private void DrawMarkers(TimelineEditor current, MotionLayer layer, MotionMarkers markers, AnimationTimelineSource loaded)
+    {
+        if (decode.DecodedPose(loaded) == null)
+        {
+            TimelineUi.Fact("Markers");
+            decode.DrawWait();
+            return;
+        }
+        TimelineUi.Fact("Detail");
+        ImGui.SetNextItemWidth(Theme.Scaled(120));
+        using (var combo = ImRaii.Combo("##marker-detail", markers.Detail.ToString()))
+        {
+            if (combo.Success)
+            {
+                foreach (var detail in Details)
+                    if (ImGui.Selectable(detail.ToString(), detail == markers.Detail) && detail != markers.Detail)
+                        current.Commit(MotionEdits.SetMarkers(current.Document, layer.Key, markers with { Detail = detail }));
+            }
+            else if (ComboWheel.Scroll(Details, markers.Detail, out var picked))
+                current.Commit(MotionEdits.SetMarkers(current.Document, layer.Key, markers with { Detail = picked }));
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("How closely markers follow the motion.");
+
+        TimelineUi.Fact("Reach");
+        var reach = markers.Reach;
+        ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
+        var changed = ImGui.SliderInt("##marker-reach", ref reach, 1, MotionMarkers.MaxReach);
+        if (ImGui.IsItemActivated())
+            current.BeginFieldEdit();
+        if (changed)
+            current.Change(MotionEdits.SetMarkers(current.Document, layer.Key, markers with { Reach = reach }));
+        if (ImGui.IsItemDeactivated())
+            current.EndFieldEdit();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("How many markers an edit fades out over.");
     }
 
     /// <summary>

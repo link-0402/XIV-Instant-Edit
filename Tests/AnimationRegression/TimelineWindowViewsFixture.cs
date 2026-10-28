@@ -43,6 +43,7 @@ internal static class TimelineWindowViewsFixture
         Sounds(check, texts);
         Places(check, texts);
         ChangedFiles(check);
+        MotionKeysHint(check, texts);
         check(texts.All(text => !text.Contains("...", StringComparison.Ordinal) && !text.Contains('\u2026')),
             "Timeline window texts never use an ellipsis");
     }
@@ -611,6 +612,18 @@ internal static class TimelineWindowViewsFixture
         texts.AddRange(["Above 100% may clip.", "These chances follow the file's own rule. Even chances rewrites them.", "Turns this into a random set.",
             "Replace with audio file", "Match length", "Remove", "Add sound", "Even chances", "Match lengths", "Full volume within", "Silent past", "Channel", "Loop",
             TimelineWindowViews.ChanceFooter(80), TimelineWindowViews.ChanceFooter(120), TimelineWindowViews.EndsEarlyTip(1, 2)]);
+    }
+
+    private static void MotionKeysHint(Action<bool, string> check, List<string> texts)
+    {
+        var withKeys = MotionEdits.AddMotionKeys(Doc(60, 60), out var key, out _);
+        var plain = MotionEdits.Add(Doc(60, 60), MotionLayerKind.Offset, 0, 60, out var plainKey, out _);
+        var hint = TimelineWindowViews.LayerHint(MotionEdits.Find(withKeys, key)!);
+        texts.Add(hint);
+        check(hint == "Changes the motion at its own key poses. Each edit fades out over the next markers.",
+            "The Motion keys layer says what it does");
+        check(TimelineWindowViews.LayerHint(MotionEdits.Find(plain, plainKey)!) == TimelineWindowViews.LayerKindHint(MotionLayerKind.Offset),
+            "An ordinary offset keeps the offset hint");
     }
 
     private static void Texts(Action<bool, string> check, List<string> texts)
