@@ -29,6 +29,7 @@ internal static class PropModelSourcesFixture
         Part(check, "private copy", () => PrivateCopy(check));
         Part(check, "timeline source", () => TimelineSource(check));
         Part(check, "body choice", () => BodyChoice(check));
+        Part(check, "mod listing", () => ModListing(check));
         Lumina.GameData? data = null;
         try
         {
@@ -194,6 +195,12 @@ internal static class PropModelSourcesFixture
               named == root + "texture/v01_m8044b0001_d.tex" &&
               (data is null || source.Textures.Values.All(source.Files.ContainsKey)),
             $"the Telephone names a private path for each texture its material lists: {string.Join(", ", source.Textures)}");
+        var there = PropModelSources.Resolve(TelephoneMod, "(You're Not Gonna Reach My) Telephone", model, 9001, 9003, effective, Game(data), Exists(data));
+        var moved = PropModelSources.Rebodied(source, 9003);
+        check(moved.Files.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(there.Files.OrderBy(p => p.Key, StringComparer.Ordinal)) &&
+              moved.Textures.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(there.Textures.OrderBy(p => p.Key, StringComparer.Ordinal)) &&
+              PropModelSources.SameFiles(source, there),
+            "the Telephone's snapshot moved to b9003 is the one resolved there");
     }
 
     /// <summary>
@@ -531,6 +538,77 @@ internal static class PropModelSourcesFixture
     }
 
     /// <summary>
+    /// The picker's list of a mod's models, end to end over a made-up mod folder: Penumbra's settings (or none), every
+    /// other group's default, the effective files, the candidates and their qualification.
+    /// </summary>
+    private static void ModListing(Action<bool, string> check)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ie-prop-listing-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            foreach (var name in new[] { "w.mdl", "plain.mdl", "fancy.mdl", "spare.mdl", "gear.mdl" })
+                File.WriteAllBytes(Path.Combine(dir, name), [1, 2, 3]);
+            // The Telephone's real model, when it is here, qualifies as a monster on n_hara; made-up bytes don't.
+            var realMonster = File.Exists(TelephoneModel);
+            if (realMonster)
+                File.Copy(TelephoneModel, Path.Combine(dir, "m.mdl"));
+            else
+                File.WriteAllBytes(Path.Combine(dir, "m.mdl"), [1, 2, 3]);
+            static System.Text.Json.Nodes.JsonObject Files(params (string GamePath, string File)[] files)
+            {
+                var result = new System.Text.Json.Nodes.JsonObject();
+                foreach (var (gamePath, file) in files)
+                    result[gamePath] = file;
+                return result;
+            }
+            var meta = new System.Text.Json.Nodes.JsonObject
+            {
+                ["FileVersion"] = 4,
+                ["Name"] = "listing",
+                ["DefaultData"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["Files"] = Files(("chara/weapon/w9001/obj/body/b0200/model/w9001b0200.mdl", "w.mdl"), (MonsterModel, "m.mdl"),
+                        ("chara/equipment/e0001/model/c0101e0001_top.mdl", "gear.mdl")),
+                },
+                ["Groups"] = new System.Text.Json.Nodes.JsonArray(
+                    new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Name"] = "Phone", ["Type"] = "Single", ["Priority"] = 0, ["DefaultSettings"] = 1,
+                        ["Options"] = new System.Text.Json.Nodes.JsonArray(
+                            new System.Text.Json.Nodes.JsonObject { ["Name"] = "Plain", ["Files"] = Files(("chara/demihuman/d1002/obj/equipment/e0001/model/d1002e0001_top.mdl", "plain.mdl")) },
+                            new System.Text.Json.Nodes.JsonObject { ["Name"] = "Fancy", ["Files"] = Files(("chara/demihuman/d1003/obj/equipment/e0001/model/d1003e0001_top.mdl", "fancy.mdl")) }),
+                    },
+                    new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Name"] = "Extra", ["Type"] = "Multi", ["Priority"] = 0,
+                        ["Options"] = new System.Text.Json.Nodes.JsonArray(
+                            new System.Text.Json.Nodes.JsonObject { ["Name"] = "Spare", ["Files"] = Files(("chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl", "spare.mdl")) }),
+                    }),
+            };
+            File.WriteAllText(Path.Combine(dir, "meta.json"), meta.ToJsonString());
+            static string Show(IEnumerable<PropModelSources.PropCandidate> rows) => string.Join(", ", rows.Select(row => $"{row.Label} {(row.Qualifies ? "yes" : "no")}"));
+            var monster = realMonster ? "yes" : "no";
+
+            var picked = PropModelSources.ModModels(dir, new Dictionary<string, IReadOnlyList<string>> { ["Extra"] = ["Spare"] });
+            check(Show(picked) == $"d1003e0001_top.mdl no, m8044b0001.mdl {monster}, w0528b0016.mdl yes, w9001b0200.mdl yes" &&
+                  picked[0].GamePath == "chara/demihuman/d1003/obj/equipment/e0001/model/d1003e0001_top.mdl",
+                $"a mod's models list under Penumbra's options, a group they leave out taking its default: {Show(picked)}");
+            var defaults = PropModelSources.ModModels(dir, null);
+            check(Show(defaults) == $"d1003e0001_top.mdl no, m8044b0001.mdl {monster}, w9001b0200.mdl yes",
+                $"without Penumbra's settings every group takes its default: {Show(defaults)}");
+            check(PropModelSources.ModFiles(dir, null).ContainsKey("chara/equipment/e0001/model/c0101e0001_top.mdl") &&
+                  !defaults.Any(row => row.GamePath.StartsWith("chara/equipment/", StringComparison.Ordinal)),
+                "gear the mod serves isn't listed");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, true);
+        }
+    }
+
+    /// <summary>
     /// The body a prop picked from a mod gets: the same mod's same model shares one, another model gets its own even
     /// when its material has the same name, and the merged copy keeps both materials apart.
     /// </summary>
@@ -579,9 +657,34 @@ internal static class PropModelSourcesFixture
                   TexturesOf(redCopy).SequenceEqual(["chara/weapon/w9001/obj/body/b9001/texture/red.tex"]) &&
                   TexturesOf(blueCopy).SequenceEqual(["chara/weapon/w9001/obj/body/b9002/texture/blue.tex"]),
                 $"two materials of one name stay apart, each under its own body: {string.Join(", ", copy.Files.Keys.Order(StringComparer.Ordinal))}");
+            // A pick is resolved under some body first; the body it ends on comes from its snapshot.
+            check(PropModelSources.BodyFor(doc, Picked(first, 9001, red), shipped) == 9001 &&
+                  PropModelSources.BodyFor(doc, Picked(first, 9006, red), shipped) == 9001,
+                "the same model with the same options reuses its body, whichever body it was resolved under");
+            var green = Path.Combine(dir, "green.mtrl");
+            File.WriteAllBytes(green, Material(("chara/a/texture/red.tex", false)));
+            var recoloured = Picked(first, 9001, green);
+            var body3 = PropModelSources.BodyFor(doc, recoloured, shipped);
+            check(body3 == 9003, $"the same model after its options changed (another material file) gets a new body (got {body3})");
+            check(PropModelSources.BodyFor(doc, Picked(first, 9001, red) with { ModDirectory = "other phones" }, shipped) == 9003,
+                "the same files from another mod get their own body");
+            var withThird = With(doc, PropModelSources.Rebodied(recoloured, body3!.Value));
+            var both = PropCopies.Of(withThird, path => path.EndsWith(".mdl", StringComparison.Ordinal) ? [9] : null);
+            check(both.Files.ContainsKey("chara/weapon/w9001/obj/body/b9001/material/v0001/mt_phone_a.mtrl") &&
+                  both.Files.ContainsKey("chara/weapon/w9001/obj/body/b9003/material/v0001/mt_phone_a.mtrl") &&
+                  both.Files.ContainsKey("chara/weapon/w9001/obj/body/b9003/model/w9001b9003.mdl"),
+                $"the earlier pick and the re-pick each have their own copy: {string.Join(", ", both.Files.Keys.Order(StringComparer.Ordinal))}");
+            var moved = PropModelSources.Rebodied(Picked(first, 9001, red), 9004);
+            var direct = Picked(first, 9004, red);
+            check(moved.Body == 9004 && moved.Files.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(direct.Files.OrderBy(p => p.Key, StringComparer.Ordinal)) &&
+                  moved.Textures.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(direct.Textures.OrderBy(p => p.Key, StringComparer.Ordinal)) &&
+                  PropModelSources.SameFiles(direct, Picked(first, 9001, red)) && !PropModelSources.SameFiles(direct, Picked(first, 9001, green)),
+                "a snapshot moved to another body is the one made there, and two snapshots compare whichever body they are under");
+
             var full = new TimelineDocument(60, 60, null, [.. Enumerable.Range(9000, 1000).Select(n =>
                 Prop("t" + n, SourceAt("x" + n, MonsterModel.Replace("b0001", $"b{n - 8000:D4}"), 9001, (ushort)n)))], 1);
-            check(PropModelSources.BodyFor(full, "phones", first, 9001, _ => false) is null, "no body when every private one is used");
+            check(PropModelSources.BodyFor(full, "phones", first, 9001, _ => false) is null &&
+                  PropModelSources.BodyFor(full, Picked(first, 9001, red), _ => false) is null, "no body when every private one is used");
         }
         finally
         {

@@ -43,9 +43,8 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
 
     // Props from a mod: the mod list, asked again each time the picker opens; the chosen mod's models under its
     // current settings, read on a task; the pick, resolved into a snapshot on a task and placed when it is polled.
-    private sealed record ModModel(string GamePath, string Label, bool Qualifies);
-    private sealed record ModModels(string Directory, ImmutableArray<ModModel> Models);
-    private sealed record PropPick(string Directory, string Name, string Label, ushort Set, ushort Body, int Frame, int Summon, string? Clip, int Generation);
+    private sealed record ModModels(string Directory, ImmutableArray<PropModelSources.PropCandidate> Models);
+    private sealed record PropPick(string Label, int Frame, int Summon, string? Clip, int Generation);
     private bool pickerFromMod;
     private int pickerSummon;
     private (string Directory, string Name, string Root)? pickerMod;
@@ -487,7 +486,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     /// The chosen mod's models that can be props, read on a task under its current settings in the clip's collection
     /// (<see cref="ModOptionGroups.Selection"/>: its defaults when the collection has none); filtered by the search.
     /// </summary>
-    private List<ModModel> ModRows()
+    private List<PropModelSources.PropCandidate> ModRows()
     {
         if (modModelsTask is { IsCompleted: true } done)
         {
@@ -511,31 +510,16 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             modModelsFor = mod.Directory;
             modModelsTask = Task.Run(async () =>
             {
-                var effective = await EffectiveFilesAsync(service, collection, mod.Directory, mod.Root).ConfigureAwait(false);
-                var found = PropModelSources.Candidates(effective).Select(path => new ModModel(path, path[(path.LastIndexOf('/') + 1)..], Qualifies(path, effective[path])));
-                return new ModModels(mod.Directory, [.. found]);
+                var settings = await service.ModSettingsAsync(collection, mod.Directory).ConfigureAwait(false);
+                // The settings may come back on the framework thread: the mod's files are read off it.
+                return await Task.Run(() => new ModModels(mod.Directory, PropModelSources.ModModels(mod.Root, settings))).ConfigureAwait(false);
             });
         }
         return [];
     }
 
-    /// <summary> The files a mod serves under its current settings in <paramref name="collection"/>, every group's selection given. </summary>
-    private static async Task<ImmutableDictionary<string, string>> EffectiveFilesAsync(AnimationEditService service, Guid collection, string directory, string root)
-    {
-        var settings = await service.ModSettingsAsync(collection, directory).ConfigureAwait(false);
-        return ModOptionGroups.EffectiveFiles(root, ModOptionGroups.Selection(root, settings));
-    }
-
-    private static bool Qualifies(string gamePath, string file)
-    {
-        if (gamePath.StartsWith("chara/weapon/", StringComparison.Ordinal))
-            return true;
-        try { return PropModelSources.Qualifies(gamePath, File.ReadAllBytes(file)); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
-    }
-
     /// <summary> The chosen mod's models: a click resolves one into a prop; one that bends with other bones is shown but can't be picked. </summary>
-    private void DrawModRows(TimelineEditor current, List<ModModel> models)
+    private void DrawModRows(TimelineEditor current, List<PropModelSources.PropCandidate> models)
     {
         if (pickerMod is not { } mod)
         {
@@ -590,10 +574,11 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     }
 
     /// <summary>
-    /// Picks <paramref name="model"/> of <paramref name="mod"/>: its private set and body now, so a full timeline says so at
-    /// once, then the mod's current files and the snapshot on a task (<see cref="PollPropPick"/> places it).
+    /// Picks <paramref name="model"/> of <paramref name="mod"/>: its private set and a body to resolve it under now, so a
+    /// full timeline says so at once, then the mod's current files and the snapshot on a task (<see cref="PollPropPick"/>
+    /// chooses its body and places it).
     /// </summary>
-    private void StartPropPick(TimelineEditor current, (string Directory, string Name, string Root) mod, ModModel model)
+    private void StartPropPick(TimelineEditor current, (string Directory, string Name, string Root) mod, PropModelSources.PropCandidate model)
     {
         pickerError = null;
         if (propTask != null || session.Animations is not { } service || session.Source is not { } source)
@@ -610,18 +595,21 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             return;
         }
         var collection = source.Capture.CollectionId;
-        propPick = new PropPick(mod.Directory, mod.Name, model.Label, set, body, pickerFrame, pickerSummon, TimelineSession.ClipKey(source), loadGeneration);
+        propPick = new PropPick(model.Label, pickerFrame, pickerSummon, TimelineSession.ClipKey(source), loadGeneration);
         Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
         propTask = Task.Run(async () =>
         {
-            var effective = await EffectiveFilesAsync(service, collection, mod.Directory, mod.Root).ConfigureAwait(false);
-            return PropModelSources.Resolve(mod.Directory, mod.Name, model.GamePath, set, body, effective, game, session.GameFileExists);
+            var settings = await service.ModSettingsAsync(collection, mod.Directory).ConfigureAwait(false);
+            // The settings may come back on the framework thread: the mod's files are read off it.
+            return await Task.Run(() => PropModelSources.Resolve(mod.Directory, mod.Name, model.GamePath, set, body,
+                PropModelSources.ModFiles(mod.Root, settings), game, session.GameFileExists)).ConfigureAwait(false);
         });
     }
 
     /// <summary>
-    /// Places a resolved prop from a mod once its task is done, into the clip it was picked for, unless its body was
-    /// taken in the meantime. Closes the picker when it is still open.
+    /// Places a resolved prop from a mod once its task is done, into the clip it was picked for, on the body
+    /// <see cref="PropModelSources.BodyFor(TimelineDocument, TimelinePropSource, Func{string, bool})"/> gives it then.
+    /// Closes the picker when it is still open.
     /// </summary>
     private void PollPropPick()
     {
@@ -651,12 +639,15 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             Fail("The timeline changed. Pick the prop again.");
             return;
         }
-        if (PropModelSources.BodyFor(editor.Document, pick.Directory, source.SourceModel, pick.Set, session.GameFileExists) != pick.Body)
+        // The body is chosen now, from the snapshot and the timeline as they are: the same files share a prop's body,
+        // other files (the mod's options changed) get their own.
+        if (PropModelSources.BodyFor(editor.Document, source, session.GameFileExists) is not { } body)
         {
-            Fail("The timeline changed. Pick the prop again.");
+            Fail("No free model number left for this prop.");
             return;
         }
-        if (Place(editor, TimelineAddKind.Prop, pick.Frame, null, "", [], new TimelinePropModel(pick.Set, pick.Body, 1, null, source), summon: pick.Summon))
+        source = PropModelSources.Rebodied(source, body);
+        if (Place(editor, TimelineAddKind.Prop, pick.Frame, null, "", [], new TimelinePropModel(source.Set, source.Body, 1, null, source), summon: pick.Summon))
         {
             if (open)
                 pickerClose = true;

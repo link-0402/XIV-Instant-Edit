@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.RegularExpressions;
+using InstantEdit.Services.PenumbraMods;
 using InstantEdit.Studio.Services;
 
 namespace InstantEdit.Services.Animations.Timeline;
@@ -87,9 +88,10 @@ internal static partial class PropModelSources
     }
 
     /// <summary>
-    /// The private body a prop picked from <paramref name="sourceModel"/> of mod <paramref name="modDirectory"/> gets
-    /// under <paramref name="set"/>: the body of a prop in <paramref name="doc"/> from the same mod and model, so both
-    /// share one copy, else the lowest free one (<see cref="AllocateBody"/> past <see cref="Taken"/>); null when none is free.
+    /// The body a pick of <paramref name="sourceModel"/> of mod <paramref name="modDirectory"/> under <paramref name="set"/>
+    /// is first resolved with: the body of a prop in <paramref name="doc"/> from the same mod and model, else the lowest
+    /// free one (<see cref="AllocateBody"/> past <see cref="Taken"/>); null when none is free. The body it ends on is
+    /// chosen from the resolved snapshot (<see cref="BodyFor(TimelineDocument, TimelinePropSource, Func{string, bool})"/>).
     /// </summary>
     internal static ushort? BodyFor(TimelineDocument doc, string modDirectory, string sourceModel, ushort set, Func<string, bool> gameExists)
     {
@@ -100,6 +102,84 @@ internal static partial class PropModelSources
                     string.Equals(source.ModDirectory, modDirectory, StringComparison.OrdinalIgnoreCase))
                     return source.Body;
         return AllocateBody(set, gameExists, Taken(doc));
+    }
+
+    /// <summary>
+    /// The private body <paramref name="resolved"/> (a snapshot made under any body) goes on: the body of a prop in
+    /// <paramref name="doc"/> from the same mod and model whose snapshot is the same (<see cref="SameFiles"/>), so both
+    /// share one copy, else the lowest free one; null when none is free. A pick made after the mod's options changed
+    /// gets its own body, so the earlier prop keeps its look.
+    /// </summary>
+    internal static ushort? BodyFor(TimelineDocument doc, TimelinePropSource resolved, Func<string, bool> gameExists)
+    {
+        if (!doc.Events.IsDefault)
+            foreach (var ev in doc.Events)
+                if (ev.Source is { } source && source.Set == resolved.Set && source.SourceModel == resolved.SourceModel &&
+                    string.Equals(source.ModDirectory, resolved.ModDirectory, StringComparison.OrdinalIgnoreCase) && SameFiles(source, resolved))
+                    return source.Body;
+        return AllocateBody(resolved.Set, gameExists, Taken(doc));
+    }
+
+    /// <summary> Whether two snapshots copy the same files, whichever private body each was made under. </summary>
+    internal static bool SameFiles(TimelinePropSource a, TimelinePropSource b)
+    {
+        if (a.Set != b.Set || a.Files.Count != b.Files.Count || a.Textures.Count != b.Textures.Count)
+            return false;
+        var moved = a.Body == b.Body ? b : Rebodied(b, a.Body);
+        return a.Files.All(pair => moved.Files.TryGetValue(pair.Key, out var from) && from == pair.Value) &&
+               a.Textures.All(pair => moved.Textures.TryGetValue(pair.Key, out var to) && to == pair.Value);
+    }
+
+    /// <summary>
+    /// <paramref name="source"/> under private body <paramref name="body"/>: the same sources at the same paths in that
+    /// body's folder, as <see cref="Resolve"/> would give it there.
+    /// </summary>
+    internal static TimelinePropSource Rebodied(TimelinePropSource source, ushort body)
+    {
+        if (body == source.Body)
+            return source;
+        var from = $"chara/weapon/w{source.Set:D4}/obj/body/b{source.Body:D4}/";
+        var to = $"chara/weapon/w{source.Set:D4}/obj/body/b{body:D4}/";
+        var fromModel = $"{from}model/w{source.Set:D4}b{source.Body:D4}.mdl";
+        var toModel = $"{to}model/w{source.Set:D4}b{body:D4}.mdl";
+        string Moved(string path) => path == fromModel ? toModel : path.StartsWith(from, StringComparison.Ordinal) ? to + path[from.Length..] : path;
+        return source with
+        {
+            Body = body,
+            Files = source.Files.ToImmutableDictionary(pair => Moved(pair.Key), pair => pair.Value, StringComparer.Ordinal),
+            Textures = source.Textures.ToImmutableDictionary(pair => pair.Key, pair => Moved(pair.Value), StringComparer.Ordinal),
+        };
+    }
+
+    /// <summary>
+    /// A model of a mod that can be listed as a prop: its game path, its file name and whether it qualifies (<see cref="Qualifies"/>).
+    /// </summary>
+    internal sealed record PropCandidate(string GamePath, string Label, bool Qualifies);
+
+    /// <summary>
+    /// The files the mod at <paramref name="modFolder"/> serves under Penumbra's <paramref name="settings"/> for it (null when
+    /// the collection has none), every group's selection given (<see cref="ModOptionGroups.Selection"/>).
+    /// </summary>
+    internal static ImmutableDictionary<string, string> ModFiles(string modFolder, IReadOnlyDictionary<string, IReadOnlyList<string>>? settings)
+        => ModOptionGroups.EffectiveFiles(modFolder, ModOptionGroups.Selection(modFolder, settings));
+
+    /// <summary>
+    /// The prop candidates of the mod at <paramref name="modFolder"/> under <paramref name="settings"/> (see <see cref="ModFiles"/>),
+    /// sorted, each with its qualification. Only monster and demihuman models are read; a weapon always qualifies, and a
+    /// file that can't be read doesn't.
+    /// </summary>
+    internal static ImmutableArray<PropCandidate> ModModels(string modFolder, IReadOnlyDictionary<string, IReadOnlyList<string>>? settings)
+    {
+        var effective = ModFiles(modFolder, settings);
+        return [.. Candidates(effective).Select(path => new PropCandidate(path, path[(path.LastIndexOf('/') + 1)..], Readable(path, effective[path])))];
+
+        static bool Readable(string gamePath, string file)
+        {
+            if (gamePath.StartsWith("chara/weapon/", StringComparison.Ordinal))
+                return true;
+            try { return Qualifies(gamePath, File.ReadAllBytes(file)); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+        }
     }
 
     /// <summary>
