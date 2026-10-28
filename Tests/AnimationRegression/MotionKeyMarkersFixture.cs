@@ -34,7 +34,14 @@ internal static class MotionKeyMarkersFixture
         var fewer = MotionKeyMarkers.Find(clip, 60, MarkerDetail.Fewer);
         var more = MotionKeyMarkers.Find(clip, 60, MarkerDetail.More);
         check(fewer.Of(B1).All(normal.Of(B1).Contains) && normal.Of(B1).All(more.Of(B1).Contains) && more.Of(B1).Length > fewer.Of(B1).Length, "markers: finer keeps coarser");
-        var stretched = MotionKeyMarkers.Find(Clip(31, 60, Swing), 60, MarkerDetail.More);
+        // b1 turns and moves together along one line, but its sample 9 turns 2.4 degrees (the worst at Fewer) and its sample 10 moves 5.5 mm
+        // (the worst at Normal): picking each level's worst alone would leave Normal without Fewer's marker 9.
+        var mixed = Clip(12, 11, (i, _) => [T(Vector3.Zero), T(Vector3.UnitX + new Vector3(.00055f * i, 0, 0), Q(Vector3.UnitZ, i switch { 9 => 2.4f, 11 => 0, _ => .22f * i })), T(Vector3.UnitY)]);
+        mixed.Set(11, 1, MotionTransform.From(T(Vector3.UnitX)));
+        var (mixedFewer, mixedNormal, mixedMore) = (MotionKeyMarkers.Find(mixed, 11, MarkerDetail.Fewer).Of(B1), MotionKeyMarkers.Find(mixed, 11, MarkerDetail.Normal).Of(B1),
+            MotionKeyMarkers.Find(mixed, 11, MarkerDetail.More).Of(B1));
+        check(mixedFewer.Contains(9) && mixedFewer.All(mixedNormal.Contains) && mixedNormal.All(mixedMore.Contains), "markers: finer keeps coarser for a bone that turns and moves");
+        var stretched =MotionKeyMarkers.Find(Clip(31, 60, Swing), 60, MarkerDetail.More);
         check(stretched.Of(B1).SequenceEqual(stretched.Of(B1).Distinct().Order()) && stretched.Of(B1).All(f => f is >= 0 and <= 60), "markers: whole frames on a stretched clip");
         var cancelled = false;
         try { MotionKeyMarkers.Find(clip, 60, MarkerDetail.Normal, new CancellationToken(true)); } catch (OperationCanceledException) { cancelled = true; }

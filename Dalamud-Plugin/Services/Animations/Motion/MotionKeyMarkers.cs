@@ -57,10 +57,11 @@ internal static class MotionKeyMarkers
             token.ThrowIfCancellationRequested();
             if (!Moves(motion, bone, tolerance))
                 continue;
-            var kept = new SortedSet<int>();
-            foreach (var sample in Simplify(motion, bone, tolerance))
-                kept.Add(frames[sample]);
-            bones[motion.Skeleton.Bones[bone].Name] = [.. kept];
+            // Each level starts from the coarser one's samples and only splits further, so a finer level keeps every coarser marker.
+            var samples = new SortedSet<int> { 0, last };
+            foreach (var level in Levels(detail))
+                Simplify(motion, bone, Tolerance(level), samples);
+            bones[motion.Skeleton.Bones[bone].Name] = [.. samples.Select(sample => frames[sample]).Distinct()];
         }
         return new MotionMarkerSet(bones, Poses(bones, length), length, motion.Loops, detail);
     }
@@ -126,13 +127,25 @@ internal static class MotionKeyMarkers
         return false;
     }
 
-    /// <summary>The samples to keep: the ends, and each one a straight line between its kept neighbours misses by more than the tolerance.</summary>
-    private static List<int> Simplify(MotionClip motion, int bone, (float Degrees, float Metres, float Scale) tolerance)
+    /// <summary>The levels from the coarsest up to <paramref name="detail"/>.</summary>
+    private static MarkerDetail[] Levels(MarkerDetail detail) => detail switch
     {
-        var last = motion.Samples - 1;
-        var kept = new List<int> { 0, last };
+        MarkerDetail.Fewer => [MarkerDetail.Fewer],
+        MarkerDetail.More => [MarkerDetail.Fewer, MarkerDetail.Normal, MarkerDetail.More],
+        _ => [MarkerDetail.Fewer, MarkerDetail.Normal],
+    };
+
+    /// <summary>Adds to <paramref name="kept"/> (holding at least the ends) each sample a straight line between its kept neighbours misses by more than the tolerance.</summary>
+    private static void Simplify(MotionClip motion, int bone, (float Degrees, float Metres, float Scale) tolerance, SortedSet<int> kept)
+    {
         var stack = new Stack<(int From, int To)>();
-        stack.Push((0, last));
+        var previous = -1;
+        foreach (var sample in kept.ToArray())
+        {
+            if (previous >= 0)
+                stack.Push((previous, sample));
+            previous = sample;
+        }
         while (stack.Count > 0)
         {
             var (from, to) = stack.Pop();
@@ -154,7 +167,6 @@ internal static class MotionKeyMarkers
             stack.Push((from, at));
             stack.Push((at, to));
         }
-        return kept;
     }
 
     /// <summary>How far two transforms are apart in tolerances: the largest of the turn, the move and the scale change.</summary>
