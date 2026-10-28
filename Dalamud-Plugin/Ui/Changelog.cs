@@ -55,7 +55,7 @@ internal static class ChangelogCatalog
             Entry("In GPose, preview the result on your character, then pause and scrub through it. The preview doesn't change your mods.", 1),
             Entry("Fix broken effect and sound loops on any animation and keep them going with one click.", 1),
             Entry("Change how an effect looks: VFX tint, size, position, its colours one by one or all at once, glow, opacity and light range. Preview and Live show it in GPose as you go. The changes go into a copy, so the original stays as it is.", 1),
-            Entry("Place an effect with Move, Turn and Size, also when it is attached to a bone. An Async VFX can get a Stops at frame, saved into a copy of the effect.", 1),
+            Entry("Place an effect with Move, Turn and Size, also when it is attached to a bone. An Async VFX can get a Stops at frame, saved into a copy of the effect. Props get Move, Turn, Size and the bone they attach to, for this animation only or for every emote with that kind of prop, and keep their parts and fade-out together when you change their length.", 1),
             Entry("Sound options say what they do: plays once or keeps looping, fades with distance, stops with the animation.", 1),
             Entry("Sounds that play one of several at random: change each one's chance and volume, listen to it in game, add, replace or remove them, or make an event always play the same one.", 1),
             Highlight("Timeline: bone layers change how the animation moves, live on your character in GPose."),

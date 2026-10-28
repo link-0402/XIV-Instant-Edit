@@ -754,6 +754,24 @@ A C173 event also has Stops at, which bakes a KILL into a copy of the effect.
 - [ ] A C012 Position edit moves that event only, not the other uses of the effect.
 - [ ] Stops at 60 on a looping effect ends it at 2 s. Keep looping and Stops at clear each other.
 
+Prop place and length (2026-10-27):
+Selecting a prop shows a Place section (Attach, Bone, Move, Turn, Size, Only this animation). The save writes an Atch
+override into the mod's meta.json for each race the file plays on, and the attach state into the TMB.
+- [ ] Preview Toast. The log says "Prop 1962 attaches with" a 3-letter code; Place then enables and saving no longer
+  says "Preview once". Navigate's second prop (frame 173) is learned too.
+- [ ] Move a prop 0,0.1,0 and Preview: it shows moved. A look or sound change during the preview keeps it there.
+- [ ] Save it, then open the mod in Penumbra: the Atch entry is there, and the prop sits moved in a normal /emote.
+  Undo the save: the entry is gone (or the one it replaced is back).
+- [ ] Without Only this animation, a vanilla emote with the same kind of prop moves too. With it on, Toast's prop
+  moves and the vanilla mug emote's stays put.
+- [ ] Resize sp50 by +30 frames: the fade-out stays at the end and the prop is gone when the clip ends.
+- [ ] A file other races also play (a c0101 fallback) gets an Atch entry for each of them.
+
+XIV Bridge plan for these: dump the four weapon slots (DrawObjectData, three at +0x10, one at +0x160) during Toast and
+read the code at +32 of each (expect one such as tsl or wdm; note which slot summon 0 and summon 1 use). Then Toast
+with Only this animation beside a vanilla mug emote, both on the GPose actor. Then sp50 resized by +30 into the
+"MCPTest" collection.
+
 Length:
 - [x] Make a loop emote 1.5x longer with Scale events on. The motion, faces, sounds
   and footsteps stretch together; validation passes (the old retime always failed it).
