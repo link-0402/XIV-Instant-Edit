@@ -64,3 +64,10 @@ Apply Racial Scaling (Blender Tools):
   Note: IVCS and YAS leave the game's bones' c0201-to-c0801 matrices as they are and add their own
   bones' matrices, so the test's mesh is weighted to both, and it toggles IVCS both ways (off to on, on
   to off). Largest difference from the reference: 1.9e-9 m.
+
+## Split by Material 2026-10-27 (pending)
+
+The headless Blender suites cover Split by Material. This needs Blender's own window:
+- [ ] Select a model with several materials and choose Split by Material in the Material Properties
+  menu (the v menu). Each material becomes its own mesh, numbered with a free mesh number. One Ctrl+Z
+  puts everything back.

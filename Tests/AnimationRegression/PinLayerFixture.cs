@@ -141,11 +141,10 @@ internal static class PinLayerFixture
               TimelineWindowViews.DragGizmo(pose, null, body) == "Select a bone to drag." &&
               TimelineWindowViews.DragGizmo(pose, "j_te_l", body) == null && TimelineWindowViews.DragGizmo(BoneLayer(MotionLayerKind.Offset, 1), "j_te_l", body) == null &&
               TimelineWindowViews.DragGizmo(pose, "j_te_l", null) == null && TimelineWindowViews.DragGizmo(pose, "j_nothing", body) == null &&
-              TimelineWindowViews.DragGizmo(pose, "j_kosi", body) == $"{AnimationPresentation.BoneName("j_kosi")} sits right under the body, so nothing can bend to drag it." &&
-              TimelineWindowViews.DragGizmo(pose, "j_kosi", body, MotionEvaluator.Index(body)) != null &&
+              TimelineWindowViews.DragGizmo(pose, "j_kosi", body) == null && TimelineWindowViews.DragGizmo(pose, "j_kosi", body, MotionEvaluator.Index(body)) == null &&
               TimelineWindowViews.DragGizmo(pose, "j_te_l", body, MotionEvaluator.Index(body)) == null &&
               TimelineWindowViews.DragGizmo(pose, "j_nothing", body, MotionEvaluator.Index(body)) == null,
-            "Drag needs an offset or pose layer that turns bones and a bone with a limb above it to bend");
+            "Drag needs an offset or pose layer that turns bones and a selected bone; a limb drags, and so do the hips");
     }
 
     private static MotionLayer BoneLayer(MotionLayerKind kind, float amount, ImmutableArray<MotionKey> keys = default) =>

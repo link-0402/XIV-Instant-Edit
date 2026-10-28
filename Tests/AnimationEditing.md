@@ -1602,12 +1602,29 @@ playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
   drag back: the arm stays straight until the gizmo is back within reach, and the hand ends under the gizmo.
   (XIV Bridge 336, 2026-10-24: 30 cm past reach in 2 cm steps, the hand never passes the reach or jumps and holds still
   in game; back in, the hand ends under the gizmo where it started.)
-- [ ] 5 Select the waist (j_kosi, right under the body): Drag is disabled with its hint.
-  Partly checked (XIV Bridge 337, 2026-10-24): the rule disables Drag on j_kosi with "Hips sits right under the body,
-  ...", a Drag kept from the hand acts as Turn there, and a drag step changes nothing. Not checked: the radio's
-  disabled look and its tooltip on screen.
+- [ ] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the hips to drag them." (Changed 2026-10-27: the hips now drag, see Hip drag.)
 - [x] 6 Undo once after a drag: the whole drag comes back in one step.
   (XIV Bridge 333, 2026-10-24: one undo step; one Undo brings the document and the hand in game back.)
+
+## Hip drag (pending)
+
+Drag mode on the hips moves them; the other selected bones, or both feet and both hands, hold where they
+are and the legs, arms and back follow. Spec: docs/superpowers/specs/2026-10-27-hip-drag-design.md.
+
+- [ ] 1 The seated pose (hips on the floor, heels down, hands planted behind): an offset layer, select the
+  hips, Gizmo: Drag. In GPose with Live on and paused, drag the hips forward 10 cm and up 5 cm: the feet
+  and hands stay where they were, the knees and elbows straighten, the torso leans back. The layer keys
+  the hips (position), both thighs, knees and feet, both arms, the clavicles and the back.
+- [ ] 2 The layer's amount at 50 %: the hips still land under the gizmo and the feet and hands still hold.
+- [ ] 3 A standing dance frame, the hips alone selected: drag down 10 cm: the knees bend, the feet and
+  hands hold. Select both feet, then Ctrl+click the hips (the hint names the feet) and drag again: the
+  hands now ride with the body.
+- [ ] 4 Drag the hips up past the legs' reach: the legs straighten smoothly and the feet lift, nothing
+  snaps; back down, the feet are back on the floor under the gizmo.
+- [ ] 5 Select the body (n_hara): Drag is disabled with "The body moves the whole character. Select the
+  hips to drag them."
+- [ ] 6 Undo once after a drag: the whole drag comes back in one step.
+- [ ] 7 Save (replace) and Edit again: the clip plays the posed frame the same, and the keys are back.
 
 ## Fix layer (pending)
 
@@ -1807,3 +1824,42 @@ Known limit: a Symmetry layer after a hand layer skips finger pairs the clip doe
 - [ ] 8 Save hand as shape from the left hand, use it on the right: mirrored correctly; delete it, the layer
   keeps its look.
 - [ ] 9 IK drag on a clip with a Replace hand layer shows the shape while dragging.
+
+## Pose browser (pending)
+
+Pose browser beside Key a pose opens a window of your pose folders, browsed like Brio's library. A click on a
+pose keys it in the selected pose layer at the playhead; the next click there replaces it in the same undo step.
+Test folder: D:\Mods\Poses (Solo, and a pack folder with a picture such as Multi\[Chaele] Altitude).
+
+- [ ] 1 Add folder: D:\Mods\Poses. The breadcrumb reads Library > Poses; folders come first, then poses,
+  in name order. A pack folder shows its picture; its poses show it too, a pose with its own image or a Brio
+  picture inside the file shows that. Scrolling a folder of 100+ poses stays smooth.
+- [ ] 2 With a Pose layer selected and the playhead inside it, click a pose: the character takes it in Live,
+  the tile is outlined, the footer says how many bones were keyed. The window stays open.
+- [ ] 3 Click another pose: it replaces the first, nothing of the first is left (try one with hair keyed via
+  Also > Hair, then one without). One Ctrl+Z goes back to before the first click.
+- [ ] 4 Move the playhead, click a pose: a second key, the first stays. Edit a bone, click again: the edit stays.
+- [ ] 5 Untick Feet on the ground or Move bones in the footer: the shown pose is keyed again with the change.
+- [ ] 6 Search this folder finds poses in subfolders; the tooltip names their folder. Right-click a library
+  folder > Remove from the list. Close and reopen the plugin: the folder list and the last folder come back.
+- [ ] 7 No pose layer selected, or the playhead outside it: the footer says why and pose tiles are dimmed.
+- [ ] 8 Drag the picture size slider (bottom right) to the largest: pictures stay sharp, more columns as it
+  shrinks. Switch By name / Newest first: a pack you added last comes first, folders stay before poses. Both
+  choices come back after reopening the plugin.
+- [ ] 9 Right-click a pose > Move to the Recycle Bin: the tile goes, the footer says so, and the file is in the
+  Recycle Bin (restore it from there). The game doesn't hitch.
+
+## Idle motion from the game (pending)
+
+The idle-motion layer's Motion from list adds, under "From the game", the character's race's Standing idle and
+Idle pose 1-6 from the game's own files (the copy the race loads, another race's when it borrows one), beside the
+animations seen playing. Offline check 2026-10-28: all 18 races list Standing idle and poses 1-6; idle.pap's
+first entry is a damage flinch (cbna_add_dmg_f), so the idle (cbnm_id0) is read by name.
+
+- [ ] 1 Fresh plugin load, open a dance, add an idle-motion layer: Motion from lists Standing idle and Idle pose
+  1-6 without playing any of them. Pick Idle pose 3: the layer reads it and Live shows its breathing.
+- [ ] 2 Pick Standing idle: the motion is the calm idle, not a flinch. With an idle mod enabled the game's own
+  idle is still the one read.
+- [ ] 3 On a Highlander or Hellsguard character (they borrow Standing idle and poses 5-6): those three read
+  without an error.
+- [ ] 4 Make startup instant on a modded loop: the held pose is the standing idle, not a flinch.

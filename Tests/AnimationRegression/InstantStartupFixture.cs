@@ -73,6 +73,23 @@ internal static class InstantStartupFixture
               skeleton == "chara/human/c1401/skeleton/base/b0001/skl_c1401b0001.sklb",
             "the race's own idle and body skeleton are read from the game");
 
+        // c0201 borrows c0801's pose02; the game has no pose04 for it.
+        var idles = AnimationEditService.GameIdles("c0201", path => path.Replace("c0201/animation/a0001/bt_common/emote/pose02", "c0801/animation/a0001/bt_common/emote/pose02"),
+            path => !path.Contains("pose04") && (path.Contains("resident/idle") || path.Contains("emote/pose0")));
+        check(idles.Select(i => i.Name).SequenceEqual(["Standing idle", "Idle pose 1", "Idle pose 2", "Idle pose 3", "Idle pose 5", "Idle pose 6", "Idle pose 7", "Idle pose 8", "Idle pose 9"]) &&
+              idles[2].GamePath == "chara/human/c0801/animation/a0001/bt_common/emote/pose02_loop.pap" &&
+              idles[0].GamePath == "chara/human/c0201/animation/a0001/bt_common/resident/idle.pap",
+            "the idle layer lists the race's standing idle and each /changepose idle the game has, at the copy the race loads");
+        AnimationPap.Entry[] standing = [new("cbna_add_dmg_f", 0, 0, 0), new("cbnm_id0", 0, 1, 0)];
+        check(AnimationEditService.DonorEntry(standing, AnimationEditService.StandingIdleEntry)?.Name == "cbnm_id0" &&
+              AnimationEditService.DonorEntry(standing, null)?.Name == "cbnm_id0" &&
+              AnimationEditService.DonorEntry([new("face", 0, 0, 1), new("cbem_pose01_2lp", 0, 1, 0)], null)?.Name == "cbem_pose01_2lp",
+            "the game's idle decodes the idle, not the damage flinch listed before it; a face entry is never the donor");
+        var watched = Capture() with { LoadedResourcePaths = ["chara/human/c0101/skeleton/face/f0001/skl_c0101f0001.sklb", "chara/human/c1401/skeleton/base/b0001/skl_c1401b0001.sklb"] };
+        var source = new AnimationTimelineSource(watched, false, watched.Clip, new AnimationResource(Loop, Loop, "hash"), [], 0, [], null, null) { FileModel = "c0101" };
+        check(AnimationEditService.CharacterRace(source) == "c1401" && AnimationEditService.CharacterRace(source with { Capture = Capture() }) == "c0101",
+            "the game's idles are listed for the watched character's body skeleton, else the clip's race");
+
         var timeline = new AnimationTimelineEdit(true, 0, null);
         var request = Request(Capture(), timeline);
         check(AnimationCommitService.AddedGamePath(Startup, request) && !AnimationCommitService.AddedGamePath(Startup) &&

@@ -16,11 +16,13 @@ from .operators import (
     XIVIE_OT_remove_hidden_vertices,
     XIVIE_OT_apply_racial_scaling,
     XIVIE_OT_select_mesh_part,
+    XIVIE_OT_split_by_material,
     XIVIE_OT_untangle_mesh_groups,
     XIVIE_OT_convert_mesh_names,
     XIVIE_OT_combine_armatures,
     XIVIE_OT_simple_import,
     XIVIE_OT_simple_export,
+    XIVIE_OT_select_stash_folder,
     XIVIE_OT_restore_backup,
     XIVIE_OT_import_backup,
     XIVIE_OT_clear_backups,
@@ -40,6 +42,7 @@ from .ui import (
     XIVIE_MT_export_targets,
     XIVIE_MT_links,
     XIVIE_MT_pose_actions,
+    XIVIE_MT_stash_folders,
     XIVIE_PT_backups,
     XIVIE_PT_connection_popover,
     XIVIE_PT_context_details_popover,
@@ -54,6 +57,7 @@ from .ui import (
     XIVIE_PT_session,
     XIVIE_PT_tools,
     XIVIE_PT_vertex_data_popover,
+    draw_material_context_menu,
     draw_mesh_part_context_menu,
 )
 
@@ -75,11 +79,13 @@ CLASSES = [
     XIVIE_OT_remove_hidden_vertices,
     XIVIE_OT_apply_racial_scaling,
     XIVIE_OT_select_mesh_part,
+    XIVIE_OT_split_by_material,
     XIVIE_OT_untangle_mesh_groups,
     XIVIE_OT_convert_mesh_names,
     XIVIE_OT_combine_armatures,
     XIVIE_OT_simple_import,
     XIVIE_OT_simple_export,
+    XIVIE_OT_select_stash_folder,
     XIVIE_OT_restore_backup,
     XIVIE_OT_import_backup,
     XIVIE_OT_clear_backups,
@@ -90,6 +96,7 @@ CLASSES = [
     XIVIE_MT_export_targets,
     XIVIE_MT_links,
     XIVIE_MT_pose_actions,
+    XIVIE_MT_stash_folders,
     XIVIE_PT_last_status_popover,
     XIVIE_PT_connection_popover,
     XIVIE_PT_context_details_popover,
@@ -137,6 +144,7 @@ def register() -> None:
         set_addon_properties()
         instant_edit.register()
         bpy.types.UI_MT_button_context_menu.append(draw_mesh_part_context_menu)
+        bpy.types.MATERIAL_MT_context_menu.append(draw_material_context_menu)
         register_keymaps()
     except Exception:
         unregister()
@@ -146,6 +154,7 @@ def register() -> None:
 def unregister() -> None:
     unregister_keymaps()
     bpy.types.UI_MT_button_context_menu.remove(draw_mesh_part_context_menu)
+    bpy.types.MATERIAL_MT_context_menu.remove(draw_material_context_menu)
     instant_edit.unregister()
     try:
         remove_addon_properties()

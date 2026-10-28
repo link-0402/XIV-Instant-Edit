@@ -5,13 +5,14 @@ import bpy
 from bpy.props import BoolProperty, CollectionProperty, EnumProperty, IntProperty, StringProperty
 from bpy.types import Context, Operator, OperatorFileListElement
 
-from .instant_edit.context import ContextValidationError
+from .instant_edit.context import ContextValidationError, try_mesh_ids_from_name
 from .materials import (
     ATTRIBUTE_PRESET_CATEGORIES,
     assign_material_path,
     backface_copies,
     commit_mesh_id_plan,
     find_material_group,
+    game_hidden_parts,
     group_mesh_objects,
     mesh_part_instance_objects,
     mesh_part_instances,
@@ -21,9 +22,12 @@ from .materials import (
     material_suggestions,
     matching_material_path,
     other_group_materials,
+    rename_mesh_parts,
     same_context_objects,
     set_mesh_part_attribute,
     shared_base_contexts,
+    split_mesh_label,
+    split_mesh_plan,
     convert_suffix_mesh_names,
 )
 from .mesh_list import (DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts,
@@ -200,11 +204,66 @@ def _simple_import_select_objects(objects: list) -> None:
         bpy.context.view_layer.objects.active = valid_objects[-1]
 
 
+class _StashListError(RuntimeError):
+    """A model Save to Stash wrote that its stash folder's list of exports couldn't take."""
+
+
+def _source_files(objects) -> list[str]:
+    """The files the meshes were imported from (Simple Import records them), each once, in order."""
+    return list(dict.fromkeys(
+        value for value in (obj.get("instant_edit_source_file") for obj in objects)
+        if isinstance(value, str) and value.strip()))
+
+
+def _stash_name(value: str) -> str:
+    """Simple Export's file name as Save to Stash takes it, without '.mdl'; "" when it can't take it.
+    The name may name a stash folder too, so it can't hold characters folder names can't have."""
+    from .instant_edit import sizes
+
+    name = (value or "").strip()
+    if not name or name in {".", ".."} or Path(name).name != name:
+        return ""
+    if name.lower().endswith(".mdl"):
+        name = name[:-len(".mdl")]
+    return name if name and sizes.file_part(name) == name else ""
+
+
+# (cache base, sources, file name) and the stash folder they pick, for the panel.
+_automatic_stash_folder: tuple = (None, "")
+
+
+def automatic_stash_folder(context: Context) -> str:
+    """The name of the stash folder Save to Stash picks when none is chosen; "" when the file name
+    can't name one. For the panel, which draws often: it remembers its answer while the sources
+    and name stay the same."""
+    from .instant_edit import cache, stash
+
+    global _automatic_stash_folder
+    try:
+        objects = XIVIE_OT_simple_export._objects(context, persist=False)
+    except ContextValidationError:
+        objects = []
+    key = (cache.cache_base_directory(), tuple(_source_files(objects)), _stash_name(get_settings().export_name))
+    if _automatic_stash_folder[0] != key:
+        try:
+            folder = stash.target_folder(key[1], None, key[2]).name if key[2] else ""
+        except ValueError:
+            folder = ""
+        _automatic_stash_folder = (key, folder)
+    return _automatic_stash_folder[1]
+
+
 class XIVIE_OT_simple_export(Operator):
     bl_idname = "xiv_ie.simple_export"
     bl_label = "Export Model File"
     bl_description = "Export the meshes chosen by Export Parts to the export folder in the selected format"
     bl_options = {"REGISTER"}
+
+    @classmethod
+    def description(cls, context, properties):
+        if get_settings().export_destination == "STASH":
+            return "Save the meshes chosen by Export Parts as an MDL into the plugin's stash"
+        return cls.bl_description
 
     @classmethod
     def poll(cls, context: Context):
@@ -217,12 +276,13 @@ class XIVIE_OT_simple_export(Operator):
         return True
 
     @staticmethod
-    def _objects(context: Context) -> list:
-        """The meshes Export Parts picks. Raises ContextValidationError without a needed Context."""
+    def _objects(context: Context, persist: bool = True) -> list:
+        """The meshes Export Parts picks. Raises ContextValidationError without a needed Context.
+        ``persist`` False stores no Context choice, as a panel's draw needs."""
         from .instant_edit.ops import export_destination_context, export_objects_for_scope
 
         scope = getattr(context.scene.xiv_ie_instant_edit_props, "export_scope", "VISIBLE")
-        ref = export_destination_context(context) if scope == "CURRENT_COLLECTION" else None
+        ref = export_destination_context(context, persist=persist) if scope == "CURRENT_COLLECTION" else None
         return export_objects_for_scope(ref, scope)
 
     def invoke(self, context: Context, event):
@@ -253,17 +313,32 @@ class XIVIE_OT_simple_export(Operator):
         )
 
     def execute(self, context: Context):
+        from contextlib import nullcontext
+
+        from .instant_edit import cache, sizes, stash, steps
+        from .instant_edit.ops import _exporting_as_mdl
+
         settings = get_settings()
-        directory = Path(bpy.path.abspath(settings.export_directory)).resolve()
+        # Save to Stash writes an MDL into the plugin's stash (instant_edit/stash.py) and lists it there.
+        to_stash = settings.export_destination == "STASH"
+        model_format = "MDL" if to_stash else settings.model_format
         name = (settings.export_name or "").strip()
-        if not directory.is_dir():
-            self.report({"ERROR"}, "Choose an existing export folder.")
-            return {"CANCELLED"}
-        if not name or name in {".", ".."} or Path(name).name != name:
+        if to_stash:
+            try:
+                cache.ensure_cache_root()
+            except (OSError, ValueError) as error:
+                self.report({"ERROR"}, f"Can't use the cache folder: {error}")
+                return {"CANCELLED"}
+        else:
+            directory = Path(bpy.path.abspath(settings.export_directory)).resolve()
+            if not directory.is_dir():
+                self.report({"ERROR"}, "Choose an existing export folder.")
+                return {"CANCELLED"}
+        if not name or name in {".", ".."} or Path(name).name != name or (to_stash and not _stash_name(name)):
             self.report({"ERROR"}, "Enter a valid file name without a path.")
             return {"CANCELLED"}
 
-        suffix = {"MDL": ".mdl", "FBX": ".fbx", "GLTF": ".gltf"}[settings.model_format]
+        suffix = {"MDL": ".mdl", "FBX": ".fbx", "GLTF": ".gltf"}[model_format]
         if name.lower().endswith(suffix):
             name = name[:-len(suffix)]
         scope = getattr(context.scene.xiv_ie_instant_edit_props, "export_scope", "VISIBLE")
@@ -289,11 +364,10 @@ class XIVIE_OT_simple_export(Operator):
         if unweighted:
             self.report({"ERROR"}, "No bone weights: " + ", ".join(unweighted))
             return {"CANCELLED"}
-        uv_problems = check_uv_layers(objects) if settings.model_format == "MDL" else []
+        uv_problems = check_uv_layers(objects) if model_format == "MDL" else []
         if uv_problems:
             self.report({"ERROR"}, " ".join(uv_problems))
             return {"CANCELLED"}
-        from .instant_edit import sizes, steps
         from .instant_edit.racial_scaling import simple_export_warning
 
         scaled = simple_export_warning(objects)
@@ -303,8 +377,11 @@ class XIVIE_OT_simple_export(Operator):
             from .instant_edit.ops import refresh_variant_targets_after_operation
 
             get_export_stats(bpy.context)
-            refresh_error = refresh_variant_targets_after_operation(bpy.context)
+            # A model saved to the stash goes into no Penumbra mod, so there are no targets to refresh.
+            refresh_error = None if folder is not None else refresh_variant_targets_after_operation(bpy.context)
             message = f"Exported {', '.join(written)}" if written else f"Exported {name}{suffix}"
+            if folder is not None:
+                message += f" to the stash folder {folder.name}"
             if scaled or dropped:
                 message += ". " + " ".join(warning for warning in (scaled, dropped) if warning)
             if refresh_error is not None:
@@ -312,7 +389,40 @@ class XIVIE_OT_simple_export(Operator):
             report({"WARNING"} if refresh_error is not None or scaled or dropped else {"INFO"}, message)
 
         def failed(report, error):
-            report({"ERROR"}, f"Export failed: {error}")
+            report({"ERROR"}, str(error) if isinstance(error, _StashListError) else f"Export failed: {error}")
+
+        # The stash folder: the one chosen, else the one holding a file the meshes came from, else
+        # a new one named after the file. The models go in its Blender folder.
+        folder, sources = None, []
+        if to_stash:
+            source_files = _source_files(objects)
+            try:
+                folder = stash.target_folder(source_files, settings.export_stash_folder, name)
+            except ValueError:
+                self.report({"ERROR"}, "Choose a folder in the Stash menu.")
+                return {"CANCELLED"}
+            sources = stash.export_sources(source_files)
+            directory = folder / stash.EXPORTS_FOLDER
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                failed(self.report, error)
+                return {"CANCELLED"}
+
+        def listed(file_name):
+            """List ``file_name``, just written, in the stash folder's blender-exports.json, which
+            the plugin reads to show the model."""
+            if folder is None:
+                return
+            try:
+                stash.record_export(folder, directory / file_name, sources)
+            except (OSError, ValueError) as error:
+                raise _StashListError(f"Saved {file_name}, but the stash could not list it: {error}") from error
+
+        def as_model_format():
+            """The scene's Format for the export, which SceneHandler reads: MDL for the stash
+            (the Format the panel hides there may be another), else as it is."""
+            return _exporting_as_mdl() if to_stash else nullcontext()
 
         if sizes.wanted():
             # A file per size picked in Magic Fit, the size added to its name, a size at a time
@@ -323,25 +433,50 @@ class XIVIE_OT_simple_export(Operator):
 
                 def session(exported):
                     nonlocal exports
-                    exports = ShapeExports(exported, settings.model_format)
+                    exports = ShapeExports(exported, model_format)
                     return exports
 
                 def export(_sized, _index, size_name):
                     file_name = f"{name} {sizes.file_part(size_name)}"
                     exports.write(directory / file_name)
                     written.append(file_name + suffix)
+                    listed(file_name + suffix)
 
-                yield from sizes.export_steps(objects, export, session)
+                # Inside the steps: with a window, steps.start returns before they run.
+                with as_model_format():
+                    yield from sizes.export_steps(objects, export, session)
                 return written
 
             return steps.start(context, size_steps(), done, failed, self.report,
                                "The sizes exported so far stay in the folder.")
         try:
-            export_result(directory / name, settings.model_format, export_objects=objects)
+            with as_model_format():
+                export_result(directory / name, model_format, export_objects=objects)
+            listed(name + suffix)
         except Exception as error:
             failed(self.report, error)
             return {"CANCELLED"}
         done(self.report, [])
+        return {"FINISHED"}
+
+
+class XIVIE_OT_select_stash_folder(Operator):
+    bl_idname = "xiv_ie.select_stash_folder"
+    bl_label = "Select Stash Folder"
+    bl_description = "Save into this stash folder"
+    bl_options = {"INTERNAL"}
+
+    # A folder name in the stash; empty picks it from the model.
+    folder: StringProperty(options={"HIDDEN", "SKIP_SAVE"})  # type: ignore
+
+    @classmethod
+    def description(cls, context, properties):
+        if not properties.folder:
+            return "Save into the stash folder the model came from, else a new one named after the file"
+        return cls.bl_description
+
+    def execute(self, _context):
+        get_settings().export_stash_folder = self.folder
         return {"FINISHED"}
 
 
@@ -454,6 +589,10 @@ class XIVIE_OT_simple_import(Operator):
                 for obj in imported_objects:
                     if obj.type == "MESH":
                         obj["instant_edit_import_instance_id"] = import_instance_id
+            # Save to Stash saves next to the stash folder this file came from.
+            for obj in imported_objects:
+                if obj.type == "MESH":
+                    obj["instant_edit_source_file"] = str(file_path)
         except Exception:
             _simple_import_remove_objects(imported_objects)
             raise
@@ -1089,6 +1228,162 @@ class XIVIE_OT_bake_mesh_copy(Operator):
             self.report({"INFO"}, f"Baked {copies[0].name} and hid {originals[0].name}")
         else:
             self.report({"INFO"}, f"Baked {len(copies)} copies and hid the originals")
+        _redraw(context)
+        return {"FINISHED"}
+
+
+# The material path a mesh exports in place of its slot material, and its alias.
+_MATERIAL_PATH_PROPERTIES = ("xiv_material", "instant_edit_xiv_material")
+
+
+def _face_materials(obj) -> list:
+    """The materials `obj`'s faces use, in slot order; a mesh without faces has its first slot's."""
+    slots = obj.material_slots
+    if not slots:
+        return [None]
+    indices = [0] * len(obj.data.polygons)
+    obj.data.polygons.foreach_get("material_index", indices)
+    materials = []
+    for index in sorted({min(index, len(slots) - 1) for index in indices} or {0}):
+        if slots[index].material not in materials:
+            materials.append(slots[index].material)
+    return materials
+
+
+def _merge_material_slots(obj) -> None:
+    """Point every face at the first slot holding its material, so Separate makes one piece per material."""
+    first = {}
+    remap = [first.setdefault(slot.material, index) for index, slot in enumerate(obj.material_slots)]
+    indices = [0] * len(obj.data.polygons)
+    obj.data.polygons.foreach_get("material_index", indices)
+    merged = [remap[min(index, len(remap) - 1)] for index in indices]
+    if merged != indices:
+        obj.data.polygons.foreach_set("material_index", merged)
+
+
+def _separate_by_material(context: Context, obj) -> list:
+    """Split `obj` with Edit Mode's Separate by Material and return its pieces, `obj` first.
+
+    Edit Mode takes in every selected mesh, so only `obj` is selected while it runs.
+    """
+    if obj.data.users > 1:
+        obj.data = obj.data.copy()
+    _merge_material_slots(obj)
+    for other in context.selected_objects:
+        other.select_set(False)
+    obj.select_set(True)
+    context.view_layer.objects.active = obj
+    active_key = obj.active_shape_key_index
+    # As split_seams does: Edit Mode then works on the basis shape.
+    obj.active_shape_key_index = 0
+    with _new_objects_since() as new:
+        bpy.ops.object.mode_set(mode="EDIT")
+        try:
+            bpy.ops.mesh.select_all(action="SELECT")
+            bpy.ops.mesh.separate(type="MATERIAL")
+        finally:
+            bpy.ops.object.mode_set(mode="OBJECT")
+    pieces = [obj, *new.created]
+    for piece in pieces:
+        piece.active_shape_key_index = active_key
+    return pieces
+
+
+def _keep_material(obj, material) -> None:
+    """Leave `material` alone in slot 0, the slot export reads, with every face on it."""
+    mesh = obj.data
+    slots = obj.material_slots
+    indices = [0] * len(mesh.polygons)
+    mesh.polygons.foreach_get("material_index", indices)
+    kept = not slots or (len(slots) == 1 and slots[0].link == "DATA" and slots[0].material == material)
+    if kept and not any(indices):
+        return
+    if mesh.users > 1:
+        mesh = obj.data = mesh.copy()
+    if not kept:
+        mesh.materials.clear()
+        mesh.materials.append(material)
+        obj.material_slots[0].link = "DATA"
+    mesh.polygons.foreach_set("material_index", [0] * len(indices))
+
+
+class XIVIE_OT_split_by_material(Operator):
+    bl_idname = "xiv_ie.split_by_material"
+    bl_label = "Split by Material"
+    bl_description = (
+        "Split the selected meshes into one mesh per material. "
+        "Each material gets a mesh number no other visible mesh uses"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context):
+        if context.mode != "OBJECT":
+            cls.poll_message_set("Switch to Object Mode to split meshes")
+            return False
+        if not any(obj.visible_get() for obj in _selected_meshes(context)):
+            cls.poll_message_set("Select the meshes to split")
+            return False
+        return True
+
+    def execute(self, context: Context):
+        visible = visible_meshobj()
+        selected = [obj for obj in visible if obj.select_get()]
+        used = {obj.as_pointer(): _face_materials(obj) for obj in selected}
+        if all(len(materials) < 2 for materials in used.values()):
+            self.report({"INFO"}, "Each selected mesh uses one material.")
+            return {"CANCELLED"}
+        # New meshes never join a visible mesh outside the selection, nor a part the game
+        # doesn't show that exports with a visible model.
+        others = [obj for obj in visible if obj.as_pointer() not in used]
+        taken = {
+            ids[0] for obj in (*others, *game_hidden_parts(visible))
+            if (ids := try_mesh_ids_from_name(obj)) is not None
+        }
+        meshes = []
+        for obj in selected:
+            names = tuple(getattr(material, "name", None) for material in used[obj.as_pointer()])
+            meshes.append((obj.name, *split_mesh_label(obj), names))
+        plan = split_mesh_plan(meshes, taken)
+
+        selection = list(context.selected_objects)
+        active = context.view_layer.objects.active
+        targets = []
+        try:
+            for obj in selected:
+                name, materials = obj.name, used[obj.as_pointer()]
+                if len(materials) < 2:
+                    _keep_material(obj, materials[0])
+                    targets.append((obj, *plan[name, getattr(materials[0], "name", None)]))
+                    continue
+                for piece in _separate_by_material(context, obj):
+                    material = _face_materials(piece)[0]
+                    _keep_material(piece, material)
+                    for key in _MATERIAL_PATH_PROPERTIES:
+                        piece.pop(key, None)
+                    targets.append((piece, *plan[name, getattr(material, "name", None)]))
+        except RuntimeError as error:
+            self.report({"ERROR"}, f"Could not split the meshes: {error}")
+            return {"CANCELLED"}
+        finally:
+            for obj in (*selection, *(target[0] for target in targets)):
+                obj.select_set(True)
+            context.view_layer.objects.active = active
+        try:
+            rename_mesh_parts(targets, visible_meshobj())
+        except ValueError as error:
+            self.report({"ERROR"}, f"The split meshes were not renamed: {error}")
+            return {"CANCELLED"}
+
+        numbers = sorted({target[1] for target in targets})
+        message = f"Split into {len(numbers)} meshes: {numbers[0]} to {numbers[-1]}"
+        exported = [obj for group in group_mesh_objects(visible_meshobj()) for obj in group.objects]
+        material_count = len(material_paths(exported))
+        if material_count > XIVModel.MATERIAL_LIMIT:
+            self.report({"WARNING"}, f"{message}. The visible meshes now use {material_count} materials, "
+                                     f"but a model can have {XIVModel.MATERIAL_LIMIT}")
+        else:
+            self.report({"INFO"}, message)
         _redraw(context)
         return {"FINISHED"}
 

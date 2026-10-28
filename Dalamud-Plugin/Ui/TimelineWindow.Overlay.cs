@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Bindings.ImGuizmo;
@@ -41,6 +42,8 @@ public sealed partial class TimelineWindow
     private MotionTransform[]? dragFrom;
     // The limb a Drag bends, found once per drag.
     private (PinChain Chain, Vector3 RestNormal)? dragLimb;
+    // What a Drag on the hips holds where it is, found once per drag.
+    private ImmutableArray<HipAnchor>? dragAnchors;
     // Whether the mouse was over the gizmo's rings or handles last frame: then the gizmo takes the click, not a dot.
     private bool gizmoOver;
     // Where the last drag left the gizmo on a bone, layer and frame, until Live shows the change there.
@@ -269,7 +272,8 @@ public sealed partial class TimelineWindow
     /// world axes the character's, forced with several bones as for the ball. Each frame of a drag turns or
     /// moves every bone the edit changes (see <see cref="PoseEdits.Turned"/>) by what the gizmo did since
     /// the frame before, in character space; a Drag instead bends the limb above the primary bone to follow
-    /// (<see cref="PoseEdits.Reach"/>). While the mouse is over its rings or handles it takes the
+    /// (<see cref="PoseEdits.Reach"/>), or on the hips moves them and bends the body to hold the anchors
+    /// (<see cref="PoseEdits.DragHips"/>). While the mouse is over its rings or handles it takes the
     /// click, and the dots under it don't (<see cref="gizmoOver"/>); a click elsewhere goes to a dot.
     /// </summary>
     private void DrawGizmo(TimelineEditor current, AnimationTimelineSource loaded, SkeletonDescription skeleton, MotionLayer? layer, int frame,
@@ -332,6 +336,7 @@ public sealed partial class TimelineWindow
             dragAim = null;
             dragFrom = null;
             dragLimb = null;
+            dragAnchors = null;
         }
         if (gizmoEditor == null)
             return;
@@ -345,9 +350,24 @@ public sealed partial class TimelineWindow
                 {
                     dragAim = from + move;
                     dragFrom ??= frames.Through;
-                    dragLimb ??= PoseEdits.Limb(skeleton, bone);
-                    current.Change(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
-                        from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb));
+                    if (bone == PinChains.Hips)
+                    {
+                        // The hips: the body bends around them to hold the anchors, then the hips' key moves them as Move does.
+                        dragAnchors ??= HipSolver.Anchors(skeleton, selection.Bones);
+                        var changed = PoseEdits.DragHips(current.Document, layer, frame, skeleton, frames.Before, frames.Through, dragFrom,
+                            from + move, dragAnchors.Value.AsSpan(), weight, BonePosing.LoopFrames(loaded, current.Document));
+                        var offset = layer.Kind == MotionLayerKind.Offset;
+                        var under = offset ? null : frames.Before;
+                        var (index, _) = BoneTree(skeleton);
+                        current.Change(PoseEdits.Move(changed, layer.Key, frame, [targets.First(t => t.Bone == bone)], follow.Move, frames.Space, offset,
+                            name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null));
+                    }
+                    else
+                    {
+                        dragLimb ??= PoseEdits.Limb(skeleton, bone);
+                        current.Change(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
+                            from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb));
+                    }
                 }
             }
             else if (operation == ImGuizmoOperation.Translate)

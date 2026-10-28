@@ -2,11 +2,13 @@ import ntpath
 from pathlib import Path, PurePosixPath
 import re
 import textwrap
+import time
 from collections import Counter, defaultdict
 from typing import NamedTuple
 
 from bpy.types import Context, Menu, Panel
 
+from .instant_edit.cache import cache_base_directory
 from .instant_edit.character import is_game_hidden
 from .instant_edit.context import (
     ContextValidationError,
@@ -24,6 +26,7 @@ from .instant_edit.props import DEFAULT_STATUS, IN_PLACE_TARGET, get_instant_edi
 from .instant_edit.racial_scaling import race_model_path
 from .instant_edit.server import server_status
 from .instant_edit.sizes import NO_SIZES, export_names, magic_fit_api, picked_issue, picked_names
+from .instant_edit.stash import stash_folders
 from .materials import (
     attribute_display_name,
     material_mismatch_parts,
@@ -34,7 +37,7 @@ from .materials import (
 )
 from .keymaps import draw_shortcut
 from .mesh_list import layout_rows, lod_zero_objects, placement_plan, scene_parts, untangled_placement
-from .operators import active_mesh_drag_plan, active_mesh_drag_state
+from .operators import active_mesh_drag_plan, active_mesh_drag_state, automatic_stash_folder
 from .pose import pose_actions, pose_armature, shown_action
 from .properties import get_settings
 from .backups import list_backups, target_folder
@@ -1004,6 +1007,13 @@ def draw_mesh_part_context_menu(self, context: Context) -> None:
     bake.mesh_part_instance = button.mesh_part_instance
 
 
+def draw_material_context_menu(self, context: Context) -> None:
+    """Add Split by Material to Blender's Material Properties specials menu."""
+    layout = self.layout
+    layout.separator()
+    layout.operator("xiv_ie.split_by_material", icon="MOD_EXPLODE")
+
+
 def _draw_mesh_groups(layout, context: Context) -> None:
     """Draw the compact Mesh Studio overview adapted from Yet Another Addon."""
     parts = scene_parts()
@@ -1191,6 +1201,51 @@ class XIVIE_PT_pose(Panel):
 # ---- Simple Export / Import, Options, Backups, Tools ------------------------------
 
 
+# A menu draws again on every redraw while it's open: the stash's folders are listed again only
+# once the last list is this old.
+_STASH_FOLDERS_SECONDS = 2.0
+# (cache base, when listed, folder names).
+_stash_folder_names: tuple = (None, 0.0, ())
+
+
+def _listed_stash_folders() -> tuple[str, ...]:
+    """The names of the stash's folders, the most recently changed first."""
+    global _stash_folder_names
+    base, listed_at, names = _stash_folder_names
+    now = time.monotonic()
+    if base != cache_base_directory() or now - listed_at > _STASH_FOLDERS_SECONDS:
+        names = tuple(folder.name for folder in stash_folders())
+        _stash_folder_names = (cache_base_directory(), now, names)
+    return names
+
+
+def _from_the_model(context: Context) -> str:
+    """The Stash choice that picks the folder from the model, with the folder it picks."""
+    folder = automatic_stash_folder(context)
+    return f"From the Model ({folder})" if folder else "From the Model"
+
+
+class XIVIE_MT_stash_folders(Menu):
+    bl_idname = "XIVIE_MT_stash_folders"
+    bl_label = "Stash Folder"
+
+    def draw(self, context: Context) -> None:
+        layout = self.layout
+        chosen = get_settings().export_stash_folder.casefold()
+        layout.operator(
+            "xiv_ie.select_stash_folder", text=_from_the_model(context),
+            icon="RADIOBUT_OFF" if chosen else "RADIOBUT_ON",
+        ).folder = ""
+        names = _listed_stash_folders()
+        if names:
+            layout.separator()
+        for name in names:
+            layout.operator(
+                "xiv_ie.select_stash_folder", text=name,
+                icon="RADIOBUT_ON" if name.casefold() == chosen else "RADIOBUT_OFF",
+            ).folder = name
+
+
 class XIVIE_PT_file_io(Panel):
     bl_idname = "XIVIE_PT_file_io"
     bl_label = "Simple Export / Import"
@@ -1214,16 +1269,28 @@ class XIVIE_PT_file_io(Panel):
                 column.prop(settings, "simple_import_skeleton", text="Skeleton")
             layout.operator("xiv_ie.simple_import", text="Import MDL, FBX or glTF...", icon="IMPORT")
             return
-        column.prop(settings, "export_directory", text="Folder")
-        column.prop(settings, "export_name", text="File Name")
-        column.row(align=True).prop(settings, "model_format", expand=True)
+        column.row(align=True).prop(settings, "export_destination", text="Save to", expand=True)
+        to_stash = settings.export_destination == "STASH"
+        if to_stash:
+            # The stash takes MDLs only, so there is no Format row.
+            _split_row(column, "Stash").menu(
+                "XIVIE_MT_stash_folders", text=settings.export_stash_folder or _from_the_model(context),
+                icon="FILE_FOLDER")
+            column.prop(settings, "export_name", text="File Name")
+        else:
+            column.prop(settings, "export_directory", text="Folder")
+            column.prop(settings, "export_name", text="File Name")
+            column.row(align=True).prop(settings, "model_format", expand=True)
         column.prop(props, "export_scope", text="Parts")
         if props.export_scope == "VISIBLE_NO_MANNEQUIN":
             column.prop(props, "export_excluded_mesh", text="Except")
         if magic_fit_api() is not None:
             column.prop(props, "export_sizes", text="Magic Fit Sizes")
         size_names = export_names(props)
-        text = f"Export {len(size_names)} Sizes" if size_names else "Export Model File"
+        if to_stash:
+            text = "Save to Stash"
+        else:
+            text = f"Export {len(size_names)} Sizes" if size_names else "Export Model File"
         layout.operator("xiv_ie.simple_export", text=text, icon="EXPORT")
         if size_names is not None:
             hint = layout.row()

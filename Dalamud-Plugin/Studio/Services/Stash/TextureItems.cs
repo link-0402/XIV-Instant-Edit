@@ -35,11 +35,76 @@ internal sealed class TextureItemList
 }
 
 /// <summary>
+/// Which of a stash's items a material's name points at when no .mtrl file says: the items with a
+/// texture name that holds all the material's telling words ("Sera_Yura_Cow" → "cow"; "mt" and the
+/// words every item's names share, like the outfit's, say nothing), as
+/// "Sera_Yura_Elbow_Glove&amp;Stocking_Cow" does. A word keeps its digits while some item's names hold
+/// it so ("UV1" beside "UV2" and "UV3"); else they are dropped ("Pearl 1" → "pearl"). Gives the models an
+/// item is on, and the textures a model's material gets (see <see cref="ModelTextureLookup"/>).
+/// </summary>
+internal sealed class TextureItemNames
+{
+    private readonly WordIndex _plain, _numbered;
+
+    public TextureItemNames(IReadOnlyList<TextureItem> items)
+    {
+        _plain    = new WordIndex(items, numbered: false);
+        _numbered = new WordIndex(items, numbered: true);
+    }
+
+    /// <summary>The words of a texture's file name, as <see cref="Names"/> reads them; with <paramref name="numbered"/>, with their digits.</summary>
+    public static HashSet<string> WordsOf(string texturePath, bool numbered = false)
+        => TexturePurposes.Words(Path.GetFileNameWithoutExtension(texturePath), numbered).ToHashSet();
+
+    /// <summary>The words of a material's name that can tell the items apart, and whether they keep their digits.</summary>
+    public (List<string> Words, bool Numbered) TellingWords(string material)
+    {
+        var numbered = _numbered.Telling(material);
+        return numbered.Count > 0 && _numbered.AnyHolds(numbered) ? (numbered, true) : (_plain.Telling(material), false);
+    }
+
+    /// <summary>Whether the material's telling words all appear in one of the item's texture names.</summary>
+    public bool Names(string material, TextureItem item)
+    {
+        var (telling, numbered) = TellingWords(material);
+        return telling.Count > 0 && (numbered ? _numbered : _plain).Holds(item, telling);
+    }
+
+    /// <summary>
+    /// The words of each item's texture names, read one way, and those every item shares. A texture that joined
+    /// by its layout doesn't name the item: it may be another's that looks alike.
+    /// </summary>
+    private sealed class WordIndex
+    {
+        private readonly bool _numbered;
+        private readonly Dictionary<TextureItem, List<HashSet<string>>> _wordsOf;
+        private readonly HashSet<string> _shared;
+
+        public WordIndex(IReadOnlyList<TextureItem> items, bool numbered)
+        {
+            _numbered = numbered;
+            _wordsOf = items.ToDictionary(i => i, i => i.Textures.Where(t => !i.ByLayout.Contains(t)).Select(t => WordsOf(t.Path, numbered)).ToList());
+            _shared = items.Count > 1
+                ? _wordsOf.Values.Select(l => l.SelectMany(w => w).ToHashSet()).Aggregate((a, b) => { a.IntersectWith(b); return a; })
+                : new HashSet<string>();
+        }
+
+        public List<string> Telling(string material)
+            => TexturePurposes.Words(material, _numbered).Where(w => w != "mt" && !_shared.Contains(w)).ToList();
+
+        public bool Holds(TextureItem item, List<string> telling) => _wordsOf[item].Any(words => telling.All(words.Contains));
+
+        public bool AnyHolds(List<string> telling) => _wordsOf.Keys.Any(item => Holds(item, telling));
+    }
+}
+
+/// <summary>
 /// Sorts a stash's textures into items. Names come first: a texture set ("Shirt", "Shirt_Normal",
 /// "Shirt_AO") is one item. The folder's .mtrl files join textures a material uses together when
-/// their names don't (a normal map in one folder, its index map in another), and its .mdl files say
-/// which models an item is on. Last, a texture left over joins the item whose layout (where its
-/// UV islands are painted) it clearly matches. Matcaps are never part of an item.
+/// their names don't (a normal map in one folder, its index map in another), a Unity material pulls
+/// the loose textures it uses into its set, and the .mdl files say which models an item is on. Last,
+/// a texture left over joins the item whose layout (where its UV islands are painted) it clearly
+/// matches. Matcaps are never part of an item.
 /// </summary>
 internal static class TextureItems
 {
@@ -76,6 +141,19 @@ internal static class TextureItems
             if (used.Select(groups.Find).Distinct().Count(r => groups.Size(r) > 1) <= 1)
                 foreach (var entry in used.Skip(1))
                     groups.Union(used[0], entry);
+        }
+
+        // A Unity material pulls the loose textures it uses into the one texture set among them ("UV1 Black
+        // Gold" puts UV1_Black with UV1_Normal2). Its colour variants share textures in ways that would
+        // chain loose ones into one item, so it makes none of its own.
+        var byPath = candidates.ToLookup(e => e.Path, StringComparer.OrdinalIgnoreCase);
+        foreach (var material in manifest.Materials)
+        {
+            var used = material.Textures.Values.SelectMany(p => byPath[p]).Distinct().ToList();
+            var sets = used.Select(groups.Find).Distinct().Where(r => groups.Size(r) > 1).ToList();
+            if (sets.Count == 1)
+                foreach (var entry in used)
+                    groups.Union(sets[0], entry);
         }
 
         foreach (var group in candidates.GroupBy(groups.Find))
@@ -170,25 +248,14 @@ internal static class TextureItems
         if (models.Count == 0)
             return;
 
-        // Without .mtrl files, a material names an item when its telling words ("Sera_Yura_Cow" → "cow";
-        // words every item's names share, like the outfit's, say nothing) all appear in one of the
-        // item's texture names ("Sera_Yura_Elbow_Glove&Stocking_Cow").
-        var wordsOf = items.ToDictionary(i => i, i => i.Textures.Select(t => TexturePurposes.Words(Path.GetFileNameWithoutExtension(t.Path)).ToHashSet()).ToList());
-        var shared = items.Count > 1
-            ? wordsOf.Values.Select(l => l.SelectMany(w => w).ToHashSet()).Aggregate((a, b) => { a.IntersectWith(b); return a; })
-            : new HashSet<string>();
-        bool Names(string material, TextureItem item)
-        {
-            var telling = TexturePurposes.Words(material).Where(w => w != "mt" && !shared.Contains(w)).ToList();
-            return telling.Count > 0 && wordsOf[item].Any(words => telling.All(words.Contains));
-        }
-
+        // Without .mtrl files, a material names an item by its telling words (see TextureItemNames).
+        var naming = new TextureItemNames(items);
         bool linked = materialsOf.Count > 0;
         foreach (var item in items)
         {
             var used = item.Textures.SelectMany(t => materialsOf.GetValueOrDefault(t) ?? new()).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var (file, materials) in models)
-                if (linked ? materials.Any(used.Contains) : materials.Any(m => Names(m, item)))
+                if (linked ? materials.Any(used.Contains) : materials.Any(m => naming.Names(m, item)))
                     item.Models.Add(file);
         }
     }
@@ -224,7 +291,12 @@ internal static class TextureItems
     // Layout
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Moves loose textures into the item whose layout they clearly share.</summary>
+    /// <summary>
+    /// Moves loose textures into the item whose layout they clearly share: more than any item of another name
+    /// (a set in several folders is alike in each). A texture is held against the items' textures of its own
+    /// purpose (a colour variant against their diffuses): a normal map painted all over, as Substance Painter's
+    /// are, looks like every item's. An item with none of that purpose goes by its normal map, then its colours.
+    /// </summary>
     private static void MatchLayouts(TextureItemList list, Dictionary<StashEntry, string> full, CancellationToken cancel)
     {
         var loose = list.Loose.Where(e => LayoutExtensions.Contains(Path.GetExtension(e.Path)) && !TexturePurposes.IsPreview(e.Path))
@@ -232,25 +304,36 @@ internal static class TextureItems
         if (loose.Count == 0)
             return;
 
-        var items = new List<(TextureItem Item, Layout Layout)>();
-        foreach (var item in list.Items.Take(MaxLayoutImages))
-        {
-            // A normal map shows an item's islands best; then the colours.
-            var pick = item.Textures.Where(t => LayoutExtensions.Contains(Path.GetExtension(t.Path)))
-                                    .OrderBy(t => t.Purpose switch { TexturePurpose.Normal => 0, TexturePurpose.Diffuse => 1, _ => 2 })
-                                    .FirstOrDefault();
-            if (pick != null && LayoutOf(full[pick], cancel) is { Telling: true } layoutOfItem)
-                items.Add((item, layoutOfItem));
-        }
+        // As the items were before any texture joined them by layout, each image read once.
+        var items = list.Items.Take(MaxLayoutImages)
+                        .Select(i => (Item: i, Images: i.Textures.Where(t => LayoutExtensions.Contains(Path.GetExtension(t.Path))).ToList()))
+                        .Where(i => i.Images.Count > 0)
+                        .ToList();
         if (items.Count == 0)
             return;
+        var layouts = new Dictionary<StashEntry, Layout?>();
+        Layout? Read(StashEntry texture)
+        {
+            if (!layouts.TryGetValue(texture, out var layout))
+                layouts[texture] = layout = LayoutOf(full[texture], cancel) is { Telling: true } telling ? telling : null;
+            return layout;
+        }
+        Layout? LayoutAs(List<StashEntry> images, TexturePurpose purpose)
+            => Read(images.FirstOrDefault(t => t.Purpose == purpose)
+                    ?? images.OrderBy(t => t.Purpose switch { TexturePurpose.Normal => 0, TexturePurpose.Diffuse => 1, _ => 2 }).First());
 
         foreach (var entry in loose)
         {
-            if (LayoutOf(full[entry], cancel) is not { Telling: true } layoutOfEntry)
+            if (Read(entry) is not { } layoutOfEntry)
                 continue;
-            var ranked = items.Select(i => (i.Item, Overlap: layoutOfEntry.Overlap(i.Layout))).OrderByDescending(r => r.Overlap).ToList();
-            var second = ranked.Count > 1 ? ranked[1].Overlap : 0;
+            var ranked = items.Select(i => (i.Item, Layout: LayoutAs(i.Images, entry.Purpose)))
+                              .Where(i => i.Layout != null)
+                              .Select(i => (i.Item, Overlap: layoutOfEntry.Overlap(i.Layout!)))
+                              .OrderByDescending(r => r.Overlap)
+                              .ToList();
+            if (ranked.Count == 0)
+                continue;
+            var second = ranked.Skip(1).FirstOrDefault(r => !string.Equals(r.Item.Name, ranked[0].Item.Name, StringComparison.OrdinalIgnoreCase)).Overlap;
             if (ranked[0].Overlap < LayoutMatch || ranked[0].Overlap - second < LayoutMargin)
                 continue;
             ranked[0].Item.Textures.Add(entry);

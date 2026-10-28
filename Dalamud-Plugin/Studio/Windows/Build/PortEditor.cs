@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
+using InstantEdit.Studio.Services.Stash;
 using InstantEdit.Studio.Windows.UI;
 
 namespace InstantEdit.Studio.Windows.Build;
@@ -20,6 +22,7 @@ internal sealed class PortEditor
     private const string ConfirmRemoveItemId     = "Remove from the modpack?##StudioConfirmRemoveItem";
     private const string ConfirmRemoveMaterialId = "Remove material?##StudioConfirmRemoveMat";
     private const string ConfirmMatchId          = "Match vanilla materials?##StudioConfirmMatch";
+    private const string ConfirmFitId            = "Fit to model?##StudioConfirmFit";
     private const string ConfirmPresetId         = "Apply preset?##StudioConfirmPreset";
     private const string ConfirmPasteId          = "Paste material##StudioConfirmPaste";
 
@@ -29,6 +32,7 @@ internal sealed class PortEditor
     private uint _askRemoveItem;
     private (uint Item, int Material)? _askRemoveMaterial;
     private uint _askMatch;
+    private uint _askFit;
     private (uint Item, int Material, int Preset)? _askPreset;
     private (uint Item, int After)? _askPaste;
     private string? _openPopup;
@@ -61,6 +65,7 @@ internal sealed class PortEditor
             model.IsVanillaDummy = false;
             _session.MarkDirty();
             _session.Notify($"{item.Subject.DisplayName} / {model.RaceGender.DisplayName}: {added.Count} variant file(s) added, {model.VariantPaths.Count} in all.", Severity.Info);
+            FitNewModel(item, files);
             return;
         }
         if (files.Count == 1 && paths.Folders.Count == 0)
@@ -81,10 +86,11 @@ internal sealed class PortEditor
         model.IsVanillaDummy = false;
         _session.MarkDirty();
         _session.Notify($"{item.Subject.DisplayName} / {model.RaceGender.DisplayName} ← {paths.Describe()}", Severity.Info);
+        FitNewModel(item, files);
     });
 
     /// <summary>Picks the .mdl a race builds from.</summary>
-    public void BrowseModel(RaceModelEntry model)
+    public void BrowseModel(PortItem item, RaceModelEntry model)
     {
         Gui.Dialogs.OpenFileDialog("Model file", "Model files{.mdl}", (ok, path) =>
         {
@@ -92,8 +98,24 @@ internal sealed class PortEditor
             model.SourcePath = path;
             model.UseVariants = model.UseDummy = model.IsVanillaDummy = false;
             _session.MarkDirty();
+            FitNewModel(item, new[] { path });
         });
     }
+
+    /// <summary>
+    /// A stash model set on an item without materials gets one for each material it names (of several files, the
+    /// first's). A model from anywhere else keeps its own material paths. For every way a model is set: dropped,
+    /// picked here or in the inspector.
+    /// </summary>
+    public void FitNewModel(PortItem item, IReadOnlyList<string> files)
+    {
+        if (MaterialFitJobs.FileToFit(item, files) is { } file)
+            _session.FitMaterialsToModel(item, file, OtherPreset(item.Subject), onlyFromStash: true);
+    }
+
+    /// <summary>The preset + Material suggests for <paramref name="subject"/>, or null when it suggests none.</summary>
+    private MaterialPreset? OtherPreset(PortSubject subject)
+        => SuggestedPreset(subject) is var index and >= 0 ? MaterialPresets.All[index] : null;
 
     /// <summary>Picks the image a texture slot is made from, or images to add to its variants.</summary>
     public void BrowseTexture(TextureSlot tex)
@@ -191,6 +213,11 @@ internal sealed class PortEditor
         if (ImGui.Selectable("Match vanilla materials"))
             AskMatchVanilla(item);
         Gui.Tooltip("Replace this item's materials with the vanilla model's own: their names, shaders and texture slots.");
+
+        bool hasModel = MaterialFitJobs.ModelFile(item) != null;
+        if (ImGui.Selectable("Fit to model", false, hasModel ? ImGuiSelectableFlags.None : ImGuiSelectableFlags.Disabled))
+            AskFitToModel(item);
+        Gui.Tooltip("One material for each material the model names.");
         ImGui.EndPopup();
     }
 
@@ -322,6 +349,19 @@ internal sealed class PortEditor
         else Ask(ref _askMatch, item.Key, ConfirmMatchId);
     }
 
+    /// <summary>Sets an item's materials up again from its model file, asking first when it has any.</summary>
+    public void AskFitToModel(PortItem item)
+    {
+        if (item.Materials.Count == 0) FitToModel(item);
+        else Ask(ref _askFit, item.Key, ConfirmFitId);
+    }
+
+    private void FitToModel(PortItem item)
+    {
+        if (MaterialFitJobs.ModelFile(item) is { } model)
+            _session.FitMaterialsToModel(item, model, OtherPreset(item.Subject));
+    }
+
     private void Ask<T>(ref T field, T value, string popupId)
     {
         field = value;
@@ -364,6 +404,18 @@ internal sealed class PortEditor
         {
             if (_session.FindItem(_askMatch) is { } item)
                 _session.MatchVanillaMaterials(item);
+        });
+
+        Confirm.Modal(ConfirmFitId, () =>
+        {
+            var item = _session.FindItem(_askFit);
+            var model = item != null ? MaterialFitJobs.ModelFile(item) : null;
+            ImGui.TextUnformatted($"Replace all {item?.Materials.Count} material(s) of \"{item?.Subject.DisplayName}\" with one for each material {Path.GetFileName(model)} names?");
+            ImGui.TextColored(Theme.Muted, "Texture source paths set on the current materials are cleared.");
+        }, "Replace", () =>
+        {
+            if (_session.FindItem(_askFit) is { } item)
+                FitToModel(item);
         });
 
         DrawPastePopup();

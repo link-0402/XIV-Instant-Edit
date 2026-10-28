@@ -641,9 +641,13 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
                 overlay.Gizmo = GizmoMode.Drag;
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(dragHint ?? "The gizmo drags the bone; the limb above bends to follow.");
+            ImGui.SetTooltip(dragHint ?? (posing.Selection.Primary == PinChains.Hips
+                ? "The gizmo drags the hips. The feet and hands hold where they are; the legs, arms and back follow."
+                : "The gizmo drags the bone; the limb above bends to follow."));
         if (overlay.GizmoWaits(layer, frame, skeleton) is { } reason)
             Widgets.HintWrapped(reason);
+        else if (drag && posing.Selection.Primary == PinChains.Hips)
+            Widgets.HintWrapped(TimelineWindowViews.HipDragHint(skeleton, posing.Selection.Bones));
     }
 
     /// <summary>The rotation of the game camera's view, for the ball; null without a camera.</summary>

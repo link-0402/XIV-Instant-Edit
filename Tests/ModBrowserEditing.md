@@ -70,11 +70,22 @@ interactive checks have not been performed by the implementation agent.
 - Extract a package a second time and press Stop part-way. The stash still shows
   the first extraction with all its files, and no `.previous` or numbered folder
   is left beside it.
+- Save a model to the stash from Blender, then extract the same package again. The Blender exports are
+  still in its stash folder and still listed.
 - Open a folder (Import package window, or the folder icon above the stash list),
   pick a VRChat avatar's resource folder. It shows under "opened folders"; its
   textures take the purpose their Unity material gives them, and its materials
   are listed on the Materials tab. Dropping a folder from Explorer on the window
   opens it too. The X takes it out of the stash and leaves its files alone.
+- VRChat round trip: Import package, Send to Blender, Split by Material, Save to Stash. The stash lists
+  the model as "from Blender". Drop it on a Build item with no materials. The item gets one material
+  per material in the model: "Gear with Diffuse" where the package has a diffuse texture for it,
+  otherwise "Gear" with placeholders in the empty slots. Build and check the mod in game.
+- On the fitted materials the default placeholder index colour looks right in game. A white index
+  means colour pair 15.
+- **+ Material > Fit to model** on an item that has materials asks first, then redoes them.
+- Pick a stash model with the inspector's browse button, or with Add file(s) on a race set to variants. An
+  item with no materials gets them, as when the model is dropped.
 - Type a path into the Output field letter by letter: the window doesn't stutter.
 - Start over (top right) clears the modpack after its confirmation.
 - Weapons: add a weapon from Add from game > Weapons, drop a model and a texture,

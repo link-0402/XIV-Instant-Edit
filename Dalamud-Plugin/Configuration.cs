@@ -201,6 +201,21 @@ public sealed class Configuration : IPluginConfiguration
     /// <summary> Which parts of the area the physics builder draws on your character (<see cref="Services.Physics.PhysicsOverlayShown"/> flags). </summary>
     public int PhysicsOverlayShown { get; set; } = (int)Services.Physics.PhysicsOverlayShown.Default;
 
+    /// <summary> The folders the Timeline's pose browser lists. </summary>
+    public List<string> PoseBrowserFolders { get; set; } = [];
+
+    /// <summary> The folder the pose browser showed last; empty for the list of folders. </summary>
+    public string PoseBrowserFolder { get; set; } = "";
+
+    public const int MinPoseBrowserTile = 64;
+    public const int MaxPoseBrowserTile = 360;
+
+    /// <summary> The size of the pose browser's pictures, in pixels before the UI scale. </summary>
+    public int PoseBrowserTile { get; set; } = 140;
+
+    /// <summary> The pose browser lists the newest folders and poses first instead of by name. </summary>
+    public bool PoseBrowserNewestFirst { get; set; }
+
     /// <summary> The Mod Browser: the modpack being built, recent mods, layout and defaults for new content. </summary>
     public Studio.StudioSettings Studio { get; set; } = new();
 

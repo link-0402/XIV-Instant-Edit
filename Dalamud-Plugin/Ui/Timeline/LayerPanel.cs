@@ -784,17 +784,33 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
                     any = true;
                     var name = AnimationPresentation.AnimationName(capture, startup);
                     if (ImGui.Selectable($"{name}##{capture.Id}-{startup}"))
-                        ReadIdle(loaded, layer.Key, capture, startup, name);
+                        ReadIdle(loaded, layer.Key, name, async (service, token) =>
+                            await service.DecodeMotionAsync(await service.LoadTimelineAsync(capture, startup, token).ConfigureAwait(false), _ => { }, token)
+                                .ConfigureAwait(false));
                 }
                 if (!any)
                 {
                     using (ImRaii.Disabled())
                         ImGui.Selectable("No animations seen yet");
                 }
+                ImGui.Separator();
+                ImGui.TextColored(Theme.Muted, "From the game");
+                var idles = GameIdles(loaded);
+                if (idles is not { IsCompletedSuccessfully: true })
+                {
+                    using (ImRaii.Disabled())
+                        ImGui.Selectable(idles?.IsFaulted == true ? "Couldn't read the game's idles" : idles == null ? "No idles for this race" : "Reading the game's idles");
+                }
+                else
+                {
+                    foreach (var game in idles.Result)
+                        if (ImGui.Selectable($"{game.Name}##game-{game.GamePath}"))
+                            ReadIdle(loaded, layer.Key, game.Name, (service, token) => service.DecodeGameIdleAsync(loaded, game, _ => { }, token));
+                }
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("The animation whose motion is borrowed, such as your race's standing idle. Play it once with Load to list it.");
+            ImGui.SetTooltip("The animation whose motion is borrowed: one played since you started, or one of the game's idles for your race.");
         if (idleError is { } error)
             Widgets.HintWrapped(error);
         if (idle == null)
@@ -845,9 +861,24 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
     private Task<MotionIdle>? idleReading;
     private CancellationTokenSource? idleCancel;
     private string? idleLayer, idleClip, idleError;
+    // The game's idles for the race they were listed for; null while the race has none.
+    private Task<ImmutableArray<GameIdle>>? gameIdles;
+    private string? gameIdlesRace;
 
-    /// <summary>Decodes a seen clip on a task and borrows its motion for <paramref name="layerKey"/>; one read at a time.</summary>
-    private void ReadIdle(AnimationTimelineSource loaded, string layerKey, AnimationCapture capture, bool startup, string name)
+    /// <summary>The game's idles for the race of the character playing <paramref name="loaded"/>, read once per race; null for no race.</summary>
+    private Task<ImmutableArray<GameIdle>>? GameIdles(AnimationTimelineSource loaded)
+    {
+        var race = AnimationEditService.CharacterRace(loaded);
+        if (race != gameIdlesRace)
+        {
+            gameIdlesRace = race;
+            gameIdles = race != null && session.Animations is { } service ? service.GameIdlesAsync(race, CancellationToken.None) : null;
+        }
+        return gameIdles;
+    }
+
+    /// <summary>Decodes a donor (<paramref name="read"/>) on a task and borrows its motion for <paramref name="layerKey"/>; one read at a time.</summary>
+    private void ReadIdle(AnimationTimelineSource loaded, string layerKey, string name, Func<AnimationEditService, CancellationToken, Task<MotionClip>> read)
     {
         if (idleReading != null || session.Animations is not { } service)
             return;
@@ -858,8 +889,7 @@ internal sealed class LayerPanel(TimelineSession session, BonePosing posing, Bon
         idleError = null;
         idleReading = Task.Run(async () =>
         {
-            var donor = await service.LoadTimelineAsync(capture, startup, token).ConfigureAwait(false);
-            var clip = await service.DecodeMotionAsync(donor, _ => { }, token).ConfigureAwait(false);
+            var clip = await read(service, token).ConfigureAwait(false);
             return MotionIdles.Borrow(clip, name);
         }, token);
     }

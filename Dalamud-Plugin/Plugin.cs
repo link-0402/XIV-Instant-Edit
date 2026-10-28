@@ -265,6 +265,7 @@ public sealed class Plugin : IDalamudPlugin
         _physics = new Services.Physics.PhysicsBuilderService(pi, _penumbra.Ipc, _penumbra.Physics, _penumbra.Previews, data, framework, objects, clientState, skeletons, log, _config, SaveConfiguration,
             configDirectory, () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         _timelineWindow.HandTips = _physics.ReadHandTipsAsync;
+        _timelineWindow.AttachPoseFolders(_config, SaveConfiguration);
         // In GPose your posed character walks or runs for the builder through the Timeline preview's playback.
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
@@ -330,6 +331,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.AddWindow(_settingsWindow);
         _windowSystem.AddWindow(_timelineWindow);
         _windowSystem.AddWindow(_timelineWindow.Bones);
+        _windowSystem.AddWindow(_timelineWindow.Poses);
         _windowSystem.AddWindow(_timelineWindow.Overlay);
         _windowSystem.AddWindow(_physicsWindow.Overlay);
         _windowSystem.AddWindow(_physicsWindow);
@@ -475,6 +477,7 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_settingsWindow);
         _windowSystem.RemoveWindow(_timelineWindow);
         _windowSystem.RemoveWindow(_timelineWindow.Bones);
+        _windowSystem.RemoveWindow(_timelineWindow.Poses);
         _windowSystem.RemoveWindow(_timelineWindow.Overlay);
         _windowSystem.RemoveWindow(_physicsWindow.Overlay);
         _windowSystem.RemoveWindow(_physicsWindow);

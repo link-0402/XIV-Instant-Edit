@@ -100,7 +100,6 @@ public sealed class PackageImportWindow : Window, IDisposable
     {
         _host       = host;
         _thumbnails = thumbnails;
-        _stash      = new StashView(host, thumbnails);
         Size          = new Vector2(960, 700);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(680, 440) };
@@ -108,8 +107,10 @@ public sealed class PackageImportWindow : Window, IDisposable
         var cfg = host.Configuration;
         _packagePath = cfg.LastSimsPackagePath;
         // A cache that can't be set up (a non-empty folder it doesn't own) leaves the old default.
-        var cacheRoot = Services.Backups.BackupFolder.TryResolve(() => host.CacheRoot, out _)
-                        ?? Path.Combine(Path.GetTempPath(), "InstantEdit");
+        var cache = Services.Backups.BackupFolder.TryResolve(() => host.CacheRoot, out _);
+        var cacheRoot = cache ?? Path.Combine(Path.GetTempPath(), "InstantEdit");
+        // Blender saves into the cache's package-imports, so the stash lists its folders there whatever output folder is picked.
+        _stash       = new StashView(host, thumbnails, cache != null ? PackageImportPaths.DefaultOutput(cache) : null);
         _outputDir   = PackageImportPaths.ChooseOutput(cfg.LastSimsOutputDir, cacheRoot, Path.GetTempPath());
         if (_outputDir != cfg.LastSimsOutputDir && !string.IsNullOrWhiteSpace(cfg.LastSimsOutputDir))
         {

@@ -189,18 +189,53 @@ internal static class PoseEdits
         var local = start?.ToArray() ?? through.ToArray();
         var model = MotionEvaluator.ModelSpace(skeleton, local);
         PinSolver.Reach(skeleton, local, model, chain, aim, normal);
+        return KeyTurns(doc, layer, frame, skeleton, before, through, local, chain.Bones, weight, loop);
+    }
+
+    /// <summary>
+    /// Keys the turns a hip drag makes in <paramref name="layer"/> at <paramref name="frame"/>: from <paramref name="start"/> (the pose the
+    /// layers through this one gave when the drag began) the hips are moved so their model position is <paramref name="aim"/> and the
+    /// <paramref name="anchors"/> held (<see cref="HipSolver.Solve"/>); every bone the solve turned is keyed as <see cref="Reach"/> keys a
+    /// chain, against <paramref name="before"/> and <paramref name="through"/>. The hips' own position is keyed by <see cref="Move"/>, not here.
+    /// Returns <paramref name="doc"/> unchanged when the weight is under MinFollowWeight or no rotation changes.
+    /// </summary>
+    public static TimelineDocument DragHips(TimelineDocument doc, MotionLayer layer, int frame, SkeletonDescription skeleton,
+        ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, MotionTransform[] start, Vector3 aim,
+        ReadOnlySpan<HipAnchor> anchors, float weight, float loop = 0)
+    {
+        if (!MotionEvaluator.Index(skeleton).TryGetValue(PinChains.Hips, out var hips))
+            throw MotionEvaluator.Missing(PinChains.Hips);
+        var turned = HipSolver.Turned(anchors);
+        if (!(weight >= MinFollowWeight) || turned.IsEmpty)
+            return doc;
+        var local = start.ToArray();
+        var startModel = MotionEvaluator.ModelSpace(skeleton, start);
+        var model = startModel.ToArray();
+        HipSolver.Solve(skeleton, local, model, hips, aim, anchors, startModel);
+        return KeyTurns(doc, layer, frame, skeleton, before, through, local, turned, weight, loop);
+    }
+
+    /// <summary>
+    /// Keys each of <paramref name="bones"/> in <paramref name="layer"/> at <paramref name="frame"/> so the layer, at
+    /// <paramref name="weight"/>, turns it as in <paramref name="solved"/> (local): the turn from <paramref name="before"/> scaled
+    /// by the weight's inverse, never a half turn or more. A bone already turned so in <paramref name="through"/> is left as it is.
+    /// </summary>
+    private static TimelineDocument KeyTurns(TimelineDocument doc, MotionLayer layer, int frame, SkeletonDescription skeleton,
+        ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, MotionTransform[] solved, IEnumerable<int> bones,
+        float weight, float loop)
+    {
         // A key past a half turn reads back the short way round, the opposite turn.
         var most = weight * 179 * MathF.PI / 180;
-        foreach (var b in chain.Bones)
+        foreach (var b in bones)
         {
-            var solved = Quaternion.Normalize(local[b].Rotation);
+            var rotation = Quaternion.Normalize(solved[b].Rotation);
             // Float noise only: |dot| > 1 - 1e-8 (about 0.016 degrees), read off the turn's sine, as a float can't hold 1 - 1e-8.
-            var moved = Quaternion.Inverse(Quaternion.Normalize(through[b].Rotation)) * solved;
+            var moved = Quaternion.Inverse(Quaternion.Normalize(through[b].Rotation)) * rotation;
             if (new Vector3(moved.X, moved.Y, moved.Z).LengthSquared() < 2e-8f)
                 continue;
             // The turn the layer makes from the pose before it, scaled so that at its weight it gives the solved one.
             var from = Quaternion.Normalize(before[b].Rotation);
-            var change = Quaternion.Normalize(Quaternion.Inverse(from) * solved);
+            var change = Quaternion.Normalize(Quaternion.Inverse(from) * rotation);
             var angle = 2 * MathF.Acos(Math.Clamp(Math.Abs(change.W), 0, 1));
             if (angle > most)
                 change = MotionEvaluator.Pow(change, most / angle);

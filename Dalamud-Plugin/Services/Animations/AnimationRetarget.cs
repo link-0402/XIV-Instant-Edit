@@ -19,6 +19,10 @@ internal sealed class AnimationRetarget
     private readonly int[] sourceAncestors, targetAncestors;
     private readonly BoneTransform[] sourceRest, targetRest, sourceReferences, targetReferences;
     private readonly Matrix4x4[] targetHelpers;
+    // How far each bone's move from rest is stretched: the bones that place the body (the hips under n_root) by the ratio
+    // of the two rests' heights, every other bone 1. Kept 1:1, a lying or sitting pose of a taller race sank by the whole
+    // difference (7.8 cm, Hyur male onto Miqo'te female, seen in game 2026-10-27).
+    private readonly float[] placementScales;
     public AnimationRetarget(SkeletonDescription source, SkeletonDescription target, AnimationChannels channels, bool dropMissing = false)
     {
         AnimationSkeleton.Validate(source); AnimationSkeleton.Validate(target);
@@ -30,6 +34,7 @@ internal sealed class AnimationRetarget
         sourceAncestors = new int[source.Bones.Length]; targetAncestors = new int[source.Bones.Length];
         sourceRest = new BoneTransform[source.Bones.Length]; targetRest = new BoneTransform[source.Bones.Length];
         targetHelpers = new Matrix4x4[source.Bones.Length];
+        placementScales = new float[source.Bones.Length];
         var sharedTargets = BoneMap.Where(i => i >= 0).ToHashSet();
         sourceReferences = source.Bones.Select(x => x.Reference).ToArray();
         targetReferences = target.Bones.Select(x => x.Reference).ToArray();
@@ -43,6 +48,7 @@ internal sealed class AnimationRetarget
             sourceAncestors[i] = a; targetAncestors[i] = b;
             sourceRest[i] = Collapse(source, sourceReferences, i, a);
             targetRest[i] = Collapse(target, targetReferences, BoneMap[i], b);
+            placementScales[i] = PlacementScale(a < 0 || source.Bones[a].Parent < 0, sourceRest[i], targetRest[i]);
             var helper = Matrix4x4.Identity;
             for (var p = target.Bones[BoneMap[i]].Parent; p != b; p = target.Bones[p].Parent) helper *= Matrix(target.Bones[p].Reference);
             if (!Matrix4x4.Invert(helper, out targetHelpers[i])) throw new InvalidDataException("A target helper bone has singular scale.");
@@ -106,17 +112,27 @@ internal sealed class AnimationRetarget
                 result[dest] = Decompose(Matrix(targetGlobal) * inverseParent);
                 continue;
             }
-            var retargeted = Transfer(sample, sourceRest[i], targetRest[i]);
+            var retargeted = Transfer(sample, sourceRest[i], targetRest[i], placementScales[i]);
             result[dest] = Decompose(Matrix(retargeted) * targetHelpers[i]);
         }
         return result;
     }
-    internal static BoneTransform Transfer(BoneTransform value, BoneTransform sourceRest, BoneTransform targetRest)
+    /// <summary>
+    /// For a bone at the top of the skeleton (<paramref name="placement"/>) that stands above the root at rest, the ratio of
+    /// the target's rest height to the source's; otherwise 1. Bones at the root itself (n_throw) have no height to compare.
+    /// </summary>
+    internal static float PlacementScale(bool placement, BoneTransform sourceRest, BoneTransform targetRest) =>
+        placement && sourceRest.Position.Y > .01f && targetRest.Position.Y > .01f ? targetRest.Position.Y / sourceRest.Position.Y : 1;
+    /// <summary>
+    /// The value that moves <paramref name="targetRest"/> as <paramref name="value"/> moves <paramref name="sourceRest"/>, the
+    /// move from rest stretched by <paramref name="placementScale"/> (<see cref="PlacementScale"/>).
+    /// </summary>
+    internal static BoneTransform Transfer(BoneTransform value, BoneTransform sourceRest, BoneTransform targetRest, float placementScale = 1)
     {
         if (Math.Abs(sourceRest.Scale.X * sourceRest.Scale.Y * sourceRest.Scale.Z) < 1e-12f)
             throw new InvalidDataException("Cannot retarget from a singular reference pose.");
         var alignment = Quaternion.Normalize(targetRest.Rotation * Quaternion.Inverse(sourceRest.Rotation));
-        return new(targetRest.Position + Vector3.Transform(value.Position - sourceRest.Position, alignment),
+        return new(targetRest.Position + Vector3.Transform(value.Position - sourceRest.Position, alignment) * placementScale,
             Quaternion.Normalize(targetRest.Rotation * Quaternion.Inverse(sourceRest.Rotation) * value.Rotation),
             targetRest.Scale * (value.Scale / sourceRest.Scale));
     }

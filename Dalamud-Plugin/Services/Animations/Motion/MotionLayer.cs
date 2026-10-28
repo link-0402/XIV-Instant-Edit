@@ -88,6 +88,25 @@ internal enum PinSensitivity : byte
     Loose,
 }
 
+/// <summary>How many markers the Motion keys layer shows. Saved as numbers; Normal first, so a missing value reads as Normal.</summary>
+internal enum MarkerDetail : byte
+{
+    Normal,
+    /// <summary>Only the larger changes in the motion.</summary>
+    Fewer,
+    /// <summary>Smaller changes too.</summary>
+    More,
+}
+
+/// <summary>
+/// What marks a Motion keys layer: how closely its markers follow the motion and <paramref name="Reach"/>, how many
+/// markers an edit fades out over (1 to <see cref="MaxReach"/>).
+/// </summary>
+internal sealed record MotionMarkers(MarkerDetail Detail = MarkerDetail.Normal, int Reach = 1)
+{
+    public const int MaxReach = 3;
+}
+
 /// <summary>
 /// One bone a pin layer holds. <paramref name="HoldTurn"/> holds its turn as well as its position.
 /// <paramref name="RelativeTo"/> is the bone it rides with, null for the character. <paramref name="Top"/>
@@ -229,6 +248,8 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 /// Other kinds have none, and journals written before fix layers load with none.</param>
 /// <param name="Idle">For an idle-motion layer, the motion it borrows, null until one is read; its amount is that
 /// motion's strength. Other kinds have none.</param>
+/// <param name="Markers">For the Motion keys layer, an offset whose keys mark the motion's own key poses; null for every
+/// other layer, and for journals written before it.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -247,7 +268,8 @@ internal sealed record MotionLayer(
     MotionSide From = MotionSide.Left,
     ImmutableArray<MotionPin> Pins = default,
     MotionFix? Fix = null,
-    MotionIdle? Idle = null)
+    MotionIdle? Idle = null,
+    MotionMarkers? Markers = null)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;

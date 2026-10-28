@@ -2,12 +2,15 @@
 
 import importlib
 import json
+import os
+import re
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -270,6 +273,10 @@ def assert_simple_import_folder(addon):
                         raise AssertionError("Simple Import folder-setting regression import failed")
                     if Path(settings.export_directory).resolve() != source_folder.resolve():
                         raise AssertionError("Simple Import did not set the export folder to its source folder")
+                    recorded = [item.get("instant_edit_source_file")
+                                for item in bpy.context.selected_objects if item.type == "MESH"]
+                    if recorded != [str(source_file.resolve())]:
+                        raise AssertionError(f"Simple Import did not record the MDL it came from: {recorded}")
 
                     # Several files picked at once: each is imported, all end up selected, and a
                     # failing file is skipped without undoing the others.
@@ -407,7 +414,12 @@ def assert_simple_import_shares_armatures():
                 raise AssertionError("The shared armature did not take the second part's bones")
             if set(bpy.context.selected_objects) != set(new):
                 raise AssertionError("Simple Import selected a removed armature or missed an object")
+            for name, mesh in meshes.items():
+                if mesh.get("instant_edit_source_file") != str((folder / f"{name}.glb").resolve()):
+                    raise AssertionError(f"{name} did not record the glTF it came from: "
+                                         f"{mesh.get('instant_edit_source_file')}")
         print("[PASS] Simple Import puts parts with a matching layout on one armature")
+        print("[PASS] Simple Import records each mesh's source file")
     finally:
         for name, value in saved.items():
             setattr(settings, name, value)
@@ -468,6 +480,9 @@ def assert_import_files_endpoint(addon):
                     or sum(item.type == "ARMATURE" for item in new) != 1
                     or sum(item.type == "MESH" for item in new) != 2):
                 raise AssertionError(f"/import/files did not import both parts onto one armature: {done}")
+            recorded = {item.get("instant_edit_source_file") for item in new if item.type == "MESH"}
+            if recorded != {str((folder / "hair_a.glb").resolve()), str((folder / "parts" / "hair_b.glb").resolve())}:
+                raise AssertionError(f"/import/files did not record each mesh's source file: {recorded}")
             relative = post(["hair_a.glb"])
             unsupported = post([str(folder / "notes.txt")])
             missing = post([str(folder / "gone.glb")])
@@ -1647,6 +1662,479 @@ def assert_mesh_drag_plan(addon):
         if [obj.name for obj in (first, middle, last)] != ["62.0 First", "63.0 Middle", "62.2 Last"]:
             raise AssertionError(f"A part leaving its group renamed the parts it passed: {[obj.name for obj in (first, middle, last)]}")
         print("[PASS] Mesh part drags rename only on drop and never pass on duplicate IDs")
+
+
+def assert_split_by_material(addon):
+    """Split by Material: one mesh per material, numbered after the visible meshes.
+
+    Run it last. Its undo reloads every datablock, so any bpy reference held from before the
+    undo, here or in the caller, points into freed memory. That is also why it isn't inside
+    temporary_scene_data and cleans up by name.
+    """
+    materials = importlib.import_module(f"{addon.__name__}.materials")
+    ui = importlib.import_module(f"{addon.__name__}.ui")
+
+    # Numbers skip the taken 0 and 2 and follow first appearance: names, then slot order.
+    # A LOD joins the part of the same label; a split mesh's label adds the material.
+    plan = materials.split_mesh_plan(
+        [
+            ("Top", "Top", 0, ("Skin", "Cloth")),
+            ("Skirt", "Skirt", 0, ("Cloth",)),
+            ("Belt", "Belt", 0, ("Metal", "Cloth")),
+            ("3.0 Belt LOD1", "Belt", 1, ("Metal", "Cloth")),
+        ],
+        {0, 2},
+    )
+    expected = {
+        ("3.0 Belt LOD1", "Metal"): (1, 0, 1, "Belt Metal"),
+        ("3.0 Belt LOD1", "Cloth"): (3, 0, 1, "Belt Cloth"),
+        ("Belt", "Metal"): (1, 0, 0, "Belt Metal"),
+        ("Belt", "Cloth"): (3, 0, 0, "Belt Cloth"),
+        ("Skirt", "Cloth"): (3, 1, 0, "Skirt"),
+        ("Top", "Skin"): (4, 0, 0, "Top Skin"),
+        ("Top", "Cloth"): (3, 2, 0, "Top Cloth"),
+    }
+    if plan != expected:
+        raise AssertionError(f"Split plan {plan}, expected {expected}")
+    # Hands has no LOD1, so Top's LOD1 still joins Top's part 1; a second Top gets a part of its own.
+    plan = materials.split_mesh_plan(
+        [
+            ("0.2 Top", "Top", 0, ("Cloth",)),
+            ("0.1 Top LOD1", "Top", 1, ("Cloth",)),
+            ("0.1 Top", "Top", 0, ("Cloth",)),
+            ("0.0 Hands", "Hands", 0, ("Cloth",)),
+        ],
+        set(),
+    )
+    expected = {
+        ("0.0 Hands", "Cloth"): (0, 0, 0, "Hands"),
+        ("0.1 Top", "Cloth"): (0, 1, 0, "Top"),
+        ("0.1 Top LOD1", "Cloth"): (0, 1, 1, "Top"),
+        ("0.2 Top", "Cloth"): (0, 2, 0, "Top"),
+    }
+    if plan != expected:
+        raise AssertionError(f"Split plan with an incomplete LOD set {plan}, expected {expected}")
+    if materials.split_mesh_plan([], {0}) != {}:
+        raise AssertionError("Planning no meshes numbered something")
+    # Plain names keep their LOD suffix as the LOD, up to LOD2 as mesh names allow.
+    labels = {
+        name: materials.split_mesh_label(SimpleNamespace(name=name))
+        for name in ("Top LOD1", "Top LOD2.001", "0.0 Top LOD2", "Top LOD3", "Top")
+    }
+    if labels != {
+        "Top LOD1": ("Top", 1), "Top LOD2.001": ("Top", 2), "0.0 Top LOD2": ("Top", 2),
+        "Top LOD3": ("Top LOD3", 0), "Top": ("Top", 0),
+    }:
+        raise AssertionError(f"Split labels {labels}")
+
+    # The entry joins the Material Properties specials menu.
+    menu_draw = bpy.types.MATERIAL_MT_context_menu.draw
+    if ui.draw_material_context_menu not in getattr(menu_draw, "_draw_funcs", ()):
+        raise AssertionError("Split by Material was not added to the material specials menu")
+
+    class Layout:
+        def __init__(self):
+            self.items = []
+
+        def separator(self):
+            self.items.append("separator")
+
+        def operator(self, idname, **options):
+            self.items.append((idname, options.get("icon")))
+
+    owner = SimpleNamespace(layout=Layout())
+    ui.draw_material_context_menu(owner, bpy.context)
+    icons = bpy.types.UILayout.bl_rna.functions["operator"].parameters["icon"].enum_items.keys()
+    if (len(owner.layout.items) != 2 or owner.layout.items[0] != "separator"
+            or owner.layout.items[1][0] != "xiv_ie.split_by_material" or owner.layout.items[1][1] not in icons):
+        raise AssertionError(f"Unexpected material specials entries: {owner.layout.items}")
+
+    def stores():
+        # Fetched fresh each time: after the undo, wrappers taken before it point into freed memory.
+        return (bpy.data.objects, bpy.data.meshes, bpy.data.materials, bpy.data.collections)
+
+    existing = [{item.name for item in store} for store in stores()]
+    # The list shows every visible mesh; keep the earlier scenarios' meshes out of it.
+    earlier = [obj.name for obj in bpy.context.visible_objects if obj.type == "MESH"]
+    for name in earlier:
+        bpy.data.objects[name].hide_set(True)
+    try:
+        skin, cloth, lace, silk, unused = (
+            bpy.data.materials.new(name) for name in ("Split Skin", "Split Cloth", "Split Lace", "Split Silk", "Split Unused"))
+        outfit = bpy.data.collections.new("Split Outfit")
+        bpy.context.scene.collection.children.link(outfit)
+
+        def create(name, slots, face_slots, collection=None):
+            mesh = bpy.data.meshes.new(f"{name} Data")
+            vertices, faces = [], []
+            for index in range(len(face_slots)):
+                start = len(vertices)
+                vertices += [(index * 2, 0, 0), (index * 2 + 1, 0, 0), (index * 2 + 1, 1, 0.2), (index * 2, 1, 0)]
+                faces.append((start, start + 1, start + 2, start + 3))
+            mesh.from_pydata(vertices, [], faces)
+            for material in slots:
+                mesh.materials.append(material)
+            mesh.polygons.foreach_set("material_index", face_slots)
+            obj = bpy.data.objects.new(name, mesh)
+            (collection or bpy.context.scene.collection).objects.link(obj)
+            return obj
+
+        body = create("0.0 Body", (skin,), (0,))
+        # Top's third slot repeats Cloth: those faces join the first Cloth piece.
+        top = create("Top", (cloth, lace, cloth), (0, 1, 2), outfit)
+        top.data.normals_split_custom_set_from_vertices([(0.0, 0.3, 0.95)] * len(top.data.vertices))
+        top.vertex_groups.new(name="j_kosi").add(list(range(len(top.data.vertices))), 1.0, "REPLACE")
+        top.modifiers.new("Displace", "DISPLACE")
+        top.shape_key_add(name="Basis")
+        for point in top.shape_key_add(name="shp_wa_").data:
+            point.co.z += 0.5
+        top.active_shape_key_index = 1
+        top["xiv_material"] = "/mt_c0201e0001_top_a.mtrl"
+        top["instant_edit_xiv_material"] = "/mt_c0201e0001_top_a.mtrl"
+        top["instant_edit_source_file"] = "C:/Outfit/Outfit.fbx"
+        # A hidden copy shares Top's mesh data and must keep it whole.
+        instance = bpy.data.objects.new("Top Instance", top.data)
+        bpy.context.scene.collection.objects.link(instance)
+        instance.hide_set(True)
+        skirt = create("Skirt", (silk, lace, unused), (0, 1), outfit)
+        # One material, in its second slot: it moves to slot 0 without a split.
+        belt = create("Belt", (unused, silk), (1,), outfit)
+        # A plain name's LOD suffix stays the LOD: its pieces join Top's parts at LOD1.
+        top_lod = create("Top LOD1", (cloth, lace), (0, 1), outfit)
+
+        def select(*objects):
+            for obj in bpy.context.view_layer.objects:
+                obj.select_set(obj in objects)
+            bpy.context.view_layer.objects.active = objects[0] if objects else None
+
+        select()
+        if bpy.ops.xiv_ie.split_by_material.poll():
+            raise AssertionError("Split by Material is available with no mesh selected")
+        select(belt)
+        if bpy.ops.xiv_ie.split_by_material() != {"CANCELLED"} or belt.name != "Belt" or len(belt.material_slots) != 2:
+            raise AssertionError("Split by Material changed meshes that use one material each")
+
+        select(top, skirt, belt, top_lod)
+        bpy.ops.ed.undo_push(message="before split by material")
+        if bpy.ops.xiv_ie.split_by_material("EXEC_DEFAULT", True) != {"FINISHED"}:
+            raise AssertionError("Split by Material did not finish")
+
+        # Body keeps 0. Silk is 1 (Belt first by name), Lace 2 (Skirt), Cloth 3 (Top).
+        pieces = {obj.name: obj for obj in outfit.objects}
+        names = sorted(pieces)
+        if names != [
+            "1.0 Belt", "1.1 Skirt Split Silk", "2.0 Skirt Split Lace", "2.1 Top Split Lace",
+            "2.1 Top Split Lace LOD1", "3.0 Top Split Cloth", "3.0 Top Split Cloth LOD1",
+        ]:
+            raise AssertionError(f"Split names {names}")
+        if body.name != "0.0 Body" or body.select_get():
+            raise AssertionError("Splitting changed an unselected mesh")
+        for name, material, faces in (
+            ("1.0 Belt", silk, 1), ("1.1 Skirt Split Silk", silk, 1), ("2.0 Skirt Split Lace", lace, 1),
+            ("2.1 Top Split Lace", lace, 1), ("3.0 Top Split Cloth", cloth, 2),
+            ("2.1 Top Split Lace LOD1", lace, 1), ("3.0 Top Split Cloth LOD1", cloth, 1),
+        ):
+            piece = pieces[name]
+            slots = [slot.material for slot in piece.material_slots]
+            if slots != [material] or any(face.material_index for face in piece.data.polygons):
+                raise AssertionError(f"{name} kept slots {[getattr(m, 'name', None) for m in slots]}")
+            if len(piece.data.polygons) != faces or not piece.select_get():
+                raise AssertionError(f"{name} has {len(piece.data.polygons)} faces or was not left selected")
+        for name in ("2.1 Top Split Lace", "3.0 Top Split Cloth"):
+            piece = pieces[name]
+            keys = piece.data.shape_keys
+            if keys is None or [key.name for key in keys.key_blocks] != ["Basis", "shp_wa_"]:
+                raise AssertionError(f"{name} lost its shape keys")
+            if any(abs(point.co.z - basis.co.z - 0.5) > 1e-6
+                   for point, basis in zip(keys.key_blocks["shp_wa_"].data, keys.key_blocks["Basis"].data)):
+                raise AssertionError(f"{name} changed its shape key")
+            if piece.active_shape_key_index != 1:
+                raise AssertionError(f"{name} did not keep its active shape key")
+            if not piece.data.has_custom_normals or "j_kosi" not in piece.vertex_groups \
+                    or [modifier.name for modifier in piece.modifiers] != ["Displace"]:
+                raise AssertionError(f"{name} lost its custom normals, vertex groups or modifiers")
+            if "xiv_material" in piece or "instant_edit_xiv_material" in piece \
+                    or piece.get("instant_edit_source_file") != "C:/Outfit/Outfit.fbx":
+                raise AssertionError(f"{name} kept the inherited material path or lost its other properties")
+        if instance.data is top.data or len(instance.data.polygons) != 3 or len(instance.data.materials) != 3:
+            raise AssertionError("Splitting changed mesh data another object shares")
+        if bpy.context.view_layer.objects.active is not top or bpy.context.mode != "OBJECT":
+            raise AssertionError("Split by Material did not keep the active object in Object Mode")
+
+        bpy.ops.ed.undo()
+        # Every reference above now points into freed memory: re-fetch by name.
+        restored = {obj.name for obj in bpy.data.objects["Top"].users_collection[0].objects}
+        if restored != {"Top", "Skirt", "Belt", "Top LOD1"}:
+            raise AssertionError(f"One undo did not restore the meshes: {sorted(restored)}")
+        top, skirt, belt, top_lod = (bpy.data.objects[name] for name in ("Top", "Skirt", "Belt", "Top LOD1"))
+        if (len(top.data.polygons), len(top.material_slots), len(skirt.material_slots), len(belt.material_slots),
+                len(top_lod.material_slots)) != (3, 3, 3, 2, 2) \
+                or top.get("xiv_material") != "/mt_c0201e0001_top_a.mtrl" or "0.0 Body" not in bpy.data.objects:
+            raise AssertionError("One undo did not restore the split meshes")
+    finally:
+        for store, names in zip(stores(), existing):
+            for item in tuple(store):
+                if item.name not in names:
+                    store.remove(item, do_unlink=True)
+        for name in earlier:
+            obj = bpy.data.objects.get(name)
+            if obj is not None:
+                obj.hide_set(False)
+    print("[PASS] Split by Material gives each material a free mesh number, and one undo restores the meshes")
+
+
+class _DrawnLayout:
+    """A stand-in for a panel's or menu's layout: keeps what is drawn, in order."""
+
+    def __init__(self):
+        self.items = []
+
+    def _child(self, *_args, **_options):
+        child = _DrawnLayout()
+        self.items.append(child)
+        return child
+
+    row = column = split = _child
+
+    def prop(self, _owner, name, **options):
+        self.items.append(("prop", name, options.get("text")))
+
+    def menu(self, menu, **options):
+        self.items.append(("menu", menu, options.get("text")))
+
+    def label(self, **options):
+        self.items.append(("label", options.get("text")))
+
+    def separator(self, **_options):
+        self.items.append(("separator",))
+
+    def operator(self, idname, **options):
+        properties = SimpleNamespace()
+        self.items.append(("operator", idname, options.get("text"), options.get("icon"), properties))
+        return properties
+
+    def drawn(self):
+        for item in self.items:
+            yield from item.drawn() if isinstance(item, _DrawnLayout) else (item,)
+
+
+def assert_save_to_stash(addon, meshes):
+    """Save to Stash: Simple Export writes an MDL into the plugin's stash, beside the package the
+    model came from, and lists it in that folder's blender-exports.json for the plugin."""
+    from sizes_regression import fake_api, installed
+
+    cache = importlib.import_module(f"{addon.__name__}.instant_edit.cache")
+    stash = importlib.import_module(f"{addon.__name__}.instant_edit.stash")
+    operators = importlib.import_module(f"{addon.__name__}.operators")
+    ui = importlib.import_module(f"{addon.__name__}.ui")
+    model_module = importlib.import_module(f"{addon.__name__}.xivpy.model")
+    settings = bpy.context.scene.xiv_ie_settings
+    props = bpy.context.scene.xiv_ie_instant_edit_props
+    saved = {name: getattr(settings, name) for name in (
+        "simple_io_tab", "export_destination", "export_stash_folder", "export_name", "export_directory",
+        "model_format")}
+    saved_props = {name: getattr(props, name) for name in ("export_scope", "export_sizes")}
+    cache_before = (cache.cache_base_directory(), cache.automatic_cleanup_enabled())
+    # SceneHandler reads the format from the scene's setting, which stays FBX below: each save must
+    # still prepare its meshes as an MDL export does (its weight check, no FBX renaming).
+    scene_handler = importlib.import_module(f"{addon.__name__}.io.model").SceneHandler
+    own_init = scene_handler.__init__
+    handled_as_mdl = []
+
+    def recording_init(handler, *args, **kwargs):
+        own_init(handler, *args, **kwargs)
+        handled_as_mdl.append(handler.xiv_mdl)
+
+    def export():
+        handled_as_mdl.clear()
+        if bpy.ops.xiv_ie.simple_export() != {"FINISHED"}:
+            raise AssertionError("Save to Stash did not finish")
+        if not handled_as_mdl or not all(handled_as_mdl) or settings.model_format != "FBX":
+            raise AssertionError(f"Save to Stash did not export as an MDL: handlers {handled_as_mdl}, "
+                                 f"format {settings.model_format}")
+
+    def refused(message):
+        try:
+            bpy.ops.xiv_ie.simple_export()
+        except RuntimeError as error:
+            if message not in str(error):
+                raise
+        else:
+            raise AssertionError(f"Save to Stash did not refuse with {message!r}")
+
+    def listed(folder):
+        payload = json.loads((folder / "blender-exports.json").read_text("utf-8"))
+        if payload["schema"] != "instant-edit.blender-exports" or payload["version"] != 1:
+            raise AssertionError(f"Unexpected stash list: {payload}")
+        for model in payload["models"]:
+            if set(model) != {"file", "exportedUtc", "sources"} or not re.fullmatch(
+                    r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", model["exportedUtc"]):
+                raise AssertionError(f"Unexpected stash entry: {model}")
+        return [(model["file"], model["sources"]) for model in payload["models"]]
+
+    def drawn_panel():
+        owner = SimpleNamespace(layout=_DrawnLayout())
+        ui.XIVIE_PT_file_io.draw(owner, bpy.context)
+        return list(owner.layout.drawn())
+
+    def drawn_menu():
+        ui._stash_folder_names = (None, 0.0, ())
+        owner = SimpleNamespace(layout=_DrawnLayout())
+        ui.XIVIE_MT_stash_folders.draw(owner, bpy.context)
+        return [(item[2], item[3], item[4].folder) for item in owner.layout.drawn() if item[0] == "operator"]
+
+    with tempfile.TemporaryDirectory(prefix="xiv-instant-edit-stash-") as base, \
+            patch.dict(os.environ, {"APPDATA": str(Path(base) / "appdata")}):
+        scene_handler.__init__ = recording_init
+        try:
+            cache.configure_cache(base, False)
+            root = stash.stash_root()
+            kaihua = root / "Kaihua"
+            (kaihua / "Models").mkdir(parents=True)
+            (kaihua / "stash.json").write_text("{}", encoding="utf-8")
+            fbx = kaihua / "Models" / "Kaihua.fbx"
+            fbx.write_bytes(b"fbx")
+            elsewhere = Path(base) / "elsewhere" / "Extra.fbx"
+            for mesh in meshes:
+                mesh["instant_edit_source_file"] = str(fbx)
+            meshes[-1]["instant_edit_source_file"] = str(elsewhere)
+            settings.simple_io_tab = "EXPORT"
+            settings.export_destination = "STASH"
+            settings.export_stash_folder = ""
+            settings.export_name = "Top.mdl"
+            # Neither is used: the stash takes MDLs, and the export folder doesn't matter.
+            settings.model_format = "FBX"
+            settings.export_directory = str(Path(base) / "missing")
+            props.export_scope = "VISIBLE"
+            props.export_sizes = False
+            exported = operators.XIVIE_OT_simple_export._objects(bpy.context)
+            sources = list(dict.fromkeys(Path(mesh["instant_edit_source_file"]).resolve().as_posix()
+                                         for mesh in exported))
+            if set(sources) != {fbx.resolve().as_posix(), elsewhere.resolve().as_posix()}:
+                raise AssertionError(f"The meshes Save to Stash exports have other sources: {sources}")
+
+            # The panel: Save to, the Stash menu with the folder the model picks, no Format, the button.
+            panel = drawn_panel()
+            for expected in (("prop", "export_destination", "Save to"), ("label", "Stash"),
+                             ("menu", "XIVIE_MT_stash_folders", "From the Model (Kaihua)")):
+                if expected not in panel:
+                    raise AssertionError(f"The Simple Export panel did not draw {expected}: {panel}")
+            if any(item[:2] in (("prop", "model_format"), ("prop", "export_directory")) for item in panel) or \
+                    panel[-1][:3] != ("operator", "xiv_ie.simple_export", "Save to Stash"):
+                raise AssertionError(f"The Simple Export panel in Stash mode: {panel}")
+            menu = drawn_menu()
+            if menu != [("From the Model (Kaihua)", "RADIOBUT_ON", ""), ("Kaihua", "RADIOBUT_OFF", "Kaihua")]:
+                raise AssertionError(f"The Stash menu: {menu}")
+            settings.export_destination = "FOLDER"
+            panel = drawn_panel()
+            if ("prop", "model_format", None) not in panel or ("label", "Stash") in panel or \
+                    panel[-1][:3] != ("operator", "xiv_ie.simple_export", "Export Model File"):
+                raise AssertionError(f"The Simple Export panel in Folder mode: {panel}")
+            settings.export_destination = "STASH"
+            print("[PASS] Simple Export's panel offers Save to Stash with the folder the model picks")
+
+            # Into the stash folder holding the model's source, as an MDL, listed with its sources.
+            export()
+            top = kaihua / "Blender" / "Top.mdl"
+            model = model_module.XIVModel.from_file(top)
+            if not {mesh.get("xiv_material") for mesh in meshes}.issubset(set(model.materials)):
+                raise AssertionError(f"Save to Stash did not write the model: {model.materials}")
+            if sorted(path.name for path in (kaihua / "Blender").iterdir()) != ["Top.mdl"]:
+                raise AssertionError(f"Save to Stash wrote other files: {list((kaihua / 'Blender').iterdir())}")
+            if listed(kaihua) != [("Blender/Top.mdl", sources)]:
+                raise AssertionError(f"Save to Stash did not list the model: {listed(kaihua)}")
+            print("[PASS] Save to Stash writes an MDL into the stash folder of the model's source and lists it")
+
+            # Again: the model and its entry are replaced. A stash save refreshes no Penumbra targets,
+            # so one that can't (the plugin not running) never turns it into a warning.
+            top.write_bytes(b"old")
+            ops = importlib.import_module(f"{addon.__name__}.instant_edit.ops")
+            with patch.object(ops, "refresh_variant_targets_after_operation", return_value="plugin not running") as refresh:
+                export()
+            if refresh.called:
+                raise AssertionError("Save to Stash refreshed the Penumbra targets")
+            if top.read_bytes() == b"old" or listed(kaihua) != [("Blender/Top.mdl", sources)]:
+                raise AssertionError(f"Saving again did not replace the model and its entry: {listed(kaihua)}")
+            print("[PASS] Saving to the stash again replaces the model and its entry")
+
+            # The saved model imported back and saved again: same folder, the package's files as sources.
+            for mesh in meshes:
+                mesh["instant_edit_source_file"] = str(top)
+            settings.export_name = "Top Again"
+            export()
+            if listed(kaihua) != [("Blender/Top.mdl", sources), ("Blender/Top Again.mdl", sources)]:
+                raise AssertionError(f"A saved model saved again lost its sources: {listed(kaihua)}")
+            print("[PASS] A model saved to the stash and saved again keeps the package's files as its sources")
+
+            # A folder chosen in the Stash menu.
+            unity = root / "Unity"
+            unity.mkdir()
+            (unity / "stash.json").write_text("{}", encoding="utf-8")
+            if bpy.ops.xiv_ie.select_stash_folder(folder="Unity") != {"FINISHED"} or \
+                    settings.export_stash_folder != "Unity":
+                raise AssertionError("Choosing a stash folder did not set it")
+            if ("menu", "XIVIE_MT_stash_folders", "Unity") not in drawn_panel() or \
+                    ("Unity", "RADIOBUT_ON", "Unity") not in drawn_menu():
+                raise AssertionError(f"The chosen stash folder is not shown: {drawn_menu()}")
+            settings.export_name = "Top"
+            export()
+            if not (unity / "Blender" / "Top.mdl").is_file() or listed(unity) != [("Blender/Top.mdl", sources)]:
+                raise AssertionError("Save to Stash did not write into the chosen folder")
+            bpy.ops.xiv_ie.select_stash_folder(folder="")
+            print("[PASS] Save to Stash writes into the folder chosen in the Stash menu")
+
+            # Without a source in the stash: a folder named after the file, which the next save reuses.
+            for mesh in meshes:
+                del mesh["instant_edit_source_file"]
+            settings.export_name = "Loose Top"
+            if operators.automatic_stash_folder(bpy.context) != "Loose Top":
+                raise AssertionError(f"From the Model named {operators.automatic_stash_folder(bpy.context)!r}")
+            export()
+            export()
+            loose = root / "Loose Top"
+            if listed(loose) != [("Blender/Loose Top.mdl", [])] or "Loose Top" not in [
+                    folder.name for folder in stash.stash_folders()]:
+                raise AssertionError(f"A model without sources was not saved into its own folder: {listed(loose)}")
+            print("[PASS] A model from outside the stash gets a stash folder named after it")
+
+            # Refusals, writing nothing: a name a folder can't have, and no cache to save into.
+            written = sorted(root.rglob("*"))
+            settings.export_name = "Top?"
+            refused("Enter a valid file name without a path.")
+            settings.export_name = "Top"
+            with patch.object(cache, "ensure_cache_root",
+                              side_effect=ValueError("cache directory is not empty and has no XIV Instant Edit ownership marker")):
+                refused("Can't use the cache folder")
+            if sorted(root.rglob("*")) != written:
+                raise AssertionError("A refused Save to Stash wrote into the stash")
+            print("[PASS] Save to Stash refuses names folders can't have, and a cache it can't use")
+
+            # Magic Fit's sizes: a file each, each listed.
+            for mesh in meshes:
+                mesh["instant_edit_source_file"] = str(fbx)
+            with installed(fake_api()) as api:
+                api.picks = [("Large", True), ("Rue/Buff", True)]
+                props.export_sizes = True
+                settings.export_name = "Sized"
+                try:
+                    export()
+                finally:
+                    props.export_sizes = False
+            sized = [entry for entry in listed(kaihua) if entry[0].startswith("Blender/Sized")]
+            expected = [fbx.resolve().as_posix()]
+            if sized != [("Blender/Sized Large.mdl", expected), ("Blender/Sized Rue-Buff.mdl", expected)] or \
+                    not all((kaihua / file).is_file() for file, _sources in sized):
+                raise AssertionError(f"Sizes saved to the stash were not listed one each: {listed(kaihua)}")
+            print("[PASS] Magic Fit sizes saved to the stash are written and listed one each")
+        finally:
+            scene_handler.__init__ = own_init
+            for name, value in saved.items():
+                setattr(settings, name, value)
+            for name, value in saved_props.items():
+                setattr(props, name, value)
+            for mesh in meshes:
+                mesh.pop("instant_edit_source_file", None)
+            cache.configure_cache(*cache_before)
 
 
 def run() -> None:
@@ -3057,6 +3545,7 @@ def run() -> None:
                 )
             print(f"[PASS] Modifier-only skeleton export produced {modifier_target.stat().st_size} bytes")
 
+        assert_save_to_stash(addon, (obj, second, added_group))
         assert_mesh_studio(addon, obj, second, added_group)
         assert_mesh_part_gap_handling(addon)
         assert_untangle_mesh_groups(addon)
@@ -3077,6 +3566,8 @@ def run() -> None:
         if props_module._export_destination_items(None, bpy.context)[0][0] != "NONE":
             raise AssertionError("Context deletion removed the permanent selector sentinel")
         print("[PASS] Context deletion keeps the Blender panel selector valid")
+        # Last: its undo reloads every datablock, which the references above would not survive.
+        assert_split_by_material(addon)
 
 
 if __name__ == "__main__":

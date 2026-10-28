@@ -7,12 +7,13 @@ namespace InstantEdit.Studio.Services.Stash;
 /// The folder one extraction run writes into: <c>outputDir/name</c> when it is new or holds only an
 /// earlier extraction of the same package, else the first free <c>name_2</c>, <c>name_3</c>, and so on.
 /// An earlier extraction is moved aside rather than deleted, and only removed once the new run has
-/// finished. A run that stops or fails is removed and the earlier one put back, so stopping a
-/// re-extraction loses nothing.
+/// finished; the models Blender saved into it move into the new run. A run that stops or fails is
+/// removed and the earlier one put back, so stopping a re-extraction loses nothing.
 /// </summary>
 internal sealed class ExtractionFolder
 {
-    private const string AsideSuffix = ".previous";
+    /// <summary>The ending of an earlier extraction's folder while it is moved aside; the stash never lists one.</summary>
+    internal const string AsideSuffix = ".previous";
     private readonly string? _aside;
 
     private ExtractionFolder(string path, string? aside, bool numbered)
@@ -47,9 +48,13 @@ internal sealed class ExtractionFolder
         var aside = folder + AsideSuffix;
         try
         {
-            // One left behind by a run that never finished (the game closed) is that package's too.
+            // One left behind by a run that never finished (the game closed), or whose Blender models
+            // couldn't be moved on, is that package's too: its Blender models come back first.
             if (Directory.Exists(aside) && isOwnRun(aside))
+            {
+                CarryBlenderExports(aside, folder);
                 Directory.Delete(aside, recursive: true);
+            }
             if (Directory.Exists(aside) || File.Exists(aside))
                 return null;
             Directory.Move(folder, aside);
@@ -61,13 +66,51 @@ internal sealed class ExtractionFolder
         }
     }
 
-    /// <summary>The run finished: the earlier extraction goes.</summary>
+    /// <summary>The run finished: the earlier extraction goes, once the models Blender saved into it (Blender/ and its sidecar) are moved into this run.</summary>
     public void Finish()
     {
         if (_aside == null)
             return;
-        try { Directory.Delete(_aside, recursive: true); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left as name.previous; the next run clears it */ }
+        try
+        {
+            CarryBlenderExports(_aside, Path);
+            Directory.Delete(_aside, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* left as name.previous; the next run takes its Blender models and clears it */ }
+    }
+
+    /// <summary>
+    /// Moves the models Blender saved into an earlier run into <paramref name="to"/>: Blender/ first,
+    /// then its sidecar, so a move that fails never leaves a sidecar listing models left behind.
+    /// Files already there are kept.
+    /// </summary>
+    private static void CarryBlenderExports(string from, string to)
+    {
+        MoveInto(System.IO.Path.Combine(from, BlenderExports.FolderName), System.IO.Path.Combine(to, BlenderExports.FolderName));
+        var sidecar = System.IO.Path.Combine(from, BlenderExports.FileName);
+        var target = System.IO.Path.Combine(to, BlenderExports.FileName);
+        if (File.Exists(sidecar) && !File.Exists(target))
+            File.Move(sidecar, target);
+    }
+
+    /// <summary>Moves a folder into another of the same name; a file already there under the same name is kept.</summary>
+    private static void MoveInto(string from, string to)
+    {
+        if (!Directory.Exists(from))
+            return;
+        if (!Directory.Exists(to))
+        {
+            Directory.Move(from, to);
+            return;
+        }
+        foreach (var file in Directory.GetFiles(from))
+        {
+            var target = System.IO.Path.Combine(to, System.IO.Path.GetFileName(file));
+            if (!File.Exists(target) && !Directory.Exists(target))
+                File.Move(file, target);
+        }
+        foreach (var folder in Directory.GetDirectories(from))
+            MoveInto(folder, System.IO.Path.Combine(to, System.IO.Path.GetFileName(folder)));
     }
 
     /// <summary>The run stopped or failed: what it wrote goes, and the earlier extraction comes back.</summary>

@@ -55,6 +55,19 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     // Until when Live waits for the GPose character to be drawn again, as after the redraw that ends a preview.
     private DateTime? liveDrawWait;
     private static readonly TimeSpan LiveDrawWait = TimeSpan.FromSeconds(10);
+    // Live turned on over a built preview: its layers go onto the file the preview built, which the game plays as it is
+    // (a rebuild already in the character's race, so every position shows), and turning Live off goes back to that preview.
+    private BuiltPreview? livePreview;
+    // Preview was pressed while Live was on: Live comes back on over the new build.
+    private bool liveAfterPreview;
+    // What the shown preview was built with besides its document: the skeleton choice, as rebuild model and standard.
+    private (string? Model, SkeletonStandard? Standard, SkeletonStandard? Repair)? previewSkeleton;
+    // The document the preview was built from. previewDocument follows it to later documents the preview shows as well
+    // (other looks, and under Live other bone layers); Live turned off goes back to this one.
+    private TimelineDocument? builtDocument;
+
+    /// <summary>A built preview Live runs over: the binding it plays, its timeline and actor, and its length when the document changed it.</summary>
+    private sealed record BuiltPreview(string Fingerprint, ushort Timeline, ushort Actor, float? Duration);
 
     // Looks shown in game while Preview or Live runs: each effect's own path points at an edited copy in
     // the preview's temporary mod (see TimelineEffectLooks.Redirectable). The game asks for the path again
@@ -104,6 +117,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary> Every frame: the playhead and the pose together, Live's layers, and the looks and sounds shown. </summary>
     public void Update(TimelineEditor current, AnimationTimelineSource loaded)
     {
+        if (liveAfterPreview && !previewJob)
+        {
+            liveAfterPreview = false;
+            if (OnBuiltPreview() != null)
+                StartLive(loaded);
+        }
         SyncPlayback(current, loaded);
         UpdateLive(current, loaded);
         SyncLooks(current);
@@ -194,23 +213,32 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             ImGui.TextColored(Theme.Muted, status);
         }
 
+        var needed = PreviewNeeded(current, loaded, repair);
         if (liveWanted)
         {
             if (session.MotionDisplay?.Unshown is > 0 and var unshown)
                 ImGui.TextColored(Theme.Warning, TimelineWindowViews.LiveUnshown(unshown));
+            if (livePreview != null)
+            {
+                ImGui.TextColored(Theme.Hint, needed ?? TimelineWindowViews.LiveOnPreviewHint);
+                return;
+            }
             if (session.Fresh(loaded).Rebuild is { Model: not null } && TimelineWindowViews.LiveRebuiltPositions(current.Document))
                 ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveRebuiltPositionsNote);
             ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched));
             return;
         }
         if (!shown && !session.Preview.Active)
+        {
+            if (needed != null)
+                ImGui.TextColored(Theme.Hint, needed);
             return;
+        }
         if (session.Preview.CollectionShared)
             ImGui.TextColored(Theme.Warning, "⚠ Others using this collection see the preview too.");
-        ImGui.TextColored(Theme.Hint, previewDocument != null && !ReferenceEquals(previewDocument, current.Document)
-            ? "Changed since the preview. Press Preview again."
-            : !shownLooks.IsEmpty ? "Effect looks change when the effect starts again."
-            : "Sounds and effects play only while the preview plays.");
+        ImGui.TextColored(Theme.Hint, needed
+            ?? (!shownLooks.IsEmpty ? "Effect looks change when the effect starts again."
+            : "Sounds and effects play only while the preview plays."));
     }
 
     /// <summary> The Live toggle, in the preview bar and in the Bones window. </summary>
@@ -222,13 +250,18 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         {
             if (Widgets.IconButton(id, FontAwesomeIcon.Bolt, liveWanted
                     ? "Live is on: your bone layers show on the GPose character as you edit. Click to turn it off."
-                    : liveBlocked ?? "Show your bone layers on the GPose character as you edit them. Nothing is saved.",
+                    : liveBlocked ?? (OnBuiltPreview() != null
+                        ? "Show your bone layers over the preview as you edit them. Nothing is saved."
+                        : "Show your bone layers on the GPose character as you edit them. Nothing is saved."),
                     liveWanted || liveBlocked == null))
             {
-                if (liveWanted)
-                    Stop();
-                else
+                if (!liveWanted)
                     StartLive(loaded);
+                else if (livePreview != null)
+                    // Back to the preview Live ran over, as built.
+                    StopLive(keepPlaying: true);
+                else
+                    Stop();
             }
         }
     }
@@ -271,7 +304,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// </summary>
     private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
     {
-        // The preview plays the built file through a temporary mod; Live's swapped motion must go first.
+        // The preview plays the built file through a temporary mod; Live's swapped motion must go first, and comes back over the build.
+        var relive = liveWanted;
         StopLive();
         ushort? actor;
         try { actor = session.Playback.ActorIndex(); }
@@ -329,7 +363,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         previewActor = index;
         previewError = null;
         previewJob = true;
-        previewDocument = document;
+        liveAfterPreview = relive;
+        previewDocument = builtDocument = document;
+        previewSkeleton = SkeletonChoice(target, repair);
         previewRest = rest;
         lastSeekFrame = -1;
         var service = session.Animations!;
@@ -437,6 +473,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     public void Stop()
     {
         StopLive();
+        liveAfterPreview = false;
+        previewSkeleton = null;
+        builtDocument = null;
         previewGeneration++;
         ForgetPreviewLooks();
         try
@@ -593,9 +632,41 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary>The length Live plays the motion at: the document's when cut or stretched, else 0 for the clip's own.</summary>
     private static int LiveLength(TimelineDocument doc) => doc.Cut || doc.Stretched ? doc.Length : 0;
 
+    /// <summary>The skeleton choice a preview of <paramref name="source"/> builds with: the rebuild's race and standard, and the repair.</summary>
+    private static (string? Model, SkeletonStandard? Standard, SkeletonStandard? Repair) SkeletonChoice(AnimationTimelineSource source, SkeletonStandard? repair) =>
+        (source.Rebuild?.Model, source.Rebuild?.Target.Standard, repair);
+
+    /// <summary>
+    /// Why the character doesn't show the document as it is: changed since the preview was built, the skeleton chosen
+    /// otherwise, or with no preview, edits or a rebuild (the one picked for your race too) that only a build shows. Null when
+    /// nothing waits. Live without a preview shows the bone layers itself; its own lines say what it can't.
+    /// </summary>
+    private string? PreviewNeeded(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
+    {
+        var fresh = session.Fresh(loaded);
+        if (previewFingerprint != null && previewDocument != null && session.Preview.Active)
+            return ReferenceEquals(previewDocument, current.Document) && previewSkeleton == SkeletonChoice(fresh, repair) ? null : TimelineWindowViews.PreviewStale;
+        if (liveWanted && livePreview == null)
+            return null;
+        // After a save the game plays the saved file, rebuilt or repaired as it was saved.
+        return current.Dirty || fresh.Rebuild != null && fresh.BaseMotion == null ? TimelineWindowViews.PreviewNeeded : null;
+    }
+
+    /// <summary>The preview built and playing now, which Live can run over; null when there is none.</summary>
+    private BuiltPreview? OnBuiltPreview() =>
+        !liveWanted && !previewJob && !previewFace && previewFingerprint is { } fingerprint && session.Preview.Active && previewBaseFiles != null &&
+        previewActor is { } actor && previewDocument is { } doc
+            ? new BuiltPreview(fingerprint, previewTimeline, actor, doc.Cut || doc.Stretched ? doc.Length / (float)TimelineDocument.Fps : null)
+            : null;
+
     private void StartLive(AnimationTimelineSource loaded)
     {
-        Stop();
+        // Over a built preview Live keeps it, its files and its playback; otherwise the character plays the clip's own file.
+        var built = OnBuiltPreview();
+        if (built == null)
+            Stop();
+        livePreview = built;
+        staleChecked = null;
         liveWanted = true;
         liveStarted = false;
         liveError = null;
@@ -607,16 +678,18 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     /// <summary>
     /// Puts the clip's own motion back and ends its playback. Stop, every reload and every save end Live here.
-    /// <paramref name="keepPlaying"/> leaves the clip playing, plain, as the loader leaves it.
+    /// <paramref name="keepPlaying"/> leaves the clip playing, plain, as the loader leaves it; over a built preview, that preview.
     /// </summary>
     private void StopLive(bool keepPlaying = false)
     {
         if (!liveWanted)
             return;
+        var onPreview = livePreview != null;
         liveWanted = false;
         liveStarted = false;
         liveDecoded = null;
         liveDrawWait = null;
+        livePreview = null;
         StopLiveLooks();
         try
         {
@@ -628,7 +701,14 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         {
             liveError = e.Message;
         }
-        previewFingerprint = null;
+        if (!onPreview || !keepPlaying)
+            previewFingerprint = null;
+        else
+        {
+            // The preview shows the bone layers it was built with again: its document is checked anew.
+            previewDocument = builtDocument;
+            staleChecked = null;
+        }
         lastSeekFrame = -1;
     }
 
@@ -683,6 +763,21 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             }
             if (!liveStarted)
             {
+                if (livePreview is { } built)
+                {
+                    // The preview plays on: Live swaps its copy in where the built file plays.
+                    if (!session.Playback.Active && !session.Playback.Play(built.Timeline, built.Fingerprint, built.Actor))
+                    {
+                        var error = session.Playback.Error;
+                        StopLive();
+                        liveError = error;
+                        return;
+                    }
+                    if (!StartDisplay(current, fresh, decoded, built.Actor))
+                        return;
+                    liveStarted = true;
+                    return;
+                }
                 if (session.Playback.ActorIndex() is not { } actor)
                 {
                     StopLive();
@@ -702,6 +797,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 previewActor = actor;
                 previewFace = false;
                 previewDocument = null;
+                previewSkeleton = null;
                 lastSeekFrame = -1;
                 if (!StartDisplay(current, fresh, decoded, actor))
                     return;
@@ -711,7 +807,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             if (!ReferenceEquals(decoded, liveDecoded))
             {
                 // The display keeps the motion it started on: it starts again on the new one, the clip playing on.
-                if (fresh.Clip.BindingFingerprint != previewFingerprint || previewActor is not { } shown)
+                if ((livePreview?.Fingerprint ?? fresh.Clip.BindingFingerprint) != previewFingerprint || previewActor is not { } shown)
                 {
                     StopLive();
                     liveError = "The clip changed. Turn Live on again.";
@@ -732,8 +828,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary>Starts the display of <paramref name="decoded"/> with the document's edits on the actor; false, with Live off and its error, when it can't.</summary>
     private bool StartDisplay(TimelineEditor current, AnimationTimelineSource fresh, MotionClip decoded, ushort actor)
     {
-        // After a save the game plays either file until it reloads the clip: the one saved or the one before.
-        if (session.MotionDisplay!.Start(actor, fresh.Clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
+        // Over a built preview the game plays the built file, on the skeleton the motion was decoded for, with nothing to
+        // convert. That file holds the layers as they were built, so a copy always shows: the motion with the layers as they are now.
+        if (livePreview is { } built
+                ? session.MotionDisplay!.Start(actor, built.Fingerprint, [], decoded, current.Document.Motion, current.Document.ExcludedBones,
+                    current.Document.Cuts, LiveLength(current.Document), built.Duration, baseDiffers: true)
+                // After a save the game plays either file until it reloads the clip: the one saved or the one before.
+                : session.MotionDisplay!.Start(actor, fresh.Clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
                 decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
                 // Edited again, the game plays the saved file, as long as the edit made it.
                 fresh.BaseMotion != null ? fresh.Clip.Duration : null,
@@ -825,16 +926,24 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             lookSyncing = null;
             lookChecked = null;
         }
-        var live = liveWanted && liveStarted;
-        var previewing = !liveWanted && previewFingerprint != null && !previewJob && previewBaseFiles != null && previewRest != null;
+        // Live over a built preview keeps the preview's files: looks and sounds go in beside them, as for the preview.
+        var live = liveWanted && liveStarted && livePreview == null;
+        var previewing = (!liveWanted || livePreview != null) && previewFingerprint != null && !previewJob && previewBaseFiles != null && previewRest != null;
         if (!live && !previewing)
             return;
         var doc = current.Document;
         if (previewing && !ReferenceEquals(doc, staleChecked) && soundFiles.SoundMissing(doc) == null)
         {
             staleChecked = doc;
-            // Only looks or redirected sound changes changed: the preview shows the document once they are in.
-            try { previewStale = !TimelineEdits.Same(soundFiles.PreviewRest(doc).Document, previewRest!); }
+            // Only looks or redirected sound changes changed: the preview shows the document once they are in. Live over
+            // the preview shows the bone layers and the bones left out too.
+            try
+            {
+                var shownRest = soundFiles.PreviewRest(doc).Document;
+                if (livePreview != null)
+                    shownRest = shownRest with { Motion = previewRest!.Motion, ExcludedBones = previewRest.ExcludedBones };
+                previewStale = !TimelineEdits.Same(shownRest, previewRest!);
+            }
             catch (Exception e) when (e is InvalidDataException or ArgumentException) { previewStale = true; }
             if (!previewStale)
                 previewDocument = doc;

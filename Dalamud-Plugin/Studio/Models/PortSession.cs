@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using InstantEdit.Studio.Services;
 using InstantEdit.Studio.Services.Sims;
+using InstantEdit.Studio.Services.Stash;
 
 namespace InstantEdit.Studio.Models;
 
@@ -449,6 +450,93 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         Notify($"Matched {layout.Count} vanilla material(s): {string.Join(", ", layout.Select(m => m.Name))}.", Severity.Info);
     }
 
+    // ── Materials fitted to a model ──────────────────────────────────────────
+
+    private readonly MaterialFitJobs _fits = new();
+
+    /// <summary>
+    /// Sets <paramref name="item"/>'s materials up from the model at <paramref name="modelPath"/>: one for each
+    /// material it names, with textures from the stash (see <see cref="MaterialFit"/>). The work runs off the
+    /// render thread, and <see cref="ApplyFinishedFit"/> puts the materials in once it is done, while the item
+    /// still has the materials it has now and still builds from that model. Asked again for the same item, the
+    /// earlier fit is dropped.
+    /// </summary>
+    /// <param name="otherPreset">The preset + Material suggests for a subject other than gear or a weapon, or null.</param>
+    /// <param name="onlyFromStash">Fit only a model of a stash folder (a model dropped or picked); any other keeps its own material paths, and nothing is said.</param>
+    public void FitMaterialsToModel(PortItem item, string modelPath, MaterialPreset? otherPreset, bool onlyFromStash = false)
+    {
+        if (item.Animation != null)
+            return;
+        var request = new MaterialFitRequest(item.Key, modelPath, item.Materials.ToArray(), item.Subject, NamingRace(item), otherPreset, onlyFromStash);
+        var cfg = _host.Configuration;
+        var saved = cfg.LastSimsOutputDir;
+        var opened = cfg.StashOpenedFolders.ToList();
+        var host = _host;
+        _fits.Start(request, cancel =>
+        {
+            // The cache folder is made sure of on disk, so it is looked up here rather than on the render thread.
+            var cache = Services.Backups.BackupFolder.TryResolve(() => host.CacheRoot, out _);
+            var roots = PackageImportPaths.StashRoots(saved, cache, Path.GetTempPath());
+            return MaterialFitJobs.Run(request, roots, StashFolders.Opened(opened), cancel);
+        });
+        // Whether a dropped model is from the stash is only known once the fit has looked, so only Fit to model says it started.
+        if (!onlyFromStash)
+            Notify(MaterialFitJobs.Starting(modelPath), Severity.Info);
+    }
+
+    /// <summary>Called once per frame from the Build draw: puts in the materials of a fit that has finished, if its item still wants them.</summary>
+    public void ApplyFinishedFit()
+    {
+        if (!_fits.TakeFinished(out var done))
+            return;
+        var request = done.Request;
+        if (done.Error != null)
+            StudioServices.Log.Warning(done.Error, "[Studio] Could not fit materials to {0}", request.ModelPath);
+        var item = FindItem(request.Item);
+        if (!MaterialFitJobs.StillWanted(request, item))
+            return;
+
+        var file = Path.GetFileName(request.ModelPath);
+        if (done.Outcome is not { } outcome)
+        {
+            if (done.Error != null)
+                Notify($"Could not set up materials from {file}.", Severity.Warning);
+            return;
+        }
+        if (outcome.NotInStash)
+            return;   // dropped from outside the stash: the model keeps its own material paths
+        if (MaterialFitJobs.Problem(outcome, request.ModelPath, ModelStamp.Of(request.ModelPath)) is { } problem)
+        {
+            Notify(problem, Severity.Warning);
+            return;
+        }
+
+        var fit = outcome.Fit!;
+        foreach (var material in fit.Materials)
+            ApplyFitDefaults(material);
+        item.Materials.Clear();
+        item.Materials.AddRange(fit.Materials);
+        ModelMaterialLinks.Remap(item.Models, ModelMaterialLinks.Reset);
+        if (MaterialFitJobs.TakesSelection(request, Selection))
+            Focus(new Target(TargetKind.Material, item.Key, 0));
+        MarkDirty();
+        Notify(MaterialFitJobs.Message(fit, request.ModelPath), Severity.Info);
+    }
+
+    /// <summary>
+    /// What a material from + Material starts with (see <see cref="ApplyTextureDefaults"/>): a hair's normal and
+    /// mask the stash had nothing for take the bases picked in Settings, and keep their placeholder without one.
+    /// </summary>
+    private void ApplyFitDefaults(MaterialSetup material)
+    {
+        var placeholders = material.Textures.Where(t => t.UseWhiteDummy && string.IsNullOrWhiteSpace(t.SourcePath)).ToList();
+        foreach (var slot in placeholders)
+            slot.UseWhiteDummy = false;
+        ApplyTextureDefaults(material);
+        foreach (var slot in placeholders)
+            slot.UseWhiteDummy = string.IsNullOrWhiteSpace(slot.SourcePath);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Stage / focus
     // ─────────────────────────────────────────────────────────────────────────
@@ -814,19 +902,7 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         if (mat == null)
             return "Select a material in the main window first.";
 
-        var applied = new List<string>();
-        foreach (var (type, path, folder) in plan)
-        {
-            if (folder ? !Directory.Exists(path) : !File.Exists(path))
-                continue;
-            var slot = GetOrAddTextureSlot(mat, type);
-            slot.SourcePath    = path;
-            slot.UseVariants   = folder;
-            slot.UseWhiteDummy = false;
-            var label = TextureTypeInfo.Labels[(int)type].ToLowerInvariant();
-            applied.Add(folder ? $"{label} ({Services.Stash.StashFolders.CountImages(path)} variant(s))" : label);
-        }
-
+        var applied = Services.Stash.StashApply.Fill(mat, plan);
         if (applied.Count == 0)
             return $"Nothing to apply: {source} has no diffuse, normal, mask or specular textures.";
 
@@ -834,18 +910,6 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
         var message = $"Applied {string.Join(", ", applied)} to material \"{mat.Name}\".";
         Notify(message, Severity.Info);
         return message;
-    }
-
-    /// <summary>Finds the material's slot for a texture role, adding one when it has none.</summary>
-    private static TextureSlot GetOrAddTextureSlot(MaterialSetup mat, TextureType type)
-    {
-        var existing = mat.Textures.FirstOrDefault(t => t.Type == type);
-        if (existing != null)
-            return existing;
-
-        var slot = new TextureSlot { Type = type, Postfix = MaterialNaming.DefaultPostfix(type), Compression = TextureCompression.Auto };
-        mat.Textures.Add(slot);
-        return slot;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

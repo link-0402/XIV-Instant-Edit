@@ -160,6 +160,52 @@ internal static class MotionEdits
         return added with { Motion = added.Motion.SetItem(index, layer) };
     }
 
+    /// <summary>The name of the layer whose keys mark the motion's key poses.</summary>
+    public const string MotionKeysName = "Motion keys";
+
+    /// <summary>The Motion keys layer: the first offset layer with markers, null when the document has none.</summary>
+    public static MotionLayer? MotionKeysLayer(TimelineDocument doc) =>
+        doc.Motion.FirstOrDefault(layer => layer.Kind == MotionLayerKind.Offset && layer.Markers != null);
+
+    /// <summary>
+    /// Adds the Motion keys layer first in the stack, an offset over the whole clip at full strength with no fades, or
+    /// returns the one already there, muted or not, with its key. Unchanged with an error on an expression's timeline,
+    /// which has no bone motion, or when the document has no room for another layer.
+    /// </summary>
+    public static TimelineDocument AddMotionKeys(TimelineDocument doc, out string key, out string? error)
+    {
+        error = null;
+        if (MotionKeysLayer(doc) is { } existing)
+        {
+            key = existing.Key;
+            return doc;
+        }
+        if (doc.Expression)
+        {
+            key = string.Empty;
+            error = "An expression's timeline has no motion keys.";
+            return doc;
+        }
+        var added = Add(doc, MotionLayerKind.Offset, 0, Math.Max(TimelineDocument.MinLength, doc.Length), out key, out error);
+        if (error != null)
+            return doc;
+        var layer = added.Motion[IndexOf(added, key)] with { Name = MotionKeysName, Markers = new MotionMarkers(), Interpolation = MotionInterpolation.Smooth };
+        return added with { Motion = added.Motion.RemoveAt(IndexOf(added, key)).Insert(0, layer) };
+    }
+
+    /// <summary>
+    /// Sets how the Motion keys layer <paramref name="key"/> shows its markers, its reach kept within 1 to
+    /// <see cref="MotionMarkers.MaxReach"/>. Unchanged when they are the same or the layer has no markers.
+    /// </summary>
+    public static TimelineDocument SetMarkers(TimelineDocument doc, string key, MotionMarkers markers)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || doc.Motion[index].Markers is not { } current)
+            return doc;
+        markers = markers with { Reach = Math.Clamp(markers.Reach, 1, MotionMarkers.MaxReach) };
+        return markers == current ? doc : doc with { Motion = doc.Motion.SetItem(index, doc.Motion[index] with { Markers = markers }) };
+    }
+
     /// <summary>The frames a new Match startup to loop blends over.</summary>
     public const int DefaultFixLength = 8;
 
@@ -863,7 +909,7 @@ internal static class MotionEdits
         while (!keys.Add(created));
         var original = doc.Motion[index];
         var name = original.Name.EndsWith(" copy", StringComparison.Ordinal) ? original.Name : original.Name + " copy";
-        var copy = original with { Key = created, Name = name.Length > MaxName ? name[..MaxName] : name };
+        var copy = original with { Key = created, Name = name.Length > MaxName ? name[..MaxName] : name, Markers = null };
         return doc with { Motion = doc.Motion.Insert(index + 1, copy), NextMotionKey = next };
     }
 
@@ -895,13 +941,13 @@ internal static class MotionEdits
             while (!keys.Add(key));
             if (IsAnchored(layer))
             {
-                motion.Add(Normalize(Anchored(layer with { Key = key }, length)));
+                motion.Add(Normalize(Anchored(layer with { Key = key, Markers = null }, length)));
                 added.Add(key);
                 continue;
             }
             var start = Math.Clamp(layer.Start, 0, length - 1);
             var end = layer.Start <= 0 && layer.End >= sourceLength ? length : Math.Clamp(layer.End, start + 1, length);
-            motion.Add(Normalize(layer with { Key = key, Start = start, End = end }));
+            motion.Add(Normalize(layer with { Key = key, Start = start, End = end, Markers = null }));
             added.Add(key);
         }
         created = added.ToImmutable();
@@ -971,7 +1017,7 @@ internal static class MotionEdits
         (a.Fix == null ? b.Fix == null
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade && a.Fix.Axes == b.Fix.Axes && a.Fix.Placement == b.Fix.Placement &&
               SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&
-        SameIdle(a.Idle, b.Idle) &&
+        SameIdle(a.Idle, b.Idle) && Equals(a.Markers, b.Markers) &&
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));

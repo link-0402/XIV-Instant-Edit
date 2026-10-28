@@ -73,6 +73,14 @@ internal static class SkeletonRepairFixture
         check(Vector3.Distance(rotation.Position, new(2, .5f, 0)) < 1e-5 && Math.Abs(Quaternion.Dot(rotation.Rotation, rotatedRest.Rotation)) > .99999f,
             "reference orientation transforms motion deltas into target axes");
         reject(() => AnimationRetarget.Transfer(T(), T() with { Scale = Vector3.Zero }, T()), "singular rest scales block retargeting");
+        var tall = S("tall", B("n_root", -1), B("n_hara", 0, 0, 1), B("j_kosi", 1, 0, .1f));
+        var short_ = S("short", B("n_root", -1), B("n_hara", 0, 0, .9f), B("j_kosi", 1, 0, .1f));
+        var placement = new AnimationRetarget(tall, short_, channels with { Bones = [1, 2], ReferenceBones = 3 });
+        var lying = placement.Map([T(), T(.2f, .1f), T(0, .15f)]);
+        var standing = placement.Map([T(), T(0, 1), T(0, .1f)]);
+        check(Math.Abs(lying[1].Position.Y - .09f) < 1e-5 && Math.Abs(lying[1].Position.X - .18f) < 1e-5 && Math.Abs(standing[1].Position.Y - .9f) < 1e-5 &&
+              Math.Abs(lying[2].Position.Y - .15f) < 1e-5,
+            "a race rebuild scales the hips' move by the rests' heights, so a pose on the ground stays on it and the rest stays the rest");
         var reference = rotatedRest with { Scale = new(2, 3, 4) };
         var modified = new BoneTransform(new(3, 4, 5), Quaternion.CreateFromAxisAngle(Vector3.UnitX, .6f), new(3, 5, 7));
         foreach (sbyte hint in new sbyte[] { 1, 2 })

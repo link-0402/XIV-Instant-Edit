@@ -36,6 +36,354 @@ internal static class ModBuildScenarios
         FolderNamesWindowsCanStore();               // writers-7
         VanillaModelsCanBeSwitchedOff();
         PartTagsMakeAnImcGroup(root);
+        MaterialsAreFittedToTheModel(root);
+        OtherSubjectsFitWithTheirPreset(root);
+        FitsTakeTheFirstModel();
+        FitsApplyOnlyWhileStillWanted(root);
+        FitReadsTheModelAndTheStash(root);
+        LaterFitReplacesTheEarlierOne();
+        FitLooksInTheStashFolders();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Materials fitted to a model
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static readonly IReadOnlyDictionary<TexturePurpose, string> NoTextures = new Dictionary<TexturePurpose, string>();
+
+    private static string FitFile(string root, string name)
+    {
+        var path = Path.Combine(root, "fit", name);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, new byte[] { 1 });
+        return path;
+    }
+
+    private static string Types(MaterialSetup material) => string.Join(", ", material.Textures.Select(t => t.Type));
+
+    private static bool Placeholder(MaterialSetup material, TextureType type)
+        => material.Textures.Single(t => t.Type == type) is { UseWhiteDummy: true, DummyPreset: "", SourcePath: "" };
+
+    /// <summary>
+    /// A model dropped on gear gets one material per material its meshes name, in mesh order, without
+    /// the shared body groups: "Gear with Diffuse" where the stash has a diffuse for it, else "Gear",
+    /// and placeholders in the slots nothing fills. They line up with the meshes the way Auto links do.
+    /// </summary>
+    private static void MaterialsAreFittedToTheModel(string root)
+    {
+        var topDiffuse = FitFile(root, "top_d.png");
+        var topNormal  = FitFile(root, "top_n.png");
+        var glovesNormal = FitFile(root, "gloves_n.png");
+        var found = new Dictionary<string, IReadOnlyDictionary<TexturePurpose, string>>
+        {
+            ["/Top.mtrl"]    = new Dictionary<TexturePurpose, string> { [TexturePurpose.Diffuse] = topDiffuse, [TexturePurpose.Normal] = topNormal },
+            ["/Gloves.mtrl"] = new Dictionary<TexturePurpose, string> { [TexturePurpose.Diffuse] = Path.Combine(root, "fit", "gone.png"), [TexturePurpose.Normal] = glovesNormal },
+        };
+        var asked = new List<string>();
+        IReadOnlyDictionary<TexturePurpose, string> TexturesFor(string name)
+        {
+            asked.Add(name);
+            return found.GetValueOrDefault(name) ?? NoTextures;
+        }
+
+        var subject = new GearSubject(new GameDataService.GameItem { RowId = 1, Name = "Top", ModelId = 6000, Slot = EquipSlot.Body });
+        var female = RaceInfo.BaseFor(PlayerGender.Female);
+        var meshes = new[] { "/Top.mtrl", "/bibo.mtrl", "/Gloves.mtrl", "/top.mtrl", "/Plain.mtrl" };
+        var fit = MaterialFit.Fit(meshes, TexturesFor, subject, female, otherPreset: null);
+
+        Require(fit.ModelNames.SequenceEqual(new[] { "/Top.mtrl", "/Gloves.mtrl", "/Plain.mtrl" }) && asked.SequenceEqual(fit.ModelNames),
+            $"one material per name the meshes use, in mesh order, once each, without shared body groups ({string.Join(", ", fit.ModelNames)})");
+        Require(fit.Materials.Select(m => m.Name).SequenceEqual(new[] { "mt_c0201e6000_top_a", "mt_c0201e6000_top_b", "mt_c0201e6000_top_c" }),
+            $"named as + Material names them, for the naming race ({string.Join(", ", fit.Materials.Select(m => m.Name))})");
+
+        var top = fit.Materials[0];
+        Require(top.ShaderType == ShaderType.Character && Types(top) == "Diffuse, Normal, Mask, Index",
+            $"a diffuse in the stash makes \"Gear with Diffuse\" ({Types(top)})");
+        Require(top.Textures[0].SourcePath == topDiffuse && top.Textures[1].SourcePath == topNormal && top.Textures.Take(2).All(t => !t.UseWhiteDummy)
+                && Placeholder(top, TextureType.Mask) && Placeholder(top, TextureType.Index),
+            "its diffuse and normal come from the stash; the mask and index get the role's default placeholder");
+        Require(top.Textures.All(t => t.Compression == TextureCompression.Auto), "every slot starts on Auto");
+
+        var gloves = fit.Materials[1];
+        Require(Types(gloves) == "Normal, Mask, Index" && gloves.Textures[0].SourcePath == glovesNormal && Placeholder(gloves, TextureType.Mask),
+            $"a diffuse that isn't on disk makes \"Gear\"; the normal still comes from the stash ({Types(gloves)})");
+        var plain = fit.Materials[2];
+        Require(Types(plain) == "Normal, Mask, Index" && plain.Textures.All(t => t.UseWhiteDummy),
+            "nothing found makes \"Gear\" with placeholders in every slot");
+        Require(fit.WithDiffuse == 1 && fit.WithTextures == 2, $"the counts for the message ({fit.WithDiffuse} with diffuse, {fit.WithTextures} with textures)");
+
+        var written = ModelMaterialLinks.WrittenNames(subject, fit.Materials, female);
+        var plan = ModelMaterialLinks.Plan(meshes, null, written);
+        Require(plan.SequenceEqual(new[] { written[0], null, written[1], written[0], written[2] }),
+            $"left on Auto, each mesh lands on the material fitted to its own name ({string.Join(", ", plan.Select(p => p ?? "keep"))})");
+
+        Require(MaterialFit.Fit(new[] { "/bibo.mtrl", "/bibopube.mtrl" }, TexturesFor, subject, female, null).Materials.Count == 0,
+            "a model naming only shared body groups gets no materials");
+        var weapon = new WeaponSubject(new WeaponModel(4321, "Bronze Gladius", 0, "Gladiator's Arm", 201, 1, 3, false));
+        var hair = MaterialPresets.All.First(p => p.Name == "Hair");
+        var weaponFit = MaterialFit.Fit(new[] { "/Top.mtrl" }, TexturesFor, weapon, null, hair);
+        Require(weaponFit.Materials.Single() is { Name: "mt_w0201b0001_a", ShaderType: ShaderType.Character } only && Types(only) == "Diffuse, Normal, Mask, Index",
+            "a weapon fits like gear, whatever preset is passed for other subjects");
+    }
+
+    /// <summary>Hair, faces, tails and ears get the preset the + Material menu suggests for them, passed in; without one, the gear rule.</summary>
+    private static void OtherSubjectsFitWithTheirPreset(string root)
+    {
+        var normal  = FitFile(root, "hair_n.png");
+        var diffuse = FitFile(root, "hair_d.png");
+        IReadOnlyDictionary<TexturePurpose, string> TexturesFor(string name)
+            => new Dictionary<TexturePurpose, string> { [TexturePurpose.Diffuse] = diffuse, [TexturePurpose.Normal] = normal };
+        var female = RaceInfo.BaseFor(PlayerGender.Female);
+        var hairSubject = new FeatureSubject(SubjectKind.Hair, female, 5);
+
+        var hair = MaterialFit.Fit(new[] { "/Hair.mtrl" }, TexturesFor, hairSubject, female, MaterialPresets.All.First(p => p.Name == "Hair")).Materials.Single();
+        Require(hair.ShaderType == ShaderType.Hair && Types(hair) == "Normal, Mask" && hair.Name == hairSubject.DefaultMaterialName(1, female),
+            $"a hair takes the preset passed in, and no diffuse slot is added for the stash's diffuse ({Types(hair)}, {hair.Name})");
+        Require(hair.Textures[0].SourcePath == normal && Placeholder(hair, TextureType.Mask), "its normal comes from the stash");
+
+        var tail = MaterialFit.Fit(new[] { "/Tail.mtrl" }, TexturesFor, new FeatureSubject(SubjectKind.Tail, female, 1), female, otherPreset: null);
+        Require(tail.Materials.Single() is { ShaderType: ShaderType.Character } fallback && Types(fallback) == "Diffuse, Normal, Mask, Index" && tail.WithDiffuse == 1,
+            "a subject with no suggested preset fits like gear");
+    }
+
+    // ── The fit asked for on a Build item, worked out off the render thread ──
+
+    private static GearSubject FitGear() => new(new GameDataService.GameItem { RowId = 1, Name = "Top", ModelId = 6000, Slot = EquipSlot.Body });
+
+    private static MaterialFitRequest FitRequest(PortItem item, string model)
+        => new(item.Key, model, item.Materials.ToArray(), item.Subject, RaceInfo.BaseFor(PlayerGender.Female), null);
+
+    private static MaterialFitResult Fitted(int materials, int withDiffuse)
+        => new(Enumerable.Range(0, materials).Select(i => new MaterialSetup { Name = $"m{i}" }).ToList(),
+               Enumerable.Range(0, materials).Select(i => $"/m{i}.mtrl").ToList(), withDiffuse, withDiffuse);
+
+    /// <summary>A model dropped or picked on an item without materials fits them, from the first file of several; "Fit to model" uses the first race's file.</summary>
+    private static void FitsTakeTheFirstModel()
+    {
+        var item = new PortItem(FitGear());
+        Require(MaterialFitJobs.FileToFit(item, new[] { @"C:\m\Top.mdl", @"C:\m\Top_b.mdl" }) == @"C:\m\Top.mdl",
+            "of several model files set at once, the fit uses the first");
+        Require(MaterialFitJobs.FileToFit(item, Array.Empty<string>()) == null, "no file, no fit");
+        item.Materials.Add(new MaterialSetup { Name = "mine" });
+        Require(MaterialFitJobs.FileToFit(item, new[] { @"C:\m\Top.mdl" }) == null, "an item with materials keeps them when a model is set");
+
+        var models = new PortItem(FitGear());
+        Require(MaterialFitJobs.ModelFile(models) == null, "without a race model, Fit to model has no file");
+        models.Models.Add(new RaceModelEntry { UseDummy = true, SourcePath = @"C:\m\Old.mdl" });
+        models.Models.Add(new RaceModelEntry());
+        models.Models.Add(new RaceModelEntry { UseVariants = true });
+        Require(MaterialFitJobs.ModelFile(models) == null, "a generated dummy, a race without a file and an empty variant set give none");
+        models.Models.Add(new RaceModelEntry { UseVariants = true, VariantPaths = { @"C:\m\A.mdl", @"C:\m\B.mdl" } });
+        models.Models.Add(new RaceModelEntry { SourcePath = @"C:\m\Top.mdl" });
+        Require(MaterialFitJobs.ModelFile(models) == @"C:\m\A.mdl", "the first race with a file gives it: of variants, the first");
+    }
+
+    /// <summary>
+    /// A finished fit goes in only while its item still wants it: still in the pack, with the very materials it had
+    /// when the fit was asked for, and still built from that model, unchanged since it was read.
+    /// </summary>
+    private static void FitsApplyOnlyWhileStillWanted(string root)
+    {
+        const string model = @"C:\m\Top.mdl";
+        var item = new PortItem(FitGear());
+        item.Models.Add(new RaceModelEntry { SourcePath = model });
+        var request = FitRequest(item, model);
+        Require(MaterialFitJobs.StillWanted(request, item), "a fit goes in while its item has no materials and builds from the model");
+        Require(MaterialFitJobs.StillWanted(request with { ModelPath = model.ToUpperInvariant() }, item), "whatever the path's case");
+        Require(!MaterialFitJobs.StillWanted(request, null), "not once the item left the pack");
+        Require(!MaterialFitJobs.StillWanted(request with { Item = 99 }, item), "not on another item");
+        Require(MaterialFitJobs.TakesSelection(request, new Target(TargetKind.Item, item.Key))
+                && MaterialFitJobs.TakesSelection(request, new Target(TargetKind.Model, item.Key, 0)),
+            "a fit that goes in selects its first material while the item, or something in it, is selected");
+        Require(!MaterialFitJobs.TakesSelection(request, new Target(TargetKind.Item, 99)) && !MaterialFitJobs.TakesSelection(request, new Target(TargetKind.Build))
+                && !MaterialFitJobs.TakesSelection(request, null),
+            "a late fit never pulls the selection back from elsewhere");
+
+        item.Materials.Add(new MaterialSetup { Name = "mine" });
+        Require(!MaterialFitJobs.StillWanted(request, item), "not once the item has a material of its own");
+
+        // "Fit to model" over two materials: it replaces those two, and only while they are still the item's.
+        item.Materials.Add(new MaterialSetup { Name = "theirs" });
+        var replace = FitRequest(item, model);
+        var asked = item.Materials.ToList();
+        Require(MaterialFitJobs.StillWanted(replace, item), "Fit to model replaces the materials it was asked to replace");
+        asked[0].ShaderType = ShaderType.Skin;
+        Require(MaterialFitJobs.StillWanted(replace, item), "the same materials, edited in place, are still the ones it replaces");
+        item.Materials.Add(new MaterialSetup { Name = "another" });
+        Require(!MaterialFitJobs.StillWanted(replace, item), "not once one was added meanwhile");
+        item.Materials.RemoveAt(0);
+        Require(!MaterialFitJobs.StillWanted(replace, item), "nor once one was removed and another added, the count the same");
+        item.Materials.Clear();
+        item.Materials.AddRange(new[] { asked[0].Clone(), asked[1].Clone() });
+        Require(!MaterialFitJobs.StillWanted(replace, item), "nor once they were replaced by others alike (Match vanilla materials, a paste)");
+        item.Materials.Clear();
+        item.Materials.AddRange(new[] { asked[1], asked[0] });
+        Require(!MaterialFitJobs.StillWanted(replace, item), "nor once they were moved");
+        item.Materials.Clear();
+
+        item.Models[0].SourcePath = @"C:\m\Other.mdl";
+        Require(!MaterialFitJobs.StillWanted(request, item), "not once the race builds from another file");
+        item.Models[0].UseVariants = true;
+        item.Models[0].VariantPaths.Add(model);
+        Require(MaterialFitJobs.StillWanted(request, item), "a variant set holding the file still builds from it");
+        item.Models[0].UseDummy = true;
+        Require(!MaterialFitJobs.StillWanted(request, item), "a generated dummy doesn't");
+
+        // Why a wanted fit isn't applied, and what it says once it is.
+        var file = Path.Combine(root, "fit", "Stamped.mdl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllBytes(file, new byte[] { 1, 2, 3 });
+        var stamp = ModelStamp.Of(file);
+        var three = new MaterialFitOutcome(Fitted(3, 2), null, stamp);
+        Require(stamp != null && MaterialFitJobs.Problem(three, file, ModelStamp.Of(file)) == null, "a fit of a file unchanged since it was read goes in");
+        File.AppendAllText(file, "more");
+        var written = MaterialFitJobs.Problem(three, file, ModelStamp.Of(file));
+        Require(written == "Stamped.mdl is still being written. Try again in a moment.", $"a file written again since it was read isn't fitted ({written})");
+        Require(MaterialFitJobs.Problem(new MaterialFitOutcome(null, "Could not read Top.mdl (file not found).", null), model, null) == "Could not read Top.mdl (file not found).",
+            "a read that failed says why");
+        var none = MaterialFitJobs.Problem(new MaterialFitOutcome(Fitted(0, 0), null, stamp), file, stamp);
+        Require(none == "No materials found in Stamped.mdl.", $"a model naming no materials of its own says so ({none})");
+
+        var messages = new[] { MaterialFitJobs.Message(Fitted(3, 2), model), MaterialFitJobs.Message(Fitted(1, 1), model), MaterialFitJobs.Message(Fitted(2, 0), model) };
+        Require(messages[0] == "Set up 3 materials from Top.mdl, 2 with diffuse.", $"the message names the counts and the file ({messages[0]})");
+        Require(messages[1] == "Set up 1 material from Top.mdl, 1 with diffuse.", $"one material is one ({messages[1]})");
+        Require(messages[2] == "Set up 2 materials from Top.mdl, none with diffuse.", $"no diffuse is none ({messages[2]})");
+        var starting = MaterialFitJobs.Starting(model);
+        Require(starting == "Setting up materials from Top.mdl.", $"while it runs, the status says so ({starting})");
+        Require(messages.Concat(new[] { written, none, starting }).All(m => m != null && !m.Contains('…') && !m.Contains("...")), "no message has an ellipsis");
+    }
+
+    /// <summary>
+    /// The fit off the render thread: the model's own material names, the stash's textures for them; a model
+    /// that can't be read (being written, broken, gone) fits nothing and says why.
+    /// </summary>
+    private static void FitReadsTheModelAndTheStash(string root)
+    {
+        var stash = Path.Combine(root, "fit-stash");
+        var outfit = Path.GetFullPath(Path.Combine(stash, "Outfit"));
+        if (Directory.Exists(outfit))
+            Directory.Delete(outfit, true);
+        var diffuse = Path.Combine(outfit, "Textures", "top_d.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(diffuse)!);
+        File.WriteAllBytes(diffuse, new byte[] { 1 });
+        var manifest = new StashManifest { Source = @"C:\p\Outfit.unitypackage", SourceKind = "unity", ExtractedUtc = DateTime.UtcNow };
+        manifest.Entries.Add(new StashEntry { Path = "Textures/top_d.png", Kind = StashKind.Texture, Purpose = TexturePurpose.Diffuse });
+        manifest.Materials.Add(new StashMaterial { Name = "Top", Textures = { [TexturePurpose.Diffuse] = "Textures/top_d.png" } });
+        manifest.Write(outfit);
+        var model = Path.Combine(outfit, "Blender", "Top.mdl");
+        Directory.CreateDirectory(Path.GetDirectoryName(model)!);
+        File.WriteAllBytes(model, ModCheckFixtures.Mdl(["/Top.mtrl", "/bibo.mtrl", "/Plain.mtrl"]));
+
+        var item = new PortItem(FitGear());
+        item.Models.Add(new RaceModelEntry { SourcePath = model });
+        var request = FitRequest(item, model);
+        MaterialFitOutcome Run(string path) => MaterialFitJobs.Run(request with { ModelPath = path }, new[] { stash }, Array.Empty<string>(), CancellationToken.None);
+
+        var outcome = Run(model);
+        Require(outcome is { Problem: null, Fit: { Materials.Count: 2, WithDiffuse: 1 } } && outcome.Stamp == ModelStamp.Of(model),
+            $"the model's own materials are fitted, with the stash's textures ({outcome.Problem ?? $"{outcome.Fit?.Materials.Count} materials"})");
+        Require(outcome.Fit!.Materials[0].Textures.Any(t => t.Type == TextureType.Diffuse && t.SourcePath == diffuse)
+                && outcome.Fit.Materials.Select(m => m.Name).SequenceEqual(new[] { "mt_c0201e6000_top_a", "mt_c0201e6000_top_b" }),
+            "named for the naming race, the stash's diffuse in the first");
+        Require(MaterialFitJobs.Problem(outcome, model, ModelStamp.Of(model)) == null && MaterialFitJobs.Message(outcome.Fit, model) == "Set up 2 materials from Top.mdl, 1 with diffuse.",
+            "it goes in, and says so");
+
+        using (new FileStream(model, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+        {
+            var held = Run(model);
+            Require(held is { Fit: null, Problem: "Top.mdl is still being written. Try again in a moment." },
+                $"a model another program is writing isn't fitted, and says so in short ({held.Problem})");
+        }
+        var broken = Path.Combine(outfit, "Blender", "Broken.mdl");
+        File.WriteAllBytes(broken, new byte[] { 1, 2, 3 });
+        Require(Run(broken).Problem?.StartsWith("Could not read Broken.mdl (", StringComparison.Ordinal) == true, "nor one that isn't a model");
+        var gone = Run(Path.Combine(outfit, "Gone.mdl")).Problem;
+        Require(gone == "Could not read Gone.mdl (file not found).", $"nor one that isn't there ({gone})");
+
+        // Dropped or picked, only a stash model is fitted: one from anywhere else keeps its own material paths.
+        var loose = Path.Combine(root, "fit-loose", "Top.mdl");
+        Directory.CreateDirectory(Path.GetDirectoryName(loose)!);
+        File.WriteAllBytes(loose, ModCheckFixtures.Mdl(["/mt_c0201e6111_top_a.mtrl"]));
+        var dropped = MaterialFitJobs.Run(request with { ModelPath = loose, OnlyFromStash = true }, new[] { stash }, Array.Empty<string>(), CancellationToken.None);
+        Require(dropped is { NotInStash: true, Fit: null, Problem: null },
+            $"a model dropped from outside the stash is left alone, quietly ({dropped.Problem ?? $"{dropped.Fit?.Materials.Count} materials"})");
+        var fitAnyway = MaterialFitJobs.Run(request with { ModelPath = loose }, new[] { stash }, Array.Empty<string>(), CancellationToken.None);
+        Require(fitAnyway is { NotInStash: false, Problem: null, Fit.Materials.Count: 1 }, "Fit to model fits it all the same");
+        var fromStash = MaterialFitJobs.Run(request with { OnlyFromStash = true }, new[] { stash }, Array.Empty<string>(), CancellationToken.None);
+        Require(fromStash is { NotInStash: false, Fit.Materials.Count: 2 }, "a stash model dropped is fitted");
+        var brokenLoose = Path.Combine(root, "fit-loose", "Broken.mdl");
+        File.WriteAllBytes(brokenLoose, new byte[] { 1, 2, 3 });
+        Require(MaterialFitJobs.Run(request with { ModelPath = brokenLoose, OnlyFromStash = true }, new[] { stash }, Array.Empty<string>(), CancellationToken.None)
+                is { NotInStash: true, Problem: null },
+            "nor does a broken model from outside the stash warn when dropped");
+    }
+
+    private static FinishedFit? NextFit(MaterialFitJobs jobs)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (clock.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            if (jobs.TakeFinished(out var done))
+                return done;
+            Thread.Sleep(5);
+        }
+        return null;
+    }
+
+    /// <summary>One fit per item: asked again, the earlier one is cancelled and never comes back. Another item's runs beside it.</summary>
+    private static void LaterFitReplacesTheEarlierOne()
+    {
+        var jobs = new MaterialFitJobs();
+        Require(!jobs.TakeFinished(out _), "nothing comes back while no fit runs");
+        var top = new PortItem(FitGear());
+        var hair = new PortItem(new FeatureSubject(SubjectKind.Hair, RaceInfo.BaseFor(PlayerGender.Female), 5));
+        var found = new MaterialFitOutcome(Fitted(1, 0), null, null);
+        using var earlierStarted = new ManualResetEventSlim();
+        using var earlierStopped = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+
+        jobs.Start(FitRequest(top, "first.mdl"), cancel =>
+        {
+            earlierStarted.Set();
+            while (!cancel.IsCancellationRequested)
+                Thread.Sleep(5);
+            earlierStopped.Set();
+            cancel.ThrowIfCancellationRequested();
+            return found;
+        });
+        // Once it runs: one cancelled before it started would just never run.
+        Require(earlierStarted.Wait(TimeSpan.FromSeconds(10)), "a fit runs off the render thread");
+        var second = FitRequest(top, "second.mdl");
+        jobs.Start(second, _ =>
+        {
+            release.Wait(TimeSpan.FromSeconds(10));
+            return found;
+        });
+        var other = FitRequest(hair, "hair.mdl");
+        jobs.Start(other, _ => found);
+
+        Require(NextFit(jobs) is { Outcome: not null } first && first.Request == other, "another item's fit runs beside it and comes back");
+        Require(earlierStopped.Wait(TimeSpan.FromSeconds(10)), "asking again for the same item cancels the earlier fit");
+        release.Set();
+        Require(NextFit(jobs) is { } later && later.Request == second && later.Outcome == found, "the later one comes back");
+        Require(!jobs.TakeFinished(out _), "the earlier one never does");
+
+        var failing = FitRequest(top, "broken.mdl");
+        jobs.Start(failing, _ => throw new InvalidDataException("bad"));
+        Require(NextFit(jobs) is { Outcome: null, Error: InvalidDataException } failed && failed.Request == failing, "a fit that throws comes back with what it threw");
+    }
+
+    /// <summary>The fit looks in the folders the stash lists: the importer's output folder and the cache's package-imports.</summary>
+    private static void FitLooksInTheStashFolders()
+    {
+        const string cache = @"C:\Cache\InstantEdit", temp = @"C:\Temp\";
+        const string imports = @"C:\Cache\InstantEdit\package-imports";
+        Require(PackageImportPaths.StashRoots("", cache, temp).SequenceEqual(new[] { imports }), "without a picked output folder, the cache's package-imports");
+        Require(PackageImportPaths.StashRoots(@"D:\Extracted", cache, temp).SequenceEqual(new[] { @"D:\Extracted", imports }),
+            "a picked output folder, and package-imports, where Blender saves");
+        Require(PackageImportPaths.StashRoots(imports + @"\", cache, temp).Count == 1, "package-imports picked by hand is listed once");
+        Require(PackageImportPaths.StashRoots("", null, temp).SequenceEqual(new[] { @"C:\Temp\InstantEdit\package-imports" }),
+            "without a cache, the folder the import window falls back to");
     }
 
     private static ModImcOverride Variant(EquipSlot slot, byte variant, byte vfx = 0)
