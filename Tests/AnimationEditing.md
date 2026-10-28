@@ -870,6 +870,7 @@ of the model it takes, so the other mod can be off.
 - [ ] Save in place, then Undo: the mod's meta.json is as before and the private files are gone.
 - [ ] Save into a new mod: its DefaultData maps the private files and 256 material folders.
 - [ ] A prop on a GPose actor that hides weapons: does hiding hide summons, and what shows them.
+
 ## Expressions (pending)
 
 Expression emotes (/smile, /taunt...) play a face on the face skeleton, timed by a TMB of

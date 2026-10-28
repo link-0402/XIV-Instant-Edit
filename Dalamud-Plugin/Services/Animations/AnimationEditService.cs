@@ -137,6 +137,10 @@ internal sealed partial class AnimationEditService : IDisposable
     internal Task<IReadOnlyDictionary<string, IReadOnlyList<string>>?> ModSettingsAsync(Guid collection, string modDirectory) =>
         animationMods.ModSettingsAsync(collection, modDirectory);
 
+    /// <summary>What Penumbra resolves <paramref name="gamePath"/> to in <paramref name="collection"/>: a file, or the game path itself when no mod serves it.</summary>
+    internal Task<string> ResolvePathAsync(Guid collection, string gamePath) =>
+        animationMods.ResolveAnimationPathAsync(collection, gamePath);
+
     /// <summary>
     /// The installed expression libraries for <paramref name="race"/>'s <paramref name="face"/> that
     /// <paramref name="collection"/> plays: each game path is resolved through Penumbra. Nothing in game changes.

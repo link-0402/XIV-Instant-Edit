@@ -344,14 +344,6 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             shown = sounds.Document;
             used.AddRange(sounds.Copies);
             added = TimelineWindowViews.AddedFiles(shown, used);
-            // Props from other mods play from their private copy; the preview's mod has no alias to follow, so each alias holds its target's bytes.
-            var props = TimelineWindowViews.PropAdded(shown, path => session.Data.GetFile(path)?.Data);
-            if (props.Error != null)
-            {
-                previewError = props.Error;
-                return;
-            }
-            added = added.SetItems(PropCopies.Flatten(new PropCopy(props.Files, props.Aliases, [])));
             // Placed props show in place: their attach overrides for the actor's race ride in the preview's mod. A prop
             // whose attach point is still unknown is left out; this preview learns it (see LearnProps below).
             var placed = document.Events.Any(e => e.Place != null) && session.Playback.ActorRace(index) is { } race
@@ -377,13 +369,20 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         previewRest = rest;
         lastSeekFrame = -1;
         var service = session.Animations!;
+        Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
         service.PreviewTimeline(target, shown, async (built, token) =>
         {
             // A clip moving bones the actor lacks (an edit made for a bigger skeleton) is never handed to the game.
             if (!target.Standalone &&
                 await session.Framework.RunOnFrameworkThread(() => service.PlayProblem(index, clip.Partial, built.Bytes, built.BindingFingerprint)) is { } problem)
                 throw new InvalidOperationException(problem);
-            var baseFiles = added.SetItem(built.GamePath, built.Bytes);
+            // Props from other mods play from their private copy, its files (textures of several MB) read here off the
+            // framework thread; a file gone fails the preview with the copy's text. The preview's mod has no alias to
+            // follow, so each alias holds its target's bytes.
+            var props = await Task.Run(() => TimelineWindowViews.PropAdded(shown, game), token);
+            if (props.Error != null)
+                throw new InvalidDataException(props.Error);
+            var baseFiles = added.SetItems(PropCopies.Flatten(new PropCopy(props.Files, props.Aliases, []))).SetItem(built.GamePath, built.Bytes);
             await session.Preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundRedirects), manipulations, token);
             if (generation != previewGeneration)
             {

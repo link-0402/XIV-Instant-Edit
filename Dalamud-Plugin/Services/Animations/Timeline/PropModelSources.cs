@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Text;
 using System.Text.RegularExpressions;
 using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio.Services;
 
 namespace InstantEdit.Services.Animations.Timeline;
@@ -15,6 +17,7 @@ internal static partial class PropModelSources
     private const ushort FallbackSet = 9001;
     private const ushort FirstBody = 9000;
     private const ushort LastBody = 9999;
+    private const int BodyCount = LastBody - FirstBody + 1;
 
     private static readonly string[] CandidateRoots = ["chara/weapon/", "chara/monster/", "chara/demihuman/"];
 
@@ -55,12 +58,132 @@ internal static partial class PropModelSources
 
     /// <summary>The lowest body 9000..9999 of <paramref name="set"/> the game doesn't ship and nothing has taken.</summary>
     internal static ushort? AllocateBody(ushort set, Func<string, bool> gameExists, IReadOnlySet<(ushort Set, ushort Body)> taken)
+        => AllocateBody(set, FirstBody, gameExists, taken, _ => false);
+
+    /// <summary>
+    /// The first body of <paramref name="set"/> from <paramref name="start"/> upward, 9999 wrapping to 9000, that isn't
+    /// in <paramref name="taken"/>, the game doesn't ship and isn't <paramref name="busyOutside"/> the timeline (asked last);
+    /// null when none of the 1000 is free.
+    /// </summary>
+    internal static ushort? AllocateBody(ushort set, ushort start, Func<string, bool> gameExists, IReadOnlySet<(ushort Set, ushort Body)> taken,
+        Func<ushort, bool> busyOutside)
     {
-        for (var body = FirstBody; body <= LastBody; ++body)
-            if (!taken.Contains((set, body)) && !gameExists($"chara/weapon/w{set:D4}/obj/body/b{body:D4}/b{body:D4}.imc"))
+        foreach (var body in Walk(start))
+            if (!taken.Contains((set, body)) && !gameExists(ImcPath(set, body)) && !busyOutside(body))
                 return body;
         return null;
     }
+
+    /// <summary>The 1000 private bodies from <paramref name="start"/> upward, 9999 wrapping to 9000.</summary>
+    private static IEnumerable<ushort> Walk(ushort start)
+    {
+        var first = start is >= FirstBody and <= LastBody ? start - FirstBody : 0;
+        for (var i = 0; i < BodyCount; ++i)
+            yield return (ushort)(FirstBody + (first + i) % BodyCount);
+    }
+
+    private static string ImcPath(ushort set, ushort body) => $"chara/weapon/w{set:D4}/obj/body/b{body:D4}/b{body:D4}.imc";
+
+    /// <summary>The private model's game path of weapon <paramref name="set"/> body <paramref name="body"/>.</summary>
+    internal static string ModelPath(ushort set, ushort body) => $"chara/weapon/w{set:D4}/obj/body/b{body:D4}/model/w{set:D4}b{body:D4}.mdl";
+
+    /// <summary>
+    /// The body the search for a free one starts at: 9000 plus the 32-bit FNV-1a hash (of the UTF-8 text) of the mod's
+    /// directory, the source model and the snapshot's sources in the order of their private paths, joined by <c>|</c>,
+    /// modulo 1000. The same pick always starts at the same body, whichever body it was resolved under; another mod's or
+    /// option's rarely does, so two mods saved apart seldom pick the same body.
+    /// </summary>
+    internal static ushort StartBody(TimelinePropSource source)
+    {
+        var text = string.Join("|", [source.ModDirectory, source.SourceModel,
+            .. source.Files.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Value)]);
+        var hash = 2166136261u;
+        foreach (var b in Encoding.UTF8.GetBytes(text))
+        {
+            hash ^= b;
+            hash *= 16777619u;
+        }
+        return (ushort)(FirstBody + hash % BodyCount);
+    }
+
+    /// <summary>
+    /// The private bodies (b9000..b9999) <paramref name="gamePaths"/> map something under: what a mod already uses for
+    /// its props, in any option.
+    /// </summary>
+    internal static IReadOnlySet<(ushort Set, ushort Body)> MappedBodies(IEnumerable<string> gamePaths)
+    {
+        var bodies = new HashSet<(ushort, ushort)>();
+        foreach (var path in gamePaths)
+            if (PrivateBodyPath().Match(path.Replace('\\', '/')) is { Success: true } match)
+                bodies.Add((ushort.Parse(match.Groups[1].Value), ushort.Parse(match.Groups[2].Value)));
+        return bodies;
+    }
+
+    /// <summary>
+    /// The private bodies the mod at <paramref name="modRoot"/> maps in its meta.json, every option and container
+    /// (<see cref="MappedBodies"/>); none when its meta.json can't be read (an in-place save then fails on its own).
+    /// </summary>
+    internal static IReadOnlySet<(ushort Set, ushort Body)> ModBodies(string modRoot)
+    {
+        try { return MappedBodies(ModFileMap.Read(File.ReadAllText(Path.Combine(modRoot, "meta.json"))).Mappings.Select(m => m.GamePath)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException) { return new HashSet<(ushort, ushort)>(); }
+    }
+
+    /// <summary>
+    /// What the search for a prop's body (<see cref="FindBody"/>) found outside the timeline: where it started
+    /// (<see cref="StartBody"/>), the body it found free (null when none is), and the bodies it found busy, mapped by the
+    /// animation's own mod or served by a mod in its collection (Penumbra gives the model's path another file).
+    /// </summary>
+    internal sealed record PropBodies(ushort Start, ushort? Free, IReadOnlySet<ushort> Busy)
+    {
+        /// <summary>
+        /// Whether <paramref name="body"/> counts as busy outside the timeline: every body but the free one, so a body the
+        /// search didn't ask about is never given out.
+        /// </summary>
+        public bool Outside(ushort body) => body != Free;
+    }
+
+    /// <summary>
+    /// Walks the bodies of <paramref name="source"/>'s set from <see cref="StartBody"/> for a free one: not
+    /// <paramref name="taken"/> in the timeline, not shipped by the game, not <paramref name="mapped"/> by the animation's
+    /// mod, and whose model path <paramref name="resolve"/> (Penumbra in the animation's collection) gives back as itself.
+    /// Only bodies past the cheap checks are resolved.
+    /// </summary>
+    internal static async Task<PropBodies> FindBody(TimelinePropSource source, IReadOnlySet<(ushort Set, ushort Body)> taken,
+        IReadOnlySet<(ushort Set, ushort Body)> mapped, Func<string, bool> gameExists, Func<string, Task<string>> resolve)
+    {
+        var start = StartBody(source);
+        var busy = new HashSet<ushort>();
+        foreach (var body in Walk(start))
+        {
+            if (taken.Contains((source.Set, body)) || gameExists(ImcPath(source.Set, body)))
+                continue;
+            if (mapped.Contains((source.Set, body)))
+            {
+                busy.Add(body);
+                continue;
+            }
+            var model = ModelPath(source.Set, body);
+            var resolved = await resolve(model).ConfigureAwait(false);
+            if (!string.Equals(resolved.Replace('\\', '/'), model, StringComparison.OrdinalIgnoreCase))
+            {
+                busy.Add(body);
+                continue;
+            }
+            return new PropBodies(start, body, busy);
+        }
+        return new PropBodies(start, null, busy);
+    }
+
+    /// <summary>The status text for a model whose material name a save would refuse (<see cref="MaterialUnsavable"/>).</summary>
+    internal const string UnsavableMaterial = "This model's material name can't be saved.";
+
+    /// <summary>
+    /// Whether a material of <paramref name="source"/> has a private path a save refuses: the name comes from the model
+    /// and is used as written, so a name with a space or another character the game paths don't take can't be copied.
+    /// </summary>
+    internal static bool MaterialUnsavable(TimelinePropSource source)
+        => source.Files.Keys.Any(path => path.Contains("/material/", StringComparison.Ordinal) && !AnimationDependencies.SafeGamePath(path));
 
     /// <summary>
     /// The private bodies <paramref name="doc"/> uses: each prop source's set and body, the model and body of each summon
@@ -90,8 +213,8 @@ internal static partial class PropModelSources
     /// <summary>
     /// The body a pick of <paramref name="sourceModel"/> of mod <paramref name="modDirectory"/> under <paramref name="set"/>
     /// is first resolved with: the body of a prop in <paramref name="doc"/> from the same mod and model, else the lowest
-    /// free one (<see cref="AllocateBody"/> past <see cref="Taken"/>); null when none is free. The body it ends on is
-    /// chosen from the resolved snapshot (<see cref="BodyFor(TimelineDocument, TimelinePropSource, Func{string, bool})"/>).
+    /// free one in the timeline (<c>AllocateBody</c> past <see cref="Taken"/>); null when none is free. The snapshot
+    /// doesn't depend on it, and the body it ends on is chosen from the resolved snapshot (<see cref="BodyFor(TimelineDocument, TimelinePropSource, Func{string, bool}, ushort, Func{ushort, bool})"/>).
     /// </summary>
     internal static ushort? BodyFor(TimelineDocument doc, string modDirectory, string sourceModel, ushort set, Func<string, bool> gameExists)
     {
@@ -107,17 +230,19 @@ internal static partial class PropModelSources
     /// <summary>
     /// The private body <paramref name="resolved"/> (a snapshot made under any body) goes on: the body of a prop in
     /// <paramref name="doc"/> from the same mod and model whose snapshot is the same (<see cref="SameFiles"/>), so both
-    /// share one copy, else the lowest free one; null when none is free. A pick made after the mod's options changed
-    /// gets its own body, so the earlier prop keeps its look.
+    /// share one copy, else the first free one from <paramref name="start"/> (<c>AllocateBody</c> past <see cref="Taken"/>
+    /// and <paramref name="busyOutside"/>, what the pick's search found outside the timeline, see <see cref="FindBody"/>);
+    /// null when none is free. A pick made after the mod's options changed gets its own body, so the earlier prop keeps its look.
     /// </summary>
-    internal static ushort? BodyFor(TimelineDocument doc, TimelinePropSource resolved, Func<string, bool> gameExists)
+    internal static ushort? BodyFor(TimelineDocument doc, TimelinePropSource resolved, Func<string, bool> gameExists, ushort start,
+        Func<ushort, bool> busyOutside)
     {
         if (!doc.Events.IsDefault)
             foreach (var ev in doc.Events)
                 if (ev.Source is { } source && source.Set == resolved.Set && source.SourceModel == resolved.SourceModel &&
                     string.Equals(source.ModDirectory, resolved.ModDirectory, StringComparison.OrdinalIgnoreCase) && SameFiles(source, resolved))
                     return source.Body;
-        return AllocateBody(resolved.Set, gameExists, Taken(doc));
+        return AllocateBody(resolved.Set, start, gameExists, Taken(doc), busyOutside);
     }
 
     /// <summary> Whether two snapshots copy the same files, whichever private body each was made under. </summary>
@@ -207,13 +332,15 @@ internal static partial class PropModelSources
             return new TimelinePropSource(modDirectory, modName, sourceModel, set, body, files.ToImmutable(), textures.ToImmutable());
 
         foreach (var name in VanillaModelReader.Read(mdl).MaterialNames
-                     .Select(name => name.Replace('\\', '/').TrimStart('/').ToLowerInvariant())
-                     .Where(name => name.Length > 0 && !name.Contains('/'))
+                     .Select(MaterialFileName)
+                     .Where(name => name.Length > 0)
                      .Distinct(StringComparer.Ordinal))
         {
             var material = MaterialSource(folder, name, effective);
-            files[$"{target}material/v0001/{name}"] = material;
-            if (Bytes(material, game) is not { } mtrl)
+            var privatePath = $"{target}material/v0001/{name}";
+            files[privatePath] = material;
+            // A name a save refuses is refused at the pick (MaterialUnsavable); its textures aren't looked for.
+            if (!AnimationDependencies.SafeGamePath(privatePath) || Bytes(material, game) is not { } mtrl)
                 continue;
             foreach (var texture in MaterialPreviewBundleBuilder.ReadMaterialTextures(mtrl))
             {
@@ -236,15 +363,28 @@ internal static partial class PropModelSources
     }
 
     /// <summary>
+    /// The file name a material name of a model stands for, lowercased: the part after its last <c>/</c>, as the game
+    /// cuts an absolute name to its file name.
+    /// </summary>
+    internal static string MaterialFileName(string name)
+    {
+        var path = name.Replace('\\', '/').ToLowerInvariant();
+        return path[(path.LastIndexOf('/') + 1)..];
+    }
+
+    /// <summary>
     /// The private path of texture <paramref name="stored"/> in body folder <paramref name="target"/>:
-    /// <c>texture/&lt;file name&gt;</c>, with <c>_2</c>, <c>_3</c>, ... before the extension while another source
-    /// texture already holds the name (<paramref name="owners"/>: private path to the source it was given to).
+    /// <c>texture/&lt;file name&gt;</c>, each character of its stem other than a letter, digit, <c>_</c>, <c>.</c> or
+    /// <c>-</c> made <c>_</c> so a save takes it, with <c>_2</c>, <c>_3</c>, ... before the extension while another
+    /// source texture already holds the name (<paramref name="owners"/>: private path to the source it was given to).
     /// </summary>
     internal static string PrivateTexturePath(string target, string stored, IReadOnlyDictionary<string, string> owners)
     {
-        var name = stored[(stored.LastIndexOf('/') + 1)..];
-        var dot = name.LastIndexOf('.');
-        var (stem, extension) = dot < 0 ? (name, "") : (name[..dot], name[dot..]);
+        var file = stored[(stored.LastIndexOf('/') + 1)..];
+        var dot = file.LastIndexOf('.');
+        var (stem, extension) = dot < 0 ? (file, "") : (file[..dot], file[dot..]);
+        stem = string.Concat(stem.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.' or '-' ? c : '_'));
+        var name = stem + extension;
         var path = $"{target}texture/{name}";
         for (var n = 2; owners.TryGetValue(path, out var owner) && owner != stored; ++n)
             path = $"{target}texture/{stem}_{n}{extension}";
@@ -299,4 +439,7 @@ internal static partial class PropModelSources
 
     [GeneratedRegex(@"^material/v\d{4}/$")]
     private static partial Regex MaterialVariant();
+
+    [GeneratedRegex(@"^chara/weapon/w(\d{4})/obj/body/b(9\d{3})/", RegexOptions.IgnoreCase)]
+    private static partial Regex PrivateBodyPath();
 }

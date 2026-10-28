@@ -45,6 +45,9 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     // current settings, read on a task; the pick, resolved into a snapshot on a task and placed when it is polled.
     private sealed record ModModels(string Directory, ImmutableArray<PropModelSources.PropCandidate> Models);
     private sealed record PropPick(string Label, int Frame, int Summon, string? Clip, int Generation);
+    // A resolved pick: its snapshot and what the search for a free body found outside the timeline (null when its
+    // material name is refused, so nothing was searched).
+    private sealed record PropPicked(TimelinePropSource Source, PropModelSources.PropBodies? Bodies);
     private bool pickerFromMod;
     private int pickerSummon;
     private (string Directory, string Name, string Root)? pickerMod;
@@ -57,7 +60,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     private Task<ModModels>? modModelsTask;
     private string? modModelsFor;
     private string? modModelsError;
-    private Task<TimelinePropSource>? propTask;
+    private Task<PropPicked>? propTask;
     private PropPick? propPick;
     private int pickerShownFrame = -1;
     private string gamePathText = string.Empty;
@@ -575,8 +578,10 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
 
     /// <summary>
     /// Picks <paramref name="model"/> of <paramref name="mod"/>: its private set and a body to resolve it under now, so a
-    /// full timeline says so at once, then the mod's current files and the snapshot on a task (<see cref="PollPropPick"/>
-    /// chooses its body and places it).
+    /// full timeline says so at once, then on a task the mod's current files, the snapshot and the search for a body
+    /// free outside the timeline too (<see cref="PropModelSources.FindBody"/>: the bodies the animation's own mod maps
+    /// when it can be saved in place, and Penumbra's answer for each model path in the clip's collection);
+    /// <see cref="PollPropPick"/> chooses its body and places it.
     /// </summary>
     private void StartPropPick(TimelineEditor current, (string Directory, string Name, string Root) mod, PropModelSources.PropCandidate model)
     {
@@ -595,21 +600,31 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             return;
         }
         var collection = source.Capture.CollectionId;
+        var taken = PropModelSources.Taken(current.Document);
+        // The animation's own mod, when a save can write into it: the bodies it maps are taken even with their option off.
+        var inPlace = AnimationResources.CanReplace(source.Resource) ? source.Resource.ModRoot : null;
         propPick = new PropPick(model.Label, pickerFrame, pickerSummon, TimelineSession.ClipKey(source), loadGeneration);
         Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
         propTask = Task.Run(async () =>
         {
             var settings = await service.ModSettingsAsync(collection, mod.Directory).ConfigureAwait(false);
             // The settings may come back on the framework thread: the mod's files are read off it.
-            return await Task.Run(() => PropModelSources.Resolve(mod.Directory, mod.Name, model.GamePath, set, body,
-                PropModelSources.ModFiles(mod.Root, settings), game, session.GameFileExists)).ConfigureAwait(false);
+            var (resolved, mapped) = await Task.Run(() => (
+                PropModelSources.Resolve(mod.Directory, mod.Name, model.GamePath, set, body, PropModelSources.ModFiles(mod.Root, settings), game, session.GameFileExists),
+                inPlace is null ? new HashSet<(ushort, ushort)>() : PropModelSources.ModBodies(inPlace))).ConfigureAwait(false);
+            if (PropModelSources.MaterialUnsavable(resolved))
+                return new PropPicked(resolved, null);
+            // Each model path is resolved on the framework thread (the service hops there), one body at a time.
+            var bodies = await PropModelSources.FindBody(resolved, taken, mapped, session.GameFileExists,
+                path => service.ResolvePathAsync(collection, path)).ConfigureAwait(false);
+            return new PropPicked(resolved, bodies);
         });
     }
 
     /// <summary>
     /// Places a resolved prop from a mod once its task is done, into the clip it was picked for, on the body
-    /// <see cref="PropModelSources.BodyFor(TimelineDocument, TimelinePropSource, Func{string, bool})"/> gives it then.
-    /// Closes the picker when it is still open.
+    /// <see cref="PropModelSources.BodyFor(TimelineDocument, TimelinePropSource, Func{string, bool}, ushort, Func{ushort, bool})"/>
+    /// gives it then from the pick's search. Closes the picker when it is still open.
     /// </summary>
     private void PollPropPick()
     {
@@ -633,17 +648,23 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             Fail($"{pick.Label} could not be read. {TimelineSession.ErrorText(task.Exception)}");
             return;
         }
-        var source = task.Result;
+        var (source, bodies) = task.Result;
         if (session.Editor is not { } editor || session.Source is not { } loaded || TimelineSession.ClipKey(loaded) != pick.Clip || pick.Generation != loadGeneration)
         {
             Fail("The timeline changed. Pick the prop again.");
             return;
         }
-        // The body is chosen now, from the snapshot and the timeline as they are: the same files share a prop's body,
-        // other files (the mod's options changed) get their own.
-        if (PropModelSources.BodyFor(editor.Document, source, session.GameFileExists) is not { } body)
+        if (bodies is null)
         {
-            Fail("No free model number left for this prop.");
+            Fail(PropModelSources.UnsavableMaterial);
+            return;
+        }
+        // The body is chosen now, from the snapshot and the timeline as they are: the same files share a prop's body,
+        // other files (the mod's options changed) get their own, the one the search found free outside the timeline.
+        if (PropModelSources.BodyFor(editor.Document, source, session.GameFileExists, bodies.Start, bodies.Outside) is not { } body)
+        {
+            // None free, or the timeline took the free one meanwhile (the search didn't ask about the others).
+            Fail(bodies.Free is null ? "No free model number left for this prop." : "The timeline changed. Pick the prop again.");
             return;
         }
         source = PropModelSources.Rebodied(source, body);

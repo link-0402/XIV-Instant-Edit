@@ -23,6 +23,9 @@ internal static class PropModelSourcesFixture
     {
         Part(check, "target set", () => TargetSets(check));
         Part(check, "body allocation", () => Bodies(check));
+        Part(check, "body search", () => BodySearch(check));
+        Part(check, "in-place mod bodies", () => InPlaceBodies(check));
+        Part(check, "savable names", () => SavableNames(check));
         Part(check, "candidates", () => CandidateModels(check));
         Part(check, "qualification", () => Qualification(check));
         Part(check, "texture rules", () => TextureRules(check));
@@ -90,6 +93,143 @@ internal static class PropModelSourcesFixture
         for (var body = 9000; body <= 9999; ++body)
             all.Add((9001, (ushort)body));
         check(PropModelSources.AllocateBody(9001, _ => false, all) is null, "no private body when every one is taken");
+
+        var none = new HashSet<(ushort, ushort)>();
+        check(PropModelSources.AllocateBody(9001, 9100, _ => false, none, body => body == 9100) == 9101,
+            "a body busy outside the timeline is skipped");
+        check(PropModelSources.AllocateBody(9001, 9998, p => p.EndsWith("b9999.imc"), new HashSet<(ushort, ushort)> { (9001, 9998) }, _ => false) == 9000,
+            "the search walks upward from its start and wraps from 9999 to 9000");
+        check(PropModelSources.AllocateBody(9001, 9500, _ => false, none, body => body != 9499) == 9499,
+            "the search reaches the body just below its start last");
+        check(PropModelSources.AllocateBody(9001, 9500, _ => false, none, _ => true) is null,
+            "no private body when every one is busy outside the timeline");
+    }
+
+    /// <summary>The start of the search for a free body, and the search itself over a fake Penumbra.</summary>
+    private static void BodySearch(Action<bool, string> check)
+    {
+        var phone = SourceAt("phones", MonsterModel, 9001, 9000);
+        var start = PropModelSources.StartBody(phone);
+        check(start is >= 9000 and <= 9999 && PropModelSources.StartBody(phone with { }) == start &&
+              PropModelSources.StartBody(PropModelSources.Rebodied(phone, 9123)) == start,
+            $"the search starts at the same body for the same pick, whichever body it was resolved under (start {start})");
+        var otherMod = PropModelSources.StartBody(SourceAt("other phones", MonsterModel, 9001, 9000));
+        var otherFiles = PropModelSources.StartBody(phone with { Files = phone.Files.SetItem(PropModelSources.ModelPath(9001, 9000), @"file:C:\m\red.mdl") });
+        check(otherMod != start && otherFiles != start,
+            $"another mod or other source files start elsewhere ({start}, {otherMod}, {otherFiles})");
+
+        // The walk from the start: b0 is served by a mod, b1 is in the timeline, the game ships b2, the animation's mod maps b3.
+        var walk = Enumerable.Range(0, 6).Select(i => (ushort)(9000 + (start - 9000 + i) % 1000)).ToArray();
+        var asked = new List<string>();
+        Task<string> Penumbra(string path)
+        {
+            asked.Add(path);
+            return Task.FromResult(path == PropModelSources.ModelPath(9001, walk[0]) ? @"G:\Penumbra\swipe left\phone.mdl" : path.ToUpperInvariant().Replace('/', '\\'));
+        }
+        var found = PropModelSources.FindBody(phone, new HashSet<(ushort, ushort)> { (9001, walk[1]) }, new HashSet<(ushort, ushort)> { (9001, walk[3]) },
+            path => path == $"chara/weapon/w9001/obj/body/b{walk[2]:D4}/b{walk[2]:D4}.imc", Penumbra).GetAwaiter().GetResult();
+        check(found.Start == start && found.Free == walk[4] && found.Busy.SetEquals([walk[0], walk[3]]),
+            $"the search skips a body a mod serves, one the timeline has, one the game ships and one the animation's mod maps (free {found.Free}, busy {string.Join(", ", found.Busy)})");
+        check(asked.SequenceEqual([PropModelSources.ModelPath(9001, walk[0]), PropModelSources.ModelPath(9001, walk[4])]),
+            $"only bodies past the timeline, game and mod checks are resolved: {string.Join(", ", asked)}");
+        check(!found.Outside(walk[4]) && found.Outside(walk[0]) && found.Outside(walk[5]),
+            "outside the timeline only the free body counts as free, so a body never asked about isn't given out");
+
+        var empty = new TimelineDocument(60, 60, null, [], 1);
+        check(PropModelSources.BodyFor(empty, phone, _ => false, found.Start, found.Outside) == walk[4],
+            "the placed prop gets the body the search found");
+        var later = new TimelineDocument(60, 60, null, [Prop("t1", SourceAt("x", MonsterModel.Replace("b0001", "b0009"), 9001, walk[4]))], 2);
+        check(PropModelSources.BodyFor(later, phone, _ => false, found.Start, found.Outside) is null,
+            "a body the timeline took after the search isn't searched past");
+        var same = new TimelineDocument(60, 60, null, [Prop("t1", PropModelSources.Rebodied(phone, 9777))], 2);
+        check(PropModelSources.BodyFor(same, phone, _ => false, found.Start, found.Outside) == 9777,
+            "a prop of the same mod, model and files in the timeline still shares its body");
+
+        var full = PropModelSources.FindBody(phone, new HashSet<(ushort, ushort)>(), new HashSet<(ushort, ushort)>(), _ => false,
+            path => Task.FromResult("game:" + path)).GetAwaiter().GetResult();
+        check(full.Free is null && full.Busy.Count == 1000 && PropModelSources.BodyFor(empty, phone, _ => false, full.Start, full.Outside) is null,
+            "no body when Penumbra serves every one");
+    }
+
+    /// <summary>The private bodies the animation's own mod maps in any option, from its meta.json.</summary>
+    private static void InPlaceBodies(Action<bool, string> check)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ie-prop-inplace-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            check(PropModelSources.ModBodies(dir).Count == 0, "a mod without a readable meta.json maps no private body");
+            var phone = SourceAt("phones", MonsterModel, 9001, 9000);
+            var start = PropModelSources.StartBody(phone);
+            static System.Text.Json.Nodes.JsonObject Files(params string[] gamePaths)
+            {
+                var result = new System.Text.Json.Nodes.JsonObject();
+                foreach (var gamePath in gamePaths)
+                    result[gamePath] = "x.mdl";
+                return result;
+            }
+            var meta = new System.Text.Json.Nodes.JsonObject
+            {
+                ["FileVersion"] = 4,
+                ["Name"] = "swipe left",
+                ["DefaultData"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["Files"] = Files("chara/weapon/w9001/obj/body/b9000/model/w9001b9000.mdl", "chara/weapon/w9001/obj/body/b0200/model/w9001b0200.mdl"),
+                },
+                ["Groups"] = new System.Text.Json.Nodes.JsonArray(
+                    new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Name"] = "Emote", ["Type"] = "Single", ["Priority"] = 0,
+                        ["Options"] = new System.Text.Json.Nodes.JsonArray(
+                            new System.Text.Json.Nodes.JsonObject { ["Name"] = "Off" },
+                            new System.Text.Json.Nodes.JsonObject
+                            {
+                                ["Name"] = "On",
+                                ["Files"] = Files($"Chara/Weapon/W9001/obj/body/b{start:D4}/material/v0001/mt_phone_a.mtrl",
+                                    "chara/weapon/w0528/obj/body/b9001/texture/x.tex"),
+                            }),
+                    }),
+            };
+            File.WriteAllText(Path.Combine(dir, "meta.json"), meta.ToJsonString());
+            var bodies = PropModelSources.ModBodies(dir);
+            check(bodies.SetEquals([(9001, 9000), (9001, start), (528, 9001)]),
+                $"the mod's private bodies come from every option, in any case, and only b9000..b9999: {string.Join(", ", bodies)}");
+            var found = PropModelSources.FindBody(phone, new HashSet<(ushort, ushort)>(), bodies, _ => false, Task.FromResult).GetAwaiter().GetResult();
+            check(found.Free != start && found.Free != 9000 && found.Busy.Contains(start),
+                $"a body the animation's mod maps is busy even with its option off (free {found.Free})");
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, true);
+        }
+    }
+
+    /// <summary>Material and texture names a save takes: an absolute material name, unsafe texture names, a material name refused.</summary>
+    private static void SavableNames(Action<bool, string> check)
+    {
+        check(PropModelSources.MaterialFileName("/chara/weapon/w9001/obj/body/b0200/material/v0001/MT_W9001B0200_A.mtrl") == "mt_w9001b0200_a.mtrl" &&
+              PropModelSources.MaterialFileName(@"\chara\x\mt_b.mtrl") == "mt_b.mtrl" &&
+              PropModelSources.MaterialFileName("/mt_c.mtrl") == "mt_c.mtrl" && PropModelSources.MaterialFileName("mt_d.mtrl") == "mt_d.mtrl" &&
+              PropModelSources.MaterialFileName("material/") == "",
+            "a material name with folders stands for its file name");
+        const string root = "chara/weapon/w9001/obj/body/b9000/";
+        var odd = PropModelSources.PrivateTexturePath(root, "chara/a/texture/my tex (1).tex", ImmutableDictionary<string, string>.Empty);
+        check(odd == root + "texture/my_tex__1_.tex" && InstantEdit.Services.Animations.AnimationDependencies.SafeGamePath(odd),
+            $"a texture name with a space or brackets gets _ for each (got {odd})");
+        var owners = new Dictionary<string, string> { [odd] = "chara/a/texture/my tex (1).tex" };
+        check(PropModelSources.PrivateTexturePath(root, "chara/b/texture/my+tex_(1).tex", owners) == root + "texture/my_tex__1__2.tex" &&
+              PropModelSources.PrivateTexturePath(root, "chara/a/texture/my tex (1).tex", owners) == odd,
+            "two names that become the same get _2, and a texture keeps the name it was given");
+        check(PropModelSources.PrivateTexturePath(root, "chara/a/texture/v01_x-y.z_d.tex", ImmutableDictionary<string, string>.Empty) == root + "texture/v01_x-y.z_d.tex",
+            "a texture name the game takes stays as it is");
+
+        var source = SourceAt("phones", MonsterModel, 9001, 9000);
+        var fine = source with { Files = source.Files.Add(root + "material/v0001/mt_phone_a.mtrl", "file:C:/m/a.mtrl") };
+        var spaced = source with { Files = source.Files.Add(root + "material/v0001/mt phone (a).mtrl", "file:C:/m/a.mtrl") };
+        check(!PropModelSources.MaterialUnsavable(fine) && PropModelSources.MaterialUnsavable(spaced) &&
+              PropModelSources.UnsavableMaterial == "This model's material name can't be saved.",
+            "a material name a save would refuse is refused at the pick");
     }
 
     private static void CandidateModels(Action<bool, string> check)
@@ -658,15 +798,15 @@ internal static class PropModelSourcesFixture
                   TexturesOf(blueCopy).SequenceEqual(["chara/weapon/w9001/obj/body/b9002/texture/blue.tex"]),
                 $"two materials of one name stay apart, each under its own body: {string.Join(", ", copy.Files.Keys.Order(StringComparer.Ordinal))}");
             // A pick is resolved under some body first; the body it ends on comes from its snapshot.
-            check(PropModelSources.BodyFor(doc, Picked(first, 9001, red), shipped) == 9001 &&
-                  PropModelSources.BodyFor(doc, Picked(first, 9006, red), shipped) == 9001,
+            check(PropModelSources.BodyFor(doc, Picked(first, 9001, red), shipped, 9000, _ => false) == 9001 &&
+                  PropModelSources.BodyFor(doc, Picked(first, 9006, red), shipped, 9000, _ => false) == 9001,
                 "the same model with the same options reuses its body, whichever body it was resolved under");
             var green = Path.Combine(dir, "green.mtrl");
             File.WriteAllBytes(green, Material(("chara/a/texture/red.tex", false)));
             var recoloured = Picked(first, 9001, green);
-            var body3 = PropModelSources.BodyFor(doc, recoloured, shipped);
+            var body3 = PropModelSources.BodyFor(doc, recoloured, shipped, 9000, _ => false);
             check(body3 == 9003, $"the same model after its options changed (another material file) gets a new body (got {body3})");
-            check(PropModelSources.BodyFor(doc, Picked(first, 9001, red) with { ModDirectory = "other phones" }, shipped) == 9003,
+            check(PropModelSources.BodyFor(doc, Picked(first, 9001, red) with { ModDirectory = "other phones" }, shipped, 9000, _ => false) == 9003,
                 "the same files from another mod get their own body");
             var withThird = With(doc, PropModelSources.Rebodied(recoloured, body3!.Value));
             var both = PropCopies.Of(withThird, path => path.EndsWith(".mdl", StringComparison.Ordinal) ? [9] : null);
@@ -684,7 +824,7 @@ internal static class PropModelSourcesFixture
             var full = new TimelineDocument(60, 60, null, [.. Enumerable.Range(9000, 1000).Select(n =>
                 Prop("t" + n, SourceAt("x" + n, MonsterModel.Replace("b0001", $"b{n - 8000:D4}"), 9001, (ushort)n)))], 1);
             check(PropModelSources.BodyFor(full, "phones", first, 9001, _ => false) is null &&
-                  PropModelSources.BodyFor(full, Picked(first, 9001, red), _ => false) is null, "no body when every private one is used");
+                  PropModelSources.BodyFor(full, Picked(first, 9001, red), _ => false, 9000, _ => false) is null, "no body when every private one is used");
         }
         finally
         {

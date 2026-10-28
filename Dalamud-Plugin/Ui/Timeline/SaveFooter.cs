@@ -24,7 +24,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
 {
     private AnimationDestination destination = AnimationDestination.NewMod;
     private string modName = string.Empty;
-    private Task<Guid?>? saveTask;
+    private Task<SaveStart>? saveTask;
     private Guid? pendingSaveId;
     private Guid? lastSaveId;
     private bool undoPending;
@@ -249,7 +249,6 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         ImmutableDictionary<string, TimelineSoundReplacement> replaced;
         ImmutableDictionary<string, string> copied;
         ImmutableDictionary<string, string> cutSounds;
-        ImmutableDictionary<string, string> aliases;
         try
         {
             (saved, var used) = effectLooks.WithLooks(document);
@@ -264,15 +263,6 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             added = TimelineWindowViews.AddedFiles(saved, used);
             beside = TimelineWindowViews.AddedBeside(saved, used);
             rebuild = TimelineWindowViews.AddedRebuild(saved, used);
-            // Props from other mods are saved as private copies of their snapshot, packaged like imports.
-            var props = TimelineWindowViews.PropAdded(saved, path => session.Data.GetFile(path)?.Data);
-            if (props.Error != null)
-            {
-                saveError = props.Error;
-                return;
-            }
-            added = added.SetItems(props.Files);
-            aliases = props.Aliases;
         }
         catch (Exception e) when (e is InvalidDataException or ArgumentException)
         {
@@ -290,19 +280,35 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         KeepMotionForSave(target, document, repair);
         timelinePreview.Stop();
         var ending = timelinePreview.TakeStopping();
+        Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
         saveTask = Task.Run(async () =>
         {
+            // Props from other mods are saved as private copies of their snapshot, packaged like imports. Their files
+            // (textures of several MB) are read here, off the framework thread; a file gone stops the save before it starts.
+            (ImmutableDictionary<string, byte[]> Files, ImmutableDictionary<string, string> Aliases, string? Error) props;
+            try { props = TimelineWindowViews.PropAdded(saved, game); }
+            catch (Exception e) when (e is InvalidDataException or ArgumentException)
+            {
+                props = (ImmutableDictionary<string, byte[]>.Empty, ImmutableDictionary<string, string>.Empty, e.Message);
+            }
             await ending;
             await session.Preview.StopAsync();
+            if (props.Error != null)
+                return new SaveStart(null, props.Error);
+            var files = added.SetItems(props.Files);
+            var aliases = props.Aliases;
             // The edit service starts jobs from the framework thread, where the observer it updates lives.
-            return await session.Framework.RunOnFrameworkThread(() =>
+            return new SaveStart(await session.Framework.RunOnFrameworkThread(() =>
             {
                 session.Playback.Stop();
-                return service.EditTimeline(target, saved, place, name, added, beside, motionFrames, repair, rebuild,
+                return service.EditTimeline(target, saved, place, name, files, beside, motionFrames, repair, rebuild,
                     replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds, aliases.IsEmpty ? null : aliases);
-            });
+            }), null);
         });
     }
+
+    /// <summary>How a save's start ended: the job's id (null when another job was running), or why it didn't start.</summary>
+    private sealed record SaveStart(Guid? Id, string? Error);
 
     public void Poll()
     {
@@ -317,7 +323,12 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                 saveError = "The preview could not be ended, so nothing was saved. " + TimelineSession.ErrorText(task.Exception);
                 motionCarry = null;
             }
-            else if (task.Result is { } id)
+            else if (task.Result.Error is { } error)
+            {
+                saveError = error;
+                motionCarry = null;
+            }
+            else if (task.Result.Id is { } id)
                 pendingSaveId = id;
             else
             {
