@@ -1779,41 +1779,61 @@ Start from a still pose, stand it on the ground, and borrow breathing from an id
 Plan: C:\Users\Example\.claude\plans\i-want-to-expand-smooth-allen.md. Test clip: a standing emote, such as
 /stretch, and your race's Standing idle.
 
-- [ ] 1 Load a standing emote, move the playhead to a calm frame, Add > Still pose (start from scratch).
+- [x] 1 Load a standing emote, move the playhead to a calm frame, Add > Still pose (start from scratch).
   The line under the toolbar says "Still pose: frame N held for ... frames", a Pose layer over the whole
   clip is selected, and Live shows the character holding that frame.
-- [ ] 2 In that Pose layer, Key a pose > Pose file, a crossed-leg or kneeling pose from D:\Mods\Poses.
+  (XIV Bridge 410, 2026-10-28, Stretch: "Still pose: frame 10 held for 147 frames."; Live holds to 0.00 deg once it
+  shows the layers. For its first second or two Live still plays the emote's own motion while it builds.)
+- [x] 2 In that Pose layer, Key a pose > Pose file, a crossed-leg or kneeling pose from D:\Mods\Poses.
   "Feet on the ground" is ticked. Key at frame 0: the character takes the pose with the feet on the
   floor, not floating. Untick it and key again: the pose floats as before.
-- [ ] 3 With Live on and paused at frame 45, turn the head with the gizmo: a key appears at 45 and the
+  (XIV Bridge 410, 2026-10-28, Multi\Occupied\Kneel.pose: the lowest foot 7.1 cm against the clip's floor 8.4 cm;
+  unticked 49.6 cm.)
+- [x] 3 With Live on and paused at frame 45, turn the head with the gizmo: a key appears at 45 and the
   head moves between frame 0 and 45 when played. With the playhead outside the layer, the Bones panel
   says "Move the playhead into the layer to pose it with the gizmo."
-- [ ] 4 Play your race's Standing idle once (Load), open the emote again, Add > Idle motion layer, Motion
+  (XIV Bridge 411, 2026-10-28, after a key at 0 as item 2 leaves: 10.4, 29.6 and 40.0 deg at 15, 30 and 45. Without a
+  key at 0 the lone key at 45 holds over the whole layer.)
+- [x] 4 Play your race's Standing idle once (Load), open the emote again, Add > Idle motion layer, Motion
   from: the idle. The chest breathes and the body shifts its weight; Breathing 0% stops the chest.
   Press Pin feet: the feet stay planted while the body shifts.
-- [ ] 5 Change the length to twice as long: the breath still loops without a jump at the end.
-- [ ] 6 Save to a new mod: the emote plays the new animation in game, breathing included.
-- [ ] 7 Use the clip's motion: the emote's own motion comes back; Ctrl+Z brings the still pose back.
-- [ ] 8 On a Miqo'te or Au Ra, raise Tail to 200%: the tail swings further.
+  (XIV Bridge 412, 2026-10-28, Standing idle from the game: the chest swings 1.83 deg, the hips 5.5 mm; Breathing
+  0% 0.00 deg; Pin feet 0.0 mm.)
+- [x] 5 Change the length to twice as long: the breath still loops without a jump at the end.
+  (XIV Bridge 412, 2026-10-28: 294 frames, seam Clean, worst 0.000 deg.)
+- [x] 6 Save to a new mod: the emote plays the new animation in game, breathing included.
+  (XIV Bridge 413, 2026-10-28: the saved file within 3.0 mm and 0.29 deg of the layers; in game the chest wanders 0.98 deg.)
+- [x] 7 Use the clip's motion: the emote's own motion comes back; Ctrl+Z brings the still pose back.
+  (XIV Bridge 413, 2026-10-28.)
+- [x] 8 On a Miqo'te or Au Ra, raise Tail to 200%: the tail swings further.
+  (XIV Bridge 412, 2026-10-28: n_sippo_a 1.49 to 2.98 deg.)
 
 ## Onion skins (pending)
 
 The Bones window's onion skins switch, beside the crosshairs, draws faint bones on the GPose character for
 the pose at the selected layer's key before the playhead (blue) and after it (orange).
 
-- [ ] 1 Select an offset or pose layer with three keys, put the playhead between the first two and turn on
+- [x] 1 Select an offset or pose layer with three keys, put the playhead between the first two and turn on
   the switch: blue bones show the first key's pose, orange ones the second's, under the normal dots.
-- [ ] 2 Put the playhead on the middle key: the ghosts are the first and the last key. Before the first key
+  (XIV Bridge 380, 2026-10-28: the ghosts are the keys' poses to 0.000 deg; the overlay drew 92 ghost dots. Colours not read.)
+- [x] 2 Put the playhead on the middle key: the ghosts are the first and the last key. Before the first key
   only orange shows; on or past the last only blue.
-- [ ] 3 Scrub across a key: the ghosts jump to the next pair of keys without a hitch.
-- [ ] 4 Turn a bone with the gizmo at the playhead's key: the ghosts stay put; turn one at a ghost's key
+  (XIV Bridge 380, 2026-10-28.)
+- [x] 3 Scrub across a key: the ghosts jump to the next pair of keys without a hitch.
+  (XIV Bridge 380, 2026-10-28: 29 to 31 moves them from (10, 30) to (30, 50); 0.09 ms at most.)
+- [x] 4 Turn a bone with the gizmo at the playhead's key: the ghosts stay put; turn one at a ghost's key
   (playhead there, then step off it): that ghost shows the new pose.
-- [ ] 5 Crosshairs on Selected: ghosts show only for the selected bones. Crosshairs Off: no ghosts.
+  (XIV Bridge 381, 2026-10-28.)
+- [x] 5 Crosshairs on Selected: ghosts show only for the selected bones. Crosshairs Off: no ghosts.
+  (XIV Bridge 381, 2026-10-28.)
 - [ ] 6 Select an amplitude or fix layer, or no layer: no ghosts. The switch's tooltip says amplitude and
   fix layers and planted pins are left out of the ghosts.
+  Partly checked (XIV Bridge 381, 2026-10-28): no ghosts on those. The tooltip: by hand.
 - [ ] 7 The ghosts sit on the character as the normal dots do at those frames (step the playhead to a
   ghost's key: the dots land on it), also on a racially scaled character.
-- [ ] 8 Close and reopen the Bones window: the switch keeps its state until the plugin reloads.
+  Partly checked (XIV Bridge 382, 2026-10-28): within 0.0 mm of the bones in game. A racially scaled character: by hand.
+- [x] 8 Close and reopen the Bones window: the switch keeps its state until the plugin reloads.
+  (XIV Bridge 381, 2026-10-28: kept on reopening; a reload not tried.)
 
 ## Pose copy and paste (pending)
 
@@ -1857,26 +1877,31 @@ offline in PoseEditorFixture (Clipboard).
 Pick keys across a layer's rows and move, spread, delete, copy or paste them together. The edits are covered
 offline in MotionEditsFixture (KeyPicks); these checks are the canvas, the panel and the feel.
 
-- [ ] 1 On a pose layer with four keys and its bone rows shown, click a key, Ctrl+click two more: all three get
+- [x] 1 On a pose layer with four keys and its bone rows shown, click a key, Ctrl+click two more: all three get
   a ring, the panel's Keys row highlights them. Ctrl+click one again: it drops out.
-- [ ] 2 Drag one of the picked keys: all of them move together and stop at a key that isn't picked. One
+  (XIV Bridge 390, 2026-10-28, items 1-3: clicks as TimelineEditor.Press/Drag/Release; the rings' look not read.)
+- [x] 2 Drag one of the picked keys: all of them move together and stop at a key that isn't picked. One
   Ctrl+Z puts them back, and Escape during the drag too. Dragging a bone's value in a picked key moves the
   group. A plain click on a picked key without dragging leaves it picked alone.
-- [ ] 3 Click a key, Shift+click a later one on the layer's row: every key in between is picked. On a bone's
+- [x] 3 Click a key, Shift+click a later one on the layer's row: every key in between is picked. On a bone's
   row, Shift+click picks only that bone's values.
-- [ ] 4 Press on an empty bone row and drag a box over keys on two bone rows: those bones' values are
+- [x] 4 Press on an empty bone row and drag a box over keys on two bone rows: those bones' values are
   picked (faint rings on the layer's row). Drag it up over the layer's row: the whole keys are picked.
   Ctrl+drag on the bar adds a box to the picks; Escape during that box goes back to the picks before it.
   The box never reaches into the next layer's rows.
-- [ ] 5 Alt+Right nudges every picked key a frame; Delete takes them all out; the menu says
+  (XIV Bridge 391, 2026-10-28, items 4-5.)
+- [x] 5 Alt+Right nudges every picked key a frame; Delete takes them all out; the menu says
   "Delete N picked keys".
-- [ ] 6 With keys picked on 3 frames, the panel shows "3 picked · Spread over N frames". Type half: they
+- [x] 6 With keys picked on 3 frames, the panel shows "3 picked · Spread over N frames". Type half: they
   play twice as fast in Preview, the first key stays put, and the field edit is one undo step. A number
   that would put two keys on one frame shows a reason in the toolbar and changes nothing.
+  (XIV Bridge 392, 2026-10-28: "3 picked · Spread over 20"; half keeps the first key, one undo step.)
 - [ ] 7 Ctrl+C, move the playhead, Ctrl+V: the keys are pasted from the playhead on and picked. Paste into
   another animation's pose layer: they carry over. Into an offset layer: the toolbar says they came from a
   Pose layer. After copying an event, Ctrl+V pastes the event again, not the keys.
-- [ ] 8 On a pin layer with a keyed pin, pick two of its keys and drag them: the pins move in time.
+  Partly checked (XIV Bridge 392, 2026-10-28): all but the event, which was skipped: Idle pose 5 has no editable event.
+- [x] 8 On a pin layer with a keyed pin, pick two of its keys and drag them: the pins move in time.
+  (XIV Bridge 393, 2026-10-28.)
 
 ## Hand shapes (pending)
 
@@ -1929,11 +1954,19 @@ first entry is a damage flinch (cbna_add_dmg_f), so the idle (cbnm_id0) is read 
 
 - [ ] 1 Fresh plugin load, open a dance, add an idle-motion layer: Motion from lists Standing idle and Idle pose
   1-6 without playing any of them. Pick Idle pose 3: the layer reads it and Live shows its breathing.
-- [ ] 2 Pick Standing idle: the motion is the calm idle, not a flinch. With an idle mod enabled the game's own
+  Partly checked (XIV Bridge 400, 2026-10-28, not a fresh load: the listener had heard poses 3, 5, 6 and the idle):
+  the list is right, the layer reads Idle pose 3 (27 bones), in Live the chest wanders 0.87 deg. Over the clip the
+  layer swings the chest only 0.26 deg (the test wanted 0.5): Idle pose 3 breathes faintly. Look at it by eye.
+- [x] 2 Pick Standing idle: the motion is the calm idle, not a flinch. With an idle mod enabled the game's own
   idle is still the one read.
+  (XIV Bridge 401, 2026-10-28: cbnm_id0, 2.67 s; with a copy of [Noff] Smoking Idle on, the same samples.)
 - [ ] 3 On a Highlander or Hellsguard character (they borrow Standing idle and poses 5-6): those three read
   without an error.
+  Partly checked (XIV Bridge 402, 2026-10-28): c0301, c0401, c1101 and c1201 listed and decoded by code, from a
+  Miqo'te. Not on such a character.
 - [ ] 4 Make startup instant on a modded loop: the held pose is the standing idle, not a flinch.
+  Not checked (XIV Bridge 403, 2026-10-28, skipped): the TikTok copy's loop has no startup ("This animation has no
+  startup."). Needs a modded loop that has one.
 
 ## Motion key markers (pending)
 
@@ -1941,20 +1974,36 @@ The clip band's key poses and the Motion keys layer: a bone edit keys the bone a
 markers. The maths is covered offline (marker finder, key poses, fade keys); these checks are the canvas and the feel.
 Code: Services/Animations/Motion (markers), Ui/Timeline/TimelineClipBand.cs, the layer panel's Detail and Reach.
 
-- [ ] 1 Open a vanilla emote and click a key pose on the clip band (muted ticks along its bottom edge; the tooltip
+- [x] 1 Open a vanilla emote and click a key pose on the clip band (muted ticks along its bottom edge; the tooltip
   says "Frame N: n bones key here. Click to edit motion keys."): a "Motion keys" Offset layer appears first in the
   stack and is selected, and the playhead is on that frame. Right-click the band > Edit motion keys does the same.
-- [ ] 2 The Motion keys layer unfolds into rows for its keyed bones and the selected bones; each row shows that
+  (XIV Bridge 420, 2026-10-28, Bow, key poses 0, 35, 59, 96, 107: the tooltip text, layer and playhead as written.
+  The ticks' muted look: by hand.)
+- [x] 2 The Motion keys layer unfolds into rows for its keyed bones and the selected bones; each row shows that
   bone's markers as small hollow circles behind the keys. Click a marker: the playhead moves there and the bone is
   selected, and no key is made.
+  (XIV Bridge 420, 2026-10-28. The circles' look: by hand.)
 - [ ] 3 Turn a bone at a marker (rotation ball, fields or gizmo). With Live on, the change fades out at the next
   markers on both sides, with zero keys there. Key, Reset, Mirror and a pose import fade out the same way.
-- [ ] 4 Paste, nudge and delete add no zero keys.
-- [ ] 5 Reach 2 widens the change to the second markers; Reach 3 to the third. An existing closer key is kept.
-- [ ] 6 Mute the layer: the original motion is back. Rename and delete it like any layer.
-- [ ] 7 Detail Fewer / Normal / More changes the marker counts on the bone rows and the number of key poses.
-- [ ] 8 Save and reopen (Edit again): the Motion keys layer comes back with its keys, and Detail and Reach are kept.
+  Partly checked (XIV Bridge 421, 2026-10-28, Wave): a turn, Key, Reset and the gizmo fade out at the next markers.
+  Mirror and a pose import not run.
+- [x] 4 Paste, nudge and delete add no zero keys.
+  (XIV Bridge 421, 2026-10-28.)
+- [x] 5 Reach 2 widens the change to the second markers; Reach 3 to the third. An existing closer key is kept.
+  (XIV Bridge 421, 2026-10-28.)
+- [x] 6 Mute the layer: the original motion is back. Rename and delete it like any layer.
+  (XIV Bridge 422, 2026-10-28: muted, 0.000 mm and 0.08 deg from the clip, the evaluator's own rounding.)
+- [x] 7 Detail Fewer / Normal / More changes the marker counts on the bone rows and the number of key poses.
+  (XIV Bridge 422, 2026-10-28, Wave: j_te_r 50/68/81 markers, 1117/2238/4216 in all, key poses 3/2/3.)
+- [x] 8 Save and reopen (Edit again): the Motion keys layer comes back with its keys, and Detail and Reach are kept.
+  (XIV Bridge 422, 2026-10-28.)
 - [ ] 9 Record the marker and key-pose counts per Detail on about 10 vanilla emotes (short, long, looping), read with
   `xiv_exec` from the open clip (`_timelineWindow.keyMarkers` / `editor.Markers`). If the counts look wrong, tune the
   tolerances (Fewer 2 deg / 0.005 m / 2 %, Normal 0.5 deg / 0.001 m / 0.5 %, More 0.1 deg / 0.0002 m / 0.1 %).
-- [ ] 10 Hips drag on the Motion keys layer fades out (after the hip-drag work is committed and wrapped).
+  Recorded 2026-10-28 (XIV Bridge 423), key poses Fewer/Normal/More: Bow 8/5/2, Cheer 5/5/2, Clap 6/3/2, Joy 5/3/2,
+  Kneel 6/4/2, Laugh 7/3/2, Pray 5/5/4, Salute 7/4/3, Idle pose 3 4/4/6, Ground sit 4/4/7. Markers per bone grow about
+  2x per step. On emotes More finds the fewest key poses, and Wave at Normal has them only on its first and last frame.
+  To decide: whether that is the wanted tuning.
+- [x] 10 Hips drag on the Motion keys layer fades out (after the hip-drag work is committed and wrapped).
+  (XIV Bridge 424, 2026-10-28, Idle pose 3: every keyed bone fades out at its markers. Where the next marker is the
+  clip's end, the zero key at frame 0 closes it: the change eases to 0 at 70 and the seam stays Clean.)
