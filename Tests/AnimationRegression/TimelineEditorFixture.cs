@@ -161,6 +161,14 @@ internal static class TimelineEditorFixture
         check(squeezed is { Start: 0, Duration: 1 } && Event(typed, "s").Duration == 61 && Event(typed, "f") is { Start: 52, Duration: 9 } &&
               Event(typed, "h") is { Start: 61, Duration: 5 } && typed.History.UndoCount == 1,
             "typing a prop's length moves its fade-out from where the edit began, as one step");
+        var started = Editor(doc);
+        started.BeginFieldEdit();
+        started.Replace(Event(started, "s") with { Start = 3 });
+        started.Replace(Event(started, "s") with { Start = 10 });
+        started.EndFieldEdit();
+        check(Event(started, "s") is { Start: 10, Duration: 81 } && Event(started, "f").Start == 82 && Event(started, "h").Start == 91 &&
+              Event(started, "x").Start == 50 && started.History.UndoCount == 1,
+            "typing a prop's start moves every part from where the edit began, as one step");
 
         // Ruling R16: no hold after a prop that lasts to the clip's end, so the Add isn't pulled back for it.
         TimelineEvent[] AddProp(int start)
@@ -176,6 +184,21 @@ internal static class TimelineEditorFixture
         var past = AddProp(50);
         check(past.Single(e => e.Magic == "C198").Start == 44 && past.Max(e => e.Start) == 99 && past.Count(e => e.Magic == "C094") == 3,
             "a prop added to outlast the clip has no hold; its fade-out, past the end, still pulls the Add back to start by the end");
+
+        // A prop place is an edit like any other: it lands, undoes in one step and Reset takes it off, on a C043 too.
+        var place = new TimelinePropPlace(0, false, null, new Vector3(0, .05f, 0), Vector3.Zero, 1);
+        var placing = Editor(Doc(100, Ev("s", TimelineLane.Prop, 0, 60, true, group: "p1", magic: "C198"),
+            Ev("w", TimelineLane.Prop, 0, 0, access: TimelineAccess.Movable, group: "p2", magic: "C043"),
+            Ev("c", TimelineLane.Prop, 1, access: TimelineAccess.Movable, group: "p2", magic: "C014")));
+        var unplaced = placing.Document;
+        check(placing.Replace(Event(placing, "s") with { Place = place }) && Event(placing, "s").Place == place && placing.History.UndoCount == 1 &&
+              placing.Undo() && ReferenceEquals(placing.Document, unplaced),
+            "a C198's place lands and undoes in one step");
+        check(placing.Replace(Event(placing, "w") with { Place = place }) && Event(placing, "w").Place == place &&
+              placing.Replace(Event(placing, "w") with { Place = null }) && Event(placing, "w").Place == null,
+            "a C043, which only moves, takes a place and Reset takes it off");
+        check(!placing.Replace(Event(placing, "c") with { Place = place }) && Event(placing, "c").Place == null,
+            "a prop control takes no place");
     }
 
     /// <summary>

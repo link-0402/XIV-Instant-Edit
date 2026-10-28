@@ -130,7 +130,14 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         if (manipulations is { Atch.Count: > 0 } atch)
         {
             if (!files.ContainsKey(atch.For)) throw new InvalidDataException("Manipulations must belong to an edited animation.");
-            var edit = new AnimationManipulationEdit { For = atch.For, Added = [.. atch.Atch.Select(Studio.Services.ModMetaWriter.AtchJson)] };
+            // A new mod can't take the source mod's override away: it carries the game's entry over it instead.
+            var removes = request.Destination == AnimationDestination.InPlace;
+            var edit = new AnimationManipulationEdit
+            {
+                For = atch.For,
+                Added = [.. atch.Atch.Where(m => !(removes && m.Remove)).Select(Studio.Services.ModMetaWriter.AtchJson)],
+                Removed = [.. atch.Atch.Where(m => removes && m.Remove).Select(Studio.Services.ModMetaWriter.AtchJson)],
+            };
             if (request.Destination == AnimationDestination.NewMod)
                 (edit.ModDirectory, edit.ModRoot) = (journal.ModDirectory, journal.ModRoot);
             else
@@ -287,12 +294,13 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                         ModMetadata.AddAnimationResourceMapping(file.ModRoot, owner, file.GamePath, file.RelativePath, file.AddedForFile);
                 }
                 // Attach overrides play wherever the animation does; the journal learns what each option held first.
-                if (journal.Manipulations is { Added.Count: > 0 } atch && journal.Request.Destination == AnimationDestination.InPlace)
+                if (journal.Manipulations is { } atch && atch.Added.Count + atch.Removed.Count > 0 &&
+                    journal.Request.Destination == AnimationDestination.InPlace)
                     ModMetadata.AddAnimationManipulations(atch.ModRoot, atch.For, atch.Added, changes =>
                     {
                         atch.Changes = [.. changes];
                         store.Save(journal);
-                    });
+                    }, atch.Removed);
                 if (journal.Request.Destination == AnimationDestination.NewMod)
                 {
                     var metadata = CreateNewModMetadata(journal.ModDirectory, journal.Files, manifest.ManipulationsJson,
@@ -354,9 +362,14 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             files[change.GamePath] = change.RelativePath.Replace('\\', '/');
         var manipulations = JsonNode.Parse(manipulationsJson) as JsonArray
             ?? throw new InvalidDataException("Animation manipulations are not a JSON array.");
-        // The edit's own (a placed prop's attach overrides) follow the collection's.
+        // The edit's own (a placed prop's attach overrides) follow the collection's, replacing one for the same place.
         foreach (var manipulation in added ?? [])
-            manipulations.Add(JsonNode.Parse(manipulation) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object."));
+        {
+            var item = JsonNode.Parse(manipulation) as JsonObject ?? throw new InvalidDataException("A manipulation is not a JSON object.");
+            if (ModMetadata.IndexOfManipulation(manipulations, item) is >= 0 and var at)
+                manipulations.RemoveAt(at);
+            manipulations.Add(item);
+        }
         return ModMetadata.CreateV4ModMetadata(
             modName,
             ModMetadata.AuthorOrDefault(author),

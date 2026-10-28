@@ -10,7 +10,10 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// </summary>
 internal sealed class PropAttachTypes
 {
+    /// <summary>Where <c>DrawObjectData</c> keeps the attach point code of what it holds (no field in ClientStructs names it; +0x20 is a pointer). Seen in game.</summary>
+    public const int CodeOffset = 0x30;
     private const string FileName = "prop-attach-types.json";
+    private readonly object saving = new();
     private readonly string? path;
     private readonly Action<string>? warn;
     private readonly ConcurrentDictionary<ushort, string> types = new();
@@ -49,22 +52,33 @@ internal sealed class PropAttachTypes
         types[model] = code;
         if (path == null)
             return;
-        try
+        // Two props learned at once each save every type; one at a time, so neither save is lost.
+        lock (saving)
         {
-            var saved = new SortedDictionary<string, string>(StringComparer.Ordinal);
-            foreach (var (id, text) in types)
-                saved[id.ToString()] = text;
-            AnimationJournalStore.WriteAtomic(path, JsonSerializer.SerializeToUtf8Bytes(saved));
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            warn?.Invoke("A prop attach type could not be saved: " + e.Message);
+            try
+            {
+                var saved = new SortedDictionary<string, string>(StringComparer.Ordinal);
+                foreach (var (id, text) in types)
+                    saved[id.ToString()] = text;
+                AnimationJournalStore.WriteAtomic(path, JsonSerializer.SerializeToUtf8Bytes(saved));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                warn?.Invoke("A prop attach type could not be saved: " + e.Message);
+            }
         }
     }
 
     /// <summary>
-    /// The attach point code a held prop's draw object names (4 bytes at +32 of its <c>DrawObjectData</c>): 3 printable
-    /// ASCII characters stored reversed, then a NUL. Null for anything else, as for a slot that holds no prop.
+    /// The attach point code a held prop's <c>DrawObjectData</c> names (<see cref="CodeFrom"/> of its 4 bytes at
+    /// <see cref="CodeOffset"/>); null when the data is too short or holds none.
+    /// </summary>
+    public static string? CodeIn(ReadOnlySpan<byte> drawObjectData) =>
+        drawObjectData.Length < CodeOffset + 4 ? null : CodeFrom(drawObjectData.Slice(CodeOffset, 4));
+
+    /// <summary>
+    /// The attach point code in 4 bytes of a held prop's draw object data: 3 printable ASCII characters stored
+    /// reversed, then a NUL. Null for anything else, as for a slot that holds no prop.
     /// </summary>
     public static string? CodeFrom(ReadOnlySpan<byte> bytes)
     {

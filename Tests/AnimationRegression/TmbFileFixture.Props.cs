@@ -55,6 +55,12 @@ internal static partial class TmbFileFixture
         check(filled.Events[0].Values["AtchState"] == 3 && filled.Events[0].Values["SummonId"] == 0 && filled.Events[2].Values["AtchState"] == 0 &&
               filled.Events[0].Values["Model"] == 1922 && ReferenceEquals(TimelineEdits.FillFields(loaded, loaded), loaded),
             "missing fields come from the loaded entry, or 0 for an added one; a document with all of them stays as it is");
+        var modPlace = new TimelinePropPlace(0, false, "n_buki_l", System.Numerics.Vector3.UnitY, System.Numerics.Vector3.Zero, 1);
+        var opened = loaded with { Events = loaded.Events.SetItem(0, summon with { Place = modPlace }) };
+        var mine = modPlace with { Size = 2 };
+        check(TimelineEdits.FillFields(kept, opened).Events[0].Place == modPlace && TimelineEdits.FillFields(kept, opened).Events[2].Place == null &&
+              TimelineEdits.FillFields(opened with { Events = opened.Events.SetItem(0, opened.Events[0] with { Place = mine }) }, opened).Events[0].Place == mine,
+            "kept edits from before places were read from the mod take the mod's place; one of their own stays");
         var saved = TmbFile.Parse(TimelineConvert.Apply(bytes, filled));
         var summons = saved.Entries.Where(e => e.Magic == "C198").ToList();
         check(summons.Count == 2 && summons.Single(e => e.Time == 0) is { } first && first.Int32(12) == 70 && first.Byte(29) == 3 &&

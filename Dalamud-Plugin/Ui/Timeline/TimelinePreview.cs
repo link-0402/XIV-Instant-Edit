@@ -346,9 +346,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             added = TimelineWindowViews.AddedFiles(shown, used);
             // Placed props show in place: their attach overrides for the actor's race ride in the preview's mod. A prop
             // whose attach point is still unknown is left out; this preview learns it (see LearnProps below).
-            var placed = document.Events.Any(e => e.Place != null) && session.Playback.ActorRace(index) is { } race
+            // Places as loaded are the mod's own overrides, which the collection applies already.
+            var opened = session.Source?.Document;
+            var placed = document.Events.Concat(opened?.Events ?? []).Any(e => e.Place != null) && session.Playback.ActorRace(index) is { } race
                 ? TimelinePropPlaces.Manipulations(document, [race],
-                    r => session.AttachTable(r) ?? throw new InvalidDataException($"The game has no attach table for c{r:D4}."), types, skipUnlearned: true)
+                    r => session.AttachTable(r) ?? throw new InvalidDataException($"The game has no attach table for c{r:D4}."), types, skipUnlearned: true,
+                    opened, session.Source?.ModAttachOverrides)
                 : [];
             manipulations = placed.IsEmpty ? string.Empty : PenumbraMetaEncoder.Encode(placed);
         }
@@ -405,12 +408,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                     return false;
                 if (Math.Abs(speed - 1) > .001f)
                     session.Playback.SetSpeed(speed);
-                // The props whose attach point is unknown are watched as they appear, to 2 s after the last one does.
+                // The props whose attach point is unknown are watched as they appear, to 2 s after the last one does;
+                // none ends the last preview's watch.
                 var starts = TimelinePropPlaces.PropStarts(document);
                 var unknown = starts.Keys.Where(model => types.CodeOf(model) == null).ToArray();
-                if (unknown.Length > 0)
-                    session.Playback.LearnProps(index, unknown,
-                        TimeSpan.FromSeconds(unknown.Max(model => starts[model]) / (double)TimelineDocument.Fps / Math.Max(speed, .1f) + 2), types.Learn);
+                session.Playback.LearnProps(index, unknown, unknown.Length == 0 ? TimeSpan.Zero
+                    : TimeSpan.FromSeconds(unknown.Max(model => starts[model]) / (double)TimelineDocument.Fps / Math.Max(speed, .1f) + 2), types.Learn);
                 return true;
             });
             return played ? redraw == null ? "Preview playing." : "Preview playing. " + redraw : "Preview on. " + session.Playback.Error;

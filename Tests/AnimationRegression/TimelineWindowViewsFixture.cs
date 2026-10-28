@@ -455,7 +455,7 @@ internal static class TimelineWindowViewsFixture
             "An expression's own timeline counts the same way, its preview included");
     }
 
-    /// <summary>The sound inspector's words: what each option of a sound event does.</summary>
+    /// <summary>The effect Place section's words and its turn, which keeps the axes a drag didn't change.</summary>
     private static void Places(Action<bool, string> check, List<string> texts)
     {
         static TimelineEffectLook Look(bool bound) => new(null, null, null, null, [], false, false, false, bound, default);
@@ -465,7 +465,7 @@ internal static class TimelineWindowViewsFixture
         texts.AddRange(hints);
         check(hints[0] == "Moves this event only. Scales with the character's race." &&
               hints[1] == "Attached to a bone; moved on its attach point" &&
-              hints[2] == "Moves the effect file; other events playing it move too",
+              hints[2] == "Moves this effect only, in a copy of its file",
             "Place says what a VFX event, an attached effect file and another effect file move");
 
         var stored = new Vector3(.1f, .2f, .3f);
@@ -495,7 +495,7 @@ internal static class TimelineWindowViewsFixture
         string[] hints = [PropPlaceEditor.RaceHint, PropPlaceEditor.SharedHint, PropPlaceEditor.OwnHint, PropPlaceEditor.UnlearnedHint];
         texts.AddRange(hints);
         check(hints.SequenceEqual([
-                "Changes where this prop attaches for your race. Other races get the same change when the file is rebuilt or borrowed for them.",
+                "Changes where this prop attaches for each race that plays this file.",
                 "Other emotes with the same kind of prop move too", "Uses a spare attach point no other animation shows a prop on", "Preview once to place it"]),
             "the prop Place hints say what a place changes");
 
@@ -521,6 +521,11 @@ internal static class TimelineWindowViewsFixture
         check(PropPlaceEditor.SummonOf(doc, control)?.Key == "s" && PropPlaceEditor.SummonOf(doc, grouped)?.Key == "s" &&
               PropPlaceEditor.SummonOf(doc, plays) == null && PropPlaceEditor.SummonOf(doc, control with { Group = null }) == null,
             "a grouped prop control places the summon on its slot");
+        var head = Ev("h", "C043", TimelineLane.Prop, 0, "", 60, Values(("Model", 1962))) with { Group = "p2" };
+        var tail = Ev("t", "C198", TimelineLane.Prop, 60, "", 125, Values(("Model", 1962), ("SummonId", 0))) with { Group = "p2" };
+        var chain = Doc(200, 200, tail, head);
+        check(PropPlaceEditor.SummonOf(chain, tail)?.Key == "h" && PropPlaceEditor.SummonOf(chain, head)?.Key == "h",
+            "both summons of a chain place its first, so the one prop has one place");
         var scale = Ev("z", "C175", TimelineLane.Prop, 1, "", 0, Values(("ObjectControl", 3), ("ObjectScale", 1))) with { Group = "p1" };
         check(PropPlaceEditor.Shows(doc, control, 101) && PropPlaceEditor.Shows(doc, grouped, 101) && !PropPlaceEditor.Shows(doc, control, null) &&
               !PropPlaceEditor.Shows(doc, grouped with { Values = Values(("Model", 0), ("SummonId", 1)) }, 101) && !PropPlaceEditor.Shows(doc, plays, 101),
@@ -537,6 +542,7 @@ internal static class TimelineWindowViewsFixture
             "a place that changes nothing is dropped");
     }
 
+    /// <summary>The sound inspector's words: what each option of a sound event does.</summary>
     private static void Sounds(Action<bool, string> check, List<string> texts)
     {
         check(TimelineWindowViews.PlaysText(1) == "Once" && TimelineWindowViews.PlaysText(-1) == "Keep looping" && TimelineWindowViews.PlaysText(90) == "Custom (90)",

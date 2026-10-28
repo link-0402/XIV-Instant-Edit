@@ -239,14 +239,14 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     // A prop watch LearnProps started: the actor (an identity key only), the models still unknown and when it ends.
     private sealed record PropWatch(ushort ObjectIndex, nint Address, HashSet<ushort> Models, long UntilTicks, Action<ushort, string> Learn);
     private PropWatch? _propWatch;
-    // Where DrawObjectData keeps the attach point code of what it holds (no field in ClientStructs names it).
-    private const int AttachCodeOffset = 32;
+    // The first weapon slot a summon lands in (summon 0 is DrawData's third); the two before it are the character's own weapons.
+    private const int FirstSummonSlot = 2;
 
     /// <summary>
-    /// Watches the GPose character at <paramref name="index"/> for <paramref name="duration"/>: every frame, a weapon slot
-    /// (the three of DrawData and the fourth after them) whose model is one of <paramref name="models"/> hands
-    /// <paramref name="learn"/> the attach point its draw object names (see <see cref="PropAttachTypes.CodeFrom"/>). Ends
-    /// sooner once every model is learned, or the character leaves; a new watch replaces the last.
+    /// Watches the GPose character at <paramref name="index"/> for <paramref name="duration"/>: every frame, a summon
+    /// slot (DrawData's third weapon slot and the fourth after it) whose model is one of <paramref name="models"/> hands
+    /// <paramref name="learn"/> the attach point its draw object names (see <see cref="PropAttachTypes.CodeIn"/>). Ends
+    /// sooner once every model is learned, or the character leaves; a new watch replaces the last, and no models ends it.
     /// </summary>
     public void LearnProps(ushort index, IReadOnlyCollection<ushort> models, TimeSpan duration, Action<ushort, string> learn)
     {
@@ -266,11 +266,11 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             return;
         }
         var drawData = &((Character*)actor.Address)->DrawData;
-        for (var i = 0; i < drawData->WeaponData.Length + drawData->UnkWeaponData.Length; i++)
+        for (var i = FirstSummonSlot; i < drawData->WeaponData.Length + drawData->UnkWeaponData.Length; i++)
         {
             ref var slot = ref i < drawData->WeaponData.Length ? ref drawData->WeaponData[i] : ref drawData->UnkWeaponData[i - drawData->WeaponData.Length];
             if (!watch.Models.Contains(slot.ModelId.Id) ||
-                PropAttachTypes.CodeFrom(new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref slot) + AttachCodeOffset, 4)) is not { } code)
+                PropAttachTypes.CodeIn(new ReadOnlySpan<byte>(Unsafe.AsPointer(ref slot), PropAttachTypes.CodeOffset + 4)) is not { } code)
                 continue;
             var model = slot.ModelId.Id;
             watch.Models.Remove(model);
@@ -465,6 +465,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     public void Stop()
     {
         RequireFrameworkThread();
+        _propWatch = null;
         if (_session == null)
             return;
         StopSession(restore: true);

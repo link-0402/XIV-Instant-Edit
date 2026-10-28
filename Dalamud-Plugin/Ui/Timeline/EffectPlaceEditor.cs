@@ -30,7 +30,7 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
     public static string RouteHint(TimelineEvent ev, TimelineEffectLook? look) =>
         ev.Magic == EventMagic ? "Moves this event only. Scales with the character's race."
         : look is { Bound: true } ? "Attached to a bone; moved on its attach point"
-        : "Moves the effect file; other events playing it move too";
+        : "Moves this effect only, in a copy of its file";
 
     /// <summary>
     /// The turn in radians after a drag of its degrees from <paramref name="shown"/> to <paramref name="dragged"/>:

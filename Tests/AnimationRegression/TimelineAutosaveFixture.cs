@@ -33,8 +33,12 @@ internal static class TimelineAutosaveFixture
             var sound = new TimelineSoundKey("sound/foot/step.scd", 1);
             check(doc.SoundEdits.TryGetValue(sound with { Path = "SOUND/foot/step.scd" }, out var edit) && edit.Volume == .5f &&
                   edit.Alternatives.Length == 2 && edit.Alternatives[1].Import == "instant_edit/step.scd", "sound edits come back by their key");
-            check(doc.Events.Length == 2 && doc.Events[1].Look is { Glow: 2, Colors.Length: 1 } look && look.Tint == new Vector3(1, 2, 3) &&
+            check(doc.Events.Length == 3 && doc.Events[1].Look is { Glow: 2, Colors.Length: 1 } look && look.Tint == new Vector3(1, 2, 3) &&
                   look.Colors[0].To == Vector3.UnitX && doc.Events[0].Values["SoundIndex"] == 1, "events come back with their values and looks");
+            check(doc.Events[1].Look is { Stop: 12 } placed && placed.Move == new Vector3(0, .25f, 0) && placed.Turn == new Vector3(0, MathF.PI / 2, 0) &&
+                  doc.Events[2] is { Group: "p1", Place: { State: 1, OwnState: true, Bone: "n_buki_l", Size: 1.25f } prop } &&
+                  prop.Move == new Vector3(.1f, 0, 0) && prop.Turn == new Vector3(0, 0, .5f),
+                "an effect's move, turn and stop and a prop's group and place come back");
             check(doc.Motion is [{ Key: "m1", Keys: [{ Bones.Count: 1 }] }] && doc.NextMotionKey == 2 && doc.Cuts?.Parts.Length == 2 &&
                   doc.Cuts.Joins[0] == MotionJoin.ForCut, "bone layers and cuts come back");
             check(doc.Replacement is { Frames: 45, Report.Changed: 1, Pap: [4, 5, 6] } && doc.ExcludedBones is ["j_ude_a_l"] &&
@@ -61,10 +65,17 @@ internal static class TimelineAutosaveFixture
         var step = new TimelineEvent("t1", "C063", TimelineLane.Sound, 5, 0, false, "sound/foot/step.scd", TimelineAccess.Editable, null, false,
             ImmutableDictionary<string, double>.Empty.Add("SoundIndex", 1), Pin: "own0");
         var effect = new TimelineEvent("n1", "C173", TimelineLane.Effect, 10, 20, true, "vfx/fx.avfx", TimelineAccess.Editable, null, false,
-            ImmutableDictionary<string, double>.Empty, Look: new TimelineEffectEdit { Tint = new Vector3(1, 2, 3), Glow = 2, Colors = [(Vector3.One, Vector3.UnitX)] });
+            ImmutableDictionary<string, double>.Empty, Look: new TimelineEffectEdit
+            {
+                Tint = new Vector3(1, 2, 3), Glow = 2, Colors = [(Vector3.One, Vector3.UnitX)], Move = new Vector3(0, .25f, 0),
+                Turn = new Vector3(0, MathF.PI / 2, 0), Stop = 12,
+            });
+        var prop = new TimelineEvent("n2", "C198", TimelineLane.Prop, 0, 60, true, "", TimelineAccess.Editable, null, false,
+            ImmutableDictionary<string, double>.Empty.Add("Model", 1962), Group: "p1",
+            Place: new TimelinePropPlace(1, true, "n_buki_l", new Vector3(.1f, 0, 0), new Vector3(0, 0, .5f), 1.25f));
         var sound = new TimelineSoundEdit([new TimelineSoundAlternative("own0", 0, null, 50, 0, 0, null, null),
             new TimelineSoundAlternative("new1", -1, "instant_edit/step.scd", 50, 0, 1, .8f, 100)], false, Volume: .5f);
-        var doc = new TimelineDocument(90, 100, "emot/laugh", [step, effect], 2)
+        var doc = new TimelineDocument(90, 100, "emot/laugh", [step, effect, prop], 3)
         {
             Motion = [layer],
             NextMotionKey = 2,

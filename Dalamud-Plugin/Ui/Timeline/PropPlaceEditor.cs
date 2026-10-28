@@ -16,7 +16,7 @@ internal enum PropRawRow { Editable, ReadOnly, Hidden }
 /// </summary>
 internal sealed class PropPlaceEditor(TimelineSession session)
 {
-    public const string RaceHint = "Changes where this prop attaches for your race. Other races get the same change when the file is rebuilt or borrowed for them.";
+    public const string RaceHint = "Changes where this prop attaches for each race that plays this file.";
     public const string SharedHint = "Other emotes with the same kind of prop move too";
     public const string OwnHint = "Uses a spare attach point no other animation shows a prop on";
     public const string UnlearnedHint = "Preview once to place it";
@@ -52,19 +52,15 @@ internal sealed class PropPlaceEditor(TimelineSession session)
     public bool Shows(TimelineDocument doc, TimelineEvent ev) => Shows(doc, ev, Race());
 
     /// <summary>
-    /// The summon <paramref name="ev"/> places: itself for a grouped summon, the summon of its group on its slot for a
-    /// grouped prop control; null otherwise.
+    /// The summon <paramref name="ev"/> places: the first summon of its group on its slot, for a grouped summon or prop
+    /// control; null otherwise. A chain (a C043, then a C198 on its slot) is one prop, so its first summon holds the place.
     /// </summary>
     public static TimelineEvent? SummonOf(TimelineDocument doc, TimelineEvent ev)
     {
         if (ev.Group is not { } group)
             return null;
-        if (IsSummon(ev))
-            return ev;
-        if (!TmbEntrySchema.PropControls.Contains(ev.Magic))
-            return null;
-        var slot = (int)Value(ev, "ObjectControl") - 2;
-        return doc.Events.FirstOrDefault(e => e.Group == group && IsSummon(e) && Slot(e) == slot);
+        var slot = IsSummon(ev) ? Slot(ev) : TmbEntrySchema.PropControls.Contains(ev.Magic) ? (int)Value(ev, "ObjectControl") - 2 : -1;
+        return slot < 0 ? null : doc.Events.Where(e => e.Group == group && IsSummon(e) && Slot(e) == slot).MinBy(e => e.Start);
     }
 
     /// <summary> <paramref name="place"/>, or null when it changes nothing: no own state, bone, move or turn, a size of 1 and the state the TMB shows (<paramref name="current"/>). </summary>
@@ -76,7 +72,7 @@ internal sealed class PropPlaceEditor(TimelineSession session)
         var race = Race();
         if (!Shows(current.Document, ev, race) || SummonOf(current.Document, ev) is not { } summon)
             return;
-        var stateOnly = summon.Key != ev.Key;
+        var stateOnly = !IsSummon(ev);
         ImGui.Spacing();
         if (!ImGui.CollapsingHeader("Place##prop-place", ImGuiTreeNodeFlags.DefaultOpen))
             return;

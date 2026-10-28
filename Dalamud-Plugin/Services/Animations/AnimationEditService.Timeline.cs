@@ -68,6 +68,14 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
     /// <summary>The race and standard skeleton a save rebuilds the borrowed clip onto; null keeps its race.</summary>
     public RaceRebuild? Rebuild { get; init; }
 
+    /// <summary>
+    /// The attach overrides the file's mod had for it when loaded (see <see cref="ModMetadata.AttachOverrides"/>): the
+    /// document's prop places start from them, and a place put back where the game has it removes them.
+    /// </summary>
+    public ImmutableArray<AtchManipulation> ModAttachOverrides { get => modAttachOverrides; init => modAttachOverrides = value.IsDefault ? [] : value; }
+
+    private readonly ImmutableArray<AtchManipulation> modAttachOverrides = [];
+
     /// <summary>The PAP whose motion the layers apply to: <see cref="BaseMotion"/>, else the file's own.</summary>
     public byte[] MotionSource => BaseMotion ?? Pap;
 
@@ -132,8 +140,35 @@ internal sealed partial class AnimationEditService
         {
             return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message) { FileModel = fileModel, HoldsOthers = holdsOthers };
         }
+        (document, var overrides) = WithModPlaces(document, resource);
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
-            await EffectsAsync(capture.CollectionId, document, token)) { FileFingerprint = fingerprint, FileModel = fileModel, HoldsOthers = holdsOthers };
+            await EffectsAsync(capture.CollectionId, document, token))
+        {
+            FileFingerprint = fingerprint, FileModel = fileModel, HoldsOthers = holdsOthers, ModAttachOverrides = overrides,
+        };
+    }
+
+    /// <summary>
+    /// The attach overrides the mod a file comes from has for it (<see cref="ModMetadata.AttachOverrides"/>), for the
+    /// races that play it, and <paramref name="document"/> with the prop places they make
+    /// (<see cref="TimelinePropPlaces.FromOverrides"/>). None for a file of the game's, one without grouped props, or a
+    /// mod whose meta can't be read.
+    /// </summary>
+    private (TimelineDocument Document, ImmutableArray<AtchManipulation> Overrides) WithModPlaces(TimelineDocument document, AnimationResource resource)
+    {
+        if (resource.ModRoot is not { } root || !document.Events.Any(e => e.Group != null && e.Magic is "C198" or "C043"))
+            return (document, []);
+        try
+        {
+            var races = PropRaces(resource.GamePath, catalog.PapTable, null);
+            var overrides = ModMetadata.AttachOverrides(root, resource.GamePath, races);
+            return (overrides.IsEmpty ? document : TimelinePropPlaces.FromOverrides(document, races, overrides, AtchTableOf, PropTypes), overrides);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or System.Text.Json.JsonException)
+        {
+            log.Warning(e, "Could not read the mod's prop attach overrides.");
+            return (document, []);
+        }
     }
 
     /// <summary>Whether <paramref name="pap"/> holds an entry bound to another animation than <paramref name="binding"/>.</summary>
@@ -713,10 +748,12 @@ internal sealed partial class AnimationEditService
     {
         if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
         var clip = source.Clip;
-        var manipulations = placeProps && document.Events.Any(e => e.Place != null)
-            ? TimelinePropPlaces.Manipulations(document, PropRaces(source.Resource.GamePath, catalog.PapTable, request.RepairModel), AtchTableOf, PropTypes)
+        // Only places changed since the file was loaded are written: the others are the mod's overrides already.
+        var manipulations = placeProps && document.Events.Concat(source.Document.Events).Any(e => e.Place != null)
+            ? TimelinePropPlaces.Manipulations(document, PropRaces(source.Resource.GamePath, catalog.PapTable, request.RepairModel), AtchTableOf, PropTypes,
+                loaded: source.Document, modOverrides: source.ModAttachOverrides)
             : [];
-        document = TimelinePropPlaces.ApplyStates(document);
+        document = TimelinePropPlaces.ApplyStates(document, source.Document);
         var timeline = TimelineConvert.Apply(source.Tmb, document, motionFrames);
         if (source.Standalone)
         {

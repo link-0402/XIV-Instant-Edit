@@ -106,8 +106,9 @@ internal static class TimelineEdits
     /// <summary>
     /// <paramref name="kept"/> (edits an older build kept, such as an autosave) with every field its events' kinds
     /// now have and they lack: the value of the entry it was loaded from or copies (in <paramref name="loaded"/>,
-    /// the file read again), else 0. Saving refuses an event without all of its kind's fields. The same instance
-    /// when nothing is missing.
+    /// the file read again), else 0. Saving refuses an event without all of its kind's fields. A prop summon without a
+    /// place takes the loaded one's, which the mod's attach override makes: kept by an older build, it never had it, and
+    /// a save would take it for one put back. The same instance when nothing is missing.
     /// </summary>
     public static TimelineDocument FillFields(TimelineDocument kept, TimelineDocument loaded)
     {
@@ -117,6 +118,11 @@ internal static class TimelineEdits
         for (var index = 0; index < events.Length; index++)
         {
             var ev = events[index];
+            if (ev.Place == null && sources.TryGetValue(ev.Key, out var placed) && placed.Magic == ev.Magic && placed.Place != null)
+            {
+                builder ??= events.ToBuilder();
+                builder[index] = ev = ev with { Place = placed.Place };
+            }
             if (TmbEntrySchema.Find(ev.Magic) is not { } kind)
                 continue;
             var values = ev.Values ?? ImmutableDictionary<string, double>.Empty;
@@ -405,7 +411,7 @@ internal static class TimelineEdits
     /// <summary>
     /// Replaces the event with <paramref name="ev"/>'s key by <paramref name="ev"/>, as far as its access
     /// allows: an Editable event takes everything but its key, kind, lane and access; a Movable one
-    /// only its start; a Locked one nothing. What the loader derives from the entry's kind and track
+    /// only its start (a C043 its prop place too); a Locked one nothing. What the loader derives from the entry's kind and track
     /// (Resizable, LockReason, Conditional) is kept too, since saving checks it against the written
     /// file, and only a resizable event takes a new duration (at least one frame; an unchanged one is
     /// kept exactly). Starts stay inside the TMB's range. A motion at its own speed that gets time
@@ -433,8 +439,10 @@ internal static class TimelineEdits
                 Look = old.Lane == TimelineLane.Effect && ev.Path == old.Path && ev.Look is { IsEmpty: false } look ? look : null,
                 // A pin names an alternative of one sound of one file.
                 Pin = old.Lane == TimelineLane.Sound && TimelineSoundKey.Of(ev) is { } key && key == TimelineSoundKey.Of(old) ? ev.Pin : null,
+                Place = old.Lane == TimelineLane.Prop ? ev.Place : null,
             },
-            TimelineAccess.Movable => old with { Start = start },
+            // A summon weapon (C043) only moves, but takes a prop place like a C198.
+            TimelineAccess.Movable => old with { Start = start, Place = old.Magic == "C043" ? ev.Place : old.Place },
             _ => old,
         };
         // Another face loops only when it moves too: a pose has no length to repeat.
@@ -556,7 +564,7 @@ internal static class TimelineEdits
         if (a.Key != b.Key || a.Magic != b.Magic || a.Lane != b.Lane || a.Start != b.Start || a.Duration != b.Duration ||
             a.Resizable != b.Resizable || a.Path != b.Path || a.Access != b.Access || a.LockReason != b.LockReason ||
             a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop || !Equals(a.Look, b.Look) ||
-            a.Pin != b.Pin)
+            a.Pin != b.Pin || !Equals(a.Place, b.Place))
             return false;
         if (ReferenceEquals(a.Values, b.Values))
             return true;
