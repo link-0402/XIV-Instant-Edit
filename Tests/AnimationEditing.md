@@ -1805,3 +1805,18 @@ Test folder: D:\Mods\Poses (Solo, and a pack folder with a picture such as Multi
   choices come back after reopening the plugin.
 - [ ] 9 Right-click a pose > Move to the Recycle Bin: the tile goes, the footer says so, and the file is in the
   Recycle Bin (restore it from there). The game doesn't hitch.
+
+## Idle motion from the game (pending)
+
+The idle-motion layer's Motion from list adds, under "From the game", the character's race's Standing idle and
+Idle pose 1-6 from the game's own files (the copy the race loads, another race's when it borrows one), beside the
+animations seen playing. Offline check 2026-10-28: all 18 races list Standing idle and poses 1-6; idle.pap's
+first entry is a damage flinch (cbna_add_dmg_f), so the idle (cbnm_id0) is read by name.
+
+- [ ] 1 Fresh plugin load, open a dance, add an idle-motion layer: Motion from lists Standing idle and Idle pose
+  1-6 without playing any of them. Pick Idle pose 3: the layer reads it and Live shows its breathing.
+- [ ] 2 Pick Standing idle: the motion is the calm idle, not a flinch. With an idle mod enabled the game's own
+  idle is still the one read.
+- [ ] 3 On a Highlander or Hellsguard character (they borrow Standing idle and poses 5-6): those three read
+  without an error.
+- [ ] 4 Make startup instant on a modded loop: the held pose is the standing idle, not a flinch.

@@ -144,6 +144,9 @@ internal sealed class AnimationResources(PenumbraIpc penumbra, AnimationModServi
         return bytes;
     }
 
+    /// <summary>Whether the game itself has a file at <paramref name="gamePath"/>.</summary>
+    public bool GameFileExists(string gamePath) => AnimationDependencies.SafeGamePath(gamePath) && data.FileExists(gamePath);
+
     internal static string ResourceMapKey(Dictionary<string, HashSet<string>> paths)
     {
         var builder = new StringBuilder();

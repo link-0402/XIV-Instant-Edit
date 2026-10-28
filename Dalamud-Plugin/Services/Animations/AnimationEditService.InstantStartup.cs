@@ -128,26 +128,10 @@ internal sealed partial class AnimationEditService
     /// Decodes the game's own idle for the race <paramref name="startup"/> was made for (its PAP header's, else its
     /// skeleton's) on that race's game skeleton, whatever mods replace either. Nothing in game changes.
     /// </summary>
-    private async Task<MotionClip> DecodeVanillaIdleAsync(AnimationTimelineSource startup, Action<string> status, CancellationToken token)
+    private Task<MotionClip> DecodeVanillaIdleAsync(AnimationTimelineSource startup, Action<string> status, CancellationToken token)
     {
         var race = startup.FileModel ?? AnimationSkeletonIndex.ModelFromPath(startup.Clip.SkeletonPath)
             ?? throw new InvalidOperationException("The startup isn't made for a playable race.");
-        var (idlePath, skeletonPath) = VanillaIdlePaths(race);
-        var pap = await resources.ReadGameAsync(idlePath, token)
-            ?? throw new FileNotFoundException($"The game has no idle for {AnimationBones.RaceName(race)}.");
-        var skeleton = await resources.ReadGameAsync(skeletonPath, token)
-            ?? throw new FileNotFoundException($"The game has no skeleton for {AnimationBones.RaceName(race)}.");
-        var entries = new AnimationPap(pap).Entries;
-        var entry = entries.FirstOrDefault(e => e.Name == "idle") ?? entries.FirstOrDefault()
-            ?? throw new InvalidDataException("The game's idle holds no animation.");
-        var description = await framework.RunOnFrameworkThread(() => AnimationSkeleton.Inspect(skeleton));
-        var clip = new AnimationClip(idlePath, entry.Name, entry.Binding, 0, 0, skeletonPath, description.Fingerprint);
-        var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit motion", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(work);
-        try { return await baker.DecodeAsync(pap, skeleton, clip, startup.Capture, work, status, token, () => { }); }
-        finally
-        {
-            try { Directory.Delete(work, true); } catch (IOException) { }
-        }
+        return DecodeGameFileAsync(VanillaIdlePaths(race).Idle, StandingIdleEntry, startup.Capture, status, token);
     }
 }
