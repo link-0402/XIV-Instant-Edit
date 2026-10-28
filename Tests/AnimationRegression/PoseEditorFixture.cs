@@ -531,16 +531,22 @@ internal static class PoseEditorFixture
               pasted.Motion[0].Keys.Single().Moved.SequenceEqual([Hand]),
             "Paste pose keys the copied bones as they were copied, in one key, keeping whether each sets its position");
 
-        // Mirrored, each hand gets the mirror image of the other's change from the clip's own pose, read in the root's turned frame.
+        // Mirrored, each hand gets the mirror image of the other's copied pose in their parent's (the root's) frame. The motion
+        // here is left out: a clip whose right hand is turned its own way at the playhead (a pose like no mirror of the left's)
+        // gives the same keys, and so does no motion at all.
         var swapped = PoseEdits.Paste(pose, "m1", 20, copy, true, rig, local, out _);
-        var root = model[0].Rotation;
-        var inverse = Quaternion.Inverse(root);
-        Quaternion Change(BoneTransform keyed, int bone) => root * keyed.Rotation * Quaternion.Inverse(root * local[bone].Rotation);
+        var skewed = local.ToArray();
+        skewed[3] = skewed[3] with { Rotation = skewed[3].Rotation * Q(Vector3.UnitX, 40) };
+        var asymmetric = PoseEdits.Paste(pose, "m1", 20, copy, true, rig, skewed, out _);
+        var unread = PoseEdits.Paste(pose, "m1", 20, copy, true, rig, null, out _);
+        static bool Mirrors(BoneTransform pasted, MotionTransform copied) =>
+            Degrees(pasted.Rotation, PoseEdits.MirrorRotation(copied.Rotation)) < 1e-2f && Near(pasted.Position, PoseEdits.MirrorPosition(copied.Position), 1e-4f);
         check(swapped != null && At(swapped, 20, Twin) is { } toTwin && At(swapped, 20, Hand) is { } toHand &&
-              Degrees(inverse * Change(toTwin, 3) * root, PoseEdits.MirrorRotation(inverse * Change(hand.Value.ToBone(), 2) * root)) < 1e-2f &&
-              Degrees(inverse * Change(toHand, 2) * root, PoseEdits.MirrorRotation(inverse * Change(twin.Value.ToBone(), 3) * root)) < 1e-2f &&
+              Mirrors(toTwin, hand.Value) && Mirrors(toHand, twin.Value) &&
+              asymmetric != null && At(asymmetric, 20, Twin) == toTwin && At(asymmetric, 20, Hand) == toHand &&
+              unread != null && At(unread, 20, Twin) == toTwin &&
               swapped.Motion[0].Keys.Single().Moved.SequenceEqual([Twin]),
-            "Paste mirrored swaps the hands, each the mirror image of the other's change, and the twin takes over setting the position");
+            "Paste mirrored swaps the hands, each the mirror image of the other's copied pose whatever the motion does there, and the twin takes over setting the position");
 
         var neck = new PoseCopy(MotionLayerKind.Offset, [new(Neck, M(Vector3.Zero, Q(Vector3.UnitY, 20)), false)]);
         var middle = PoseEdits.Paste(Doc(MotionLayerKind.Offset), "m1", 4, neck, true, rig, local, out _);
@@ -556,8 +562,8 @@ internal static class PoseEditorFixture
 
         var offset = Doc(MotionLayerKind.Offset);
         check(ReferenceEquals(PoseEdits.Paste(offset, "m1", 20, copy, false, rig, null, out _), offset) &&
-              PoseEdits.Paste(pose, "m1", 20, copy, true, rig, null, out _) == null,
-            "a pose copy never pastes into an offset layer, and a mirrored paste waits for the clip's own pose");
+              PoseEdits.Paste(Doc(MotionLayerKind.Offset), "m1", 4, neck, true, rig, null, out _) == null,
+            "a pose copy never pastes into an offset layer, and a mirrored offset paste waits for the clip's own pose");
 
         // Copy what you see: the lowest pose layer that is on, every bone but the root as the frames through it leave it.
         var two = Doc(MotionLayerKind.Pose, new MotionKey(20, ImmutableDictionary<string, BoneTransform>.Empty.Add(Hand, hand.Value.ToBone()), [Hand]));

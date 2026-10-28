@@ -448,10 +448,11 @@ internal static class PoseEdits
 
     /// <summary>
     /// Keys <paramref name="copy"/>'s bones at <paramref name="frame"/> in a layer of the kind they were copied from,
-    /// as one edit. With <paramref name="mirrored"/> each goes to its twin (a middle bone onto itself), mirrored as
-    /// <see cref="Mirror"/> does: read against the pose the layers before leave here (<paramref name="local"/>), so a pose key's
-    /// change from that is what mirrors. Null when that pose is unknown. Bones the skeleton lacks, or for a mirrored
-    /// paste whose twin it lacks, are left out and counted in <paramref name="skipped"/>.
+    /// as one edit. With <paramref name="mirrored"/> each goes to its twin (a middle bone onto itself), mirrored. A pose
+    /// key becomes the copied pose's mirror image: its change from the skeleton at rest, mirrored onto the twin at rest,
+    /// whatever the motion does here. An offset is read against the pose the layers before leave here
+    /// (<paramref name="local"/>), as <see cref="Mirror"/> does; null when that pose is unknown. Bones the skeleton lacks,
+    /// or for a mirrored paste whose twin it lacks, are left out and counted in <paramref name="skipped"/>.
     /// </summary>
     public static TimelineDocument? Paste(TimelineDocument doc, string layerKey, int frame, PoseCopy copy, bool mirrored,
         SkeletonDescription skeleton, MotionTransform[]? local, out int skipped)
@@ -459,11 +460,12 @@ internal static class PoseEdits
         skipped = 0;
         if (MotionEdits.Find(doc, layerKey) is not { Kind: MotionLayerKind.Offset or MotionLayerKind.Pose } layer || layer.Kind != copy.Kind)
             return doc;
-        if (mirrored && (local == null || local.Length != skeleton.Bones.Length))
+        var pose = layer.Kind == MotionLayerKind.Pose;
+        if (mirrored && !pose && (local == null || local.Length != skeleton.Bones.Length))
             return null;
         var index = MotionEvaluator.Index(skeleton);
-        MotionTransform[] model = mirrored ? MotionEvaluator.ModelSpace(skeleton, local!) : [], rest = mirrored ? RestModel(skeleton) : [];
-        var pose = layer.Kind == MotionLayerKind.Pose;
+        MotionTransform[] restLocal = mirrored ? RestLocal(skeleton) : [], rest = mirrored ? MotionEvaluator.ModelSpace(skeleton, restLocal) : [];
+        MotionTransform[] model = mirrored && !pose ? MotionEvaluator.ModelSpace(skeleton, local!) : [];
         foreach (var (bone, value, moved) in copy.Bones)
         {
             var to = mirrored ? MotionMirror.Twin(bone) ?? bone : bone;
@@ -475,12 +477,10 @@ internal static class PoseEdits
             }
             var result = value;
             if (mirrored)
-            {
-                var body = Body(skeleton, model, rest, from, twin);
                 result = pose
-                    ? MirrorPose(value, local![from], ParentRotation(skeleton, model, from), local[twin], ParentRotation(skeleton, model, twin), body)
-                    : MirrorOffset(value, model[from].Rotation, model[twin].Rotation, body);
-            }
+                    ? MirrorPose(value, restLocal[from], ParentRotation(skeleton, rest, from), restLocal[twin], ParentRotation(skeleton, rest, twin),
+                        Quaternion.Identity)
+                    : MirrorOffset(value, model[from].Rotation, model[twin].Rotation, Body(skeleton, model, rest, from, twin));
             doc = MotionEdits.SetKey(doc, layerKey, frame, to, result.ToBone(), pose ? moved : null);
         }
         return doc;
@@ -507,8 +507,10 @@ internal static class PoseEdits
         new(copy.Kind, [new MotionKey(0, copy.Bones.ToImmutableDictionary(bone => bone.Bone, bone => bone.Value.ToBone(), StringComparer.Ordinal),
             [.. copy.Bones.Where(bone => bone.Moved).Select(bone => bone.Bone)])]);
 
-    private static MotionTransform[] RestModel(SkeletonDescription skeleton) =>
-        MotionEvaluator.ModelSpace(skeleton, skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference)).ToArray());
+    private static MotionTransform[] RestLocal(SkeletonDescription skeleton) =>
+        [.. skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference))];
+
+    private static MotionTransform[] RestModel(SkeletonDescription skeleton) => MotionEvaluator.ModelSpace(skeleton, RestLocal(skeleton));
 
     /// <summary>How the bone above both sides is turned from rest in <paramref name="model"/>: the body's middle turns with it.</summary>
     private static Quaternion Body(SkeletonDescription skeleton, MotionTransform[] model, MotionTransform[] rest, int bone, int twin) =>

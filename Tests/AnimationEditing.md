@@ -1792,20 +1792,37 @@ the pose at the selected layer's key before the playhead (blue) and after it (or
 The Bones panel's Copy pose, Paste pose and Paste mirrored buttons, next to Mirror. The maths is covered
 offline in PoseEditorFixture (Clipboard).
 
-- [ ] 1 Open a dance in the Timeline, add a pose layer, select the left arm group and pause on a frame. Copy
+- [x] 1 Open a dance in the Timeline, add a pose layer, select the left arm group and pause on a frame. Copy
   pose: the status line says how many bones were copied.
-- [ ] 2 Move the playhead 20 frames on, Paste pose: one key holds the arm as it was copied. Undo once: the
+  (XIV Bridge 370, 2026-10-28, Idle pose 3.)
+- [x] 2 Move the playhead 20 frames on, Paste pose: one key holds the arm as it was copied. Undo once: the
   whole paste goes.
+  (XIV Bridge 370, 2026-10-28: the pasted arm 0.0 mm from the copy in the chest's frame.)
 - [ ] 3 Paste mirrored at another frame: the right arm takes the mirrored pose, the left arm is untouched.
   With both arms selected when copying, they swap sides.
-- [ ] 4 On an offset layer, turn the neck to one side, Copy pose, then Paste mirrored at another frame: the
+  Found 2026-10-28 (XIV Bridge 370, Idle pose 3): the left arm stays put, but the right arm lands 28.0 mm from the
+  mirrored copy in the chest's frame, and both arms swapped 26.8 mm (the test allows 2 cm). The neck mirrors exactly
+  (371). Cause (probe, 2026-10-28): PoseEdits.Paste mirrors the copy's change from the motion under the layer at the
+  paste frame (as Mirror does), so the right arm becomes its own motion there plus the mirrored change; that guess
+  matches the paste within 0.5 mm. Idle pose 3 is 28.1 mm (elbow) and 25.5 mm (hand) off symmetric at frame 50, which
+  is the whole gap; the mirror plane and the rest skeleton are exact.
+  Changed 2026-10-28 (the user chose it): on a Pose layer Paste mirrored keys the copied pose's mirror image, its change
+  from the skeleton at rest mirrored onto the twin at rest, whatever the motion does at the paste frame; offsets and Mirror
+  are unchanged. Checked in game with the new formula on the loaded build's statics: the right arm 0.0 mm from the
+  mirrored copy, both arms swapped 0.0 mm. Retest: 370 once the new build is loaded (its swap check now reads the copy as
+  it is after the first paste).
+- [x] 4 On an offset layer, turn the neck to one side, Copy pose, then Paste mirrored at another frame: the
   neck turns to the other side.
-- [ ] 5 Open another animation, add a pose layer, Paste pose: the copy carries over. Paste into an offset
+  (XIV Bridge 371, 2026-10-28: 30.0 deg each way, the axis mirrored.)
+- [x] 5 Open another animation, add a pose layer, Paste pose: the copy carries over. Paste into an offset
   layer: the buttons are disabled, and the tooltip says the copy is from a pose layer.
+  (XIV Bridge 372, 2026-10-28: Idle pose 3 to Idle pose 5, through the "Open ... and lose them?" Discard. The tooltip
+  is the rule's string, not read off the screen.)
 - [ ] 6 Copy bones from a skeleton with tail or IVCS bones, paste on one without them: the status line says
   how many bones were skipped, the rest are keyed.
-- [ ] 7 Move the playhead outside the layer: both paste buttons are disabled with "Move the playhead into the
+- [x] 7 Move the playhead outside the layer: both paste buttons are disabled with "Move the playhead into the
   layer."
+  (XIV Bridge 372, 2026-10-28.)
 
 ## Picking several keys (pending)
 

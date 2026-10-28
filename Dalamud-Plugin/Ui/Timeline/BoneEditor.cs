@@ -186,7 +186,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         FlowLine("Mirror");
         using (ImRaii.Disabled(readOnly || pairs.Count == 0 || !mirrorReady))
         {
-            // The motion as the layers before this one leave it, as Paste mirrored reads it.
+            // The motion as the layers before this one leave it, as Paste mirrored reads it for an offset.
             if (ImGui.Button("Mirror") && PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton,
                     at => posing.FramesAt(loaded, current.Document, layer, at)?.Before) is { } mirrored)
                 current.Commit(current.WithReach(mirrored));
@@ -219,16 +219,18 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(noPaste ?? "Key the copied bones at the playhead.");
 
-        // Mirroring reads the pose the layers before this one leave here, which may still be read.
-        var local = noPaste == null ? posing.FramesAt(loaded, current.Document, layer, frame)?.Before : null;
+        // An offset mirrors against the pose the layers before this one leave here, which may still be read; a pose
+        // mirrors against the skeleton at rest.
+        var local = noPaste == null && !pose ? posing.FramesAt(loaded, current.Document, layer, frame)?.Before : null;
+        var waiting = !pose && local == null;
         FlowLine("Paste mirrored");
-        using (ImRaii.Disabled(readOnly || noPaste != null || local == null))
+        using (ImRaii.Disabled(readOnly || noPaste != null || waiting))
         {
-            if (ImGui.Button("Paste mirrored") && copied != null && local != null)
+            if (ImGui.Button("Paste mirrored") && copied != null && !waiting)
                 Paste(current, layer.Key, skeleton, copied, frame, true, local);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(noPaste ?? (local == null ? decode.Status : "Key the copied bones on the other side at the playhead, mirrored."));
+            ImGui.SetTooltip(noPaste ?? (waiting ? decode.Status : "Key the copied bones on the other side at the playhead, mirrored."));
 
         FlowLine("Clear");
         using (ImRaii.Disabled(readOnly || !bones.Any(bone => layer.Keys.Any(key => key.Bones.ContainsKey(bone)))))
