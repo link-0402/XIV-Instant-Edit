@@ -870,6 +870,8 @@ of the model it takes, so the other mod can be off.
 - [ ] Save in place, then Undo: the mod's meta.json is as before and the private files are gone.
 - [ ] Save into a new mod: its DefaultData maps the private files and 256 material folders.
 - [ ] A prop on a GPose actor that hides weapons: does hiding hide summons, and what shows them.
+- [ ] Two new mods, each with a prop from a mod, both on: each emote shows its own prop.
+- [ ] In place, a prop on a second animation of the same mod gets its own body and stays when the first's option is off.
 
 ## Expressions (pending)
 

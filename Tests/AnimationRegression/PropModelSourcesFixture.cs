@@ -194,6 +194,8 @@ internal static class PropModelSourcesFixture
             var bodies = PropModelSources.ModBodies(dir);
             check(bodies.SetEquals([(9001, 9000), (9001, start), (528, 9001)]),
                 $"the mod's private bodies come from every option, in any case, and only b9000..b9999: {string.Join(", ", bodies)}");
+            check(PropModelSources.AllocateBody(9001, 9000, _ => false, new HashSet<(ushort, ushort)>(), body => bodies.Contains((9001, body))) == 9001,
+                "a b9000 the animation's mod maps is skipped, b9001 given instead");
             var found = PropModelSources.FindBody(phone, new HashSet<(ushort, ushort)>(), bodies, _ => false, Task.FromResult).GetAwaiter().GetResult();
             check(found.Free != start && found.Free != 9000 && found.Busy.Contains(start),
                 $"a body the animation's mod maps is busy even with its option off (free {found.Free})");
