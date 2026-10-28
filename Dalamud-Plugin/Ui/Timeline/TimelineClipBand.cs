@@ -37,6 +37,9 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     private (Quaternion[][] Poses, int Playhead, IReadOnlyList<PoseMatch> Found)? matches;
     private readonly List<(float X, PoseMatch Match)> marks = [];
     private (float Top, float Bottom) markBand;
+    // The motion's key poses as ticks along the band's bottom edge, below the pose matches' marks: where they were drawn last, in screen pixels.
+    private readonly List<(float X, KeyPose Pose)> keyTicks = [];
+    private (float Top, float Bottom) tickBand;
 
     /// <summary>The clip band's height for <paramref name="doc"/>: none on an expression's timeline, which is never cut.</summary>
     public static float Height(TimelineDocument doc, float row) => doc.Expression ? 0 : row * 1.5f;
@@ -45,6 +48,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
         float trackLeft, TimelineHit hit)
     {
         marks.Clear();
+        keyTicks.Clear();
         if (geometry.Clip <= 0)
             return;
         var doc = current.Document;
@@ -130,6 +134,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
             drawList.AddLine(new Vector2(TimelineUi.Crisp(full), barTop), new Vector2(TimelineUi.Crisp(full), barBottom), TimelineUi.U32(Theme.Accent), line);
         }
         DrawMatches(drawList, current, max, trackLeft, barTop, barBottom, line);
+        DrawKeyPoses(drawList, current, max, trackLeft, bottom, line);
         DrawDecodeState(drawList, max, top, bottom);
         DrawSeamBadge(drawList, current, max, trackLeft, top, bottom);
         drawList.PopClipRect();
@@ -227,6 +232,53 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
             if (Math.Abs(mouse.X - x) is var distance && distance <= reach && distance < closest)
                 (best, closest) = (match, distance);
         return best;
+    }
+
+    /// <summary>
+    /// With the motion's markers shown, a tick at each key pose along the band's bottom edge, under the pose
+    /// matches' marks, which end at the bar's bottom; the one under the pointer brighter.
+    /// </summary>
+    private void DrawKeyPoses(ImDrawListPtr drawList, TimelineEditor current, Vector2 max, float trackLeft, float bottom, float line)
+    {
+        tickBand = (bottom - Theme.Scaled(4), bottom);
+        if (current.Document.Expression || current.ShownMarkers is not { } markers)
+            return;
+        var reach = Theme.Scaled(4);
+        foreach (var pose in markers.Poses)
+        {
+            var x = TimelineUi.Crisp(trackLeft + current.View.X(pose.Frame));
+            if (x >= trackLeft - reach && x <= max.X + reach)
+                keyTicks.Add((x, pose));
+        }
+        var hot = KeyPoseAt(ImGui.GetIO().MousePos);
+        foreach (var (x, pose) in keyTicks)
+            drawList.AddLine(new Vector2(x, tickBand.Top), new Vector2(x, tickBand.Bottom),
+                TimelineUi.U32(hot == pose ? Theme.Text : Theme.Muted), line);
+    }
+
+    /// <summary>The key pose whose tick is under <paramref name="mouse"/> (screen pixels), as last drawn; the tick strip only.</summary>
+    public KeyPose? KeyPoseAt(Vector2 mouse)
+    {
+        if (keyTicks.Count == 0 || mouse.Y < tickBand.Top || mouse.Y > tickBand.Bottom)
+            return null;
+        var reach = Theme.Scaled(4);
+        KeyPose? best = null;
+        var closest = float.MaxValue;
+        foreach (var (x, pose) in keyTicks)
+            if (Math.Abs(mouse.X - x) is var distance && distance <= reach && distance < closest)
+                (best, closest) = (pose, distance);
+        return best;
+    }
+
+    /// <summary>The tooltip of the key pose tick under the pointer; whether there is one.</summary>
+    public bool DrawKeyPoseTooltip()
+    {
+        if (KeyPoseAt(ImGui.GetIO().MousePos) is not { } pose)
+            return false;
+        ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        if (Widgets.HoverDelay($"key-pose:{pose.Frame}"))
+            ImGui.SetTooltip($"Frame {pose.Frame}: {pose.Bones} bones key here. Click to edit motion keys.");
+        return true;
     }
 
     /// <summary>While the motion is read, how far along on the band's right; why it failed when it did.</summary>
@@ -331,6 +383,8 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
                     !readOnly && (blend || CutEdits.CanBlend(cuts, selected))))
                 current.ToggleSelectedBlend();
         }
+        if (ImGui.MenuItem("Edit motion keys", "", false, !readOnly))
+            current.EditMotionKeys(frame);
         ImGui.Separator();
         if (ImGui.MenuItem("Fit", "F"))
             current.Fit();

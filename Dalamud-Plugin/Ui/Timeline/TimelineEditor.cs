@@ -1416,7 +1416,7 @@ internal sealed class TimelineEditor
             (SelectedKey, SelectedBone) = (hit.KeyFrame, null);
         else if (gesture == TimelineGesture.None && hit.OnLayer)
             SelectLayer(hit.Layer!, hit.OnKey ? hit.KeyFrame : null, hit.Part == TimelinePart.BoneKey ? hit.Bone : null);
-        else if (gesture == TimelineGesture.None && hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Layer != null)
+        else if (gesture == TimelineGesture.None && hit.Part is TimelinePart.BoneLane or TimelinePart.BoneMarker or TimelinePart.Legend && hit.Layer != null)
             SelectLayer(hit.Layer);
         else if (gesture == TimelineGesture.None && hit.Part is TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight && hit.Cut >= 0)
             SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, hit.Cut));

@@ -274,6 +274,15 @@ internal static class TimelinePainter
         }
     }
 
+    /// <summary>Whether <paramref name="layer"/> has a key for <paramref name="bone"/> at <paramref name="frame"/>.</summary>
+    private static bool HasBoneKey(MotionLayer layer, int frame, string bone)
+    {
+        foreach (var key in layer.Keys)
+            if (key.Frame == frame && key.Bones.ContainsKey(bone))
+                return true;
+        return false;
+    }
+
     /// <summary>
     /// An unfolded layer's bone rows: a thin line over the layer's frames and the bone's own keys, smaller
     /// than the layer's. The selected one gets a ring, and so does each bone's part of a selected whole key.
@@ -282,6 +291,7 @@ internal static class TimelinePainter
         TimelineGeometry geometry, TimelineView view, Vector2 min, Vector2 max, float trackLeft, float rowsTop, TimelineHit hit)
     {
         var line = Math.Max(1, MathF.Floor(Theme.Scale));
+        var keysLayer = MotionEdits.MotionKeysLayer(doc)?.Key;
         for (var row = layout.MotionFirstRow; row < layout.MotionFirstRow + layout.MotionRows; row++)
         {
             if (layout.BoneAt(row) is not { } entry)
@@ -298,6 +308,19 @@ internal static class TimelinePainter
             drawList.AddLine(new Vector2(x0, middle), new Vector2(x1, middle), TimelineUi.U32(Theme.WithAlpha(colour, .45f * alpha)), line);
             var half = Math.Min(geometry.Row / 2 - Theme.Scaled(2), Theme.Scaled(4));
             var selectedLayer = current.SelectedLayer == layer.Key;
+            // The Motion keys layer's own markers: a hollow circle where the motion has a key pose of this bone and the layer no key.
+            if (current.ShownMarkers is { } markers && layer.Key == keysLayer)
+            {
+                var radius = half * .55f;
+                foreach (var marker in markers.Of(entry.Bone))
+                {
+                    var x = trackLeft + view.X(marker);
+                    if (x < trackLeft - half || x > max.X + half || HasBoneKey(layer, marker, entry.Bone))
+                        continue;
+                    var hotMarker = hit.Part == TimelinePart.BoneMarker && hit.Row == row && hit.KeyFrame == marker;
+                    drawList.AddCircle(new Vector2(x, middle), radius, TimelineUi.U32(hotMarker ? Theme.Text : Theme.WithAlpha(Theme.Muted, .7f * alpha)), 0, line);
+                }
+            }
             foreach (var key in layer.Keys)
             {
                 if (!key.Bones.ContainsKey(entry.Bone))

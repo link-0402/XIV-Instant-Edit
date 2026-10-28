@@ -197,6 +197,15 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Playhead = match.Frame;
             return;
         }
+        // A key pose's tick goes there and shows the Motion keys layer; read-only, it only moves the playhead.
+        if (clipBand.KeyPoseAt(io.MousePos) is { } pose)
+        {
+            if (readOnly)
+                current.Playhead = pose.Frame;
+            else
+                current.EditMotionKeys(pose.Frame);
+            return;
+        }
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly &&
             hit.Part is TimelinePart.Lane or TimelinePart.Legend && hit.Lane is { } lane && TimelineWindowViews.AddKind(lane) is { } kind)
         {
@@ -207,6 +216,18 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly && hit.Part == TimelinePart.MotionLane && hit.Layer == null)
         {
             AddLayer(current, MotionLayerKind.Offset);
+            return;
+        }
+        // A marker goes to its frame and picks its bone and layer; nothing in the document changes, so read-only works too.
+        if (hit.Part == TimelinePart.BoneMarker && hit.Bone is { } marked && hit.Layer != null)
+        {
+            current.Playhead = hit.KeyFrame;
+            // A selected bone becomes the primary one and the rest stay; any other is picked alone.
+            if (posing.Selection.Contains(marked))
+                posing.Selection.Set([marked], true, marked);
+            else
+                posing.Selection.Only(marked);
+            current.SelectLayer(hit.Layer);
             return;
         }
         // A bone's row picks that bone for the panel and the Bones window; Ctrl adds it.
@@ -540,6 +561,11 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                 ImGui.TextColored(Theme.Hint, "Click to pick this bone. Ctrl+click adds it.");
             return;
         }
+        if (hit.Part == TimelinePart.BoneMarker && Widgets.HoverDelay($"bone-marker:{hit.Layer}:{hit.Bone}:{hit.KeyFrame}"))
+        {
+            ImGui.SetTooltip($"Frame {hit.KeyFrame}: a key pose of this bone's motion. Click to go there.");
+            return;
+        }
         if (clipBand.MarkAt(ImGui.GetIO().MousePos) is { } match)
         {
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
@@ -550,6 +576,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             ImGui.TextColored(Theme.Hint, readOnly ? "Click to go here." : TimelineWindowViews.MatchHint);
             return;
         }
+        if (clipBand.DrawKeyPoseTooltip())
+            return;
         if (TimelineClipBand.DrawTooltip(hit, CutEdits.CutsOf(current.Document), readOnly))
             return;
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
@@ -670,7 +698,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             clipBand.DrawMenu(current, readOnly, menuFrame);
             return;
         }
-        if (menuHit.Part is TimelinePart.BoneLane or TimelinePart.Legend && menuHit.Bone is { } bone &&
+        if (menuHit.Part is TimelinePart.BoneLane or TimelinePart.BoneMarker or TimelinePart.Legend && menuHit.Bone is { } bone &&
             MotionEdits.Find(current.Document, menuHit.Layer) is { } owner)
         {
             ImGui.TextColored(Theme.Label, AnimationPresentation.BoneName(bone));
