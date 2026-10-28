@@ -279,6 +279,13 @@ internal static class MotionKeyMarkersFixture
         var cancelled = false;
         try { MotionKeyMarkers.Find(clip, 60, MarkerDetail.Normal, new CancellationToken(true)); } catch (OperationCanceledException) { cancelled = true; }
         check(cancelled, "markers: a cancelled search stops");
+        // b2 turns steadily by only 0.15 degrees: the straight line between its ends matches it, so rounding near no turn must not split it.
+        var tiny = MotionKeyMarkers.Find(Clip(61, 60, (_, frame) => [T(Vector3.Zero), T(Vector3.UnitX), T(Vector3.UnitY, Q(Vector3.UnitX, .15f * frame / 60))]), 60, MarkerDetail.More);
+        check(tiny.Of(B2).SequenceEqual([0, 60]), "markers: a tiny steady turn keeps only its ends at More");
+        // The same turn with its stored rotations a few float steps off unit length, as a decode can leave them.
+        var drift = MotionKeyMarkers.Find(Clip(61, 60, (_, frame) => [T(Vector3.Zero), T(Vector3.UnitX),
+            T(Vector3.UnitY, Q(Vector3.UnitX, .15f * frame / 60) * .999998f)]), 60, MarkerDetail.More);
+        check(drift.Of(B2).SequenceEqual([0, 60]), "markers: rotations a hair off unit length don't read as a turn");
         check(normal.Poses.Select(p => p.Frame).First() == 0 && normal.Poses[^1].Frame == 60 && normal.Loops == clip.Loops && normal.Length == 60, "markers: the set's ends, loop and length");
     }
 
