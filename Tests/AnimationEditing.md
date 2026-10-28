@@ -1863,3 +1863,27 @@ first entry is a damage flinch (cbna_add_dmg_f), so the idle (cbnm_id0) is read 
 - [ ] 3 On a Highlander or Hellsguard character (they borrow Standing idle and poses 5-6): those three read
   without an error.
 - [ ] 4 Make startup instant on a modded loop: the held pose is the standing idle, not a flinch.
+
+## Motion key markers (pending)
+
+The clip band's key poses and the Motion keys layer: a bone edit keys the bone and fades out over the motion's own
+markers. The maths is covered offline (marker finder, key poses, fade keys); these checks are the canvas and the feel.
+Code: Services/Animations/Motion (markers), Ui/Timeline/TimelineClipBand.cs, the layer panel's Detail and Reach.
+
+- [ ] 1 Open a vanilla emote and click a key pose on the clip band (muted ticks along its bottom edge; the tooltip
+  says "Frame N: n bones key here. Click to edit motion keys."): a "Motion keys" Offset layer appears first in the
+  stack and is selected, and the playhead is on that frame. Right-click the band > Edit motion keys does the same.
+- [ ] 2 The Motion keys layer unfolds into rows for its keyed bones and the selected bones; each row shows that
+  bone's markers as small hollow circles behind the keys. Click a marker: the playhead moves there and the bone is
+  selected, and no key is made.
+- [ ] 3 Turn a bone at a marker (rotation ball, fields or gizmo). With Live on, the change fades out at the next
+  markers on both sides, with zero keys there. Key, Reset, Mirror and a pose import fade out the same way.
+- [ ] 4 Paste, nudge and delete add no zero keys.
+- [ ] 5 Reach 2 widens the change to the second markers; Reach 3 to the third. An existing closer key is kept.
+- [ ] 6 Mute the layer: the original motion is back. Rename and delete it like any layer.
+- [ ] 7 Detail Fewer / Normal / More changes the marker counts on the bone rows and the number of key poses.
+- [ ] 8 Save and reopen (Edit again): the Motion keys layer comes back with its keys, and Detail and Reach are kept.
+- [ ] 9 Record the marker and key-pose counts per Detail on about 10 vanilla emotes (short, long, looping), read with
+  `xiv_exec` from the open clip (`_timelineWindow.keyMarkers` / `editor.Markers`). If the counts look wrong, tune the
+  tolerances (Fewer 2 deg / 0.005 m / 2 %, Normal 0.5 deg / 0.001 m / 0.5 %, More 0.1 deg / 0.0002 m / 0.1 %).
+- [ ] 10 Hips drag on the Motion keys layer fades out (after the hip-drag work is committed and wrapped).
