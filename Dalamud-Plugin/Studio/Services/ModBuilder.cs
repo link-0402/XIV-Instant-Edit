@@ -1024,6 +1024,13 @@ internal sealed class ModBuilder
     private bool ConvertTexture(string sourcePath, TextureCompression compression, IReadOnlyList<TextureUse> uses, string label,
         out byte[] texData, out string error, out string detail)
     {
+        if (TextureSources.SizeProblem(ImageFileCache.ReadHeader(sourcePath)) is { Length: > 0 } size)
+        {
+            texData = Array.Empty<byte>();
+            error   = size;
+            detail  = string.Empty;
+            return false;
+        }
         if (compression == TextureCompression.Auto && !TextureSources.IsTex(sourcePath))
             return AutoTexture(sourcePath, uses, label, out texData, out error, out detail);
 

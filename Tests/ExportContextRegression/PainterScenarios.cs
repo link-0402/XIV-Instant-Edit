@@ -489,7 +489,9 @@ internal static class PainterScenarios
         Require(PainterRules.EditReason(Planned("diffuse", "chara/x.tex", uvSet: 1)).Length > 0, "second-UV-set textures are not offered");
         Require(PainterRules.EditReason(Planned("diffuse", "chara/x.tex", kind: "")).Length > 0, "external files are not offered");
         Require(PainterRules.EditReason(Planned("diffuse", "chara/x.tex", format: (uint)TexFile.TextureFormat.BC2)).Length > 0, "formats sessions can't keep are not offered");
-        Require(PainterRules.EditReason(Planned("diffuse", "chara/x.tex", size: 1026)).Length > 0, "compressed sizes must divide by 4");
+        Require(PainterRules.EditReason(Planned("diffuse", "chara/x.tex", size: 1026)).Length > 0 &&
+                PainterRules.EditReason(Planned("diffuse", "chara/x.tex", size: 1000, format: (uint)TexFile.TextureFormat.B8G8R8A8)).Contains("power of two"),
+            "textures that aren't a power of two on each side are not offered, compressed or not");
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         Require(PainterRules.UniqueName("--c0101e0001_top_norm", used, "t") == "--c0101e0001_top_norm" &&
                 PainterRules.UniqueName("--C0101E0001_TOP_NORM", used, "t") == "--C0101E0001_TOP_NORM_2" &&

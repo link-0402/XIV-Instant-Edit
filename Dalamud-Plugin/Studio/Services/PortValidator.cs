@@ -403,6 +403,8 @@ internal static class PortValidator
                 var missing = tex.VariantPaths.Where(p => !File.Exists(p)).Select(Path.GetFileName).ToList();
                 if (missing.Count > 0)
                     issues.Add(new(Severity.Error, target, $"{who}: variant file(s) not found: {string.Join(", ", missing)}."));
+                else
+                    ValidateVariantSizes(tex, images, target, who, issues);
                 return;
             }
 
@@ -412,6 +414,8 @@ internal static class PortValidator
                 issues.Add(new(Severity.Error, target, $"{who}: variant folder not found."));
             else if (TextureSources.VariantImages(tex).Count == 0)
                 issues.Add(new(Severity.Error, target, $"{who}: variant folder has no images."));
+            else
+                ValidateVariantSizes(tex, images, target, who, issues);
             return;
         }
 
@@ -434,8 +438,17 @@ internal static class PortValidator
             issues.Add(new(Severity.Error, target, $"{who}: the alpha map is not a supported file type (use png, jpeg, tga, dds or .tex)."));
     }
 
+    /// <summary>Each variant image whose size the game can't take, by name.</summary>
+    private static void ValidateVariantSizes(TextureSlot tex, ImageFileCache images, Target target, string who, List<PortIssue> issues)
+    {
+        foreach (var image in TextureSources.VariantImages(tex))
+            if (TextureSources.SizeProblem(images.Read(image)) is { Length: > 0 } size)
+                issues.Add(new(Severity.Error, target, $"{who} / {Path.GetFileName(image)}: {size}"));
+    }
+
     /// <summary>
-    /// What a source image costs, which is the one thing about a texture that is easy to get wrong
+    /// The size rule every texture follows (<see cref="TextureSources.SizeProblem"/>), then what a
+    /// source image costs, which is the one thing about a texture that is easy to get wrong
     /// without noticing: an uncompressed 4096×4096 texture is 64 MiB the game carries around, and
     /// compressing that one with BC7 takes the better part of a minute the first time it is built.
     /// </summary>
@@ -444,7 +457,9 @@ internal static class PortValidator
         if (!facts.Ok)
             return;
 
-        if (tex.Compression == TextureCompression.None && facts.Pixels >= 1024 * 1024)
+        if (TextureSources.SizeProblem(facts) is { Length: > 0 } size)
+            issues.Add(new(Severity.Error, target, $"{who}: {size}"));
+        else if (tex.Compression == TextureCompression.None && facts.Pixels >= 1024 * 1024)
             issues.Add(new(Severity.Warning, target,
                 $"{who}: {facts.Size} written uncompressed is {ImageFacts.Mib(facts.UncompressedBytes)}, which the game then carries " +
                 "in memory - either block format keeps it to a quarter of that."));

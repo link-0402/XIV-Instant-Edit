@@ -34,6 +34,8 @@ internal static class TextureFiles
         System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     public const int MaxBytes = 512 * 1024 * 1024;
     public const int MaxDimension = 8192;
+    /// <summary>The smallest side a new texture may have: one 4 × 4 block.</summary>
+    public const int MinDimension = 4;
     internal const uint Uncompressed = (uint)TexFile.TextureFormat.B8G8R8A8;
     public static string Hash(ReadOnlySpan<byte> data) => Convert.ToHexString(SHA256.HashData(data));
     public static TextureType OutputType(uint format) => (TexFile.TextureFormat)format switch
@@ -371,6 +373,24 @@ internal static class TextureFiles
         hash.AppendData(size);
         hash.AppendData(uncompressedTex.AsSpan(offset, checked(h.Width * h.Height * 4)));
         return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    /// <summary>
+    /// Why a texture can't be written at this size, or empty when it can. The game's own textures are a
+    /// power of two on each side, so every texture this plugin writes from a new image is too. Existing
+    /// textures of other sizes still open and re-encode at their own size.
+    /// </summary>
+    public static string SizeProblem(int width, int height, int max = MaxDimension)
+        => IsTextureSide(width, max) && IsTextureSide(height, max) ? string.Empty
+            : $"Texture sides must be a power of two from {MinDimension} to {max}; this one is {width} × {height}.";
+
+    private static bool IsTextureSide(int side, int max) => side >= MinDimension && side <= max && (side & (side - 1)) == 0;
+
+    /// <summary>Refuses a save whose size <see cref="SizeProblem"/> rules out.</summary>
+    public static void ValidateSaveSize(int width, int height)
+    {
+        if (SizeProblem(width, height) is { Length: > 0 } problem)
+            throw new InvalidDataException(problem);
     }
 
     public static void ValidateTga(ReadOnlySpan<byte> bytes, int width, int height)

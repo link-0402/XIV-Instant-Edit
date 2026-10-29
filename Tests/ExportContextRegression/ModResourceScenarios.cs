@@ -217,6 +217,14 @@ internal static class ModResourceScenarios
             image.SaveAsPng(fine);
         Require(TextureConverter.Convert(fine, TextureCompression.None, out var tex, out error) && tex.Length == 80 + 8 * 8 * 4,
             $"an image of a normal size still converts ({error})");
+
+        var odd = Path.Combine(root, "odd.png");
+        using (var image = new Image<Rgba32>(1000, 512))
+            image.SaveAsPng(odd);
+        Require(TextureSources.SizeProblem(ImageFileCache.ReadHeader(odd)).Contains("1000 × 512", StringComparison.Ordinal) &&
+                TextureSources.SizeProblem(ImageFileCache.ReadHeader(fine)) == "" &&
+                TextureSources.SizeProblem(ImageFileCache.ReadHeader(wide)).Length > 0,
+            "builds and updates refuse sources that aren't a power of two on each side");
     }
 
     private static void PruneGetsUnderTheLimit(string root)

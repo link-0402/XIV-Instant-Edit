@@ -990,6 +990,7 @@ public sealed class TextureEditService : IDisposable
         if (string.Equals(name, TextureModBackend.OriginalTextureOptionName, StringComparison.OrdinalIgnoreCase))
             throw new IOException($"\"{name}\" is reserved for the edited texture. Rename the TGA.");
         var (width, height) = TextureFiles.ValidateTga(tga);
+        TextureFiles.ValidateSaveSize(width, height);
         await Task.Delay(150, _life.Token).ConfigureAwait(false);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested &&
             generation == Interlocked.Read(ref runtime.VariantGeneration) && TextureFiles.Hash(TextureFiles.Read(file)) == hash;
@@ -1133,6 +1134,7 @@ public sealed class TextureEditService : IDisposable
         }
         if (Environment.TickCount64 < runtime.RetryAt) return;
         var (width, height) = TextureFiles.ValidateTga(tga);
+        TextureFiles.ValidateSaveSize(width, height);
         await Task.Delay(150, _life.Token).ConfigureAwait(false);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested && generation == Interlocked.Read(ref runtime.Generation) &&
             TextureFiles.Hash(TextureFiles.Read(s.WorkingFile)) == hash;
@@ -1184,7 +1186,8 @@ public sealed class TextureEditService : IDisposable
     /// <summary>
     /// Encodes a saved image. A texture captured block-compressed gets its format again when the
     /// compression check Optimize textures uses (<see cref="VerifiedEncode"/>) finds the encode keeps
-    /// how it looks; otherwise, and at sizes that aren't whole 4 × 4 blocks, it is saved uncompressed.
+    /// how it looks; otherwise it is saved uncompressed. Saves are a power of two of at least 4 on each
+    /// side (<see cref="TextureFiles.SizeProblem"/>), so they are whole 4 × 4 blocks.
     /// Returns the TEX, its format, and why a compressed texture stayed uncompressed (empty otherwise).
     /// </summary>
     private async Task<(byte[] Tex, uint Format, string Kept)> EncodeSaveAsync(TextureEditSession s, string image, int width, int height)
@@ -1201,8 +1204,6 @@ public sealed class TextureEditService : IDisposable
             TextureFiles.ValidateOutput(plain, TextureFiles.Uncompressed, width, height, s.MipMaps);
             if (!TextureFiles.IsBlockCompressed(s.Format))
                 return (plain, TextureFiles.Uncompressed, string.Empty);
-            if (width % 4 != 0 || height % 4 != 0)
-                return (plain, TextureFiles.Uncompressed, $"{width} × {height} isn't whole 4 × 4 blocks");
             var info = TextureCost.Read(plain) ?? throw new InvalidDataException("Penumbra wrote a texture this plugin can't read.");
             var uses = AutoCompression.UsesFor(s.GamePath, s.RelativePath);
             var result = await VerifiedEncode.RunAsync(new VerifiedEncodeRequest(plain, info, uses, s.Format, null, AllowSingleColor: false),
@@ -1293,6 +1294,7 @@ public sealed class TextureEditService : IDisposable
         var s = runtime.Session;
         EnsureWritable(s);
         var (width, height) = TextureFiles.ValidateTga(tga);
+        TextureFiles.ValidateSaveSize(width, height);
         bool Current() => runtime.Enabled && !_life.IsCancellationRequested;
         var hash = TextureFiles.Hash(tga);
         var snapshot = Path.Combine(s.Directory, "snapshot.tga");

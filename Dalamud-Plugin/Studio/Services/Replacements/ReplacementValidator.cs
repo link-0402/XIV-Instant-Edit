@@ -12,7 +12,7 @@ namespace InstantEdit.Studio.Services;
 /// <summary>
 /// Checks the resources being replaced or added for what keeps them out of the mod: a missing
 /// source file, a file that cannot stand in for what it replaces, an option that is gone, two
-/// replacements for the same file, and the size of images (the same advice Build mode's texture
+/// replacements for the same file, and the size of images (the same rules Build mode's texture
 /// slots get).
 /// </summary>
 internal static class ReplacementValidator
@@ -89,6 +89,8 @@ internal static class ReplacementValidator
             {
                 if (!TexHeader.TryRead(source, out _))
                     issues.Add(new(Severity.Error, target, $"{who}: {Path.GetFileName(source)} is not a texture the game can read."));
+                else if (TextureSources.SizeProblem(images.Read(source)) is { Length: > 0 } texSize)
+                    issues.Add(new(Severity.Error, target, $"{who}: {texSize}"));
                 continue;
             }
 
@@ -98,8 +100,8 @@ internal static class ReplacementValidator
                 issues.Add(new(Severity.Error, target, $"{who}: {Path.GetFileName(source)} could not be read as an image ({facts.Error})."));
                 continue;
             }
-            if (!IsPowerOfTwo(facts.Width) || !IsPowerOfTwo(facts.Height))
-                issues.Add(new(Severity.Info, target, $"{who}: {facts.Size} is not a power of two on each side — the game's own textures always are, and smaller mipmaps may look off."));
+            if (TextureSources.SizeProblem(facts) is { Length: > 0 } size)
+                issues.Add(new(Severity.Error, target, $"{who}: {size}"));
             if (replacement.Compression == TextureCompression.None && facts.Pixels >= 1024 * 1024)
                 issues.Add(new(Severity.Warning, target,
                     $"{who}: {facts.Size} written uncompressed is {ImageFacts.Mib(facts.UncompressedBytes)}, which the game then carries in memory — a block format keeps it to a quarter of that."));
@@ -184,14 +186,14 @@ internal static class ReplacementValidator
                 issues.Add(new(Severity.Error, target, $"{slot}: {Path.GetFileName(tex.SourcePath)} is not an image."));
             else if (Path.GetExtension(tex.SourcePath).ToLowerInvariant() is not (".tex" or ".atex") && !images.Read(tex.SourcePath).Ok)
                 issues.Add(new(Severity.Error, target, $"{slot}: {Path.GetFileName(tex.SourcePath)} could not be read as an image."));
+            else if (TextureSources.SizeProblem(images.Read(tex.SourcePath)) is { Length: > 0 } size)
+                issues.Add(new(Severity.Error, target, $"{slot}: {size}"));
             else if (tex.UseAlphaOverlay && string.IsNullOrWhiteSpace(tex.AlphaSourcePath))
                 issues.Add(new(Severity.Error, target, $"{slot}: no alpha map set."));
             else if (tex.UseAlphaOverlay && !File.Exists(tex.AlphaSourcePath))
                 issues.Add(new(Severity.Error, target, $"{slot}: {Path.GetFileName(tex.AlphaSourcePath)} does not exist."));
         }
     }
-
-    private static bool IsPowerOfTwo(int value) => value > 0 && (value & (value - 1)) == 0;
 
     private static bool IsInside(string path, string folder)
     {

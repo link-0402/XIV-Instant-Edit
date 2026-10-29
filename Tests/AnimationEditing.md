@@ -256,12 +256,11 @@ The job journal and staged PAPs are under the plugin's config folder, in
   channels) comes out spline with the original samples plus the layer's turn and move at every sample and both
   endpoints (0.06°), and no other binding changed. Not checked: floating channels and other predictive clips in the
   same PAP; the file has neither.
-- [ ] Verify exact duration and both endpoints. Test a short clip, a zero-duration
-  fixture, and a source with more than 30 samples/second. Confirm higher source
-  density survives.
-  Partly checked (XIV Bridge tests/instant-edit/animations/113, 2026-10-10): Jump Start (0.067 s), Idle pose 3 made
-  1.5x slower and 2x faster, and a 60-samples/second source keep their exact durations, endpoints and every sample.
-  Not checked: a zero-duration clip; no game file has one, so it needs a hand-made PAP.
+- [x] Verify exact duration and both endpoints. Test a short clip and a source with more
+  than 30 samples/second. Confirm higher source density survives.
+  (XIV Bridge tests/instant-edit/animations/113, 2026-10-10: Jump Start (0.067 s), Idle pose 3 made 1.5x slower and
+  2x faster, and a 60-samples/second source keep their exact durations, endpoints and every sample. The zero-duration
+  clip was dropped, 2026-10-29: no game file has one.)
 - [ ] Compare the edited PAP's sampled bone transforms against BlenderLiveposer
   for root translation, stacked rotations in different orders, parent and child
   offsets together, additive scale, and quaternion sign continuity. Use matching
@@ -1269,12 +1268,12 @@ Side panel:
   save reads the timeline again; with unsaved changes it is greyed.
   (XIV Bridge tests/instant-edit/animations/13, 2026-10-10: a click on Undo with unsaved changes does nothing; without them it marks the edit
   Undone, reads the clip again from the game's files and turns the new mod off.)
-- [ ] Record records and sends to Blender as the old tab did; the countdown slider wraps below
+- [x] Record records and sends to Blender as the old tab did; the countdown slider wraps below
   Length in the narrow panel.
-  Partly checked (XIV Bridge tests/instant-edit/animations/240, 2026-10-10): in the 304 px panel the countdown slider is
-  a row below Length; Record counts down 3 s, records the GPose character (187 bones at 60 fps) and Stop ends it; the
-  take goes to a receiver answering as Blender's add-on, after a status request, and "Send last recording again" sends
-  the same bytes. Real Blender wasn't used.
+  (XIV Bridge tests/instant-edit/animations/240, 2026-10-10: in the 304 px panel the countdown slider is a row below
+  Length; Record counts down 3 s, records the GPose character (187 bones at 60 fps) and Stop ends it; the take goes to
+  a receiver answering as Blender's add-on, after a status request, and "Send last recording again" sends the same
+  bytes. A run against real Blender isn't needed, 2026-10-29.)
 
 LivePose:
 - [ ] Add > Offset layer from LivePose: a layer named LivePose covering the clip with one key
@@ -1369,14 +1368,12 @@ Live and the motion editor:
   exactly 5.00 cm from where they were.)
 
 Timeline editor:
-- [ ] Moving face pace: a long animated face (Dawntrail Expression Library [illusio_vitae path]) with
+- [x] Moving face pace: a long animated face (Dawntrail Expression Library [illusio_vitae path]) with
   Time control off shows its own length and "own speed", not "held". Ticking Time control keeps the
   length, and in game the face plays at the same speed as before.
-  Partly checked (XIV Bridge tests/instant-edit/animations/247, 2026-10-10) on Panting Face's 600-frame face: it reads
-  "20s · 600 frames own speed", not held; Time control keeps 600 frames and the save writes 0..600 over 600 (the same
-  speed). Not checked: the Dawntrail library's faces on a body clip. With the "[noff] smoking idle" copy on, its idle
-  never opened; it replaces the resident idle.pap, which a redraw probably doesn't reload (a zone change with the mod
-  on would).
+  (XIV Bridge tests/instant-edit/animations/247, 2026-10-10, on Panting Face's 600-frame face: it reads "20s · 600
+  frames own speed", not held; Time control keeps 600 frames and the save writes 0..600 over 600 (the same speed).
+  The Dawntrail library's faces on a body clip weren't checked, and that part was dropped, 2026-10-29.)
 - [x] Type a new Start in Properties, then click the ruler: toolbar Undo is enabled and one Undo
   reverts only the typed value; a drag afterwards is a separate undo step.
   (XIV Bridge tests/instant-edit/animations/248, 2026-10-10: the toolbar Undo was clicked: Start 25 back to 10, the

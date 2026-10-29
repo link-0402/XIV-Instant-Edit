@@ -825,6 +825,13 @@ internal sealed class ModWriter
     private bool ConvertTexture(string sourcePath, TextureCompression compression, IReadOnlyList<TextureUse> uses, string label,
         out Content content, out string error, out string detail)
     {
+        if (TextureSources.SizeProblem(ImageFileCache.ReadHeader(sourcePath)) is { Length: > 0 } size)
+        {
+            content = null!;
+            error   = size;
+            detail  = string.Empty;
+            return false;
+        }
         if (compression == TextureCompression.Auto && !TextureSources.IsTex(sourcePath))
             return AutoTexture(sourcePath, uses, label, out content, out error, out detail);
 

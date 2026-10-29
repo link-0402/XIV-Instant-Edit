@@ -25,8 +25,9 @@ agent.
 - Save a compressed texture with fine detail the compression check rejects (a
   sharp cut-out edge in alpha, for example). The destination must become
   uncompressed BGRA32 at the same size, and the session status must say
-  "saved uncompressed" with the reason. A save at a size not divisible by 4 is
-  also written uncompressed. An ordinary edit must keep the original format.
+  "saved uncompressed" with the reason. An ordinary edit must keep the original format.
+- Save at a size that isn't a power of two on each side (1000 × 1000, or 6 × 4): the
+  save is refused with why, the file stays, and the next power-of-two save goes through.
 - Confirm existing non-mipmapped textures remain single-level. Mipmapped inputs
   should regenerate the full size-appropriate chain, capped at 13 levels.
 - Open a mod texture whose header lists mip offsets written for uncompressed data,
@@ -155,7 +156,8 @@ These checks need the game and Explorer:
   texture back, the actor redraws, and the item is gone. After another drop and an editor
   save of the texture's TGA, the item is gone too.
 - [ ] Drop a JPEG, a TGA, a DDS and a mod's .tex: each replaces the texture. An image whose
-  size isn't a multiple of 4 on a BC texture is refused with why, and the file stays.
+  size isn't a power of two on each side is refused with why, and the file stays (ruled
+  2026-10-29: every texture Instant Edit writes is a power of two, 4 to 8192).
 - [ ] With "Include vanilla" on, drop on a Game Data texture: the "Replace a vanilla texture"
   dialog asks for the mod name, the new mod shows the image, and Undo puts the game's texture
   back into that mod.

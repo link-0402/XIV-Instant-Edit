@@ -31,8 +31,8 @@ internal static class PainterRules
         catch (NotSupportedException) { return "Its TEX format can't be saved back."; }
         if (texture.Width is < 1 or > TextureFiles.MaxDimension || texture.Height is < 1 or > TextureFiles.MaxDimension)
             return "Its size is not supported.";
-        if (TextureFiles.IsBlockCompressed(texture.Format) && (texture.Width % 4 != 0 || texture.Height % 4 != 0))
-            return "Its size isn't a multiple of 4, which its compression needs.";
+        if (TextureFiles.SizeProblem(texture.Width, texture.Height).Length > 0)
+            return "Its size isn't a power of two.";
         return "";
     }
 

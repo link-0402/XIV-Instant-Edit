@@ -58,6 +58,11 @@ internal static partial class TextureEditScenarios
             Reject(() => TextureFiles.ValidateTga(Tga(4, 8, 1), 8, 8), "initial conversion must match the captured size");
             Check(TextureFiles.ValidateTga(Tga(4, 12, 1)) == (4, 12), "resized TGA saves report their dimensions");
             Reject(() => TextureFiles.ValidateTga(Tga(0, 8, 1)), "zero-width TGA rejected");
+            Check(TextureFiles.SizeProblem(4, 8192) == "" && TextureFiles.SizeProblem(1024, 16) == "" &&
+                  TextureFiles.SizeProblem(4, 12).Contains("power of two") && TextureFiles.SizeProblem(2, 2).Length > 0 &&
+                  TextureFiles.SizeProblem(16384, 16).Length > 0 && TextureFiles.SizeProblem(16384, 16, 16384) == "" &&
+                  TextureFiles.SizeProblem(65, 66).Contains("65 × 66"),
+                "new textures must be a power of two from 4 up on each side");
             var rgba = Tex((uint)TexFile.TextureFormat.B8G8R8A8, 8, 8, 1, 0);
             var hash = TextureFiles.PixelHash(rgba);
             rgba[80] = 123; // RGB under alpha zero must participate in no-op detection.
@@ -159,11 +164,13 @@ internal static partial class TextureEditScenarios
 
         File.WriteAllBytes(s.WorkingFile, Tga(6, 4, 51));
         await f.Service.ProcessPendingAsync(true);
-        header = TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile));
-        Check(f.Backend.Commits == 2 && f.Backend.LastFormat == TextureType.RgbaTex && header.Format == bgra &&
-              header is { Width: 6, Height: 4 } && f.Service.Sessions.Single() is { SavedFormat: var unblocked, Status: var note } &&
-              unblocked == bgra && note.Contains("saved uncompressed"),
-            "a save that is not whole 4 × 4 blocks is written uncompressed, and its status says so");
+        Check(f.Backend.Commits == 1 && TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) == resized &&
+              f.Service.Sessions.Single() is { Width: 16, Height: 4, Status: var note } && note.Contains("power of two"),
+            "a save that isn't a power of two on each side is refused, and its status says so");
+        File.WriteAllBytes(s.WorkingFile, Tga(8, 16, 51));
+        await f.Service.ProcessPendingAsync(true);
+        Check(f.Backend.Commits == 2 && TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile)) is { Width: 8, Height: 16 } next && next.Format == bc7,
+            "the next save at a power-of-two size commits");
 
         await f.Service.RestoreAsync(id);
         Check(TextureFiles.Hash(File.ReadAllBytes(s.TargetFile)) == resized &&
@@ -859,10 +866,11 @@ internal static partial class TextureEditScenarios
 
         results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(Guid.NewGuid(), red)], CancellationToken.None);
         Check(results.Single().Outcome == ExternalTextureOutcome.Failed, "a missing session is reported, not thrown");
+        var secondBefore = File.ReadAllBytes(secondTarget);
         results = await f.Service.ApplyExternalAsync([new ExternalTextureSave(secondId, Tga(6, 8, 1))], CancellationToken.None);
-        Check(results.Single() is { Outcome: ExternalTextureOutcome.Applied, Message: var why } && why.Contains("saved uncompressed") &&
-              TextureFiles.ReadTex(File.ReadAllBytes(secondTarget)).Format == (uint)TexFile.TextureFormat.B8G8R8A8,
-            "an image the texture's compression can't hold is applied uncompressed, and the result says why");
+        Check(results.Single() is { Outcome: ExternalTextureOutcome.Failed, Message: var why } && why.Contains("power of two") &&
+              File.ReadAllBytes(secondTarget).SequenceEqual(secondBefore),
+            "an image that isn't a power of two on each side is refused, and the result says why");
 
         // A Painter project keeps its sessions even when they look stale.
         f.Service.KeepSession = id => id == firstId;
@@ -1106,10 +1114,11 @@ internal static partial class TextureEditScenarios
         await RejectAsync(() => service.UndoReplaceAsync(s.Id), "undo refuses once the texture changed after the drop");
 
         await RejectAsync(() => service.ReplaceAsync(f.Request, Path.Combine(images, "notes.txt")), "a file that isn't an image is refused");
+        var beforeOdd = File.ReadAllBytes(s.TargetFile);
         result = await service.ReplaceAsync(f.Request, Png(Path.Combine(images, "Odd.png"), 6, 8, 50));
-        Check(result.Outcome == ExternalTextureOutcome.Applied && result.Message.Contains("4 × 4 blocks") && f.Backend.Commits == 5 &&
-              TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile)) is { Width: 6, Height: 8 } odd && odd.Format == (uint)TexFile.TextureFormat.B8G8R8A8,
-            "an image the texture's block compression can't hold is dropped in uncompressed, and the result says why");
+        Check(result.Outcome == ExternalTextureOutcome.Failed && result.Message.Contains("power of two") && f.Backend.Commits == 4 &&
+              File.ReadAllBytes(s.TargetFile).SequenceEqual(beforeOdd),
+            "an image that isn't a power of two on each side is refused, the result says why, and the file stays");
     }
 
     /// <summary>

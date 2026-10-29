@@ -23,6 +23,13 @@ internal static class TextureSources
         return ext is ".tex" or ".atex";
     }
 
+    /// <summary>
+    /// Why a source can't become a texture at its size (<see cref="InstantEdit.Services.TextureFiles.SizeProblem"/>),
+    /// or empty when it can. A size that can't be read is left to the conversion, which says why.
+    /// </summary>
+    public static string SizeProblem(ImageFacts facts)
+        => facts.Ok ? InstantEdit.Services.TextureFiles.SizeProblem(facts.Width, facts.Height, TextureConverter.MaxSide) : string.Empty;
+
     /// <summary>Whether neither converter reads the file itself, so it is decoded to a PNG first (see <see cref="DecodeToPng"/>).</summary>
     public static bool NeedsDecoding(string path)
         => Path.GetExtension(path).Equals(".tga", StringComparison.OrdinalIgnoreCase);

@@ -51,35 +51,36 @@ internal sealed class ImageFileCache
         if (_cache.TryGetValue(path, out var cached) && cached.Stamp == info.LastWriteTimeUtc && cached.Length == info.Length)
             return cached.Facts;
 
-        ImageFacts facts;
+        var facts = ReadHeader(path);
+        _cache[path] = (info.LastWriteTimeUtc, info.Length, facts);
+        return facts;
+    }
+
+    /// <summary>An image's size from its header, without the cache: what a build reads once per texture.</summary>
+    internal static ImageFacts ReadHeader(string path)
+    {
         try
         {
             var ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext is ".tex" or ".atex")
             {
                 // The game's own format: its header says what ImageSharp cannot.
-                facts = Resources.TexHeader.TryRead(path, out var header)
+                return Resources.TexHeader.TryRead(path, out var header)
                     ? new ImageFacts(header.Width, header.Height, null)
                     : new ImageFacts(0, 0, "not a readable .tex file");
             }
-            else if (ext == ".dds")
+            if (ext == ".dds")
             {
                 // ImageSharp has no DDS decoder; the header holds the size.
-                facts = ReadDds(path);
+                return ReadDds(path);
             }
-            else
-            {
-                var image = Image.Identify(StudioImages.Decoder, path);   // png, jpeg, tga, bmp, gif, webp headers
-                facts = new ImageFacts(image.Width, image.Height, null);
-            }
+            var image = Image.Identify(StudioImages.Decoder, path);   // png, jpeg, tga, bmp, gif, webp headers
+            return new ImageFacts(image.Width, image.Height, null);
         }
         catch (Exception ex)
         {
-            facts = new ImageFacts(0, 0, ex.Message);
+            return new ImageFacts(0, 0, ex.Message);
         }
-
-        _cache[path] = (info.LastWriteTimeUtc, info.Length, facts);
-        return facts;
     }
 
     private const uint DdsMagic = 0x20534444;   // "DDS "
