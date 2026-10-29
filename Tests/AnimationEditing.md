@@ -768,8 +768,16 @@ override into the mod's meta.json for each race the file plays on, and the attac
   save: the entry is gone; Undo brings it back.
 - [ ] Change a prop's Atch entry in Penumbra's own editor, then reopen the file: Place shows that change (Penumbra's
   field names are read as Instant Edit writes them; not yet checked against Penumbra's writer).
-- [ ] Without Only this animation, a vanilla emote with the same kind of prop moves too. With it on, Toast's prop
+- [x] Without Only this animation, a vanilla emote with the same kind of prop moves too. With it on, Toast's prop
   moves and the vanilla mug emote's stays put.
+  (XIV Bridge tests/instant-edit/animations-pending/442, 2026-10-29, after the fix below: without Only this animation
+  the idle's Toast and the game's own Toast emote (sp19) both sit 10.0 cm off, and back with the mod off; with it,
+  Toast moves 10.0 cm and sp19's prop stays put.)
+  Fixed 2026-10-29: a summon that leaves its attach state unset (a C043, or a C198 at AtchState Default, with no
+  C014/C174) shows in state 1 (Stowed), not 0, so a shared place was written where no vanilla emote looked.
+  TimelinePropPlaces.CurrentState now falls back to 1. Probes: all 17 vanilla prop emotes leave the state unset; on
+  Toast, Drink Tea, Navigate and Magic Trick a place saved at state 1 moves the vanilla prop 10.0 cm, one at state 0
+  doesn't. (Their state 0 and 1 entries are the same, so the wrong state didn't show until a place was saved.)
 - [ ] Resize sp50 by +30 frames: the fade-out stays at the end and the prop is gone when the clip ends.
 - [ ] A file other races also play (a c0101 fallback) gets an Atch entry for each of them.
 
@@ -871,14 +879,26 @@ of the model it takes, so the other mod can be off.
 - [ ] Preview the Hanzo phone and the Telephone on swipe left: both draw with materials, and the log names `gdt`.
 - [ ] A mod with a colour option (Telephone, Moogle Pink) copies the textures of the option you have on.
 - [ ] The Vibrator under w0528 sits in the hand like the equipped lance.
+  Not checked (XIV Bridge tests/instant-edit/animations-pending/443, 2026-10-29): it keeps set 528 on a private body and
+  the Preview learns 2sp, but in attach state 0 it sits a steady 40 cm from n_buki_l, not at a hand. The lance
+  comparison needs a lance drawn in GPose (the test doesn't equip gear).
 - [ ] Summon 1 shows a second prop alongside Summon 0.
 - [ ] The prop panel lists "Missing: <path>" for a texture the source lacks.
 - [ ] Save, turn the source mod off: the prop still draws.
 - [ ] Save in place, then Undo: the mod's meta.json is as before and the private files are gone.
 - [ ] Save into a new mod: its DefaultData maps the private files and 256 material folders.
 - [ ] A prop on a GPose actor that hides weapons: does hiding hide summons, and what shows them.
+  Partly checked (XIV Bridge tests/instant-edit/animations-pending/444, 2026-10-29, "Display weapons when sheathed"
+  off): yes, the summon is in its slot with a draw object but not visible (a screenshot shows no toast). What shows it
+  again: not checked (the script calls HideWeapons only after it is disassembled).
 - [ ] Two new mods, each with a prop from a mod, both on: each emote shows its own prop.
+  Partly checked (XIV Bridge tests/instant-edit/animations-pending/445, 2026-10-29): the two phone cases get bodies
+  b9893 and b9894, each idle draws only its own bodies (the telephone too) and each resolves into its own mod. Not
+  checked: that they are visible (the character hides weapons, which hides summons).
 - [ ] In place, a prop on a second animation of the same mod gets its own body and stays when the first's option is off.
+  Partly checked (XIV Bridge tests/instant-edit/animations-pending/446, 2026-10-29): the second gets b9894 (the first
+  b9893), each is mapped only in its own option, and with option A off the second still resolves into the mod and is
+  drawn. Not checked: that it is visible (the character hides weapons).
 
 ## Expressions (pending)
 
@@ -1910,13 +1930,25 @@ Known limit: a Symmetry layer after a hand layer skips finger pairs the clip doe
   name; fingertips stay straight.
 - [ ] 2 The same on a YAS character with a YAS-weighted hand mesh: tips bend, no tip line.
 - [ ] 3 Gloves without tip weights on a YAS skeleton: the line names the model, tips stay straight.
+  Partly checked (XIV Bridge tests/instant-edit/animations-pending/448, 2026-10-29): with vanilla hands on IVCS + YAS
+  the line reads "Fingertips: your hands' model isn't weighted to tip bones.", the layer's Tips turn off and the tips
+  stay at rest in Live. The line doesn't name the model (HandTipCheck.cs:48).
 - [ ] 4 A clip on the vanilla skeleton played on a YAS character: the line names the clip's skeleton.
-- [ ] 5 Fist to Flat with a 10-frame fade opens smoothly in Preview and Live.
-- [ ] 6 Curl and Spread at -100% and +100% stay natural (no backward bends).
+  Partly checked (XIV Bridge 448, 2026-10-29): the line says the clip's skeleton has no tip bones, without naming it
+  (HandTipCheck.cs:46).
+- [x] 5 Fist to Flat with a 10-frame fade opens smoothly in Preview and Live.
+  (XIV Bridge tests/instant-edit/animations-pending/449, 2026-10-29: frame by frame the fingers open on the fade's
+  smoothstep, never closing again or jumping, in the document, Live and Preview, paused and playing. How it looks: by eye.)
+- [x] 6 Curl and Spread at -100% and +100% stay natural (no backward bends).
+  (XIV Bridge tests/instant-edit/animations-pending/450, 2026-10-29: on all 7 shapes every finger joint stays between
+  -5 and 110 deg, in the document and in Live. How it looks: by eye.)
 - [ ] 7 Keep finger motion keeps an emote's finger wiggle.
 - [ ] 8 Save hand as shape from the left hand, use it on the right: mirrored correctly; delete it, the layer
   keeps its look.
-- [ ] 9 IK drag on a clip with a Replace hand layer shows the shape while dragging.
+- [x] 9 IK drag on a clip with a Replace hand layer shows the shape while dragging.
+  (XIV Bridge tests/instant-edit/animations-pending/451, 2026-10-29: at every step of a drag the gizmo's pose and Live
+  keep the fist, also with the hand layer after the offset layer; the drag is one undo step. A real mouse drag didn't
+  start the gizmo in the test.)
 
 ## Pose browser (pending)
 
@@ -1932,7 +1964,9 @@ Test folder: D:\Mods\Poses (Solo, and a pack folder with a picture such as Multi
 - [ ] 3 Click another pose: it replaces the first, nothing of the first is left (try one with hair keyed via
   Also > Hair, then one without). One Ctrl+Z goes back to before the first click.
 - [ ] 4 Move the playhead, click a pose: a second key, the first stays. Edit a bone, click again: the edit stays.
-- [ ] 5 Untick Feet on the ground or Move bones in the footer: the shown pose is keyed again with the change.
+- [x] 5 Untick Feet on the ground or Move bones in the footer: the shown pose is keyed again with the change.
+  (XIV Bridge tests/instant-edit/animations-pending/452, 2026-10-29: each footer change keys the shown pose again in the
+  click's undo step, matching a fresh click with that choice, and Live shows it.)
 - [ ] 6 Search this folder finds poses in subfolders; the tooltip names their folder. Right-click a library
   folder > Remove from the list. Close and reopen the plugin: the folder list and the last folder come back.
 - [ ] 7 No pose layer selected, or the playhead outside it: the footer says why and pose tiles are dimmed.

@@ -40,7 +40,8 @@ internal static class TimelinePropPlaces
 
     /// <summary>
     /// The attach state <paramref name="summon"/> shows now: its C198 AtchState less one when not Default; else the
-    /// ObjectPosition of the first C014 or C174 of its group acting on its slot; else 0.
+    /// ObjectPosition of the first C014 or C174 of its group acting on its slot; else 1, Stowed (the game shows Toast's
+    /// own emote, a C043 and a Default C198 with no control, in state 1).
     /// </summary>
     public static int CurrentState(TimelineDocument doc, TimelineEvent summon)
     {
@@ -48,7 +49,7 @@ internal static class TimelinePropPlaces
             return atch - 1;
         if (summon.Group != null && Control(doc, summon) is { } control)
             return SwapStowedDrawn((int)control.Values.GetValueOrDefault("ObjectPosition"));
-        return 0;
+        return 1;
     }
 
     /// <summary>

@@ -84,7 +84,7 @@ internal static class AtchTableFixture
         check(TimelinePropPlaces.Manipulations(moved, [801], Tables, types) is [{ GenderRace: 801, Entry.Scale: .85f }],
             "a clip rebuilt for another race moves that race's own entry");
 
-        // The state the TMB picks now: the C198's own, else a C014 or C174 of the group on its slot, else 0.
+        // The state the TMB picks now: the C198's own, else a C014 or C174 of the group on its slot, else 1 (Stowed).
         TimelineEvent Mug(int atch) => Event("t4", "C198", 60, 125, "p3", ("Model", 1962), ("SummonId", 0), ("AtchState", atch));
         TimelineDocument Doc(params TimelineEvent[] events) => new(185, 185, null, [.. events], 1);
         check(TimelinePropPlaces.CurrentState(Doc(Mug(4)), Mug(4)) == 3, "a C198 attach state names the state, one up");
@@ -92,7 +92,7 @@ internal static class AtchTableFixture
         check(TimelinePropPlaces.CurrentState(switched, Mug(0)) == 3, "at Default a C014 of the group on the prop's slot names the state");
         var stowed = Doc(Mug(0), Event("t5", "C174", 61, 1, "p3", ("ObjectPosition", 0), ("ObjectControl", 2)));
         check(TimelinePropPlaces.CurrentState(stowed, Mug(0)) == 1, "a C014 or C174 position 0 is Stowed, attach state 1");
-        check(TimelinePropPlaces.CurrentState(Doc(Mug(0)), Mug(0)) == 0, "at Default with nothing else the prop is in state 0");
+        check(TimelinePropPlaces.CurrentState(Doc(Mug(0)), Mug(0)) == 1, "at Default with nothing else the prop is Stowed, state 1");
 
         // Only this animation: state 2 becomes a moved copy of the current state's place.
         var own = Placed(toast, "t4", new TimelinePropPlace(0, true, null, up, Vector3.Zero, 1));
@@ -145,13 +145,14 @@ internal static class AtchTableFixture
               AnimationEditService.PropRaces("chara/human/c0101/animation/a0001/bt_common/emote/toast.pap", null, null).SequenceEqual(new ushort[] { 101 }),
             "a prop is placed for the file's race, and for the race a rebuild makes it for");
 
-        // A mod's file opens with the places its overrides make, and a save writes only the places changed since.
-        var mod = new AtchManipulation(801, "tsl", 0, new AtchEntry("n_buki_l", .85f * 1.5f, up, new Vector3(0, 0, .5f)));
+        // A mod's file opens with the places its overrides make, and a save writes only the places changed since. Toast's
+        // C043 and Default C198 have no control, so it shows in state 1 (Stowed), as the game's own Toast emote does.
+        var mod = new AtchManipulation(801, "tsl", 1, new AtchEntry("n_buki_l", .85f * 1.5f, up, new Vector3(0, 0, .5f)));
         var opened = TimelinePropPlaces.FromOverrides(toast, both, [mod], Tables, types);
-        check(opened.Events.Single(e => e.Key == "t3").Place is { State: 0, OwnState: false, Bone: "n_buki_l", Size: var grown, Move: var lift, Turn: var turn } &&
+        check(opened.Events.Single(e => e.Key == "t3").Place is { State: 1, OwnState: false, Bone: "n_buki_l", Size: var grown, Move: var lift, Turn: var turn } &&
               MathF.Abs(grown - 1.5f) < 1e-6f && lift == up && turn == new Vector3(0, 0, .5f) && opened.Events.Single(e => e.Key == "t4").Place == null,
             "a mod's file opens with the place its override makes, on the prop's first summon");
-        check(TimelinePropPlaces.FromOverrides(toast, both, [mod with { Entry = t801.Entry("tsl", 0)! }], Tables, types) == toast &&
+        check(TimelinePropPlaces.FromOverrides(toast, both, [mod with { Entry = t801.Entry("tsl", 1)! }], Tables, types) == toast &&
               TimelinePropPlaces.FromOverrides(toast, both, [mod with { State = 2 }], Tables, types) == toast,
             "an override equal to the game's, or at a state the file doesn't show, makes no place");
         check(TimelinePropPlaces.FromOverrides(Doc(Mug(3)), both, [mod with { State = 2 }], Tables, types).Events[0].Place is { State: 2, OwnState: true },
@@ -161,12 +162,12 @@ internal static class AtchTableFixture
             "an opened place saved unchanged writes nothing: the mod has it already");
         var nudged = Placed(opened, "t3", opened.Events.Single(e => e.Key == "t3").Place! with { Move = up * 2 });
         check(TimelinePropPlaces.Manipulations(nudged, both, Tables, types, loaded: opened, modOverrides: [mod]) is
-                  [{ GenderRace: 101, State: 0, Remove: false }, { GenderRace: 801, Remove: false, Entry: { Bone: "n_buki_l", Offset: var nudge } }] &&
+                  [{ GenderRace: 101, State: 1, Remove: false }, { GenderRace: 801, Remove: false, Entry: { Bone: "n_buki_l", Offset: var nudge } }] &&
               nudge == up * 2,
             "a change moves on from the mod's place, for every race");
         var reset = Placed(opened, "t3", null!);
         check(TimelinePropPlaces.Manipulations(reset, both, Tables, types, loaded: opened, modOverrides: [mod]) is
-                  [{ GenderRace: 801, State: 0, Remove: true, Entry: { Bone: "n_buki_r", Scale: .85f } }],
+                  [{ GenderRace: 801, State: 1, Remove: true, Entry: { Bone: "n_buki_r", Scale: .85f } }],
             "putting it back where the game has it removes the mod's override, for the races the mod moves");
         check(TimelinePropPlaces.Manipulations(reset, both, Tables, types, skipUnlearned: true, loaded: opened, modOverrides: [mod]) is
                   [{ GenderRace: 801, Remove: false, Entry.Scale: .85f }],

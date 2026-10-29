@@ -164,15 +164,16 @@ stainingtemplate.stm (43 templates each).
 ## Save as copy into an option (pending)
 
 The places, file names and the meta.json write are checked offline (ModHandoffScenarios.RunCopies).
-- [ ] Open a material from a mod window, edit a value, dots menu > Save as copy into an option: the
+Checked in game 2026-10-29 by XIV Bridge tests/instant-edit/materials/13 to 17, on a test mod with options.
+- [x] Open a material from a mod window, edit a value, dots menu > Save as copy into an option: the
   list shows Default files and every option; the options using the opened file say "uses this file".
-- [ ] Pick another option and Save copy: the message names it; in Penumbra that option now points
+- [x] Pick another option and Save copy: the message names it; in Penumbra that option now points
   at a new file in its own folder, and the original file and the other options are unchanged.
-- [ ] Turn that option on and redraw: the character shows the copy. Save again: it writes the copy,
-  not the original.
-- [ ] After Scrolling pattern, Save as copy: the new `_fx.tex` goes into the same option.
-- [ ] Opened from On Screen or Game Files, the menu has no such item; with the mod window closed it
-  is greyed with the reason.
+- [x] Turn that option on and redraw: the character shows the copy. Save again: it writes the copy,
+  not the original. (The copy is the file the character loads; how it looks: by eye.)
+- [x] After Scrolling pattern, Save as copy: the new `_fx.tex` goes into the same option.
+- [x] Opened from On Screen or Game Files, the menu has no such item; with the mod window closed it
+  is greyed with the reason. (The reason and that nothing is written are checked; the grey: by eye.)
 
 ## Final review fixes (2026-10-17, need an in-game check)
 
