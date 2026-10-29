@@ -323,9 +323,7 @@ internal static class CutEditsFixture
         check(editor.Key(TimelineKey.Cut) && editor.Document.Cuts!.Parts.Length == 2, "C cuts at the playhead");
         editor.Playhead = 70;
         check(editor.Key(TimelineKey.RemoveAfter) && editor.Document.Length == 70, "W removes from the playhead to the part's end");
-        check(!editor.SetSeam(MotionJoin.ForSeam) && !editor.FixLoop(new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Clean),
-                  new SeamReport(new JoinGap(0, 0, "", 0, 0), 1, null, SeamState.Pops), null) &&
-              !editor.SetEase(30), "a clip that doesn't loop takes no seam");
+        check(!editor.SetSeam(MotionJoin.ForSeam) && !editor.SetEase(30), "a clip that doesn't loop takes no seam");
         editor.SelectCut(new TimelineCutSelection(TimelineCutTarget.Part, 0));
         check(editor.Key(TimelineKey.Delete) && editor.Document.Length == 40 && editor.Undo() && editor.Document.Length == 70, "Delete removes a part; undo brings it back");
         var undoing = new TimelineEditor(Doc(100)) { Loops = false };
@@ -465,26 +463,7 @@ internal static class CutEditsFixture
         check(half.Cuts!.Parts[1] == new MotionPart(50, 100) && half.Length == 90 && Find(half, "t5")!.Start == 60, "a partial trim back inserts frames");
         var stretched = CutEdits.RemoveRange(doc with { Length = 200 }, 80, 120, out _);
         check(stretched.Length == 160 && stretched.Cuts!.Parts[1].From == 60, "a stretch maps output frames to source frames");
-        var slowEnd = CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", .2f, 1.6f), 1.4f, null, SeamState.Stalls));
-        check(slowEnd is { Length: 100, Cuts: { Parts: [{ From: 0, To: 100 }], Seam: null, Ease: MotionCuts.DefaultEase } },
-            "Fix loop eases the start of a loop that arrives slower than it leaves, trimming nothing");
-        var held = CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", 0, 1.6f), 1.4f, 88, SeamState.Stalls));
-        check(held is { Length: 88, Cuts: { Parts: [{ To: 88 }], Seam: null, Ease: MotionCuts.DefaultEase } },
-            "Fix loop trims an end that holds frame 0's pose, then eases the start");
-        check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops)) is
-              { Length: 100, Cuts: { Seam: not null, Ease: 0 } },
-            "a pose jump gets a blend and keeps the length");
-        check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(20, 30, "x", .2f, 3), 3, null, SeamState.Stalls)) is
-              { Cuts: { Seam: not null, Ease: 0 } },
-            "a pose jump into a faster start gets only the blend, which matches the speeds too");
-        check(CutEdits.FixLoop(doc, new SeamReport(new JoinGap(0, 0, "", 3, .5f), 1.4f, null, SeamState.Stalls)) is
-              { Length: 100, Cuts: { Ease: MotionCuts.DefaultEase, EaseEnd: true, Seam: null } } &&
-              slowEnd.Cuts!.EaseEnd == false, "a loop that arrives faster than it leaves eases its end instead");
-        // A blend and an ease fight over the speed at the seam: Fix loop keeps one of them.
-        check(CutEdits.FixLoop(slowEnd, new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops)).Cuts is { Seam: not null, Ease: 0 } &&
-              CutEdits.FixLoop(CutEdits.SetSeam(doc, MotionJoin.ForSeam), new SeamReport(new JoinGap(0, 0, "", .2f, 1.6f), 1.4f, null, SeamState.Stalls)).Cuts is
-                  { Seam: null, Ease: MotionCuts.DefaultEase },
-            "Fix loop sets a blend or an ease, never both");
+        var slowEnd = CutEdits.SetEase(doc, 30);
         check(CutEdits.SetEase(doc, 90).Cuts!.Ease == 60 && CutEdits.SetEase(CutEdits.SetEase(doc, 20), 0).Cuts == null &&
               CutEdits.SetEase(doc, 20, atEnd: true).Cuts is { Ease: 20, EaseEnd: true } && CutEdits.SetEase(slowEnd, 30, atEnd: true).Cuts!.EaseEnd,
             "an ease clamps to 60, takes a side, and none leaves the motion whole");

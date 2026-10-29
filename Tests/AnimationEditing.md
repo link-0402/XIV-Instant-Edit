@@ -1755,6 +1755,9 @@ Spec: docs/superpowers/specs/2026-10-14-timeline-cuts-and-loop-seams-design.md. 
   starts again faster than it ends."; Fix loop eases the start over 30 frames, keeps the length (437) and trims
   nothing, and the badge says Loops cleanly; Ease 20, 30 and 45 at Start and End show in Live; Preview and the in-place
   save play, the saved file loops Clean with no settle before the wrap or jerk after it, and the game plays it.)
+  Removed 2026-10-30 (the user's call): Fix loop's seam blend pulled a loop into a bad first frame (Angel Dust's
+  smoking idle, legs up to 19 deg), and Close loop does the job. The seam panel keeps the badge, the gap and the stall
+  or speed note; an older edit's seam blend or ease still plays and can be changed or removed there.
 - [x] 4 Remove a range from a dance with C, Q, W and Delete: no pop at the join in Preview, and the
   sounds, effects and faces after it moved with the motion.
   (XIV Bridge tests/instant-edit/animations-pending/283, 2026-10-29: C, C and Delete take out 45 frames (437 to 392),
@@ -2141,6 +2144,7 @@ docs/superpowers/specs/2026-10-27-close-loop-fix-design.md.
   the seam. Add > Close loop: Live and the played loop are smooth, and stay smooth after a save to a new mod.
   Fix loop on the seam panel does the same when the layers make it jump.
   Partly checked (XIV Bridge 360, 2026-10-28, Idle pose 3 with a 25 deg right upper arm offset from mid-clip): Add >
+  (Fix loop was removed 2026-10-30: Add > Close loop is the way now.)
   Close loop closes the seam (worst 25 to 0.04 deg; in Live the arm's largest step 25.0 to 2.5 deg, the saved file
   played from a new mod 2.5 deg). **Fix loop doesn't offer it**: the badge and the seam panel say Clean, since
   LoopSeam pops only on a mean gap of 1 deg (PopDegrees) over all tracks, and one bone's 25 deg is a 0.26 deg mean.
@@ -2161,6 +2165,10 @@ docs/superpowers/specs/2026-10-27-close-loop-fix-design.md.
 - [x] 3 Pin both feet near the seam (Pin feet) and set Blend over to 8: the planted feet don't slide visibly at the
   seam. The layer panel's hint warns that it may move pinned bones.
   (XIV Bridge 362, 2026-10-28: the feet travel 0.0 mm more over the seam; in Live at most 2.6 mm between frames.)
+- [ ] 4 Open [yllisne] Angel Dust - smoking animation pack's idle (common/9, j_pose02_loop), whose first frame alone
+  turns the legs up to 6 deg. Add > Close loop at each Place, then Smooth jitter alone: the legs no longer twitch at
+  the seam, and the tail still closes. (Offline on the decoded clip, 2026-10-30: the legs' largest seam step 6.15 to
+  0.04 deg with either fix, where Close loop used to swing them 14.6 deg; no other bone changed.)
 
 ## Animations from scratch (pending)
 

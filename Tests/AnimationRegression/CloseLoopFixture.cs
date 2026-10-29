@@ -160,6 +160,23 @@ internal static class CloseLoopFixture
                   Vector3.Distance(still.Get(i, b).Position, reference.Get(i, b).Position) < 1e-5f)),
             "close loop closed: a loop whose end already runs into its start is left as it is");
 
+        // A lone twist on the first frame, the last frame on the second (Angel Dust's smoking idle, 5.7 degrees on the
+        // legs): the close landed the end on the twist moving at its 6 degrees a frame back, swinging the legs 14 degrees.
+        // At twice the key rate the sample after the twist lies halfway and goes back with it.
+        var twisted = Clip([.. Enumerable.Range(0, 31).Select(i => new[] { T(Vector3.Zero), T(Vector3.UnitX, Q(Vector3.UnitY, i == 0 ? 6 : .4f)), T(Vector3.UnitY) })], 30);
+        var twistedTwice = Clip([.. Enumerable.Range(0, 61).Select(i => new[] { T(Vector3.Zero), T(Vector3.UnitX, Q(Vector3.UnitY, i == 0 ? 6 : i == 1 ? 3.2f : .4f)), T(Vector3.UnitY) })], 30);
+        foreach (var source in new[] { twisted, twistedTwice })
+            foreach (var place in Enum.GetValues<JoinPlacement>())
+            {
+                var untwisted = Applied(source, CloseLayer(place, 8));
+                var most = Enumerable.Range(0, source.Samples).Max(i => Degrees(untwisted.Get(i, b1).Rotation, Q(Vector3.UnitY, .4f)));
+                check(most < .05f, $"close loop twist {place}, {source.Samples} samples: a lone twist on the seam goes, and the still end stays still ({most:0.###} degrees off at most)");
+            }
+        var halfTwist = Applied(twisted, CloseLayer(JoinPlacement.Centered, 8, .5f));
+        var halfLeft = Degrees(halfTwist.Get(0, b1).Rotation, Q(Vector3.UnitY, .4f));
+        check(halfLeft > 1 && halfLeft < 4,
+            $"close loop twist half: 50% leaves part of the twist ({halfLeft:0.##} of 5.6 degrees)");
+
         // Review focus 4: an end 170 degrees round from the start closes the short way.
         var wide = Clip([.. Enumerable.Range(0, 31).Select(i => new[] { T(Vector3.Zero), T(Vector3.UnitX, Q(Vector3.UnitY, 170 * i / 30f)), T(Vector3.UnitY) })], 30);
         var unfixed = Applied(wide);
@@ -328,31 +345,6 @@ internal static class CloseLoopFixture
             "a measure that fails reports its key as failed, once, rather than as measured forever");
         check(failing.Report("decode", plain, doc, gesture: false, out failed) is { State: not SeamState.Clean } && !failed && starts == 2,
             "after a failed measure a new key is measured");
-
-        // Fix loop: the cut motion's fix when the cut seam jumps, a Close loop when the layers make it jump.
-        var pops = new SeamReport(new JoinGap(20, 30, "x", 3, 3), 3, null, SeamState.Pops);
-        var clean = new SeamReport(new JoinGap(0, 0, "", 3, 3), 3, null, SeamState.Clean);
-        static int Closes(TimelineEditor e) => e.Document.Motion.Count(layer => layer.Fix?.Kind == MotionFixKind.CloseLoop);
-        var layered = new TimelineDocument(100, 100, null, [], 1) { Motion = [Turn()] };
-        var editor = new TimelineEditor(layered) { Loops = true };
-        check(editor.FixLoop(pops, clean, pops) && Closes(editor) == 1 && editor.SelectedLayerValue is { Fix.Kind: MotionFixKind.CloseLoop, Enabled: true } &&
-              editor.Document.Cuts == null && editor.Undo() && Closes(editor) == 0 && !editor.Undo(),
-            "Fix loop on a seam the layers make jump adds a selected Close loop, as one undo step");
-        editor.FixLoop(pops, clean, pops);
-        var closeKey = editor.SelectedLayer!;
-        editor.SelectLayer("o1");
-        check(!editor.FixLoop(pops, clean, pops) && Closes(editor) == 1 && editor.SelectedLayer == closeKey,
-            "a second Fix loop selects the Close loop and adds none");
-        var off = new TimelineEditor(MotionEdits.SetEnabled(editor.Document, closeKey, false)) { Loops = true };
-        check(off.FixLoop(pops, pops, pops) && Closes(off) == 1 && off.SelectedLayer == closeKey && MotionEdits.Find(off.Document, closeKey) is { Enabled: true } &&
-              off.Document.Cuts?.Seam != null && off.Undo() && MotionEdits.Find(off.Document, closeKey) is { Enabled: false } && off.Document.Cuts == null && !off.Undo(),
-            "Fix loop turns a Close loop that is off back on and selects it, with the cut fix as one undo step");
-        var measuring = new TimelineEditor(layered) { Loops = true };
-        check(measuring.FixLoop(pops, pops, null) && measuring.Document.Cuts?.Seam != null && Closes(measuring) == 0,
-            "Fix loop while the edited seam is measured applies only the cut fix");
-        var unlayered = new TimelineEditor(layered with { Motion = [] }) { Loops = true };
-        check(!unlayered.FixLoop(pops, clean, pops) && Closes(unlayered) == 0 && !new TimelineEditor(layered) { Loops = false }.FixLoop(pops, pops, pops),
-            "Fix loop adds no Close loop without layers that change the motion, and does nothing on a clip that doesn't loop");
     }
 
     private static void Views(Action<bool, string> check)

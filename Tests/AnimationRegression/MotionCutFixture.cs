@@ -251,7 +251,7 @@ internal static class MotionCutFixture
         reject(() => new MotionCuts(100, [new(0, 50)], [MotionJoin.ForCut]).Validate(), "a join count that doesn't match is refused");
         reject(() => new MotionCuts(100, [new(0, 100)], [], new MotionJoin(61, JoinPlacement.Before)).Validate(), "a blend over 60 frames is refused");
         reject(() => new MotionCuts(100, [new(0, 100)], [], null, 61).Validate(), "an ease over 60 frames is refused");
-        check(!new MotionCuts(100, [new(0, 100)], [], null, MotionCuts.DefaultEase).Whole && MotionCuts.DefaultEase == 30, "an eased start alone changes the motion");
+        check(!new MotionCuts(100, [new(0, 100)], [], null, 30).Whole, "an eased start alone changes the motion");
         reject(() => new MotionCuts(100, [new(0, 40, Blend: true), new(40, 100)], [MotionJoin.ForCut]).Validate(), "a first blend part is refused");
         reject(() => new MotionCuts(100, [new(0, 40), new(40, 100, Blend: true)], [MotionJoin.ForCut]).Validate(), "a last blend part is refused");
         reject(() => new MotionCuts(100, [new(0, 40), new(40, 50, Blend: true), new(50, 60, Blend: true), new(60, 100)],

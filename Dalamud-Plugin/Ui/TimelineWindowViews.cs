@@ -51,7 +51,7 @@ internal static partial class TimelineWindowViews
     public const string CloseLoopNoLoop = "Only for a clip the game loops.";
     public const string CloseLoopPinNote = "Runs after every other layer, so it may move pinned bones near the seam.";
     public const string SmoothJitterName = "Smooth jitter";
-    public const string SmoothJitterHint = "Calm small shakes and keep sharp moves.";
+    public const string SmoothJitterHint = "Calm small shakes, remove brief twists and keep sharp moves.";
     public const string HandShapeName = "Hand shape";
     public const string HandShapeHint = "Set a hand's fingers to a shape.";
     public const string ResetRootName = "Reset root turn";
@@ -998,9 +998,6 @@ internal static partial class TimelineWindowViews
     /// <summary>Under the loop seam's gap when the cut motion runs cleanly into its start and the bone layers make it jump.</summary>
     public const string LayersJumpText = "Bone layers make this jump.";
 
-    /// <summary>The Fix loop button's tooltip.</summary>
-    public const string FixLoopTip = "Trims an end that holds still, blends a jump in pose and eases a jump in speed. Adds Close loop when bone layers make it jump.";
-
     /// <summary>A loop whose end and start move at different speeds: which way the speed jumps.</summary>
     public static string JumpText(float speedIn, float speedOut) => speedIn < speedOut
         ? "The loop starts again faster than it ends."
@@ -1012,9 +1009,6 @@ internal static partial class TimelineWindowViews
     public static readonly string[] EaseSides = ["Start", "End"];
 
     public const string EaseTip = "The faster side plays at the slower side's speed and catches up within these frames. The length stays.";
-
-    /// <summary>Fix loop's tooltip while there is nothing to fix.</summary>
-    public const string LoopCleanTip = "The loop already runs cleanly.";
 
     /// <summary>A part's frames: the motion's own it keeps, and where it plays now.</summary>
     public static string PartRange(MotionPart part, double start, double end) => string.Create(CultureInfo.InvariantCulture,

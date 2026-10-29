@@ -219,11 +219,41 @@ internal static class FixLayerFixture
         var still = Clip(61, 60, (_, _) => [T(Vector3.Zero), T(new Vector3(.2f, .1f, 0), Q(Vector3.UnitY, 30)), T(Vector3.UnitX)]);
         check(Bits(Applied(still, SmoothLayer(1, 0, 60)), Applied(still)), "smooth zero: a still bone is left as it is");
 
+        // A lone twist: one sample turned off a still bone that comes straight back. The low-pass alone spread it into a
+        // bump (Angel Dust's smoking idle: 5.7 degrees on frame 0 became 1.9 over 8 frames), and past twice the limit kept it.
+        foreach (var (degrees, amount) in new[] { (6f, 1f), (6f, .5f), (30f, .5f) })
+        {
+            var twisted = Clip(31, 30, (i, _) => [T(Vector3.Zero), T(Vector3.Zero, Q(Vector3.UnitY, i == 15 ? degrees : 0)), T(Vector3.UnitX)]);
+            var untwisted = Applied(twisted, SmoothLayer(amount, 0, 30));
+            check(Enumerable.Range(0, twisted.Samples).All(i => MathF.Abs(AboutY(untwisted.Get(i, b1).Rotation)) < .05f),
+                $"smooth twist: a lone {degrees}-degree twist at {amount:0%} goes back between its neighbours");
+        }
+        var pair = Clip(31, 30, (i, _) => [T(Vector3.Zero), T(new Vector3(i is 15 or 16 ? .03f : 0, 0, 0), Q(Vector3.UnitY, i is 15 or 16 ? 10 : 0)), T(Vector3.UnitX)]);
+        var unpaired = Applied(pair, SmoothLayer(.5f, 0, 30));
+        check(Enumerable.Range(0, pair.Samples).All(i => MathF.Abs(AboutY(unpaired.Get(i, b1).Rotation)) < .05f && unpaired.Get(i, b1).Position.Length() < 1e-4f),
+            "smooth twist: a twist and move two samples long goes back too");
+
+        // The seam of a loop whose first sample is the twist and whose last is its second, as the idle decodes.
+        // At twice the key rate, as the game decodes, the sample after the twist lies halfway and goes back with it.
+        foreach (var samples in new[] { 31, 61 })
+        {
+            var seamTwist = Clip(samples, 30, (i, _) => [T(Vector3.Zero), T(Vector3.Zero, Q(Vector3.UnitY, i == 0 ? 6 : i == 1 && samples == 61 ? 3.2f : .4f)), T(Vector3.UnitX)], loops: true);
+            var seamUntwisted = Applied(seamTwist, SmoothLayer(1, 0, 30));
+            check(Enumerable.Range(0, seamTwist.Samples).All(i => MathF.Abs(AboutY(seamUntwisted.Get(i, b1).Rotation) - .4f) < .05f),
+                $"smooth twist: a twist on a loop's first sample goes back between the end and the second sample ({samples} samples)");
+        }
+
+        // Not a twist: a still bone that starts turning fast, or turns and stops, doesn't come back.
+        var starts = Clip(31, 30, (i, _) => [T(Vector3.Zero), T(Vector3.Zero, Q(Vector3.UnitY, 30 * Math.Clamp(i - 15, 0, 3))), T(Vector3.UnitX)]);
+        var started = Applied(starts, SmoothLayer(1, 0, 30));
+        check(Enumerable.Range(0, starts.Samples).All(i => Degrees(started.Get(i, b1).Rotation, starts.Get(i, b1).Rotation) < .5f),
+            "smooth twist: a sudden start or stop isn't flattened");
+
         // Noise only beside the seam: the first sample sees it only round the loop.
-        BoneTransform[] Seam(int i, float frame) => [T(Vector3.Zero), T(Vector3.Zero, Q(Vector3.UnitY, i == 29 ? 2 : 0)), T(Vector3.UnitX)];
+        BoneTransform[] Seam(int i, float frame) => [T(Vector3.Zero), T(Vector3.Zero, Q(Vector3.UnitY, i is >= 24 and <= 29 ? (i % 2 == 0 ? 1 : -1) : 0)), T(Vector3.UnitX)];
         var looped = Applied(Clip(31, 30, Seam, loops: true), SmoothLayer(1, 0, 30));
         var once = Applied(Clip(31, 30, Seam), SmoothLayer(1, 0, 30));
-        check(AboutY(looped.Get(0, b1).Rotation) > .1f && MathF.Abs(AboutY(looped.Get(0, b1).Rotation) - AboutY(looped.Get(30, b1).Rotation)) < 1e-3f &&
+        check(MathF.Abs(AboutY(looped.Get(0, b1).Rotation)) > .1f && MathF.Abs(AboutY(looped.Get(0, b1).Rotation) - AboutY(looped.Get(30, b1).Rotation)) < 1e-3f &&
               MathF.Abs(AboutY(once.Get(0, b1).Rotation)) < 1e-4f,
             "smooth wraps: on a loop the first sample is smoothed with the last ones");
     }

@@ -8,8 +8,8 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The properties panel for the clip band: a part (its frames, removing frames, removing it, a blend in its place), a join
-/// (its blend's length and place, the jump it blends away) and the loop seam (its state, the jump,
-/// a stall, its blend, its ease and Fix loop).
+/// (its blend's length and place, the jump it blends away) and the loop seam (its state, the jump, a stall, and the
+/// blend or ease an older edit gave it).
 /// </summary>
 internal sealed class CutPanel(TimelineSession session, MotionDecode decode, TimelineClipBand clipBand)
 {
@@ -205,21 +205,15 @@ internal sealed class CutPanel(TimelineSession session, MotionDecode decode, Tim
             if (seam.Placement != JoinPlacement.Before)
                 Widgets.HintWrapped(TimelineWindowViews.SeamPlacementNote);
         }
-        ImGui.Spacing();
-        DrawEase(current, cuts, readOnly);
-        ImGui.Spacing();
-        var clean = edited.State == SeamState.Clean;
-        using (ImRaii.Disabled(readOnly || !current.Loops || clean))
+        // Close loop fixes a seam now. A blend or an ease an older edit gave the seam still plays and can be changed or removed.
+        if (cuts.Ease > 0)
         {
-            // A seam with the layers still being measured fixes only the cut motion.
-            if (ImGui.Button("Fix loop"))
-                current.FixLoop(raw, cut, measured ? edited : null);
+            ImGui.Spacing();
+            DrawEase(current, cuts, readOnly);
         }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(clean ? TimelineWindowViews.LoopCleanTip : TimelineWindowViews.FixLoopTip);
         if (cuts.Seam != null)
         {
-            ImGui.SameLine(0, Theme.Gap);
+            ImGui.Spacing();
             using (ImRaii.Disabled(readOnly))
             {
                 if (ImGui.Button("Remove blend"))

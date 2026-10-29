@@ -326,7 +326,7 @@ internal static class TimelineWindowViewsFixture
         texts.AddRange([TimelineWindowViews.SoundCutsFooter(1), TimelineWindowViews.SoundCutsFooter(3), TimelineWindowViews.CrossesCutTip,
             .. TimelineWindowViews.SoundCutChoices, TimelineWindowViews.LeaveWholeNote]);
         texts.AddRange([TimelineWindowViews.RemovalStatus(new(3, 2))!, TimelineWindowViews.StallText(12), TimelineWindowViews.SeamPlacementNote,
-            TimelineWindowViews.FixLoopTip, TimelineWindowViews.ShortenedText(10), TimelineWindowViews.PartRange(new MotionPart(1, 2), 1, 2),
+            TimelineWindowViews.ShortenedText(10), TimelineWindowViews.PartRange(new MotionPart(1, 2), 1, 2),
             TimelineWindowViews.GapText(new JoinGap(1, 2, "b", 1, 2))]);
         // Live shows a cut or a new length too, but plays the clip's own sounds and effects at their old frames.
         check(TimelineWindowViews.LiveHint(false) == "Live shows bone layers and effect looks. Preview shows sounds, effects and looks that differ per event too." &&
@@ -337,15 +337,13 @@ internal static class TimelineWindowViewsFixture
             "pose match texts");
         texts.AddRange([TimelineWindowViews.MatchText(new PoseMatch(1, 1, 1), 0), TimelineWindowViews.MatchHint, TimelineWindowViews.KeepLoop,
             TimelineWindowViews.KeepLoopTip(1, 2)]);
-        // A loop that arrives slow and leaves fast (the TikTok dance) gets its start eased in.
+        // A loop that arrives slow and leaves fast (the TikTok dance); an older edit's eased start.
         check(TimelineWindowViews.JumpText(.19f, 1.61f) == "The loop starts again faster than it ends." &&
               TimelineWindowViews.JumpText(2, 1) == "The loop starts again slower than it ends." &&
-              TimelineWindowViews.FixLoopTip == "Trims an end that holds still, blends a jump in pose and eases a jump in speed. Adds Close loop when bone layers make it jump." &&
               TimelineWindowViews.EaseTip == "The faster side plays at the slower side's speed and catches up within these frames. The length stays." &&
-              TimelineWindowViews.EaseLegend == "Ease" && TimelineWindowViews.EaseSides.SequenceEqual(["Start", "End"]) &&
-              TimelineWindowViews.LoopCleanTip == "The loop already runs cleanly.", "loop ease texts");
+              TimelineWindowViews.EaseLegend == "Ease" && TimelineWindowViews.EaseSides.SequenceEqual(["Start", "End"]), "loop ease texts");
         texts.AddRange([TimelineWindowViews.JumpText(1, 2), TimelineWindowViews.JumpText(2, 1), TimelineWindowViews.EaseTip, TimelineWindowViews.EaseLegend,
-            .. TimelineWindowViews.EaseSides, TimelineWindowViews.LoopCleanTip]);
+            .. TimelineWindowViews.EaseSides]);
     }
 
     /// <summary>

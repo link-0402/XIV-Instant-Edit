@@ -132,7 +132,8 @@ internal static class MotionFixes
     /// <summary>
     /// Close loop: blends a looping clip's end into its start, quintic offsets that put the end on the start's pose moving
     /// at its speed (<see cref="CloseSpans"/> for the frames each side changes). Rotations compose on the left like the cut
-    /// joins. Gaps and speeds are read from the clip as it arrives; at full amount the last sample is then the first.
+    /// joins. Gaps and speeds are read from the clip as it arrives, after a lone twist on the seam goes back between its
+    /// neighbours (<see cref="Untwist"/>); at full amount the last sample is then the first.
     /// </summary>
     internal static void ApplyClose(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, float end, CancellationToken token)
     {
@@ -181,6 +182,21 @@ internal static class MotionFixes
         }
 
         var bones = layer.Bones.IsEmpty ? [.. Enumerable.Range(0, clip.Bones)] : layer.Bones.Where(index.ContainsKey).Select(name => index[name]).ToArray();
+        // A lone twist on the seam goes back between its neighbours first, so the blend closes the gap the motion either
+        // side leaves, not one into the twist: a clip whose first frame alone is off, its last frame on its second.
+        var rotations = new Quaternion[clip.Samples];
+        var positions = new Vector3[clip.Samples];
+        var keys = new List<int>(clip.Samples);
+        foreach (var b in bones)
+        {
+            for (var i = 0; i < clip.Samples; i++)
+                (rotations[i], positions[i]) = (Quaternion.Normalize(clip.Get(i, b).Rotation), clip.Get(i, b).Position);
+            KeysOf(rotations, positions, keys);
+            var moved = new bool[keys.Count];
+            Untwist(clip, b, keys, [.. keys.Select(i => rotations[i])], [.. keys.Select(i => positions[i])], moved, rotate, move, true, true,
+                _ => Math.Clamp(amount, 0, 1));
+            Rejoin(clip, b, keys, moved, rotate, move, 0, last);
+        }
         // Every gap and speed gap before any sample is written: the start side changes samples the end side's are read from.
         var gaps = new (Vector3 Turn, Vector3 Move, Vector3 TurnSpeed, Vector3 MoveSpeed)[bones.Length];
         for (var k = 0; k < bones.Length; k++)
@@ -251,7 +267,8 @@ internal static class MotionFixes
     /// (a snap or a fast curve), through the layer's fades. The test and the share it gives are taken over neighbours,
     /// not per sample. Game clips decode at about twice their key rate, the samples between keys halfway between their
     /// neighbours: a track is smoothed on its keys and the samples between are put back on the line between them, since
-    /// keys lie farther off the low-pass than the samples between and smoothing both apart left a ripple. Bones that
+    /// keys lie farther off the low-pass than the samples between and smoothing both apart left a ripple. A lone twist
+    /// goes back between its neighbours before the low-pass, whatever its size (<see cref="Untwist"/>). Bones that
     /// never move are left alone, so no track is made from rounding.
     /// </summary>
     internal static void ApplySmooth(MotionClip clip, MotionLayer layer, IReadOnlyCollection<int> bones, float loop, float end, CancellationToken token)
@@ -300,20 +317,17 @@ internal static class MotionFixes
             }
             if (!turns && !moves)
                 continue;
-            // The track's keys: every sample but those halfway between their neighbours, which game clips decoding at
-            // twice their key rate put between keys, one at a time after a key so keys stay evenly spaced (a steady
-            // stretch, halfway throughout, keeps every other sample). The keys are smoothed as a track of their own (the
-            // ends always keys, so a loop still wraps by one less than their count) and the samples between go back on the line.
-            keys.Clear();
-            for (var i = 0; i < clip.Samples; i++)
-                if (i == 0 || i == clip.Samples - 1 || keys[^1] != i - 1 || !Halfway(rotations, positions, i))
-                    keys.Add(i);
+            // The keys are smoothed as a track of their own (the ends always keys, so a loop still wraps by one less than
+            // their count) and the samples between go back on the line. Lone twists go first (Untwist).
+            KeysOf(rotations, positions, keys);
             var count = keys.Count;
             var keyRotations = new Quaternion[count];
             var keyPositions = new Vector3[count];
             var moved = new bool[count];
             for (var k = 0; k < count; k++)
                 (keyRotations[k], keyPositions[k]) = (rotations[keys[k]], positions[keys[k]]);
+            Untwist(clip, b, keys, keyRotations, keyPositions, moved, turns, moves, wraps, false,
+                i => i < first || i > last ? 0 : MotionEvaluator.Fade(layer, clip.Frame(i), end));
             // Every key's low-pass and how far it lies off it, the span's neighbours included.
             for (var k = 0; k < count; k++)
             {
@@ -366,24 +380,45 @@ internal static class MotionFixes
                 if (smoothMove > 0)
                     value = value with { Position = Vector3.Lerp(value.Position, means[k], smoothMove) };
                 clip.Set(i, b, value);
-                moved[k] = smoothTurn > 0 || smoothMove > 0;
+                moved[k] |= smoothTurn > 0 || smoothMove > 0;
             }
-            // Only between keys that moved: elsewhere the samples between stay as they are, not near halfway made exact.
-            for (var k = 0; k + 1 < count; k++)
+            Rejoin(clip, b, keys, moved, rotate, move, first, last);
+        }
+    }
+
+    /// <summary>
+    /// A track's keys into <paramref name="keys"/>: every sample but those halfway between their neighbours, which game
+    /// clips decoding at twice their key rate put between keys, one at a time after a key so keys stay evenly spaced (a
+    /// steady stretch, halfway throughout, keeps every other sample). The first and last samples are always keys.
+    /// </summary>
+    private static void KeysOf(Quaternion[] rotations, Vector3[] positions, List<int> keys)
+    {
+        keys.Clear();
+        for (var i = 0; i < rotations.Length; i++)
+            if (i == 0 || i == rotations.Length - 1 || keys[^1] != i - 1 || !Halfway(rotations, positions, i))
+                keys.Add(i);
+    }
+
+    /// <summary>
+    /// Puts the samples from <paramref name="first"/> to <paramref name="last"/> between keys back on the line between
+    /// them, only where a key either side <paramref name="moved"/>: elsewhere they stay as they are, not near halfway made exact.
+    /// </summary>
+    private static void Rejoin(MotionClip clip, int b, List<int> keys, bool[] moved, bool rotate, bool move, int first, int last)
+    {
+        for (var k = 0; k + 1 < keys.Count; k++)
+        {
+            if (!moved[k] && !moved[k + 1])
+                continue;
+            var (from, to) = (keys[k], keys[k + 1]);
+            for (var i = Math.Max(from + 1, first); i < to && i <= last; i++)
             {
-                if (!moved[k] && !moved[k + 1])
-                    continue;
-                var (from, to) = (keys[k], keys[k + 1]);
-                for (var i = Math.Max(from + 1, first); i < to && i <= last; i++)
-                {
-                    var (before, after, value) = (clip.Get(from, b), clip.Get(to, b), clip.Get(i, b));
-                    var t = (float)(i - from) / (to - from);
-                    if (rotate)
-                        value = value with { Rotation = MotionEvaluator.Slerp(before.Rotation, after.Rotation, t) };
-                    if (move)
-                        value = value with { Position = Vector3.Lerp(before.Position, after.Position, t) };
-                    clip.Set(i, b, value);
-                }
+                var (before, after, value) = (clip.Get(from, b), clip.Get(to, b), clip.Get(i, b));
+                var t = (float)(i - from) / (to - from);
+                if (rotate)
+                    value = value with { Rotation = MotionEvaluator.Slerp(before.Rotation, after.Rotation, t) };
+                if (move)
+                    value = value with { Position = Vector3.Lerp(before.Position, after.Position, t) };
+                clip.Set(i, b, value);
             }
         }
     }
@@ -643,6 +678,93 @@ internal static class MotionFixes
         }
         return offsets;
     }
+
+    /// <summary>
+    /// Smooth jitter's twist pass, before the low-pass: a run of up to <see cref="TwistKeys"/> keys that leaves the motion
+    /// either side and comes straight back goes onto the line between the keys round it, through the layer's fades. The
+    /// low-pass alone spread a lone twist over its window, and kept one past twice its limit as a move. A run is a twist
+    /// when it lies farther off that line than the keys round it lie apart, and than the motion either side carried on
+    /// would put it: a sudden start, stop or fast swing doesn't come back, a shake is the low-pass's. Turns and moves are
+    /// tested apart. On a loop the run may be the first key, whose neighbour back is the key before the last; with
+    /// <paramref name="seam"/> only runs holding it are. Each repaired sample goes <paramref name="share"/> of the way.
+    /// </summary>
+    private static void Untwist(MotionClip clip, int b, List<int> keys, Quaternion[] keyRotations, Vector3[] keyPositions,
+        bool[] moved, bool turns, bool moves, bool wraps, bool seam, Func<int, float> share)
+    {
+        var count = keys.Count;
+        var period = count - 1;
+        // A key's sample, counted on round a loop.
+        float Place(int k)
+        {
+            if (!wraps)
+                return keys[k];
+            var at = (k % period + period) % period;
+            return keys[at] + (k - at) / period * (clip.Samples - 1);
+        }
+        // Each run key's place on the line between the keys round the run.
+        var lines = new (Quaternion Rotation, Vector3 Position)[TwistKeys];
+        for (var run = 1; run <= TwistKeys; run++)
+        {
+            // The run's keys k to k + run - 1, the keys round it a and z, and one more beyond each.
+            for (var k = wraps ? 0 : 2; wraps ? k < period : k + run + 1 < count; k++)
+            {
+                if (wraps && period < run + 4)
+                    break;
+                if (seam && k != 0 && k + run <= period)
+                    continue;
+                var (a, z) = (k - 1, k + run);
+                var (ta, tz, tb, ty) = (Place(a), Place(z), Place(a - 1), Place(z + 1));
+                var (ra, pa) = Neighbour(keyRotations, keyPositions, a, wraps);
+                var (rz, pz) = Neighbour(keyRotations, keyPositions, z, wraps);
+                var (rb, pb) = Neighbour(keyRotations, keyPositions, a - 1, wraps);
+                var (ry, py) = Neighbour(keyRotations, keyPositions, z + 1, wraps);
+                rz = MotionEvaluator.Align(rz, ra);
+                var backTurn = MotionCutter.Log(MotionEvaluator.Align(ra, rb) * Quaternion.Inverse(rb)) / (ta - tb);
+                var onTurn = MotionCutter.Log(MotionEvaluator.Align(rz, ry) * Quaternion.Inverse(ry)) / (tz - ty);
+                bool twists = turns, shifts = moves;
+                for (var j = 0; j < run; j++)
+                {
+                    var at = wraps ? Near(k + j, count, true) : k + j;
+                    var t = Place(k + j);
+                    var s = (t - ta) / (tz - ta);
+                    lines[j] = (MotionEvaluator.Slerp(ra, rz, s), Vector3.Lerp(pa, pz, s));
+                    var line = lines[j].Rotation;
+                    var turnOff = Degrees(keyRotations[at], line);
+                    var turnCarried = MathF.Max(Degrees(MotionCutter.Exp(backTurn * (t - ta)) * ra, line), Degrees(MotionCutter.Exp(onTurn * (t - tz)) * rz, line));
+                    twists &= turnOff > MathF.Max(TwistDegrees, TwistRatio * MathF.Max(Degrees(ra, rz), turnCarried));
+                    var moveOff = Vector3.Distance(keyPositions[at], lines[j].Position);
+                    var moveCarried = MathF.Max(Vector3.Distance(pa + (pa - pb) * (t - ta) / (ta - tb), lines[j].Position),
+                        Vector3.Distance(pz + (pz - py) * (t - tz) / (tz - ty), lines[j].Position));
+                    shifts &= moveOff > MathF.Max(TwistDistance, TwistRatio * MathF.Max(Vector3.Distance(pa, pz), moveCarried));
+                }
+                if (!twists && !shifts)
+                    continue;
+                for (var j = 0; j < run; j++)
+                {
+                    var at = wraps ? Near(k + j, count, true) : k + j;
+                    var i = keys[at];
+                    var weight = share(i);
+                    if (weight <= 0)
+                        continue;
+                    var value = clip.Get(i, b);
+                    if (twists)
+                        value = value with { Rotation = MotionEvaluator.Slerp(value.Rotation, lines[j].Rotation, weight) };
+                    if (shifts)
+                        value = value with { Position = Vector3.Lerp(value.Position, lines[j].Position, weight) };
+                    clip.Set(i, b, value);
+                    (keyRotations[at], keyPositions[at], moved[at]) = (Quaternion.Normalize(value.Rotation), value.Position, true);
+                }
+            }
+        }
+    }
+
+    // A twist is at most two keys long (four samples at the game's decode rate), at least a quarter degree or half a
+    // millimetre off, and twice as far off as the keys round it lie apart or the motion either side carried on would put it.
+    private const int TwistKeys = 2;
+    private const float TwistDegrees = .25f, TwistDistance = 5e-4f, TwistRatio = 2;
+
+    private static float Degrees(Quaternion a, Quaternion b) =>
+        2 * MathF.Acos(Math.Clamp(MathF.Abs(Quaternion.Dot(Quaternion.Normalize(a), Quaternion.Normalize(b))), 0, 1)) * 180 / MathF.PI;
 
     /// <summary>Whether sample <paramref name="i"/> lies halfway between its neighbours in turn and place, as a sample between keys does.</summary>
     private static bool Halfway(Quaternion[] rotations, Vector3[] positions, int i)

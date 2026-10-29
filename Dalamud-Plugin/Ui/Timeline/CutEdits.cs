@@ -349,32 +349,6 @@ internal static class CutEdits
     }
 
     /// <summary>
-    /// Fixes a loop's seam by <paramref name="report"/>: an end that holds the start's pose is trimmed
-    /// off (unless that leaves the clip too short), a jump in pose gets the seam's default blend, which
-    /// matches the speeds too, and a jump in speed alone the default ease of the faster side. The blend
-    /// and the ease keep the length.
-    /// </summary>
-    public static TimelineDocument FixLoop(TimelineDocument doc, SeamReport report) => FixLoop(doc, report, out _);
-
-    /// <inheritdoc cref="FixLoop(TimelineDocument, SeamReport)"/>
-    public static TimelineDocument FixLoop(TimelineDocument doc, SeamReport report, out CutRemoval removed)
-    {
-        removed = default;
-        if (doc.Expression)
-            return doc;
-        var next = doc;
-        var cuts = CutsOf(doc);
-        if (report.StallFrom is { } stall && cuts.Parts[^1] is var last && stall > last.From && stall < last.To)
-            next = Remove(doc, cuts, cuts.Kept - (last.To - stall), cuts.Kept, out removed);
-        // One or the other: the blend matches the speeds already, and an ease beside it changes what it aims at.
-        if (LoopSeam.Pops(report.Gap))
-            next = SetEase(SetSeam(next, MotionJoin.ForSeam), 0);
-        else if (report.State == SeamState.Stalls)
-            next = SetEase(SetSeam(next, null), MotionCuts.DefaultEase, atEnd: report.Gap.SpeedIn > report.Gap.SpeedOut);
-        return next;
-    }
-
-    /// <summary>
     /// Moves events and bone layers for <paramref name="delta"/> output frames that go (negative: from
     /// <paramref name="at"/> up to <paramref name="at"/> - <paramref name="delta"/>) or come (positive, at
     /// <paramref name="at"/>), and the length with them. The cut list is left as it is.

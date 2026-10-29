@@ -58,9 +58,6 @@ internal sealed record MotionJoin(int Frames, JoinPlacement Placement)
 internal sealed record MotionCuts(int Source, ImmutableArray<MotionPart> Parts, ImmutableArray<MotionJoin> Joins, MotionJoin? Seam = null, int Ease = 0,
     bool EaseEnd = false)
 {
-    /// <summary>Fix loop's ease, in frames: long enough that the catch-up stays under about 1.3 times normal speed.</summary>
-    public const int DefaultEase = 30;
-
     public ImmutableArray<MotionPart> Parts { get; init; } = Parts.IsDefault ? [] : Parts;
     public ImmutableArray<MotionJoin> Joins { get; init; } = Joins.IsDefault ? [] : Joins;
 
