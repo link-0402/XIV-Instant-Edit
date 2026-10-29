@@ -11,8 +11,8 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// sync plays at its own pace (C010 flags 0, 0 to its length).
 /// <para>
 /// A prop follows the emote_sp pattern (sp54, sp50): the sync effect every animated emote prop
-/// uses (C173), the model (C198, summon slot 0 unless the request names 1; a model from a mod carries its source), and with a weapon timeline the animation
-/// (C031 on the summon, 5 frames after the spawn) behind a hide-then-fade on the summon
+/// uses (C173), the model (C198, summon slot 0 unless the request names 1, see <see cref="FreeSummon"/>; a model from a mod carries its source), and with a weapon timeline the animation
+/// (C031 on that summon, 5 frames after the spawn) behind a hide-then-fade on the summon
 /// (C094 0 to 0 for 5 frames, then 0 to 1 over 7), so its first pose never shows. It ends as vanilla's do
 /// (sp50, sp54): a fade-out over its last 5 frames, then hidden to the clip's end (C094 1 to 0, then 0 to 0).
 /// </para>
@@ -22,6 +22,8 @@ internal static class TimelineTemplates
     public const string SyncEffect = "vfx/common/eff/syncactiontimelineclip01t.avfx";
     public const int AnimationDelay = 5;
     public const int FadeOutFrames = 5;
+    /// <summary>How long an added prop lasts when the Add gives no length, in frames.</summary>
+    public const int PropLength = 60;
     private static readonly byte[] SummonFilter = [1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
     /// <summary>
@@ -63,14 +65,15 @@ internal static class TimelineTemplates
                 var group = "prop-" + Guid.NewGuid().ToString("N")[..12];
                 var events = ImmutableArray.CreateBuilder<TimelineEvent>();
                 events.Add(Event("C173", request.Start, 0, SyncEffect, new() { [TimelineEffectCheck.LoopField] = 1 }, group));
-                var length = Length(60);
+                var length = Length(PropLength);
                 events.Add(Event("C198", request.Start, length, "",
                     new() { ["Model"] = prop.Model, ["Body"] = prop.Body, ["Variant"] = prop.Variant, ["SummonId"] = request.Summon, ["AtchState"] = 0 },
                     group) with { Source = prop.Source });
                 if (prop.WeaponTimeline is { } timeline)
                 {
                     var animated = Math.Min(request.Start + AnimationDelay, TimelineDocument.MaxFrames);
-                    events.Add(Event("C031", animated, 1, "", new() { ["WeaponTimeline"] = timeline, ["TargetType"] = 2 }, group));
+                    // The animation plays on the prop's own summon: target 2 for summon 0, 3 for summon 1.
+                    events.Add(Event("C031", animated, 1, "", new() { ["WeaponTimeline"] = timeline, ["TargetType"] = 2 + request.Summon }, group));
                     events.Add(Event("C094", request.Start, AnimationDelay, "", new() { ["StartVisibility"] = 0, ["EndVisibility"] = 0 }, group));
                     events.Add(Event("C094", animated, 7, "", new() { ["StartVisibility"] = 0, ["EndVisibility"] = 1 }, group));
                 }
@@ -86,6 +89,24 @@ internal static class TimelineTemplates
             default:
                 throw new InvalidDataException($"Cannot add {request.Kind}.");
         }
+    }
+
+    /// <summary>
+    /// The summon slot a prop added at <paramref name="start"/> for <paramref name="duration"/> frames (0: the
+    /// default <see cref="PropLength"/>) gets: the first one no summon in <paramref name="doc"/> holds over that span
+    /// (a C198 on its slot, or a C043 given a model, always slot 0), else 0. Two props on one slot at once show only
+    /// the later one (Toast and Read, seen in game 2026-10-29).
+    /// </summary>
+    public static int FreeSummon(TimelineDocument doc, int start, int duration = 0)
+    {
+        var end = start + (duration > 0 ? duration : PropLength);
+        if (doc.Length > start)
+            end = Math.Min(end, doc.Length);
+        bool Busy(int slot) => !doc.Events.IsDefault && doc.Events.Any(e =>
+            e.Values != null && e.Values.GetValueOrDefault("Model") > 0 &&
+            (e.Magic == "C198" && (int)e.Values.GetValueOrDefault("SummonId") == slot || e.Magic == "C043" && slot == 0) &&
+            e.Start < end && (e.Duration <= 0 ? doc.Length : e.Start + e.Duration) > start);
+        return Busy(0) && !Busy(1) ? 1 : 0;
     }
 
     /// <summary>

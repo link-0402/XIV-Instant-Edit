@@ -165,6 +165,25 @@ internal static class PhysicsKnobs
         return MathF.Sign(sideways.X) == -MathF.Sign(pull.Point.X) ? "Pull together" : "Pull apart";
     }
 
+    /// <summary> Whether a spring is aimed off where its point rests, so <see cref="AimAtRest"/> would change it. </summary>
+    public static bool CanAimAtRest(PhybSimulator simulator, PhybAttract spring, PhysicsSkeleton skeleton)
+        => SpringAim(simulator, spring, skeleton) > SpringAimLimit;
+
+    /// <summary>
+    /// Turns a spring's point about the point before its own until it pulls straight at where its
+    /// point rests, the aim a fit gives a spring when it moves the tip. It keeps its distance and its
+    /// strength; a negative spring's point goes behind, so it still pushes the same way. False when a bone is missing.
+    /// </summary>
+    public static bool AimAtRest(PhybSimulator simulator, PhybAttract spring, PhysicsSkeleton skeleton)
+    {
+        if (SpringPull(simulator, spring, skeleton) is not { } pull || RestFrame(skeleton, spring.Bone.Text) is not { } frame)
+            return false;
+        var pivot = pull.Point - pull.Resting;
+        var reach = (frame.Place(spring.Offset) - pivot).Length();
+        spring.Offset = frame.ToLocal(pivot + Vector3.Normalize(pull.Resting) * (spring.Stiffness < 0 ? -reach : reach));
+        return true;
+    }
+
     /// <summary>
     /// A spring's point and the place it acts on, in the rest pose: the rest direction from the point
     /// before it to the point, and the way the spring moves it (toward its anchor, or away when negative).

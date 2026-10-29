@@ -220,4 +220,20 @@ internal static class AnimationLibrary
                 return false;
         return true;
     }
+
+    /// <summary>
+    /// Whether the clip at <paramref name="gamePath"/> is a numbered idle, ground, chair or bed pose
+    /// (emote/pose03_loop and the like). The game plays such a pose's timeline once and holds it at its
+    /// end while the motion loops on its own (seen in game 2026-10-29: Idle pose 3's timeline stayed at
+    /// frame 70 while its motion looped), so its events play only on the first loop.
+    /// </summary>
+    public static bool IsPoseLoop(string gamePath)
+    {
+        const string folder = "/bt_common/";
+        var at = gamePath.LastIndexOf(folder, StringComparison.OrdinalIgnoreCase);
+        if (at < 0 || !gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var key = gamePath[(at + folder.Length)..^4].ToLowerInvariant();
+        return Families.Any(family => family.Pose.IsMatch(key));
+    }
 }

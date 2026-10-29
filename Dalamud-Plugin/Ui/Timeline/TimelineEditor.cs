@@ -804,6 +804,15 @@ internal sealed class TimelineEditor
             default:
                 return;
         }
+        if (gesture is TimelineGesture.Move or TimelineGesture.ResizeLeft or TimelineGesture.ResizeRight)
+        {
+            // Judged against the press, so a vanilla prop moved off Summon 0 goes back once the drag leaves it. Refused, the
+            // events stay where they last could be.
+            LastError = null;
+            if (Slotted(start, next) is not { } slotted)
+                return;
+            next = slotted;
+        }
         SnapGuide = guide == landed ? guide : null;
         History.Preview(next);
     }
@@ -997,17 +1006,13 @@ internal sealed class TimelineEditor
         var switched = switchPack && !string.IsNullOrEmpty(pack) && !string.Equals(pack, Document.FacePack, StringComparison.OrdinalIgnoreCase);
         var doc = switched ? Document with { FacePack = pack } : Document;
         var added = events.ToList();
-        if (added.Count > 0)
-        {
-            var first = added.Min(ev => ev.Start);
-            var shift = Math.Max(-first, Math.Min(0, Math.Min(doc.Length - 1, TimelineDocument.MaxFrames) - added.Max(ev => ev.Start)));
-            if (first >= 0 && shift != 0)
-                added = added.ConvertAll(ev => ev with { Start = ev.Start + shift });
-        }
+        var shift = TimelineEdits.FitShift(doc, added);
+        if (shift != 0)
+            added = added.ConvertAll(ev => ev with { Start = ev.Start + shift });
         var next = TimelineEdits.Add(doc, added, pack, out var created, out var error, ResidentMotions);
         LastError = error;
-        // A switched library alone is no add.
-        if (created.IsDefaultOrEmpty || !Commit(next))
+        // A switched library alone is no add. A prop from a mod takes Summon 0, moving a vanilla one over it in the same step.
+        if (created.IsDefaultOrEmpty || Slotted(doc, next) is not { } slotted || !Commit(slotted))
             return false;
         SelectKeys(created);
         if (switched)
@@ -1254,7 +1259,7 @@ internal sealed class TimelineEditor
         if (first == int.MaxValue)
             return false;
         var next = TimelineEdits.Duplicate(doc, selected, end - first, out var created);
-        if (!Commit(next))
+        if (Slotted(doc, next) is not { } slotted || !Commit(slotted))
             return false;
         SelectKeys(created);
         return true;
@@ -1316,8 +1321,9 @@ internal sealed class TimelineEditor
         if (gesture != TimelineGesture.None || PrimaryEvent is not { } primary)
             return false;
         var next = TimelineEdits.Move(Document, selected, frame - primary.Start);
-        if (ReferenceEquals(next, Document))
+        if (ReferenceEquals(next, Document) || Slotted(FieldStart, next) is not { } slotted)
             return false;
+        next = slotted;
         if (History.InGesture)
             History.Preview(next);
         else
@@ -1348,9 +1354,9 @@ internal sealed class TimelineEditor
                  first.Group == moved.Group)
             next = TimelineEdits.Move(TimelineEdits.Replace(origin, ev with { Start = first.Start }, motionFrames), GroupOf(origin, ev.Key),
                 ev.Start - first.Start);
-        if (ReferenceEquals(next, Document))
+        if (ReferenceEquals(next, Document) || Slotted(FieldStart, next) is not { } slotted)
             return false;
-        next = TimelineEdits.ReleasePack(Document, next, ResidentMotions);
+        next = TimelineEdits.ReleasePack(Document, slotted, ResidentMotions);
         if (History.InGesture)
             History.Preview(next);
         else
@@ -1437,7 +1443,23 @@ internal sealed class TimelineEditor
         Math.Max(0, TimelineSnap.Snap(frame, TimelineSnap.Targets(Document, playhead), SnapTolerance, View.Scale, Snap && !alt, out _));
 
     /// <summary>Moves the selection by <paramref name="delta"/> frames as one undo step.</summary>
-    public bool Nudge(int delta) => Commit(TimelineEdits.Move(Document, selected, delta));
+    public bool Nudge(int delta) => Slotted(Document, TimelineEdits.Move(Document, selected, delta)) is { } next && Commit(next);
+
+    /// <summary>The document a field edit started from, else the current one: what an edit's summons are judged against.</summary>
+    private TimelineDocument FieldStart => History.InGesture && History.GestureStart is { } began ? began : Document;
+
+    /// <summary>
+    /// <paramref name="next"/>, an add, move or resize of <paramref name="before"/>, with props from mods on Summon 0
+    /// (<see cref="TimelineEdits.ModPropSlots"/>); null with <see cref="LastError"/> when refused.
+    /// </summary>
+    private TimelineDocument? Slotted(TimelineDocument before, TimelineDocument next)
+    {
+        var slotted = TimelineEdits.ModPropSlots(before, next, out var error);
+        if (error == null)
+            return slotted;
+        LastError = error;
+        return null;
+    }
 
     /// <summary>
     /// Alt+arrows on a selected layer: moves its selected key (or the selected bone's value in it), else

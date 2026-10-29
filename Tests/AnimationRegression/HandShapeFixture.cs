@@ -392,6 +392,14 @@ internal static class HandShapeFixture
         }
         check(rolled == null, "shape spread: Spread on a Fist swings each curled finger sideways, the index toward its side and the little finger away, without rolling it" + Failed(rolled));
 
+        var capped = (from hand in hands from id in HandShapes.Order
+                      let low = HandShapes.Targets(hand.Skeleton, hand.Rig, Hand(id, spread: -1), hand.Rig.HasTips)
+                      let cap = HandShapes.Targets(hand.Skeleton, hand.Rig, Hand(id, spread: HandShapes.MinSpread), hand.Rig.HasTips)
+                      let above = HandShapes.Targets(hand.Skeleton, hand.Rig, Hand(id, spread: HandShapes.MinSpread + .1f), hand.Rig.HasTips)
+                      where !low.All(target => cap[target.Key] == target.Value) || above.All(target => cap[target.Key] == target.Value)
+                      select $"{hand.Rig.Side} {id}").FirstOrDefault();
+        check(capped == null, "shape spread: a Spread below -30% applies as -30%, and one above it still changes the hand" + Failed(capped));
+
         string? uncaptured = null;
         foreach (var (r, l) in pairs)
             foreach (var tips in bools)
@@ -784,5 +792,27 @@ internal static class HandShapeFixture
         check(HandTipCheck.Reason(false, false, false) == clip && HandTipCheck.Reason(false, true, true) == clip && HandTipCheck.Reason(true, false, false) == live &&
               HandTipCheck.Reason(true, false, true) == live && HandTipCheck.Reason(true, true, false) == mesh && HandTipCheck.Reason(true, true, true) == null,
             "tips reason: the first failing check's line, null when all pass");
+
+        // The lines name the clip's skeleton and the hand model when they're known.
+        var game = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Game,
+            new AnimationResource("chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", "")),
+            TestHand(false, false), 0, "");
+        var modded = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Mod,
+            new AnimationResource("chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", @"G:\Penumbra\Some Skeleton\skl_c0801b0001.sklb", "", ModName: "Some Skeleton")),
+            TestHand(false, false), 0, "");
+        var rebuild = new RaceRebuild("c0801", new StandardSkeleton(SkeletonStandard.Vanilla, TestHand(false, false), "Game data"));
+        check(HandTipCheck.SkeletonName(game, null) == "skl_c0801b0001.sklb from the game" &&
+              HandTipCheck.SkeletonName(modded, null) == "skl_c0801b0001.sklb from Some Skeleton" &&
+              HandTipCheck.SkeletonName(game, rebuild) == "the game's" && HandTipCheck.SkeletonName(null, null) == null,
+            "tips skeleton name: the chosen skeleton's file and source, or a rebuild's standard");
+        check(HandTipCheck.Reason(false, true, true, "skl_c0801b0001.sklb from the game") ==
+              "Fingertips: the clip's skeleton (skl_c0801b0001.sklb from the game) has no tip bones. Repair it onto IVCS or YAS to bend them.",
+            "tips reason: the clip's line names its skeleton");
+        check(HandTipCheck.Models(["c0801e0000_glv.mdl", "C0801E0000_GLV.mdl", "", "c0801e6024_top.mdl"]) == "c0801e0000_glv.mdl, c0801e6024_top.mdl" &&
+              HandTipCheck.Models([]) == null, "tips models: each hand model once, none is null");
+        check(HandTipCheck.Reason(true, true, false, "skl_c0801b0001.sklb from the game", "c0801e0000_glv.mdl") ==
+              "Fingertips: your hands' model (c0801e0000_glv.mdl) isn't weighted to tip bones." &&
+              HandTipCheck.Reason(true, false, false, "x", "c0801e0000_glv.mdl") == live,
+            "tips reason: the model's line names the model; the live line names nothing");
     }
 }

@@ -135,6 +135,15 @@ internal static class AnimationBakeRules
         !document.ExcludedBones.IsEmpty || repair != null;
 
     /// <summary>
+    /// Whether a save that rebuilds a borrowed clip for another race (<see cref="AnimationBakeRequest.RepairModel"/>) keeps
+    /// its edits open: with no bones left out, the motion from before rebuilt for that race takes its cuts, length and
+    /// layers back (Edit again), on the skeleton the saved file is for.
+    /// </summary>
+    public static bool RebuildKeepsEdits(AnimationBakeRequest request, TimelineDocument document) =>
+        request is { RepairModel: not null, RepairTarget: not null, ExcludedBones.IsEmpty: true } &&
+        (document.MotionChanged || document.Cut || document.Stretched);
+
+    /// <summary>
     /// Whether the Timeline window goes on editing <paramref name="document"/>'s bone layers on the motion
     /// from before once it is saved or the save undone: not when the save bakes them in for good, and not
     /// when it cuts or stretches the motion, whose saved timeline is then in other frames than that motion.

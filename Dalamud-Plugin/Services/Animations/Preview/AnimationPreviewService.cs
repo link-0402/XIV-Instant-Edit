@@ -12,7 +12,8 @@ namespace InstantEdit.Services.Animations.Preview;
 /// in Penumbra's memory. Every revision gets a new folder, because the game and Penumbra never
 /// re-read a file path they already loaded. Replaying the clip is not enough: the character keeps its
 /// loaded animation files until it is redrawn (<see cref="RedrawAsync"/>; seen in game 2026-10-07,
-/// a removed expression kept playing), while an effect is asked for again whenever it starts. A record
+/// a removed expression kept playing), and the same goes for the effects and sounds its timeline loaded
+/// (2026-10-29: a tint changed while a preview played never showed). A record
 /// in the config folder is saved before Penumbra is called, so a crash or a failed unload is cleaned
 /// up on the next load.
 /// </summary>

@@ -2360,6 +2360,59 @@ static async Task CheckExportContextsAsync(string testRoot)
             File.Exists(cleanupHeldFile),
         "cleanup: an old file that can't be deleted is a warning naming it, and the mod stays normalised");
 
+    // A Studio save while the clean-up writes its files: the clean-up refuses and undoes only its own files.
+    var cleanupRaceRoot = Path.Combine(testRoot, "CleanupRace");
+    var cleanupRaceLegacy = Path.Combine(cleanupRaceRoot, "legacy", "item.mdl");
+    var cleanupRaceReadme = Path.Combine(cleanupRaceRoot, "Files", "readme.txt");
+    var cleanupRaceCanonical = Path.Combine(cleanupRaceRoot, "Files", cleanupModelPath.Replace('/', Path.DirectorySeparatorChar));
+    var cleanupRaceStudioFile = Path.Combine(cleanupRaceRoot, "studio", "new.mtrl");
+    var cleanupRaceMetaPath = Path.Combine(cleanupRaceRoot, "meta.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(cleanupRaceLegacy)!);
+    Directory.CreateDirectory(Path.GetDirectoryName(cleanupRaceReadme)!);
+    File.WriteAllBytes(cleanupRaceLegacy, [4, 5, 6]);
+    File.WriteAllText(cleanupRaceReadme, "keep me");
+    var cleanupRaceMeta = new JsonObject
+    {
+        ["FileVersion"] = 4,
+        ["Identifier"] = Guid.NewGuid(),
+        ["LastWrite"] = DateTime.UtcNow,
+        ["Name"] = "Cleanup Race",
+        ["DefaultData"] = new JsonObject { ["Files"] = new JsonObject { [cleanupModelPath] = "legacy/item.mdl" } },
+        ["Groups"] = new JsonArray(),
+    };
+    File.WriteAllText(cleanupRaceMetaPath, cleanupRaceMeta.ToJsonString());
+    cleanupRaceMeta["Name"] = "Cleanup Race (Studio save)";
+    var cleanupRaceStudioMeta = cleanupRaceMeta.ToJsonString();
+    Task<(IReadOnlyList<string> Warnings, ModPathRemap? PathRemap)> cleanupRaceTask;
+    var cleanupRaceSawWrite = false;
+    lock (InstantEdit.Studio.Services.Project.ModFiles.Gate)
+    {
+        cleanupRaceTask = Task.Run(() => ModCleanup.NormalizeAndDeduplicateModForRegression(cleanupRaceRoot, "cleanup-race"));
+        // The clean-up writes its files, then waits on the gate this thread holds.
+        var cleanupRaceDeadline = DateTime.UtcNow.AddSeconds(30);
+        while (!cleanupRaceTask.IsCompleted && DateTime.UtcNow < cleanupRaceDeadline &&
+               !(cleanupRaceSawWrite = File.Exists(cleanupRaceCanonical)))
+            Thread.Sleep(10);
+        Thread.Sleep(50);
+        File.WriteAllText(cleanupRaceMetaPath, cleanupRaceStudioMeta);
+        Directory.CreateDirectory(Path.GetDirectoryName(cleanupRaceStudioFile)!);
+        File.WriteAllBytes(cleanupRaceStudioFile, [7, 8, 9]);
+    }
+    var cleanupRace = cleanupRaceTask.Result;
+    Require(cleanupRaceSawWrite && cleanupRace.PathRemap is null &&
+            cleanupRace.Warnings is [var cleanupRaceWarning] &&
+            cleanupRaceWarning.Contains("meta.json changed", StringComparison.Ordinal) &&
+            File.ReadAllText(cleanupRaceMetaPath) == cleanupRaceStudioMeta,
+        "cleanup: a meta.json change made meanwhile is refused and the Studio save stays");
+    Require(File.Exists(cleanupRaceStudioFile) && File.ReadAllBytes(cleanupRaceStudioFile).SequenceEqual(new byte[] { 7, 8, 9 }) &&
+            File.ReadAllText(cleanupRaceReadme) == "keep me" &&
+            File.ReadAllBytes(cleanupRaceLegacy).SequenceEqual(new byte[] { 4, 5, 6 }) &&
+            !File.Exists(cleanupRaceCanonical) &&
+            !Directory.Exists(Path.Combine(cleanupRaceRoot, "Files", "chara")) &&
+            Directory.Exists(Path.Combine(cleanupRaceRoot, "Files")) &&
+            Directory.GetDirectories(testRoot, ".instant-edit-cleanup-*").Length == 0,
+        "cleanup rollback undoes only the files it wrote and leaves the mod's other files and folders alone");
+
     var sourceDescription = MashupPlanning.FormatMashupDescription(
     [
         new MashupContributor(galianContext with { SourceModName = "Galian Hair" }, []),

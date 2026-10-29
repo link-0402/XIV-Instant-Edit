@@ -70,8 +70,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private sealed record BuiltPreview(string Fingerprint, ushort Timeline, ushort Actor, float? Duration);
 
     // Looks shown in game while Preview or Live runs: each effect's own path points at an edited copy in
-    // the preview's temporary mod (see TimelineEffectLooks.Redirectable). The game asks for the path again
-    // whenever the effect starts, so a changed look shows then, without building the clip again.
+    // the preview's temporary mod (see TimelineEffectLooks.Redirectable). A playing timeline loads its effects
+    // and sounds once, when its resources load, and keeps them through every loop (in game 2026-10-29: a tint
+    // changed while the preview played never showed), so each update redraws the character and starts the
+    // clip again (ShowAndReload), without building it again.
     // The preview's files without the looks, and the previewed document without the looks it redirects.
     private ImmutableDictionary<string, byte[]>? previewBaseFiles;
     // The placed props' attach overrides the preview's mod carries, encoded; a look update keeps them.
@@ -85,6 +87,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private Task? lookSync;
     private (ImmutableDictionary<string, TimelineEffectEdit> Looks, ImmutableDictionary<string, byte[]> Sounds, bool Live, int Generation)? lookSyncing;
     private int lookGeneration;
+    // A look edit waits until the document stays the same this long, so dragging a colour doesn't redraw every frame.
+    private TimelineDocument? lookPending;
+    private long lookPendingAt;
+    private const long LookSettleMs = 400;
+    // The frame a paused preview held when a look update started it again; it pauses there again once it plays.
+    private int? reloadHold;
     // The document last compared with the preview, and the one whose looks were last shown or found unshowable.
     private TimelineDocument? staleChecked;
     private TimelineDocument? lookChecked;
@@ -237,7 +245,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         if (session.Preview.CollectionShared)
             ImGui.TextColored(Theme.Warning, "⚠ Others using this collection see the preview too.");
         ImGui.TextColored(Theme.Hint, needed
-            ?? (!shownLooks.IsEmpty ? "Effect looks change when the effect starts again."
+            ?? (!shownLooks.IsEmpty ? "Changing an effect look redraws your character."
             : "Sounds and effects play only while the preview plays."));
     }
 
@@ -574,6 +582,15 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 }
                 else
                 {
+                    if (reloadHold is { } hold && session.Playback.CurrentTime(fingerprint) != null)
+                    {
+                        // Paused before a look update started the clip again: paused again once it plays, at the same frame.
+                        reloadHold = null;
+                        PlaybackCall(session.Playback.Pause);
+                        current.Playhead = hold;
+                        lastSeekFrame = -1;
+                        return;
+                    }
                     if (session.Playback.CurrentTime(fingerprint) is { } seconds)
                     {
                         current.Playhead = TimelineWindowViews.Frames(seconds);
@@ -872,7 +889,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// </summary>
     private bool WaitingForDraw()
     {
-        if (previewStop is { IsCompleted: false })
+        // A look update redraws the character too (ShowAndReload): Live starts again once it ends.
+        if (previewStop is { IsCompleted: false } || lookSync is { IsCompleted: false })
             return true;
         ushort? actor;
         try { actor = session.Playback.ActorIndex(); }
@@ -897,10 +915,15 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         liveLooks = false;
         staleChecked = null;
         lookChecked = null;
+        lookPending = null;
+        reloadHold = null;
         previewStale = false;
     }
 
-    /// <summary> Ends Live's temporary mod with looks, when it has one. </summary>
+    /// <summary>
+    /// Ends Live's temporary mod with looks, when it has one. A look update redrew the character to load them (previewRedrawn),
+    /// so Stop redraws it again for the effects' own files; Preview redraws it anyway.
+    /// </summary>
     private void StopLiveLooks()
     {
         if (!liveLooks && lookSyncing is not { Live: true })
@@ -961,6 +984,16 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         if (previewing && previewStale || ReferenceEquals(doc, lookChecked) || previewStop is { IsCompleted: false } || session.Preview.Busy ||
             previewActor is not { } actor || effectLooks.LookMissing(doc) != null || soundFiles.SoundMissing(doc) != null)
             return;
+        // Each update redraws the character: an edit is shown once it has settled.
+        var now = Environment.TickCount64;
+        if (!ReferenceEquals(doc, lookPending))
+        {
+            lookPending = doc;
+            lookPendingAt = now;
+            return;
+        }
+        if (now - lookPendingAt < LookSettleMs)
+            return;
         lookChecked = doc;
         var looks = TimelineEffectLooks.Redirectable(doc).Looks;
         ImmutableDictionary<string, byte[]> sounds;
@@ -984,8 +1017,59 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             return;
         }
         lookSyncing = (looks, sounds, live, lookGeneration);
-        // Live without looks needs no temporary mod.
-        lookSync = files.Count == 0 ? session.Preview.StopAsync() : session.Preview.ShowAsync(actor, files, previewing ? previewManipulations : string.Empty, CancellationToken.None);
+        lookSync = ShowAndReload(actor, files, previewing ? previewManipulations : string.Empty, lookGeneration);
+    }
+
+    /// <summary>
+    /// Puts <paramref name="files"/> into the temporary mod (Live without looks needs none: it is taken down), then redraws
+    /// the character and starts the clip again, as Preview does: the playing timeline keeps the effects and sounds it loaded
+    /// when it started, through every loop. Live goes back to the clip's own motion for the redraw and starts its display
+    /// again after it (UpdateLive). A stop or a new preview meanwhile (another <paramref name="generation"/>) leaves the character be.
+    /// </summary>
+    private async Task ShowAndReload(ushort actor, ImmutableDictionary<string, byte[]> files, string manipulations, int generation)
+    {
+        if (files.Count == 0)
+            await session.Preview.StopAsync();
+        else
+            await session.Preview.ShowAsync(actor, files, manipulations, CancellationToken.None);
+        if (!await session.Framework.RunOnFrameworkThread(() => BeforeReload(generation)))
+            return;
+        if (await session.Preview.RedrawAsync(actor, CancellationToken.None) is { } error)
+            session.Log.Warning("The character was not redrawn for the effect looks: {Error}", error);
+        await WaitUntilShown(actor, CancellationToken.None);
+        await session.Framework.RunOnFrameworkThread(() => AfterReload(generation));
+    }
+
+    /// <summary>On the framework thread, before a look update's redraw: false when the preview or Live it was for has ended.</summary>
+    private bool BeforeReload(int generation)
+    {
+        if (generation != lookGeneration)
+            return false;
+        // A stop redraws the character again to put its own files back.
+        previewRedrawn = true;
+        // Mid-redraw the clip has no control, which RepeatAtEnd would take for its end.
+        repeatArmed = false;
+        if (liveWanted)
+        {
+            // The redraw frees the controls holding Live's copy: they get the clip's own motion back first.
+            session.MotionDisplay?.Stop();
+            liveStarted = false;
+            liveDecoded = null;
+        }
+        return true;
+    }
+
+    /// <summary>On the framework thread, once the redrawn character shows: the preview plays again from the start.</summary>
+    private void AfterReload(int generation)
+    {
+        // Live without a built preview plays the clip's own file again itself, once the character is drawn.
+        if (generation != lookGeneration || liveWanted && livePreview == null || previewFingerprint is not { } fingerprint)
+            return;
+        reloadHold = session.Playback.Active && session.Playback.Paused && lastSeekFrame >= 0 ? lastSeekFrame : null;
+        repeatArmed = false;
+        PlaybackCall(() => session.Playback.Play(previewTimeline, fingerprint, previewActor, previewFace));
+        if (Math.Abs(speedPercent - 100) > .1f && session.Playback.Active)
+            PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
     }
 
     /// <summary> Whether two sets of files by game path hold the same bytes. </summary>

@@ -160,6 +160,58 @@ internal static partial class TmbFileFixture
             "a part that starts past the prop's new end moves inside it");
     }
 
+    /// <summary>
+    /// A prop from a mod always takes Summon 0: the game loads its private body (no IMC) only there (2026-10-29). A vanilla prop
+    /// over it moves to Summon 1 in the same undo step; a second prop from a mod at the same time is refused.
+    /// </summary>
+    private static void ModPropSlots(Action<bool, string> check, TimelineDocument idle, TimelineDocument toast)
+    {
+        var source = new TimelinePropSource("Telephone", "Telephone", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9901, 9000,
+            ImmutableDictionary<string, string>.Empty, ImmutableDictionary<string, string>.Empty);
+        TimelineEvent[] ModProp(int start, ushort body = 9000, bool sourced = true) => [.. TimelineTemplates.Create(new(TimelineAddKind.Prop, start, "", 20,
+            Prop: new TimelinePropModel(9901, body, 1, null, sourced ? source with { Body = body } : null), ClipLength: 70, Summon: 1))];
+        static bool Mod(TimelineEvent e) => e.Values["Body"] >= 9000;
+        static IEnumerable<int> Slots(TimelineDocument d, Func<TimelineEvent, bool> which) =>
+            d.Events.Where(e => e.Magic == "C198" && which(e)).Select(e => (int)e.Values["SummonId"]);
+
+        // Toast holds Summon 0 from 4 to 64.
+        var editor = new TimelineEditor(toast);
+        check(editor.Add(ModProp(10), null), "a prop from a mod over Toast is added");
+        var placed = editor.Document;
+        check(Slots(placed, Mod).SequenceEqual([0]) && Slots(placed, e => !Mod(e)).SequenceEqual([1]) &&
+              placed.Events.Single(e => e.Magic == "C031").Values["TargetType"] == 3,
+            "a prop from a mod takes Summon 0, even asked for on 1; Toast moves to Summon 1 with its animation");
+        check(editor.Undo() && TimelineEdits.Same(editor.Document, toast), "one undo puts Toast back on Summon 0 and takes the prop away");
+
+        check(editor.Add(ModProp(10), null), "the prop from a mod goes in again");
+        var one = editor.Document;
+        check(!editor.Add(ModProp(20, 9001), null) && editor.LastError == TimelineEdits.OneModProp && ReferenceEquals(editor.Document, one),
+            "a second prop from a mod at the same time is refused with the reason, and nothing changes");
+        check(!editor.Add(ModProp(20, 9002, sourced: false), null) && editor.LastError == TimelineEdits.OneModProp,
+            "a saved prop from a mod (a private body, no source) counts too");
+        check(editor.Add(ModProp(40, 9001), null) && Slots(editor.Document, Mod).SequenceEqual([0, 0]) &&
+              Slots(editor.Document, e => !Mod(e)).SequenceEqual([1]),
+            "a prop from a mod after the other ends is added, on Summon 0 too");
+        var two = editor.Document;
+        check(!editor.Nudge(-15) && editor.LastError == TimelineEdits.OneModProp && ReferenceEquals(editor.Document, two),
+            "moving a prop from a mod over the other is refused");
+        var first = two.Events.First(e => e.Magic == "C198" && Mod(e)).Key;
+        check(ReferenceEquals(TimelineEdits.ModPropSlots(two, TimelineEdits.ResizeGroup(two, first, false, 20), out var longer), two) &&
+              longer == TimelineEdits.OneModProp,
+            "making a prop from a mod last into the other is refused");
+
+        // A loaded prop from a mod on Summon 1 stays there while the edit leaves it alone.
+        var legacy = TimelineEdits.Add(toast, ModProp(10), null, out _);
+        var sound = TimelineEdits.Add(legacy, TimelineTemplates.Create(new(TimelineAddKind.Sound, 50, "sound/test/test.scd")), null, out _);
+        check(ReferenceEquals(TimelineEdits.ModPropSlots(legacy, sound, out var untouched), sound) && untouched == null,
+            "an edit that leaves a prop from a mod alone moves no summon");
+
+        var weapon = idle with { Events = [TimelineTemplates.Event("C043", 0, 70, "", new() { ["Model"] = 1922 }) with { Key = "w1" }] };
+        check(ReferenceEquals(TimelineEdits.ModPropSlots(weapon, TimelineEdits.Add(weapon, ModProp(10), null, out _), out var held), weapon) &&
+              held == TimelineEdits.ClipPropOnSummon0,
+            "a prop from a mod over the clip's own summoned weapon is refused");
+    }
+
     private static void PropTemplates(Action<bool, string> check)
     {
         var prop = TimelineTemplates.Create(new(TimelineAddKind.Prop, 0, "", 60, Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 200));
@@ -185,6 +237,40 @@ internal static partial class TmbFileFixture
         var summon = prop.Single(e => e.Magic == "C198");
         check(summon.Values["SummonId"] == 0 && summon.Values["AtchState"] == 0 && prop.Single(e => e.Magic == "C031").Values["TargetType"] == 2,
             "an added prop is summon 0 at its default attach state, animated on that summon");
+
+        // Toast at 4 and Read at 40 on Idle pose 3 (70 frames) both took summon 0, so only Read showed (2026-10-29):
+        // a second prop that overlaps the first gets summon 1, and is animated on it.
+        var idle = new Tmb().Head(70, null, 2).Actor(2, 3).Track(3, 20).Motion(20, 70).Build();
+        var idleDoc = TimelineConvert.Read(TmbFile.Parse(idle));
+        check(TimelineTemplates.FreeSummon(idleDoc, 4) == 0, "the first prop takes summon 0");
+        var toast = TimelineEdits.Add(idleDoc, TimelineTemplates.Create(new(TimelineAddKind.Prop, 4, "", 0,
+            Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 70, Summon: TimelineTemplates.FreeSummon(idleDoc, 4))), null, out _);
+        var second = TimelineTemplates.FreeSummon(toast, 40);
+        var read = TimelineTemplates.Create(new(TimelineAddKind.Prop, 40, "", 0, Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 70,
+            Summon: second));
+        check(second == 1 && read.Single(e => e.Magic == "C198").Values["SummonId"] == 1 &&
+              read.Single(e => e.Magic == "C031").Values["TargetType"] == 3,
+            "a prop overlapping another takes summon 1 and is animated on summon 1");
+        check(TimelineTemplates.FreeSummon(toast, 64) == 0 && TimelineTemplates.FreeSummon(toast, 0, 4) == 0,
+            "a prop that starts after the other ends, or ends before it starts, keeps summon 0");
+        var both = TimelineEdits.Add(toast, read, null, out var bothError);
+        var bothSaved = TmbFile.Parse(TimelineConvert.Apply(idle, both));
+        check(bothError == null && bothSaved.Entries.Where(e => e.Magic == "C198").Select(e => (int)e.Byte(28)).Order().SequenceEqual([0, 1]) &&
+              bothSaved.Entries.Where(e => e.Magic == "C031").Select(e => (int)e.Int16(22)).Order().SequenceEqual([2, 3]),
+            "both props save on their own summons, each animated on its own");
+        check(TimelineTemplates.FreeSummon(both, 40) == 0, "with both summons taken the next prop goes back to summon 0");
+        // A prop asked for after Toast has ended is moved back by the Add to fit the clip, onto Toast's span: its summon is
+        // the one free where it lands, not where it was asked for (2026-10-29: asked for at 66, it landed at 14 on summon 0).
+        var late = TimelineTemplates.Create(new(TimelineAddKind.Prop, 66, "", 0, Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 70));
+        var lands = late.Min(e => e.Start) + TimelineEdits.FitShift(toast, late);
+        check(lands < 64 && TimelineTemplates.FreeSummon(toast, 66) == 0 && TimelineEdits.LandedSummon(toast, late) == 1,
+            "a prop asked for late takes the summon free where the Add moves it, not where it was asked for");
+        check(TimelineEdits.LandedSummon(idleDoc, late) == 0, "on an empty clip it keeps summon 0");
+        check(TimelineEdits.FitShift(toast, TimelineTemplates.Create(new(TimelineAddKind.Prop, 4, "", 0,
+                  Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 70))) == 0, "a prop that fits isn't moved");
+        check(ReferenceEquals(TimelineEdits.ModPropSlots(toast, both, out var vanillaError), both) && vanillaError == null,
+            "two vanilla props keep their summons");
+        ModPropSlots(check, idleDoc, toast);
 
         var bytes = Sp50();
         var doc = TimelineConvert.Read(TmbFile.Parse(bytes));

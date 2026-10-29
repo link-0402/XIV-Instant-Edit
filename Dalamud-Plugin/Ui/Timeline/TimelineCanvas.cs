@@ -897,6 +897,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             return;
         ImGui.SetNextFrameWantCaptureKeyboard(true);
         keys.Claim();
+        // No shortcut uses Up or Down, but the game would tilt the GPose camera with them.
+        keys.Hold(VirtualKey.UP);
+        keys.Hold(VirtualKey.DOWN);
         if (ImGui.IsAnyItemActive() || ImGui.IsPopupOpen("", ImGuiPopupFlags.AnyPopupId | ImGuiPopupFlags.AnyPopupLevel))
             return;
         var readOnly = session.ReadOnly;

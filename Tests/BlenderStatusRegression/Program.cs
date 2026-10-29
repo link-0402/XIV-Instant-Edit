@@ -246,6 +246,9 @@ static async Task CheckBridgeResponsesAsync()
         typedException.HttpStatus == 400 && typedException.Failure.Code == "model_file_unavailable" &&
         typedException.Message.Contains("Diagnostic ID: 01234567", StringComparison.Ordinal),
         "typed Blender bridge exceptions expose structured failure details to the UI");
+    Require(
+        structured.ShortMessage == "Blender could not access the temporary model file. Run both applications as the same user.",
+        "the short message is the cause and remedy alone");
     var asynchronous = BridgeFailure.Create(
         "blender_addon", "import", "import_processing", "import_processing_failed",
         "The model operator failed.", "Review the diagnostic report.");

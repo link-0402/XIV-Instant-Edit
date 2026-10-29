@@ -138,6 +138,10 @@ internal sealed class EffectLookEditor(TimelineSession session)
         session.Source != null && ev.Lane == TimelineLane.Effect && ev.Path.EndsWith(".avfx", StringComparison.OrdinalIgnoreCase) &&
         AnimationDependencies.SafeGamePath(ev.Path);
 
+    /// <summary> The look of the effect <paramref name="ev"/> plays, like <see cref="LookOrStatus"/> but showing nothing; null until read. </summary>
+    public TimelineEffectLook? LookIfRead(TimelineEvent ev) =>
+        ReadsFile(ev) && session.Source is { } loaded ? EffectFor(ev.Path, loaded).Look : null;
+
     /// <summary>
     /// The look of the effect <paramref name="ev"/> plays (see <see cref="ReadsFile"/>), read on a task the
     /// first time. While it is read, or when it couldn't be, this shows that and gives null.

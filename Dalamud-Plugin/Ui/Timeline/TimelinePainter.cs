@@ -311,14 +311,17 @@ internal static class TimelinePainter
             // The Motion keys layer's own markers: a hollow circle where the motion has a key pose of this bone and the layer no key.
             if (current.ShownMarkers is { } markers && layer.Key == keysLayer)
             {
-                var radius = half * .55f;
+                // As large as a key and drawn like the clip band's key pose ticks, so the two read as one thing.
+                var radius = half * .85f;
+                var ring = Theme.Scaled(1.5f);
                 foreach (var marker in markers.Of(entry.Bone))
                 {
                     var x = trackLeft + view.X(marker);
                     if (x < trackLeft - half || x > max.X + half || HasBoneKey(layer, marker, entry.Bone))
                         continue;
                     var hotMarker = hit.Part == TimelinePart.BoneMarker && hit.Row == row && hit.KeyFrame == marker;
-                    drawList.AddCircle(new Vector2(x, middle), radius, TimelineUi.U32(hotMarker ? Theme.Text : Theme.WithAlpha(Theme.Muted, .7f * alpha)), 0, line);
+                    drawList.AddCircle(new Vector2(x, middle), hotMarker ? radius + Theme.Scaled(1) : radius,
+                        TimelineUi.U32(hotMarker ? Theme.Text : Theme.WithAlpha(Theme.Label, alpha)), 0, hotMarker ? ring * 1.5f : ring);
                 }
             }
             foreach (var key in layer.Keys)

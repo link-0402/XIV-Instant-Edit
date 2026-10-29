@@ -29,6 +29,110 @@ internal static class TimelineEdits
     /// </summary>
     public static int End(TimelineEvent ev) => (int)Math.Min(int.MaxValue, (long)ev.Start + Math.Max(0, ev.Duration));
 
+    /// <summary>
+    /// How far an Add moves <paramref name="added"/> back together (0 or less) so that none starts past the end of
+    /// <paramref name="doc"/>, never before frame 0 (<see cref="TimelineEditor.Add"/>).
+    /// </summary>
+    public static int FitShift(TimelineDocument doc, IReadOnlyCollection<TimelineEvent> added)
+    {
+        if (added.Count == 0)
+            return 0;
+        var first = added.Min(ev => ev.Start);
+        return first < 0 ? 0 : Math.Max(-first, Math.Min(0, Math.Min(doc.Length - 1, TimelineDocument.MaxFrames) - added.Max(ev => ev.Start)));
+    }
+
+    /// <summary>
+    /// The summon slot free (<see cref="TimelineTemplates.FreeSummon"/>) where a prop's <paramref name="events"/> land once an Add
+    /// has fitted them into <paramref name="doc"/> (<see cref="FitShift"/>). A prop asked for late lands earlier: asked for at
+    /// 66 on a 70-frame clip it starts at 14, over a prop that ends at 64 (seen 2026-10-29).
+    /// </summary>
+    public static int LandedSummon(TimelineDocument doc, IReadOnlyCollection<TimelineEvent> events)
+        => events.Count == 0 ? 0 : TimelineTemplates.FreeSummon(doc, Math.Max(0, events.Min(ev => ev.Start) + FitShift(doc, events)));
+
+    /// <summary>Why a prop from a mod can't show while another one does (<see cref="ModPropSlots"/>).</summary>
+    public const string OneModProp = "Only one prop from a mod can show at a time.";
+
+    /// <summary>Why a prop from a mod can't show over the clip's own summoned weapon (a C043, always Summon 0).</summary>
+    public const string ClipPropOnSummon0 = "The clip's own prop holds Summon 0 here.";
+
+    /// <summary>
+    /// <paramref name="next"/>, an add, move or resize of <paramref name="before"/>, with the summon rule for props from a mod
+    /// (<see cref="PropModelSources.FromMod"/>): the game loads their private body only on Summon 0 (seen in game 2026-10-29:
+    /// on Summon 1 it never asks for its files). A prop from a mod the edit added or changed goes to Summon 0, and a vanilla prop
+    /// on Summon 0 over its span to Summon 1, its animation and controls along (<see cref="SwapSlot"/>). Refused, with
+    /// <paramref name="error"/> and <paramref name="before"/> back, when two props from mods would show at once, or one over the
+    /// clip's own summoned weapon. Only summons the edit added or changed count, so an opened timeline stays as it is.
+    /// </summary>
+    public static TimelineDocument ModPropSlots(TimelineDocument before, TimelineDocument next, out string? error)
+    {
+        error = null;
+        var events = Events(next);
+        if (ReferenceEquals(before, next) || !events.Any(PropModelSources.FromMod))
+            return next;
+        var old = Events(before).ToDictionary(ev => ev.Key, StringComparer.Ordinal);
+        bool Changed(TimelineEvent ev) => !old.TryGetValue(ev.Key, out var was) || was.Start != ev.Start || was.Duration != ev.Duration ||
+            SummonSlot(was) != SummonSlot(ev) || PropModelSources.FromMod(was) != PropModelSources.FromMod(ev);
+        int SpanEnd(TimelineEvent ev) => ev.Duration <= 0 ? next.Length : End(ev);
+        bool Overlap(TimelineEvent a, TimelineEvent b) => a.Start < SpanEnd(b) && SpanEnd(a) > b.Start;
+        var summons = events.Where(ev => ev.Magic is "C198" or "C043" && ev.Values?.GetValueOrDefault("Model") > 0).ToList();
+        var mods = summons.Where(PropModelSources.FromMod).ToList();
+        // A prop from a mod the edit leaves alone keeps its slot; one it touches takes Summon 0.
+        bool OnZero(TimelineEvent mod) => Changed(mod) || SummonSlot(mod) == 0;
+        bool Meets(TimelineEvent mod, TimelineEvent other) => (Changed(mod) || Changed(other)) && Overlap(mod, other);
+        foreach (var a in mods)
+            foreach (var b in mods)
+                // Two summons of one prop (a chain) never show at once.
+                if (string.CompareOrdinal(a.Key, b.Key) < 0 && (a.Group == null || a.Group != b.Group) && Meets(a, b))
+                {
+                    error = OneModProp;
+                    return before;
+                }
+        if (mods.Any(mod => OnZero(mod) && summons.Any(other => other.Magic == "C043" && Meets(mod, other))))
+        {
+            error = ClipPropOnSummon0;
+            return before;
+        }
+        var moving = mods.Where(mod => Changed(mod) && SummonSlot(mod) == 1)
+            .Concat(summons.Where(other => other.Magic == "C198" && !PropModelSources.FromMod(other) && SummonSlot(other) == 0 &&
+                mods.Any(mod => OnZero(mod) && Meets(mod, other))))
+            .DistinctBy(summon => summon.Group ?? "\0" + summon.Key)
+            .ToList();
+        if (moving.Count == 0)
+            return next;
+        var builder = events.ToBuilder();
+        foreach (var summon in moving)
+            for (var index = 0; index < builder.Count; index++)
+                if (summon.Group == null ? builder[index].Key == summon.Key : builder[index].Group == summon.Group)
+                    builder[index] = SwapSlot(builder[index]);
+        return next with { Events = builder.ToImmutable() };
+    }
+
+    /// <summary>A summon's slot: a C198's SummonId; a C043 is always slot 0; -1 for anything else.</summary>
+    private static int SummonSlot(TimelineEvent ev) => ev.Magic switch
+    {
+        "C198" => (int)(ev.Values?.GetValueOrDefault("SummonId") ?? 0),
+        "C043" => 0,
+        _ => -1,
+    };
+
+    /// <summary>
+    /// <paramref name="ev"/>, a part of a prop, on the other summon slot: a C198's SummonId, a C031's target (2 for summon 0,
+    /// 3 for summon 1) and a C014 or C174's object (the same). Any other part, or a value outside those, stays.
+    /// </summary>
+    private static TimelineEvent SwapSlot(TimelineEvent ev)
+    {
+        var (field, offset) = ev.Magic switch
+        {
+            "C198" => ("SummonId", 0),
+            "C031" => ("TargetType", 2),
+            "C014" or "C174" => ("ObjectControl", 2),
+            _ => ("", 0),
+        };
+        if (field.Length == 0 || ev.Values is not { } values || !values.TryGetValue(field, out var value) || value - offset is not (0d or 1d))
+            return ev;
+        return ev with { Values = values.SetItem(field, offset + 1 - (value - offset)) };
+    }
+
     /// <summary>The index of the event with <paramref name="key"/>, or -1.</summary>
     public static int IndexOf(TimelineDocument doc, string key)
     {

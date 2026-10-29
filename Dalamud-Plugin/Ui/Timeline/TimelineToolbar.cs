@@ -128,6 +128,12 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             current.AddPinFeet(skeleton);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
+        // As the clip row's Edit motion keys: without markers the layer would have nothing to fade out over.
+        var markers = current.ShownMarkers != null;
+        if (ImGui.MenuItem(MotionEdits.MotionKeysName, "", false, !session.ReadOnly && markers))
+            current.EditMotionKeys(current.Playhead);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(TimelineWindowViews.MotionKeysTip(markers));
         session.LoopPose.DrawAddItems(current, session.ReadOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
         ImGui.Separator();
         var still = blenderMotion.StillUnavailable(current);
@@ -142,11 +148,16 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         livePose.DrawItems(session.Source);
     }
 
-    /// <summary> One line each for an import running or done, an edit the editor refused or noted and a header length the motion disagrees with. </summary>
+    /// <summary>
+    /// One line each for an import running or done, an edit the editor refused or noted, a header length the motion
+    /// disagrees with and a pose that plays its events once.
+    /// </summary>
     public void DrawMessages(TimelineEditor current)
     {
         if (texts.HeaderNote != null)
             TimelineUi.Note(null, Theme.Muted, texts.HeaderNote);
+        if (texts.PoseLoopNote != null)
+            TimelineUi.Note(null, Theme.Muted, texts.PoseLoopNote);
         pickers.DrawImportStatus();
         if (current.LastError is { } error)
             TimelineUi.Note(null, Theme.Warning, error);

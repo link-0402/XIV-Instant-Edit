@@ -62,7 +62,7 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
                     ImGui.TableSetupColumn("##place-name", ImGuiTableColumnFlags.WidthFixed);
                     ImGui.TableSetupColumn("##place-value", ImGuiTableColumnFlags.WidthStretch);
                     if (onEvent)
-                        DrawEventRows(current, ev);
+                        DrawEventRows(current, ev, looks.LookIfRead(ev));
                     else
                         DrawFileRows(current, ev, look!);
                 }
@@ -74,8 +74,11 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
         }
     }
 
-    /// <summary> A VFX event's Position (metres), Rotation (radians, shown in degrees) and Scale; each drag is one undo step. </summary>
-    private void DrawEventRows(TimelineEditor current, TimelineEvent ev)
+    /// <summary>
+    /// A VFX event's Position (metres), Rotation (radians, shown in degrees) and Scale; each drag is one undo step.
+    /// Its effect's <paramref name="look"/>, once read, says whether it is attached, which ignores the Scale.
+    /// </summary>
+    private void DrawEventRows(TimelineEditor current, TimelineEvent ev, TimelineEffectLook? look)
     {
         TimelineUi.Fact("Move");
         var move = Shown(ev, "Position", 1);
@@ -97,11 +100,15 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
 
         TimelineUi.Fact("Size");
         var size = Shown(ev, "Scale", 1);
-        dragged = size;
-        changed = SizeDrag(ref dragged, (float)Field("Scale.X").Min, (float)Field("Scale.X").Max);
-        TimelineUi.TrackField(current, changed, changed ? Written(ev, "Scale", size, dragged, 1) : null);
-        TimelineUi.Tip("Scales the effect.");
-        SizeAxesButton(size);
+        var refusal = TimelineEffectLooks.EventSizeRefusal(look);
+        using (ImRaii.Disabled(refusal != null))
+        {
+            dragged = size;
+            changed = SizeDrag(ref dragged, (float)Field("Scale.X").Min, (float)Field("Scale.X").Max);
+            TimelineUi.TrackField(current, changed, changed ? Written(ev, "Scale", size, dragged, 1) : null);
+            TimelineUi.Tip(refusal ?? "Scales the effect.");
+            SizeAxesButton(size);
+        }
     }
 
     /// <summary> An Async VFX event's move, turn and size, written into a copy of its effect; an attached one can only be moved. </summary>
@@ -119,7 +126,7 @@ internal sealed class EffectPlaceEditor(TimelineSession session, EffectLookEdito
                 if (ImGui.DragFloat3("##move", ref move, .01f, -TimelineEffectEdit.MaxMove, TimelineEffectEdit.MaxMove, "%.2f m", ImGuiSliderFlags.AlwaysClamp))
                     looks.SetLook(current, ev, edit with { Move = EffectLookEditor.Changed(move, Vector3.Zero) });
             }
-            TimelineUi.Tip(refusal ?? "Moves the whole effect, in metres.");
+            TimelineUi.Tip(refusal ?? (look.Bound ? "Moves along the bone's axes, in metres." : "Moves the whole effect, in metres."));
         }
         if (look.Turn != null)
         {

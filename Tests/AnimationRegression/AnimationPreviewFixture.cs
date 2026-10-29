@@ -76,6 +76,17 @@ internal static class AnimationPreviewFixture
                      "chara/human/c1401/animation/a0001/bt_common/emote/pose 1 loop.pap",
                  })
             check(AnimationPreviewRules.IsSafeGamePath(path), $"a preview may replace {Path.GetExtension(path)} files ({path})");
+        // 437: a prop from another mod brings its private body's model, materials and textures.
+        foreach (var path in new[]
+                 {
+                     "chara/weapon/w9001/obj/body/b9119/model/w9001b9119.mdl",
+                     "chara/weapon/w9001/obj/body/b9119/material/v0141/mt_m8044b0001_a.mtrl",
+                     "chara/weapon/w9001/obj/body/b9119/texture/v01_m8044b0001_d.tex",
+                 })
+            check(AnimationPreviewRules.IsSafeGamePath(path), $"a preview may carry a prop's private {Path.GetExtension(path)} ({path})");
+        check(!AnimationPreviewRules.IsSafeGamePath("chara/weapon/w9001/obj/body/b0200/model/w9001b0200.mdl") &&
+              !AnimationPreviewRules.IsSafeGamePath("chara/equipment/e6001/material/v0001/mt_c0101e6001_top_a.mtrl"),
+            "models, materials and textures elsewhere stay refused: a game body or gear isn't a prop's private copy");
         foreach (var path in new[]
                  {
                      "", "chara/../joy.pap", "chara/./joy.pap", "chara//joy.pap", "C:/joy.pap", "chara/joy.mdl",
@@ -121,6 +132,15 @@ internal static class AnimationPreviewFixture
         reject(() => AnimationPreviewRules.PlanFiles(revision1,
                 Enumerable.Range(0, AnimationPreviewRules.MaxFiles + 1).Select(i => $"chara/action/emote/clip{i}.tmb")),
             "a preview with too many files is refused");
+        var propFiles = Enumerable.Range(1, 256).Select(v => $"chara/weapon/w9001/obj/body/b9119/material/v{v:D4}/mt_m8044b0001_a.mtrl")
+            .Concat(Enumerable.Range(1, 256).Select(v => $"chara/weapon/w9001/obj/body/b9893/material/v{v:D4}/mt_w9001b0200_a.mtrl"))
+            .Append("chara/weapon/w9001/obj/body/b9119/model/w9001b9119.mdl").ToArray();
+        check(AnimationPreviewRules.PlanFiles(revision1, [pap, .. propFiles]).Count == propFiles.Length + 1,
+            "two props' private copies (a material in every material folder each) fit beside the clip");
+        reject(() => AnimationPreviewRules.PlanFiles(revision1, propFiles), "a preview of prop files alone, without the clip, is refused");
+        reject(() => AnimationPreviewRules.PlanFiles(revision1, [pap, .. Enumerable.Range(0, AnimationPreviewRules.MaxPropFiles + 1)
+                .Select(i => $"chara/weapon/w9001/obj/body/b9119/texture/t{i}.tex")]),
+            "props bringing too many files are refused");
         var deep = Path.Combine(revision1, string.Join(Path.DirectorySeparatorChar, Enumerable.Repeat(new string('d', 200), 10)));
         reject(() => AnimationPreviewRules.PlanFiles(deep, [pap]), "a file path Penumbra cannot redirect to (2048 characters or more) is refused");
 

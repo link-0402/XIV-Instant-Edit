@@ -123,7 +123,7 @@ internal sealed partial class MaterialWindow
         if (fixable.Count > 0)
         {
             ImGui.Checkbox("Add a second UV map to the model##material-uv2", ref addUv2);
-            Tip("The pattern follows the model's second UV map, which it doesn't have, so the part would flash instead. "
+            Tip("The pattern follows the model's second UV map, which it lacks or leaves empty, so the part would flash instead. "
                 + "This copies the first UV map into it. Save writes the model too, with a backup; Undo last save puts it back.");
         }
         foreach (var state in missing.Except(fixable))

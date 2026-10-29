@@ -29,6 +29,8 @@ public sealed partial class TimelineWindow
     // How long the gizmo stays where a drag left it while Live applies the change: frames once Live
     // shows it, and frames at most.
     private const int GizmoShownFrames = 2, GizmoHoldFrames = 240;
+    // How many frames the "barely applies" tooltip stays after ImGuizmo last had the mouse over its rings.
+    private const int GizmoTipFrames = 4;
 
     private readonly BonesOverlay overlayWindow;
     private readonly ActorPose actorPose = new();
@@ -46,6 +48,8 @@ public sealed partial class TimelineWindow
     private ImmutableArray<HipAnchor>? dragAnchors;
     // Whether the mouse was over the gizmo's rings or handles last frame: then the gizmo takes the click, not a dot.
     private bool gizmoOver;
+    // Frames left of the "barely applies" tooltip; it's begun on each of them.
+    private int gizmoTip;
     // Where the last drag left the gizmo on a bone, layer and frame, until Live shows the change there.
     private (string Layer, string Bone, int Frame, Matrix4x4 Matrix, int Since, int Shown)? gizmoHeld;
     // Each bone's dot this frame, by the clip skeleton's bone index.
@@ -156,8 +160,8 @@ public sealed partial class TimelineWindow
         DrawOverlayBones(skeleton, layer, frame, animated, primary, hover);
         DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
 
-        // The mouse reached the gizmo this frame: it takes the click.
-        if (hover < 0 || gizmoOver)
+        // The mouse reached the gizmo this frame: it takes the click. A dot's tooltip would hide the gizmo's.
+        if (hover < 0 || gizmoOver || gizmoTip > 0)
             return;
         // The game must not take the click as well.
         ImGui.SetNextFrameWantCaptureMouse(true);
@@ -285,6 +289,7 @@ public sealed partial class TimelineWindow
         {
             EndGizmo(true);
             gizmoHeld = null;
+            gizmoTip = 0;
             return;
         }
         var turned = targets.Count > 1 ? PoseEdits.Turned(targets, bone, skeleton) : targets;
@@ -320,7 +325,11 @@ public sealed partial class TimelineWindow
         var dragging = ImGuizmo.IsUsing();
         var over = ImGuizmo.IsOver();
         gizmoOver = over;
-        if (over && weight < PoseEdits.MinFollowWeight)
+        // ImGuizmo can report the mouse over its rings on some frames only, and ImGui hides a tooltip on a frame
+        // after one without it while it sizes itself: begun only on those frames it never shows. Held a few
+        // frames, it's begun on every frame while the mouse is on the rings.
+        gizmoTip = weight >= PoseEdits.MinFollowWeight ? 0 : over ? GizmoTipFrames : Math.Max(0, gizmoTip - 1);
+        if (gizmoTip > 0)
             ImGui.SetTooltip("The layer barely applies here.");
         ImGuizmo.Enable(true);
         ImGuizmo.AllowAxisFlip(true);

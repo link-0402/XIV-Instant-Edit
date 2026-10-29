@@ -20,6 +20,9 @@ internal static class HandShapes
 {
     private const float FingerCurl = 60, ThumbCurl = 30, SpreadTurn = 15, MinBend = -5, MaxBend = 110;
 
+    /// <summary>The lowest Spread that applies: below about -30% the index finger goes through the middle one (seen in game).</summary>
+    public const float MinSpread = -.3f;
+
     /// <summary>The built-in shapes' ids in the order the shape picker lists them.</summary>
     public static readonly ImmutableArray<string> Order = ["relaxed", "flat", "fist", "point", "grip", "cupped", "spread"];
 
@@ -51,6 +54,8 @@ internal static class HandShapes
             return targets;
         var bones = skeleton.Bones;
         var rest = recipe == null ? MotionSymmetry.RestModel(skeleton) : null;
+        // A layer saved before the cap keeps its value, but applies no further than it.
+        var spreadBy = Math.Max(hand.Spread, MinSpread) * SpreadTurn;
         foreach (var chain in rig.Chains)
         {
             var thumb = chain.Finger == HandFinger.Thumb;
@@ -69,7 +74,7 @@ internal static class HandShapes
                     local[0] = Turn(local[0], rig.AcrossAxis, recipe.Thumb.Z);
                 for (var i = 0; i < local.Length && i < bend.Length; i++)
                     local[i] = Turn(local[i], chain.BendAxes[i], bend[i]);
-                spread = recipe.Spread + hand.Spread * SpreadTurn;
+                spread = recipe.Spread + spreadBy;
             }
             else
             {
@@ -95,7 +100,7 @@ internal static class HandShapes
                     var add = curl * (fold && i == 1 ? 2 : 1);
                     local[i] = Turn(local[i], chain.BendAxes[i], add > 0 ? Math.Clamp(MaxBend - bent[i], 0, add) : add < 0 ? -Math.Clamp(bent[i] - MinBend, 0, -add) : 0);
                 }
-                spread = hand.Spread * SpreadTurn;
+                spread = spreadBy;
             }
             // After the bends, in the bent frame: on a curled a bone, which points along the palm's normal, a turn about that normal would only roll it.
             local[0] = Turn(local[0], chain.SpreadAxis, spread * chain.SpreadSign);

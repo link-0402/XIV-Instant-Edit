@@ -220,15 +220,17 @@ internal static class PhysicsOverlayModel
         }
     }
 
-    /// <summary> A hovered shape is lit; otherwise a shape the chains bump into (or any, in the shapes view) is a shape, the rest dim. </summary>
+    /// <summary>
+    /// A shape the chains bump into (or any, in the shapes view) is a shape, the rest dim; a hovered one is lit, so an
+    /// unticked shape lights grey, not green.
+    /// </summary>
     private static (PhysicsOverlayPart Part, bool Lit) ShapeState(PhybFile file, IReadOnlyList<(int Simulator, int Chain)> targets, bool allShapes,
         PhysicsOverlayHover hover, string name)
     {
-        if (hover.Part == PhysicsOverlayPart.Shape && hover.Shape == name)
-            return (PhysicsOverlayPart.Shape, true);
+        var lit = hover.Part == PhysicsOverlayPart.Shape && hover.Shape == name;
         if (allShapes || PhysicsCollisions.State(file, targets, name) != PhysicsBumps.None)
-            return (PhysicsOverlayPart.Shape, false);
-        return (PhysicsOverlayPart.OtherShape, false);
+            return (PhysicsOverlayPart.Shape, lit);
+        return (PhysicsOverlayPart.OtherShape, lit);
     }
 
     /// <summary> A length in metres as the sliders show it, whatever the system's language: "14.0 cm". </summary>

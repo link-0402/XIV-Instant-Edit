@@ -1,3 +1,4 @@
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Previews;
 
@@ -6,8 +7,10 @@ namespace InstantEdit.Services.Animations;
 /// <summary>
 /// What the live character has for fingertips: whether its skeleton holds each hand's four tip bones and
 /// whether the drawn hand model is weighted to them. <paramref name="Problem"/> is set when it couldn't be read.
+/// <paramref name="ModelLeft"/> and <paramref name="ModelRight"/> name the hand models that aren't weighted to the tips.
 /// </summary>
-internal sealed record HandTipFacts(bool LiveLeft, bool LiveRight, bool MeshLeft, bool MeshRight, string? Problem);
+internal sealed record HandTipFacts(bool LiveLeft, bool LiveRight, bool MeshLeft, bool MeshRight, string? Problem,
+    string? ModelLeft = null, string? ModelRight = null);
 
 /// <summary>
 /// The fingertip bones (iv_hito, iv_naka, iv_kusu and iv_ko _c) exist only on IVCS and YAS skeletons. A hand shape
@@ -41,9 +44,37 @@ internal static class HandTipCheck
         return weighted.All(w => w);
     }
 
-    /// <summary>The line saying which check failed first (clip, live skeleton, hand model), or null when all pass.</summary>
-    public static string? Reason(bool clipHasTips, bool live, bool mesh) =>
-        !clipHasTips ? "Fingertips: the clip's skeleton has no tip bones. Repair it onto IVCS or YAS to bend them." :
+    /// <summary>
+    /// The line saying which check failed first (clip, live skeleton, hand model), or null when all pass. It names
+    /// the clip's <paramref name="skeleton"/> and the hand <paramref name="model"/> when they're known.
+    /// </summary>
+    public static string? Reason(bool clipHasTips, bool live, bool mesh, string? skeleton = null, string? model = null) =>
+        !clipHasTips ? $"Fingertips: the clip's skeleton{Named(skeleton)} has no tip bones. Repair it onto IVCS or YAS to bend them." :
         !live ? "Fingertips: your character's skeleton has no tip bones." :
-        !mesh ? "Fingertips: your hands' model isn't weighted to tip bones." : null;
+        !mesh ? $"Fingertips: your hands' model{Named(model)} isn't weighted to tip bones." : null;
+
+    private static string Named(string? name) => string.IsNullOrEmpty(name) ? "" : $" ({name})";
+
+    /// <summary>The hand models a line names: each file once, in order, joined; null for none.</summary>
+    public static string? Models(IEnumerable<string> files)
+    {
+        var names = files.Where(file => file.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return names.Length == 0 ? null : string.Join(", ", names);
+    }
+
+    /// <summary>
+    /// The clip's editing skeleton for the line: a rebuild's standard and where it's from, else the chosen
+    /// skeleton's file and the mod it comes from ("skl_c0801b0001.sklb from the game"); null when there's none.
+    /// </summary>
+    public static string? SkeletonName(SkeletonCandidate? selected, RaceRebuild? rebuild)
+    {
+        if (rebuild is { Target: var target })
+            return target.Standard == SkeletonStandard.Vanilla ? "the game's" : $"{AnimationBones.StandardName(target.Standard)} from {target.Origin}";
+        if (selected is not { Source: var source })
+            return null;
+        var resource = source.Resource;
+        var from = resource.ModName ?? resource.ModDirectory ?? (source.Kind == SkeletonSourceKind.Game ? "the game" : "your collection");
+        var file = Path.GetFileName(resource.ResolvedPath.Length > 0 ? resource.ResolvedPath : resource.GamePath);
+        return file.Length > 0 ? $"{file} from {from}" : from;
+    }
 }

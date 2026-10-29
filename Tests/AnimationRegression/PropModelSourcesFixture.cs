@@ -70,10 +70,18 @@ internal static class PropModelSourcesFixture
     {
         check(PropModelSources.TargetSet("chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl") == 528,
             "a weapon prop keeps its own weapon set");
-        check(PropModelSources.TargetSet("chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl") == 9001,
-            "a monster prop goes to weapon set 9001");
-        check(PropModelSources.TargetSet("chara/demihuman/d1002/obj/equipment/e0001/model/d1002e0001_top.mdl") == 9001,
-            "a demihuman prop goes to weapon set 9001");
+        // In game 2026-10-29 a summon on w9001 never showed (the Hanzo phone case, private body or its own shipped b0200);
+        // the same copy on w9901, the set of the game's still props, did.
+        check(PropModelSources.TargetSet("chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl") == 9901,
+            "a monster prop goes to weapon set 9901");
+        check(PropModelSources.TargetSet("chara/demihuman/d1002/obj/equipment/e0001/model/d1002e0001_top.mdl") == 9901,
+            "a demihuman prop goes to weapon set 9901");
+        check(PropModelSources.TargetSet("chara/weapon/w9001/obj/body/b0200/model/w9001b0200.mdl") == 9901 &&
+              PropModelSources.TargetSet(@"CHARA\WEAPON\W9001\obj\body\b0200\model\w9001b0200.mdl") == 9901,
+            "a w9001 weapon prop, whose summons the game never shows, goes to weapon set 9901");
+        check(PropModelSources.TargetSet("chara/weapon/w9901/obj/body/b0026/model/w9901b0026.mdl") == 9901 &&
+              PropModelSources.TargetSet("chara/weapon/w1962/obj/body/b0001/model/w1962b0001.mdl") == 1962,
+            "other weapon props keep their set");
     }
 
     private static void Bodies(Action<bool, string> check)

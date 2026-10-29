@@ -235,12 +235,12 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     }
 
     /// <summary>
-    /// With the motion's markers shown, a tick at each key pose along the band's bottom edge, under the pose
-    /// matches' marks, which end at the bar's bottom; the one under the pointer brighter.
+    /// With the motion's markers shown, a tick at each key pose rising from the band's bottom edge into the bar, a small
+    /// triangle at its foot; the pose matches' marks are checked first where they overlap. The one under the pointer brighter.
     /// </summary>
     private void DrawKeyPoses(ImDrawListPtr drawList, TimelineEditor current, Vector2 max, float trackLeft, float bottom, float line)
     {
-        tickBand = (bottom - Theme.Scaled(4), bottom);
+        tickBand = (bottom - Theme.Scaled(7), bottom);
         if (current.Document.Expression || current.ShownMarkers is not { } markers)
             return;
         var reach = Theme.Scaled(4);
@@ -251,9 +251,14 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
                 keyTicks.Add((x, pose));
         }
         var hot = KeyPoseAt(ImGui.GetIO().MousePos);
+        var cap = Theme.Scaled(3);
         foreach (var (x, pose) in keyTicks)
-            drawList.AddLine(new Vector2(x, tickBand.Top), new Vector2(x, tickBand.Bottom),
-                TimelineUi.U32(hot == pose ? Theme.Text : Theme.Muted), line);
+        {
+            var lit = hot == pose;
+            var colour = TimelineUi.U32(lit ? Theme.Text : Theme.Label);
+            drawList.AddLine(new Vector2(x, tickBand.Top), new Vector2(x, tickBand.Bottom), colour, lit ? line * 2 : line);
+            drawList.AddTriangleFilled(new Vector2(x - cap, bottom), new Vector2(x, bottom - cap - Theme.Scaled(1)), new Vector2(x + cap, bottom), colour);
+        }
     }
 
     /// <summary>The key pose whose tick is under <paramref name="mouse"/> (screen pixels), as last drawn; the tick strip only.</summary>

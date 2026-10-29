@@ -10,15 +10,40 @@ internal static partial class MaterialEditorScenarios
     /// <summary>
     /// The scroll shader reads its pattern at the mesh's second UV map (TEXCOORD0.zw); a mesh without one
     /// flashed as a whole in game (2026-10-17). The synthetic model's mesh 0 (mt_b) has a two-value half
-    /// UV after a half4 normal in stream 1; mesh 1 (mt_a) has a four-value float UV already.
+    /// UV after a half4 normal in stream 1; mesh 1 (mt_a) has a four-value float UV whose second map is
+    /// 0, 0 on every vertex, as most gear meshes have it (sampled in G:\Penumbra 2026-10-29): it glowed flat in game.
     /// </summary>
     private static void CheckModelUv2()
     {
         var model = PainterScenarios.SyntheticModel();
         var without = ModelUv2.Check(model, "mt_b.mtrl");
-        var with = ModelUv2.Check(model, "mt_a.mtrl");
-        Require(without is { Meshes: 1, WithoutUv2: 1, CanAdd: true } && with is { Meshes: 1, WithoutUv2: 0 } && ModelUv2.Check(model, "mt_c.mtrl").Meshes == 0,
-            "the check finds the material's meshes and which lack a second UV map");
+        var empty = ModelUv2.Check(model, "mt_a.mtrl");
+        Require(without is { Meshes: 1, WithoutUv2: 1, CanAdd: true } && empty is { Meshes: 1, WithoutUv2: 1, CanAdd: true } && ModelUv2.Check(model, "mt_c.mtrl").Meshes == 0,
+            "the check finds the material's meshes and which lack a second UV map, an empty one counting as missing");
+
+        // An empty second map is filled in place: nothing moves.
+        var filled = ModelUv2.Add(model, "mt_a.mtrl");
+        int table = MeshTableOffset(model);
+        var start = BinaryPrimitives.ReadUInt32LittleEndian(model.AsSpan(16)) + BinaryPrimitives.ReadUInt32LittleEndian(model.AsSpan(table + 36 + 20));
+        var same = filled.Length == model.Length;
+        var copiedOver = true;
+        for (var i = 0; i < model.Length; i++)
+        {
+            var inSecondMap = i >= start && (i - start) % 44 is >= 36 and < 44 && i < start + 3 * 44;
+            if (inSecondMap)
+                continue;
+            same &= filled[i] == model[i];
+        }
+        for (var v = 0; v < 3; v++)
+            copiedOver &= filled.AsSpan((int)start + v * 44 + 28, 8).SequenceEqual(filled.AsSpan((int)start + v * 44 + 36, 8));
+        Require(same && copiedOver && ModelUv2.Check(filled, "mt_a.mtrl") is { Meshes: 1, WithoutUv2: 0 },
+            "an empty second map gets the first map's values in place, and the rest of the file is unchanged");
+
+        // A model with a shadow mesh: the empty map can be filled, the missing one can't be widened (that moves the geometry).
+        var shadowed = (byte[])model.Clone();
+        BinaryPrimitives.WriteUInt16LittleEndian(shadowed.AsSpan(table - 3 * 60 + 16 + 2), 1);
+        Require(ModelUv2.Check(shadowed, "mt_a.mtrl") is { CanAdd: true } && ModelUv2.Check(shadowed, "mt_b.mtrl") is { WithoutUv2: 1, CanAdd: false },
+            "an empty second map is filled in a model whose geometry can't be moved; a missing one isn't added there");
 
         var added = ModelUv2.Add(model, "mt_b.mtrl");
         Require(ModelUv2.Check(added, "mt_b.mtrl") is { Meshes: 1, WithoutUv2: 0 } && added.Length == model.Length + 4 * 4,

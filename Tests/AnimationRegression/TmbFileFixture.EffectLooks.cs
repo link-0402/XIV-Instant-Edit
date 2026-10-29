@@ -71,9 +71,13 @@ internal static partial class TmbFileFixture
               Near(Values(edited, "Emit", "Col", "A"), [.5f]) &&
               Near(Values(edited, "Ptcl", "Col", "Bri"), [4]) && Near(Values(edited, "Emit", "Col", "Bri"), [3]) &&
               Near(Values(edited, "Efct", "Data", "Col", "Bri"), [3]) &&
-              Near(Values(edited, "Efct", "Data", "DstS"), [3, 9]),
+              Near(Values(edited, "Efct", "Data", "DstS"), [12, 9]),
             "glow and opacity scale each particle's main curve once (not its emitter's or other colours'), glow the light too, " +
-            "light range only a point light's");
+            "light range only a point light's, dividing its distance scale (half the range doubles it)");
+        check(Near(Values(TimelineEffectLooks.Apply(effect, new TimelineEffectEdit { LightRange = 2 }), "Efct", "Data", "DstS"), [3, 9]) &&
+              Values(TimelineEffectLooks.Apply(effect, new TimelineEffectEdit { LightRange = 0 }), "Efct", "Data", "DstS") is [var smallest, 9] &&
+              Math.Abs(smallest / (6 / TimelineEffectEdit.MinLightRange) - 1) < 1e-5f,
+            "a wider light range is a smaller distance scale; 0% is held to the smallest range rather than dividing by zero");
         check(Values(edited, "Ptcl", "Col", "A") is [var alpha] && Keys(edited, "Ptcl", "Col", "A").Single() is var key &&
               BitConverter.ToSingle(edited, key + 4) == 1 && BitConverter.ToSingle(edited, key + 8) == 1 && alpha > 0,
             "a single-value key changes only its value, the third float");
@@ -217,6 +221,9 @@ internal static partial class TmbFileFixture
               Thrown(() => TimelineEffectLooks.Apply(bound, turn)) == attached && Thrown(() => TimelineEffectLooks.Apply(bound, size)) == attached &&
               TimelineEffectLooks.MoveRefusal(TimelineEffectLooks.Read(LookEffect()), turn) == null,
             "turn and size are refused on an attached effect");
+        check(TimelineEffectLooks.EventSizeRefusal(TimelineEffectLooks.Read(bound)) == "Size can't change an attached effect" &&
+              TimelineEffectLooks.EventSizeRefusal(TimelineEffectLooks.Read(LookEffect())) == null && TimelineEffectLooks.EventSizeRefusal(null) == null,
+            "a VFX event's own size is refused on an attached effect, and allowed on another or one not read yet");
 
         var effect = LookEffect();
         var rvPyAt = Found(effect, "RvPy").Single().At;

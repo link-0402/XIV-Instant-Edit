@@ -192,7 +192,8 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
          string.Equals(gamePath, startup.GamePath, StringComparison.OrdinalIgnoreCase) &&
          gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase));
 
-    private static readonly System.Text.RegularExpressions.Regex PrivatePropBody = new(@"^chara/weapon/w\d{4}/obj/body/b9\d{3}/",
+    /// <summary>A weapon body in b9000..b9999, which the game doesn't ship: where a prop's private copy goes (the Preview's rule too).</summary>
+    internal static readonly System.Text.RegularExpressions.Regex PrivatePropBody = new(@"^chara/weapon/w\d{4}/obj/body/b9\d{3}/",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     /// <summary>
@@ -482,16 +483,25 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     }
 
     public Task UndoFilesAsync(AnimationEditJournal journal) => animationMods.AnimationExportAsync(() => UndoFilesCoreAsync(journal), CancellationToken.None);
+
+    /// <summary>
+    /// Whether nothing of <paramref name="journal"/>'s files is left to put back. FilesUndone: they were put back, or never
+    /// written (a save refused, cancelled or rolled back), so an Undo of a "Not saved" row only finishes the record. A new
+    /// mod whose commit stopped before its metadata, with no folder (<paramref name="modFolderExists"/>): it was never made.
+    /// A finished new mod whose folder is gone was moved, and its Undo is refused (the ownership marker is missing).
+    /// </summary>
+    internal static bool NoFilesLeft(AnimationEditJournal journal, bool modFolderExists) =>
+        journal.State == "FilesUndone" ||
+        journal.Request.Destination == AnimationDestination.NewMod && !modFolderExists &&
+        journal.State is "Committing" or "RecoveryRequired" && journal.ModFileHashes.Count == 0;
+
     private async Task UndoFilesCoreAsync(AnimationEditJournal journal)
     {
         if (journal.State == "Prepared")
         { journal.State = "FilesUndone"; journal.Message = "The prepared job had not changed any files."; store.Save(journal); return; }
         foreach (var file in journal.Files) ValidateTarget(journal, file);
-        if (journal.Request.Destination == AnimationDestination.NewMod && !Directory.Exists(journal.ModRoot) &&
-            journal.State is "Committing" or "RecoveryRequired" && journal.ModFileHashes.Count == 0)
+        if (NoFilesLeft(journal, Directory.Exists(journal.ModRoot)))
         {
-            // A commit that stopped before the mod's metadata was written, with no folder: it was never made,
-            // so nothing of this job is left. A finished mod whose folder is gone was moved, and is refused below.
             journal.State = "FilesUndone"; store.Save(journal);
             return;
         }

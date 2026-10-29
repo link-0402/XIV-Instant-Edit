@@ -141,7 +141,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (!loaded.Standalone)
         {
             DrawRepairChoice(loaded);
-            if (AnimationBakeRules.BakeInNote(doc, RepairTarget) is { } bakeIn)
+            // A rebuild for another race keeps the edits open (AnimationBakeRules.RebuildKeepsEdits): only a repair bakes them in.
+            if (AnimationBakeRules.BakeInNote(doc, session.Rebuild?.Model != null ? null : RepairTarget) is { } bakeIn)
                 Widgets.HintWrapped(bakeIn);
         }
 

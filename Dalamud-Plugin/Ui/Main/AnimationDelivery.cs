@@ -81,7 +81,8 @@ internal sealed class AnimationDelivery
         }
         catch (BlenderBridgeException e)
         {
-            throw new InvalidOperationException(e.Failure.UserMessage);
+            // The Timeline's line already says the motion was not read; the full message and diagnostic ID stay inside.
+            throw new InvalidOperationException(e.Failure.ShortMessage, e);
         }
     }
 }

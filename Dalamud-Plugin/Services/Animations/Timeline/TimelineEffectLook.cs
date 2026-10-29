@@ -19,7 +19,7 @@ internal sealed record TimelineEffectColor(Vector3 Rgb, int Uses);
 /// <param name="Colors">The colours its parts use, most used first.</param>
 /// <param name="Glow">Whether its particles or lights have brightness for Glow to scale.</param>
 /// <param name="Opacity">Whether its particles have alpha for Opacity to scale.</param>
-/// <param name="LightRange">Whether it has a point light whose range Light range scales.</param>
+/// <param name="LightRange">Whether it has a point light whose distance scale (DstS) Light range changes.</param>
 /// <param name="Bound">Whether it is attached to a binder: a timeline (BnNo) or one of its items (BdNo) names one.</param>
 /// <param name="BinderPositions">The positions of its binders' property blocks, in file order.</param>
 internal sealed record TimelineEffectLook(Vector3? Tint, Vector3? Size, Vector3? Offset, Vector3? Turn,
@@ -43,7 +43,7 @@ internal sealed record TimelineEffectBinderPos(int Binder, string Block, Vector3
 internal sealed record TimelineEffectEdit
 {
     public const float MaxTint = 4, MinSize = .01f, MaxSize = 20, MaxMove = 100, MaxTurn = 2 * MathF.PI;
-    public const float MaxSaturation = 2, MaxGlow = 4, MaxOpacity = 2, MaxLightRange = 4;
+    public const float MaxSaturation = 2, MaxGlow = 4, MaxOpacity = 2, MinLightRange = .01f, MaxLightRange = 4;
 
     public Vector3? Tint { get; init; }
 
@@ -89,7 +89,10 @@ internal sealed record TimelineEffectEdit
     /// <summary>Scales the particles' alpha.</summary>
     public float Opacity { get; init; } = 1;
 
-    /// <summary>Scales how far the point lights reach.</summary>
+    /// <summary>
+    /// Scales how far the point lights reach. Their DstS multiplies the distance before the falloff, so a
+    /// larger value reaches less far; the file's value is divided by this.
+    /// </summary>
     public float LightRange { get; init; } = 1;
 
     public bool IsEmpty => Tint == null && Sizes == null && Moves == null && Turns == null && Stop == null && !Recolors &&
@@ -142,6 +145,7 @@ internal sealed record TimelineEffectEdit
 internal static class TimelineEffectLooks
 {
     public const string AttachedRefusal = "Turn and size can't change an attached effect";
+    public const string AttachedSizeRefusal = "Size can't change an attached effect";
     public const string NoPositionRefusal = "This effect can't be moved: its attach point has no position.";
 
     /// <summary>The curves of a binder position in the order VFXEditor writes them: axis links, the axes, their random parts.</summary>
@@ -174,7 +178,7 @@ internal static class TimelineEffectLooks
         Alpha,
         /// <summary>A particle's or light's brightness key.</summary>
         Glow,
-        /// <summary>A point light's range key.</summary>
+        /// <summary>A point light's distance scale key (DstS), divided by Light range.</summary>
         LightRange,
     }
 
@@ -267,6 +271,13 @@ internal static class TimelineEffectLooks
     public static string? MoveRefusal(TimelineEffectLook look, TimelineEffectEdit edit) =>
         Refusal(look.Bound, !look.BinderPositions.IsDefaultOrEmpty, edit);
 
+    /// <summary>
+    /// Why a VFX event's (C012) own Scale can't size the effect <paramref name="look"/> was read from; null
+    /// when it can or the effect isn't read yet. An attached effect ignores it (seen in game 2026-10-29 on
+    /// dk01pr_fir0t), though the event's Position and Rotation still place it.
+    /// </summary>
+    public static string? EventSizeRefusal(TimelineEffectLook? look) => look is { Bound: true } ? AttachedSizeRefusal : null;
+
     private static string? Refusal(bool bound, bool positions, TimelineEffectEdit edit) =>
         !bound ? null
         : edit.Turns != null || edit.Sizes != null ? AttachedRefusal
@@ -301,7 +312,7 @@ internal static class TimelineEffectLooks
         };
         var glow = Bounded(edit.Glow, TimelineEffectEdit.MaxGlow);
         var opacity = Bounded(edit.Opacity, TimelineEffectEdit.MaxOpacity);
-        var range = Bounded(edit.LightRange, TimelineEffectEdit.MaxLightRange);
+        var range = Math.Max(TimelineEffectEdit.MinLightRange, Bounded(edit.LightRange, TimelineEffectEdit.MaxLightRange));
         foreach (var (part, at) in layout.Spots)
             switch (part)
             {
@@ -325,7 +336,8 @@ internal static class TimelineEffectLooks
                     Scale(avfx, output, at, glow);
                     break;
                 case Part.LightRange when range != 1:
-                    Scale(avfx, output, at, range);
+                    // DstS scales the distance, so a wider reach is a smaller value (scaling it up narrowed the lit area in game, 2026-10-29).
+                    Scale(avfx, output, at, 1 / range);
                     break;
             }
         if (layout.Bound && edit.Moves is { } move)

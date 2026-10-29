@@ -52,18 +52,27 @@ internal static class MotionKeyMarkers
             frames[s] = s == 0 ? 0 : s == last ? length : Math.Clamp((int)MathF.Round(motion.Frame(s)), 0, length);
 
         var bones = new Dictionary<string, ImmutableArray<int>>(StringComparer.Ordinal);
+        // The key poses always come from the Fewer level's markers: finer markers are so dense that nearly every frame
+        // is a candidate, and the run merges into one. So the key poses stay the same whatever the detail.
+        var coarse = new Dictionary<string, ImmutableArray<int>>(StringComparer.Ordinal);
+        var coarseTolerance = Tolerance(MarkerDetail.Fewer);
         for (var bone = 0; bone < motion.Bones; bone++)
         {
             token.ThrowIfCancellationRequested();
             if (!Moves(motion, bone, tolerance))
                 continue;
+            var name = motion.Skeleton.Bones[bone].Name;
             // Each level starts from the coarser one's samples and only splits further, so a finer level keeps every coarser marker.
             var samples = new SortedSet<int> { 0, last };
             foreach (var level in Levels(detail))
+            {
                 Simplify(motion, bone, Tolerance(level), samples);
-            bones[motion.Skeleton.Bones[bone].Name] = [.. samples.Select(sample => frames[sample]).Distinct()];
+                if (level == MarkerDetail.Fewer && Moves(motion, bone, coarseTolerance))
+                    coarse[name] = [.. samples.Select(sample => frames[sample]).Distinct()];
+            }
+            bones[name] = [.. samples.Select(sample => frames[sample]).Distinct()];
         }
-        return new MotionMarkerSet(bones, Poses(bones, length), length, motion.Loops, detail);
+        return new MotionMarkerSet(bones, Poses(coarse, length), length, motion.Loops, detail);
     }
 
     /// <summary>

@@ -293,6 +293,17 @@ internal static class MotionKeyMarkersFixture
             T(Vector3.UnitY, Q(Vector3.UnitX, .15f * frame / 60) * .999998f)]), 60, MarkerDetail.More);
         check(drift.Of(B2).SequenceEqual([0, 60]), "markers: rotations a hair off unit length don't read as a turn");
         check(normal.Poses.Select(p => p.Frame).First() == 0 && normal.Poses[^1].Frame == 60 && normal.Loops == clip.Loops && normal.Length == 60, "markers: the set's ends, loop and length");
+        // b1's swing with a 0.3 degree shake every frame: More marks nearly every frame, which merged into one run touching
+        // frame 0 and left key poses only at the ends. The key poses come from Fewer's markers at every detail.
+        var shaky = Clip(61, 60, (i, frame) => [T(Vector3.Zero), T(Vector3.UnitX, Q(Vector3.UnitZ, 30 * MathF.Sin(2 * MathF.PI * frame / 60) + (i % 2 == 0 ? .3f : -.3f))),
+            T(Vector3.UnitY, Q(Vector3.UnitX, 90 * frame / 60))]);
+        var (shakyFewer, shakyNormal, shakyMore) = (MotionKeyMarkers.Find(shaky, 60, MarkerDetail.Fewer), MotionKeyMarkers.Find(shaky, 60, MarkerDetail.Normal),
+            MotionKeyMarkers.Find(shaky, 60, MarkerDetail.More));
+        check(shakyMore.Of(B1).Length > 40 && shakyMore.Of(B1).Length > shakyFewer.Of(B1).Length, "key poses: the shaky swing's markers are dense at More");
+        check(shakyFewer.Poses.SequenceEqual(shakyNormal.Poses) && shakyFewer.Poses.SequenceEqual(shakyMore.Poses), "key poses: the same at Fewer, Normal and More");
+        check(MotionKeyMarkers.Poses(shakyMore.Bones, 60).Select(p => p.Frame).SequenceEqual([0, 60]) && shakyMore.Poses.Length > 2 &&
+              shakyMore.Poses.Skip(1).SkipLast(1).All(p => p.Frame is > 0 and < 60),
+            "key poses: a busy run doesn't collapse to the ends");
     }
 
     private static void Poses(Action<bool, string> check)

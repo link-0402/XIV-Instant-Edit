@@ -142,7 +142,8 @@ in a Penumbra test mod, with its session list and cache in a temporary folder.
 ## Dropping an image on On Screen (2026-10-10, pending)
 
 `Tests/BlenderStatusRegression` covers the service side (decode, commit, undo, restart, refusals).
-These checks need the game and Explorer:
+These checks need the game and Explorer (not scripted: the drag from Explorer, the fill and the
+outline, and the Include-vanilla dialog):
 - [ ] Drag a PNG from Explorer over a mod texture row in On Screen. The row fills from the
   left over about a second while the tooltip says "Hold here to replace <texture>", then lights
   up with an accent outline and "Let go to replace <texture> with <file>". Let go: the actor
@@ -155,29 +156,48 @@ These checks need the game and Explorer:
 - [ ] The row's menu (dots button or right-click) shows **Undo replace**. It puts the old
   texture back, the actor redraws, and the item is gone. After another drop and an editor
   save of the texture's TGA, the item is gone too.
-- [ ] Drop a JPEG, a TGA, a DDS and a mod's .tex: each replaces the texture. An image whose
+  Partly checked (XIV Bridge tests/instant-edit/textures/03, 2026-10-29): after another drop Undo
+  replace is offered again, and after an editor save of the TGA it is gone. Undo puts the texture
+  from before the drop back. Rerun 2026-10-29 after the power-of-two ruling: Undo replace is offered
+  after a drop, puts the old texture back and is then gone. Not checked: the actor's redraw (by eye).
+- [x] Drop a JPEG, a TGA, a DDS and a mod's .tex: each replaces the texture. An image whose
   size isn't a power of two on each side is refused with why, and the file stays (ruled
   2026-10-29: every texture Instant Edit writes is a power of two, 4 to 8192).
+  (XIV Bridge tests/instant-edit/textures/03, 2026-10-29: a PNG, a JPEG, a TGA, a DDS and a mod's
+  .tex each replace the texture and change the mod's file; a 65 × 66 drop on the 64 × 64 texture is
+  refused with "Texture sides must be a power of two from 4 to 8192; this one is 65 × 66." and the
+  file stays.)
 - [ ] With "Include vanilla" on, drop on a Game Data texture: the "Replace a vanilla texture"
   dialog asks for the mod name, the new mod shows the image, and Undo puts the game's texture
   back into that mod.
-- [ ] Reload the plugin after a drop: Undo replace is still offered and works.
+- [x] Reload the plugin after a drop: Undo replace is still offered and works.
+  Partly checked (XIV Bridge tests/instant-edit/textures/03, 2026-10-29): a second texture service
+  started on the same folder stands for the reload; Undo replace is still offered there and puts the
+  texture from before the drop back. The real plugin reload: by hand.
+  (XIV Bridge textures/07, Release 2026-10-29: after a real reload of Instant Edit, Undo replace is
+  still offered for an image dropped before it and puts the texture from before the drop back.)
 
 ## Copying a texture onto another row in On Screen (2026-10-17, pending)
 
-`Tests/BlenderStatusRegression` covers the service side (CopiedTextureAsync). These need the game:
+`Tests/BlenderStatusRegression` covers the service side (CopiedTextureAsync). These need the game
+(not scripted: the drag between rows, its texts and outlines):
 - [ ] Drag a mod texture's name onto a texture row of another material or model. The drag says
   "<texture> from <mod>" and "Hold it on another texture's row to copy it there". The target row
   fills and lights up as for an image, with "Let go to copy <texture> from <mod> onto <target>".
   Let go: the actor redraws with the copy and the status says "Replaced <target> with ...".
-- [ ] Undo replace in the target row's menu puts its old texture back.
+- [x] Undo replace in the target row's menu puts its old texture back.
+  (XIV Bridge tests/instant-edit/textures/04, 2026-10-29, on the plugin's texture service: Undo
+  replace is offered on the target and puts its old texture back, at its old 64 x 64 size.)
 - [ ] The row being dragged shows no outline. Another row that shows the same file is outlined
   red: "This row already shows <texture>".
 - [ ] With "Include vanilla" on, drag a Game Data texture onto a mod texture: the game's texture
   is copied. Drag one onto another Game Data texture: the new mod dialog says "the game's
   <texture> goes into a new mod".
-- [ ] Copy onto a texture of a different size (e.g. 1024 onto 2048): the target takes the
+- [x] Copy onto a texture of a different size (e.g. 1024 onto 2048): the target takes the
   copy's size and keeps its own compression.
+  (XIV Bridge tests/instant-edit/textures/04, 2026-10-29: white.tex, 32 x 32, copied onto a 64 x 64
+  target: the target becomes 32 x 32 and keeps its format (0x3420), and the session shows the new
+  size.)
 - [ ] Let go too soon: nothing changes and the status says to hold the texture until the row
   lights up.
 - [ ] Dragging a texture row over a Mod Browser tile: the tile refuses it in red.
@@ -188,11 +208,25 @@ These checks need the game and Explorer:
 - [ ] Pick a mod texture that two materials share. ⋯ > Edit as a separate copy opens the TGA; the session
   says "Watching; the first save makes the copy". Save: the actor redraws, only that material shows the
   edit, and the row now shows `ie_<id>_<name>.tex` from the material's mod. The other material is unchanged.
-- [ ] In Penumbra the material's mod maps `<folder>/ie_<id>/<name>.tex` in every option that maps the material.
-- [ ] Save again: the copy changes, the original file stays as it was. Restore puts back the copied original.
-- [ ] Copy white.tex (or another Game Data texture) under a mod material: it works, and no new mod is made.
-- [ ] Under a Game Data material the item is greyed out with "Its material comes from the game".
-- [ ] Choosing the item again before the first save reopens the same session.
+  Partly checked (XIV Bridge tests/instant-edit/textures/05, 2026-10-29): the session says "Watching;
+  the first save makes the copy"; the first save puts the copy beside the material, the material now
+  names the copy's game path and not the original, and the original file is untouched. Not checked:
+  a second material sharing the texture, the redraw and the row's new name (by eye).
+- [x] In Penumbra the material's mod maps `<folder>/ie_<id>/<name>.tex` in every option that maps the material.
+  (XIV Bridge tests/instant-edit/textures/05, 2026-10-29: the default files and the option that maps
+  the material map the copy; the option without the material doesn't.)
+- [x] Save again: the copy changes, the original file stays as it was. Restore puts back the copied original.
+  (XIV Bridge tests/instant-edit/textures/05, 2026-10-29: the second save changes the copy, the
+  original keeps its hash; Restore goes back to the copy before the last save, and Restoring the
+  original puts back the copied original.)
+- [x] Copy white.tex (or another Game Data texture) under a mod material: it works, and no new mod is made.
+  (XIV Bridge tests/instant-edit/textures/06, 2026-10-29: "Texture copy saved", the copy is in the
+  material's mod and the material names it; no new mod is asked for.)
+- [x] Under a Game Data material the item is greyed out with "Its material comes from the game".
+  (XIV Bridge tests/instant-edit/textures/05, 2026-10-29: "Its material comes from the game. Save
+  the material into a mod first.")
+- [x] Choosing the item again before the first save reopens the same session.
+  (XIV Bridge tests/instant-edit/textures/05, 2026-10-29: the same session id.)
 
 ## Implementation validation environment
 

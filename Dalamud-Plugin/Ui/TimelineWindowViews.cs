@@ -57,6 +57,10 @@ internal static partial class TimelineWindowViews
     public const string ResetRootName = "Reset root turn";
     public const string ResetRootHint = "Turn the character back to face forward on the ticked axes, for poses with a turn baked into them.";
     public const string MotionKeysHint = "Changes the motion at its own key poses. Each edit fades out over the next markers.";
+    public const string MotionKeysWait = "Needs the motion's key poses. Wait until the motion is read.";
+
+    /// <summary>The Add menu's Motion keys item's tooltip: what it does, or why it waits.</summary>
+    public static string MotionKeysTip(bool ready) => ready ? MotionKeysHint : MotionKeysWait;
 
     /// <summary>A root reset's axis checkboxes, in order, with what turning about each does.</summary>
     public static readonly ImmutableArray<(MotionAxes Axis, string Label, string Tip)> ResetAxes =
@@ -645,6 +649,17 @@ internal static partial class TimelineWindowViews
             _ => $"{Whole(count)} events start after the end and may not play.",
         };
     }
+
+    /// <summary>
+    /// The note for a pose whose events the game plays once (<see cref="AnimationLibrary.IsPoseLoop"/>), shown while
+    /// it has an event that would play again on later loops of another clip: not the motion, a looping effect (C173,
+    /// which its own loop/wait repeats) or a face that stays. Null for any other clip.
+    /// </summary>
+    public static string? PoseLoopNote(TimelineDocument doc, string clipGamePath) =>
+        AnimationLibrary.IsPoseLoop(clipGamePath) && !doc.Events.IsDefault &&
+        doc.Events.Any(e => e.Lane != TimelineLane.Motion && e.Magic != "C173" && !TimelineDocument.Kept(e) && !TimelineDocument.Holds(e))
+            ? "This pose plays its events once. Later loops repeat only the motion."
+            : null;
 
     /// <summary>The warning about effects that stop although the animation goes on, or null when none do.</summary>
     public static string? EffectLoopWarning(ImmutableArray<TimelineEffectCheck.Problem> problems)

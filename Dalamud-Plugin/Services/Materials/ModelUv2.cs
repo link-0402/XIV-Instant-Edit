@@ -17,7 +17,9 @@ internal sealed record Uv2Check(int Meshes, int WithoutUv2, string? Blocked)
 /// shader samples the catchlight texture at TEXCOORD0.zw times the layer's scale plus the time offset. A
 /// mesh whose UV element holds only two values gives 0, 0 there, so the whole part shows one texel and
 /// flashes as the pattern moves past. <see cref="Add"/> widens those meshes' UV element to four values
-/// with the second map a copy of the first, and moves the geometry after it to make room.
+/// with the second map a copy of the first, and moves the geometry after it to make room. Most gear
+/// meshes hold four values whose second map is one point (0, 0, 0, 1 or -1, 2 on every vertex), which
+/// shows the same: those count as missing too, and <see cref="Add"/> copies the first map over it in place.
 /// </summary>
 internal static class ModelUv2
 {
@@ -31,6 +33,8 @@ internal static class ModelUv2
     private const int MeshSize = 36;
     private const byte UsageUv = 4;
     private const byte TypeSingle2 = 1, TypeSingle4 = 3, TypeHalf2 = 13, TypeHalf4 = 14;
+    // How far apart two vertices' second maps may be and still be one point: under a texel of a 1024 texture.
+    private const float Flatness = 1f / 1024;
 
     private sealed record Layout(int LodCount, int LodTable, int MeshTable, int MeshCount, int DeclarationCount, IReadOnlyList<string> Materials,
         int TablesEnd);
@@ -45,14 +49,14 @@ internal static class ModelUv2
         {
             layout = Read(bytes);
             meshes = Targets(bytes, layout, materialFileName).ToList();
-            without = meshes.Count(m => UvElement(bytes, m) is { Type: TypeHalf2 or TypeSingle2 });
+            without = meshes.Count(m => Narrow(bytes, m) || FlatSecond(bytes, layout, m));
         }
         catch (Exception e) when (e is InvalidDataException or NotSupportedException) { return new Uv2Check(0, 0, e.Message); }
         // A damaged table that points past the file.
         catch (Exception e) when (e is ArgumentException or OverflowException) { return new Uv2Check(0, 0, "The model's tables are damaged."); }
         if (without == 0)
             return new Uv2Check(meshes.Count, 0, null);
-        if (WhyNot(bytes, layout, meshes) is { } blocked)
+        if (WhyNot(bytes, layout, meshes, meshes.Any(m => Narrow(bytes, m))) is { } blocked)
             return new Uv2Check(meshes.Count, without, blocked);
         // Some layouts only show while moving the geometry (shared vertex data), so a trial run decides.
         try { Add(bytes, materialFileName); }
@@ -65,12 +69,23 @@ internal static class ModelUv2
     public static byte[] Add(byte[] bytes, string materialFileName)
     {
         var layout = Read(bytes);
-        var targets = Targets(bytes, layout, materialFileName).Where(m => UvElement(bytes, m) is { Type: TypeHalf2 or TypeSingle2 }).ToHashSet();
-        if (targets.Count == 0)
+        var meshes = Targets(bytes, layout, materialFileName).ToList();
+        var narrow = meshes.Where(m => Narrow(bytes, m)).ToHashSet();
+        var flat = meshes.Where(m => FlatSecond(bytes, layout, m)).ToList();
+        if (narrow.Count == 0 && flat.Count == 0)
             throw new InvalidOperationException("Every mesh with this material already has a second UV map.");
-        if (WhyNot(bytes, layout, targets) is { } blocked)
+        if (WhyNot(bytes, layout, narrow.Concat(flat), narrow.Count > 0) is { } blocked)
             throw new NotSupportedException(blocked);
+        // Widening moves the geometry; the tables before it stay where they are, so the flat meshes are filled after.
+        var result = narrow.Count > 0 ? WithWideUvs(bytes, layout, narrow) : (byte[])bytes.Clone();
+        foreach (var mesh in flat)
+            CopyFirstMap(result, layout, mesh);
+        return result;
+    }
 
+    /// <summary>A copy of <paramref name="bytes"/> with the two-value UV elements of <paramref name="targets"/> widened to four.</summary>
+    private static byte[] WithWideUvs(byte[] bytes, Layout layout, HashSet<int> targets)
+    {
         var lodVertex = new byte[layout.LodCount][];
         var newStreamOffsets = new Dictionary<(int Mesh, int Stream), uint>();
         for (var l = 0; l < layout.LodCount; l++)
@@ -250,10 +265,13 @@ internal static class ModelUv2
         return output;
     }
 
-    /// <summary>Why a second UV map can't be added to <paramref name="meshes"/>, or null when it can.</summary>
-    private static string? WhyNot(byte[] bytes, Layout layout, IEnumerable<int> meshes)
+    /// <summary>
+    /// Why a second UV map can't be added to <paramref name="meshes"/>, or null when it can. Only a change that
+    /// <paramref name="moves"/> the geometry (a two-value UV widened) is stopped by what it can't move.
+    /// </summary>
+    private static string? WhyNot(byte[] bytes, Layout layout, IEnumerable<int> meshes, bool moves)
     {
-        for (var l = 0; l < layout.LodCount; l++)
+        for (var l = 0; moves && l < layout.LodCount; l++)
         {
             var lod = layout.LodTable + l * LodSize;
             for (var field = 12; field < 28; field += 4)
@@ -270,9 +288,77 @@ internal static class ModelUv2
                 return "A mesh with this material has no UV map.";
             if (uv.Type is not (TypeHalf2 or TypeSingle2 or TypeHalf4 or TypeSingle4))
                 return "A mesh with this material stores its UV map in a form this can't widen.";
+            if (FlatSecond(bytes, layout, mesh) && SharesVertices(bytes, layout, mesh))
+                return "Two meshes share vertex data, so one of them can't get a second UV map alone.";
         }
         return null;
     }
+
+    /// <summary>Whether the mesh's UV element holds two values: no second map at all.</summary>
+    private static bool Narrow(byte[] bytes, int mesh) => UvElement(bytes, mesh) is { Type: TypeHalf2 or TypeSingle2 };
+
+    /// <summary>Whether the mesh's UV element holds four values whose second map is the same point on every vertex (an empty one).</summary>
+    private static bool FlatSecond(byte[] bytes, Layout layout, int mesh)
+    {
+        if (UvElement(bytes, mesh) is not { Type: TypeHalf4 or TypeSingle4 } uv || UvStream(bytes, layout, mesh, uv) is not var (start, stride, vertices))
+            return false;
+        var half = uv.Type == TypeHalf4;
+        var size = half ? 2 : 4;
+        if (vertices == 0 || stride < uv.Offset + 4 * size || start + (long)vertices * stride > bytes.Length)
+            return false;
+        float firstZ = 0, firstW = 0;
+        for (var v = 0; v < vertices; v++)
+        {
+            var at = (int)(start + (long)v * stride + uv.Offset);
+            var z = Value(bytes, at + 2 * size, half);
+            var w = Value(bytes, at + 3 * size, half);
+            if (v == 0)
+                (firstZ, firstW) = (z, w);
+            else if (MathF.Abs(z - firstZ) > Flatness || MathF.Abs(w - firstW) > Flatness)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>Where the mesh's UV stream starts in the file, its stride and vertex count; null outside the LODs.</summary>
+    private static (long Start, int Stride, int Vertices)? UvStream(byte[] bytes, Layout layout, int mesh, UvInfo uv)
+    {
+        var lod = LodOf(bytes, layout, mesh);
+        if (lod < 0)
+            return null;
+        var table = layout.MeshTable + mesh * MeshSize;
+        return (U32(bytes, 16 + lod * 4) + (long)U32(bytes, table + 20 + uv.Stream * 4), bytes[table + 32 + uv.Stream], U16(bytes, table));
+    }
+
+    /// <summary>Whether another mesh of the LOD reads the vertices of the mesh's UV stream.</summary>
+    private static bool SharesVertices(byte[] bytes, Layout layout, int mesh)
+    {
+        var uv = UvElement(bytes, mesh)!.Value;
+        var lod = layout.LodTable + LodOf(bytes, layout, mesh) * LodSize;
+        var offset = U32(bytes, layout.MeshTable + mesh * MeshSize + 20 + uv.Stream * 4);
+        int first = U16(bytes, lod), count = U16(bytes, lod + 2);
+        for (var m = first; m < first + count; m++)
+            if (m != mesh && U16(bytes, layout.MeshTable + m * MeshSize) > 0 &&
+                Streams(bytes, m, layout.DeclarationCount).Any(s => U32(bytes, layout.MeshTable + m * MeshSize + 20 + s * 4) == offset))
+                return true;
+        return false;
+    }
+
+    /// <summary>Writes each vertex's first UV map over its second, in place: the mesh's UV element already holds four values.</summary>
+    private static void CopyFirstMap(byte[] model, Layout layout, int mesh)
+    {
+        var uv = UvElement(model, mesh)!.Value;
+        var (start, stride, vertices) = UvStream(model, layout, mesh, uv)!.Value;
+        var map = uv.Type == TypeHalf4 ? 4 : 8;
+        for (var v = 0; v < vertices; v++)
+        {
+            var at = (int)(start + (long)v * stride + uv.Offset);
+            model.AsSpan(at, map).CopyTo(model.AsSpan(at + map, map));
+        }
+    }
+
+    private static float Value(byte[] bytes, int at, bool half)
+        => half ? (float)BinaryPrimitives.ReadHalfLittleEndian(bytes.AsSpan(at, 2)) : BinaryPrimitives.ReadSingleLittleEndian(bytes.AsSpan(at, 4));
 
     /// <summary>The vertex streams (0 to 2) the mesh's declaration reads.</summary>
     private static IEnumerable<int> Streams(byte[] bytes, int mesh, int declarationCount)

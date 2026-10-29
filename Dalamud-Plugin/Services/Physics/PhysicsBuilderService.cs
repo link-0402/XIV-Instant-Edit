@@ -420,18 +420,35 @@ internal sealed class PhysicsBuilderService : IDisposable
             var live = capture.Pose.Keys.ToList();
             var meshLeft = false;
             var meshRight = false;
+            // The hand models without tip weights, for the line to name.
+            var bareLeft = new List<string>();
+            var bareRight = new List<string>();
             foreach (var drawn in capture.Models)
             {
-                if (PhysicsPaths.ResolveDrawn(resolved, drawn.File, drawn.Slot) is not var (actual, _))
+                if (PhysicsPaths.ResolveDrawn(resolved, drawn.File, drawn.Slot) is not var (actual, gamePath))
                     continue;
                 var bytes = await Task.Run(() => ReadModel(actual), token).ConfigureAwait(false);
                 if (bytes is null)
                     continue;
                 var mesh = await Task.Run(() => ModelMeshReader.Read(bytes, skin: true), token).ConfigureAwait(false);
-                meshLeft |= mesh.Bones.Contains("j_hito_a_l") && HandTipCheck.MeshWeighted(mesh, MotionSide.Left);
-                meshRight |= mesh.Bones.Contains("j_hito_a_r") && HandTipCheck.MeshWeighted(mesh, MotionSide.Right);
+                var name = Path.GetFileName(gamePath.Length > 0 ? gamePath : actual);
+                if (mesh.Bones.Contains("j_hito_a_l"))
+                {
+                    if (HandTipCheck.MeshWeighted(mesh, MotionSide.Left))
+                        meshLeft = true;
+                    else
+                        bareLeft.Add(name);
+                }
+                if (mesh.Bones.Contains("j_hito_a_r"))
+                {
+                    if (HandTipCheck.MeshWeighted(mesh, MotionSide.Right))
+                        meshRight = true;
+                    else
+                        bareRight.Add(name);
+                }
             }
-            return new HandTipFacts(HandTipCheck.SkeletonHas(live, MotionSide.Left), HandTipCheck.SkeletonHas(live, MotionSide.Right), meshLeft, meshRight, null);
+            return new HandTipFacts(HandTipCheck.SkeletonHas(live, MotionSide.Left), HandTipCheck.SkeletonHas(live, MotionSide.Right), meshLeft, meshRight, null,
+                HandTipCheck.Models(bareLeft), HandTipCheck.Models(bareRight));
         }
         catch (Exception e) when (e is IOException or InvalidOperationException or InvalidDataException or NotSupportedException or Dalamud.Plugin.Ipc.Exceptions.IpcError)
         {

@@ -138,8 +138,10 @@ public static class EffectPresets
             changes.Add("Reflections come from the pattern; layer 1 scrolls at 0.2 and repeats 1.5 times.");
             // A new index shows pair 1 only, so every row may scroll.
             var (rows, note) = Rows(context with { Doc = doc }, madeIndex ? RowTarget.All : target);
-            doc = EditRows(doc, rows, row => row with { ScrollLayer = 1f, Emissive = ScrollGlow(row) });
-            changes.Add($"{RowCount(rows.Length)} show layer 1 and glow, since the pattern shows through the glow.");
+            // The pattern is the rows' reflection (the key above), so it shows only at their reflection strength:
+            // every scrolling row in scroll mods has it at 1 or more. At 0 the part glows flat.
+            doc = EditRows(doc, rows, row => row with { ScrollLayer = 1f, SphereMapMask = 1f, Emissive = ScrollGlow(row) });
+            changes.Add($"{RowCount(rows.Length)} show layer 1 at full reflection strength and glow, since the pattern shows through the glow.");
             return Result(doc, changes, [], note, [.. textures]);
         }
     }

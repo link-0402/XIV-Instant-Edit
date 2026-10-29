@@ -449,17 +449,6 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         }
         if (modsError != null)
             ImGui.TextColored(Theme.Warning, modsError);
-
-        ImGui.SetNextItemWidth(Theme.Scaled(120));
-        using (var slot = ImRaii.Combo("Slot", $"Summon {pickerSummon}"))
-        {
-            if (slot.Success)
-                for (var summon = 0; summon <= 1; summon++)
-                    if (ImGui.Selectable($"Summon {summon}", pickerSummon == summon))
-                        pickerSummon = summon;
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Put a second prop on Summon 1 to show both at once.");
     }
 
     /// <summary> Asks Penumbra for its mods once each time the picker opens in From a mod, and takes the answer once it is in. </summary>
@@ -668,7 +657,8 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             return;
         }
         source = PropModelSources.Rebodied(source, body);
-        if (Place(editor, TimelineAddKind.Prop, pick.Frame, null, "", [], new TimelinePropModel(source.Set, source.Body, 1, null, source), summon: pick.Summon))
+        // The game loads a prop from a mod only on Summon 0 (TimelineEdits.ModPropSlots).
+        if (Place(editor, TimelineAddKind.Prop, pick.Frame, null, "", [], new TimelinePropModel(source.Set, source.Body, 1, null, source), summon: 0))
         {
             if (open)
                 pickerClose = true;
@@ -769,10 +759,12 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     /// A face comes from one of the expression libraries that hold it (<paramref name="packs"/>), switching
     /// the timeline's when another holds all its faces (<see cref="TimelineEditor.ChoosePack"/>).
     /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known. A prop goes on
-    /// summon slot <paramref name="summon"/>; one from a mod stays still.
+    /// summon slot <paramref name="summon"/>, or without one the first slot free over the span it lands on
+    /// (<see cref="TimelineEdits.LandedSummon"/>); one from a mod stays still and takes Summon 0, moving a vanilla one there to
+    /// Summon 1 (<see cref="TimelineEdits.ModPropSlots"/>).
     /// </summary>
     private bool Place(TimelineEditor current, TimelineAddKind kind, int frame, string? target, string path, ImmutableArray<string> packs,
-        TimelinePropModel? prop, int frames = 0, int summon = 0)
+        TimelinePropModel? prop, int frames = 0, int? summon = null)
     {
         pickerError = null;
         if (session.ReadOnly)
@@ -794,8 +786,12 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         ImmutableArray<TimelineEvent> events;
         try
         {
-            events = TimelineTemplates.Create(new TimelineAddRequest(kind, frame, path, kind == TimelineAddKind.LipSync ? frames : 0, pack, prop,
-                current.Document.Length, kind == TimelineAddKind.Prop ? summon : 0));
+            var request = new TimelineAddRequest(kind, frame, path, kind == TimelineAddKind.LipSync ? frames : 0, pack, prop,
+                current.Document.Length, kind == TimelineAddKind.Prop ? summon ?? 0 : 0);
+            events = TimelineTemplates.Create(request);
+            // The Add moves a prop that would run past the end back to fit, so its slot is the one free where it lands.
+            if (kind == TimelineAddKind.Prop && summon == null && TimelineEdits.LandedSummon(current.Document, events) is var free and not 0)
+                events = TimelineTemplates.Create(request with { Summon = free });
         }
         catch (InvalidDataException e)
         {

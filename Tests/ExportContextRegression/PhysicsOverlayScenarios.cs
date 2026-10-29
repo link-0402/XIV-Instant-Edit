@@ -141,8 +141,11 @@ internal static class PhysicsOverlayScenarios
             "physics overlay: a sphere the chain doesn't bump into is drawn dim at its bone's offset");
 
         var hovered = PhysicsOverlayModel.Build(file, [(0, 0)], false, new PhysicsOverlayHover(PhysicsOverlayPart.Shape, "hand_r"), skeleton, Frame);
-        Require(hovered.Spheres.Single() is { Part: PhysicsOverlayPart.Shape, Lit: true } && hovered.Capsules.Single() is { Part: PhysicsOverlayPart.Shape, Lit: false },
-            "physics overlay: hovering a shape's row lights that shape, even one the chain doesn't bump into");
+        Require(hovered.Spheres.Single() is { Part: PhysicsOverlayPart.OtherShape, Lit: true } && hovered.Capsules.Single() is { Part: PhysicsOverlayPart.Shape, Lit: false },
+            "physics overlay: hovering a shape's row lights that shape, one the chain doesn't bump into in grey");
+        var hoveredUsed = PhysicsOverlayModel.Build(file, [(0, 0)], false, new PhysicsOverlayHover(PhysicsOverlayPart.Shape, "thigh_l"), skeleton, Frame);
+        Require(hoveredUsed.Capsules.Single() is { Part: PhysicsOverlayPart.Shape, Lit: true },
+            "physics overlay: hovering a shape the chain bumps into lights it as a shape");
         var view = PhysicsOverlayModel.Build(file, [(0, 0)], true, new PhysicsOverlayHover(PhysicsOverlayPart.Shape, "thigh_l"), skeleton, Frame);
         Require(view.Spheres.Single() is { Part: PhysicsOverlayPart.Shape, Lit: false } && view.Capsules.Single() is { Part: PhysicsOverlayPart.Shape, Lit: true },
             "physics overlay: the shapes view shows every shape as a shape, the hovered one lit");

@@ -54,6 +54,10 @@ public sealed record BridgeFailure
         }
     }
 
+    /// <summary>The cause and remedy alone, for a line under a toolbar that already says what failed.</summary>
+    [JsonIgnore]
+    public string ShortMessage => $"{Cause} {Remedy}".Trim();
+
     public static BridgeFailure Create(
         string component,
         string operation,

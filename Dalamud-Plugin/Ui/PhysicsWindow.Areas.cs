@@ -376,6 +376,20 @@ internal sealed partial class PhysicsWindow
             // Presets aim springs elsewhere, as a lift for example; the slider is named for what its spring does.
             var name = target is { } aimed ? PhysicsKnobs.SpringName(file.Simulators[s0], spring, aimed.Character.Skeleton) : "Firmness";
             KnobSlider(current, targets, PhysicsKnob.Firmness, SpringTip(name), 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic, name, PhysicsOverlayPart.Spring);
+            // Only on request: a spring aimed off where it rests changes only when this is clicked.
+            if (target is { } found && PhysicsKnobs.CanAimAtRest(file.Simulators[s0], spring, found.Character.Skeleton))
+            {
+                var skeleton = found.Character.Skeleton;
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Aim at rest"))
+                    Change(current, () =>
+                    {
+                        foreach (var (s, c) in targets)
+                            if (PhysicsKnobs.MainSpring(file.Simulators[s], c) is { } main && PhysicsKnobs.CanAimAtRest(file.Simulators[s], main, skeleton))
+                                PhysicsKnobs.AimAtRest(file.Simulators[s], main, skeleton);
+                    }, "Aim at rest");
+                Tip($"Turns the spring to pull the tip to where it rests, keeping its strength. It points {PhysicsKnobs.SpringAim(file.Simulators[s0], spring, skeleton):F0}° off now.");
+            }
         }
         else
         {

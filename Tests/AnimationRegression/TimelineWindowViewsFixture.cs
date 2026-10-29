@@ -44,8 +44,38 @@ internal static class TimelineWindowViewsFixture
         Places(check, texts);
         ChangedFiles(check);
         MotionKeysHint(check, texts);
+        PoseLoops(check, texts);
         check(texts.All(text => !text.Contains("...", StringComparison.Ordinal) && !text.Contains('\u2026')),
             "Timeline window texts never use an ellipsis");
+    }
+
+    // The game plays a numbered pose's timeline once while its motion loops (Idle pose 3 and Angel Dust's ground sit,
+    // 2026-10-29): events added there play on the first loop only, which the window says.
+    private static void PoseLoops(Action<bool, string> check, List<string> texts)
+    {
+        const string idle = "chara/human/c0801/animation/a0001/bt_common/emote/pose03_loop.pap";
+        const string sit = "chara/human/c0801/animation/a0001/bt_common/emote/j_pose01_loop.pap";
+        check(AnimationLibrary.IsPoseLoop(idle) && AnimationLibrary.IsPoseLoop(sit) &&
+              AnimationLibrary.IsPoseLoop("chara/human/c0101/animation/a0001/bt_common/emote/s_pose02_loop.pap") &&
+              AnimationLibrary.IsPoseLoop("chara/human/c0101/animation/a0001/bt_common/emote/l_pose01_loop.pap") &&
+              !AnimationLibrary.IsPoseLoop("chara/human/c0801/animation/a0001/bt_common/emote/loop_emot11_loop.pap") &&
+              !AnimationLibrary.IsPoseLoop("chara/human/c0801/animation/a0001/bt_common/emote/dance01_loop.pap") &&
+              !AnimationLibrary.IsPoseLoop("chara/human/c0801/animation/a0001/bt_common/emote/pose03_start.pap"),
+            "idle, ground, chair and bed pose loops are told apart from emote loops and starts");
+        var motion = Ev("t5", "C009", TimelineLane.Motion, 0, "cbem_pose03_2lp", 70, access: TimelineAccess.Locked);
+        var effect = Ev("n1", "C012", TimelineLane.Effect, 10, "vfx/common/eff/dk01pr_fir0t.avfx", 30);
+        var smoke = Ev("t9", "C173", TimelineLane.Effect, 1, "vfx/dustsmoke.avfx", 0, Values(("Loop", 1)));
+        var note = TimelineWindowViews.PoseLoopNote(Doc(70, 70, motion, effect), idle);
+        if (note != null)
+            texts.Add(note);
+        check(note == "This pose plays its events once. Later loops repeat only the motion." &&
+              TimelineWindowViews.PoseLoopNote(Doc(70, 70, motion, effect), sit) == note,
+            "an added effect on an idle or ground sit pose gets the note");
+        check(TimelineWindowViews.PoseLoopNote(Doc(70, 70, motion), idle) == null &&
+              TimelineWindowViews.PoseLoopNote(Doc(70, 70, motion, smoke), idle) == null &&
+              TimelineWindowViews.PoseLoopNote(Doc(270, 270, motion, effect),
+                  "chara/human/c0801/animation/a0001/bt_common/emote/loop_emot11_loop.pap") == null,
+            "no note for the motion alone, a looping effect (C173) or an emote loop");
     }
 
     private static void Lanes(Action<bool, string> check, List<string> texts)
@@ -630,6 +660,9 @@ internal static class TimelineWindowViewsFixture
             "The Motion keys layer says what it does");
         check(TimelineWindowViews.LayerHint(MotionEdits.Find(plain, plainKey)!) == TimelineWindowViews.LayerKindHint(MotionLayerKind.Offset),
             "An ordinary offset keeps the offset hint");
+        texts.AddRange([MotionEdits.MotionKeysName, TimelineWindowViews.MotionKeysWait]);
+        check(TimelineWindowViews.MotionKeysTip(true) == hint && TimelineWindowViews.MotionKeysTip(false) == TimelineWindowViews.MotionKeysWait,
+            "The Add menu's Motion keys item says what it does, or that it waits for the motion");
     }
 
     private static void Texts(Action<bool, string> check, List<string> texts)

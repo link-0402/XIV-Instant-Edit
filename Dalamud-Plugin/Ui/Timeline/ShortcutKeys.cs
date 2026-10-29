@@ -48,6 +48,9 @@ internal sealed partial class ShortcutKeys : IDisposable
     /// </summary>
     public void Claim() => claimed = true;
 
+    /// <summary> Takes a key from the game while a window has the keyboard, though no shortcut uses it. </summary>
+    public void Hold(VirtualKey virtualKey) => watched.TryAdd(virtualKey, null);
+
     /// <summary> Forgets released keys, once a frame; the Timeline calls it every frame it draws. </summary>
     public void Refresh()
     {

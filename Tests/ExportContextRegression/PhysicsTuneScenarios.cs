@@ -115,6 +115,57 @@ internal static class PhysicsTuneScenarios
         Require(PhysicsKnobs.SpringAim(chest, new PhybAttract { Bone = PhybName.From("missing"), Chain = 0, Node = 1 }, skeleton) is null &&
                 PhysicsKnobs.SpringAim(chest, new PhybAttract { Bone = PhybName.From("n_root"), Chain = 1, Node = 1 }, skeleton) is null,
             "physics knobs: a spring on a bone or chain that isn't there has no aim");
+        CheckAimAtRest();
+    }
+
+    /// <summary> Breast tip place: a chest spring left aimed at an old tip turns back to where the tip rests, on request, as one undo step. </summary>
+    private static void CheckAimAtRest()
+    {
+        var skeleton = GameChest();
+        var file = new PhybFile();
+        file.Simulators.Add(new PhybSimulator { Group = PhysicsAreas.ChestGroup, Chains = [Chain("j_mune_l", 0.1449f)] });
+        var chest = file.Simulators[0];
+        var game = new PhybAttract { Bone = PhybName.From("j_sebo_b"), Offset = new Vector3(0.075f, 0.1929f, 0.077f), Chain = 0, Node = 1, Stiffness = 0.075f };
+        Require(!PhysicsKnobs.CanAimAtRest(chest, game, skeleton), "physics aim at rest: the game's spring, aimed at the rest place, offers nothing");
+
+        // The saved mod's spring: 0.0005 toward j_sebo_b, 58° off where the tip rests.
+        var bone = skeleton.Get("j_mune_l")!.Position;
+        var aimed = new PhybAttract { Bone = game.Bone, Offset = game.Offset, Chain = 0, Node = 1, Stiffness = 0.0005f };
+        PhysicsKnobs.AimAtRest(chest, aimed, skeleton);
+        var aim = aimed.Offset - bone;
+        var off = new PhybAttract
+        {
+            Bone = game.Bone, Chain = 0, Node = 1, Stiffness = 0.0005f,
+            Offset = bone + Vector3.Transform(aim, Quaternion.CreateFromAxisAngle(Vector3.Normalize(Vector3.Cross(aim, Vector3.UnitZ)), PhysicsTemplates.Radians(58))),
+        };
+        chest.Attracts.Add(off);
+        Require(PhysicsKnobs.SpringAim(chest, off, skeleton) is > 57.5f and < 58.5f && PhysicsKnobs.SpringName(chest, off, skeleton) != "Firmness" &&
+                PhysicsKnobs.CanAimAtRest(chest, off, skeleton),
+            $"physics aim at rest: a spring {PhysicsKnobs.SpringAim(chest, off, skeleton):F0}° off is named for its pull and offers the action");
+
+        var before = off.Offset;
+        var document = new PhysicsDocument(file, new PhysicsSource(PhysicsSourceKind.File, "Chest", "chest.phyb"), 801);
+        document.Checkpoint("Aim at rest");
+        var spring = document.File.Simulators[0].Attracts[0];
+        Require(PhysicsKnobs.AimAtRest(document.File.Simulators[0], spring, skeleton), "physics aim at rest: the spring turns");
+        document.Changed();
+        Require(PhysicsKnobs.SpringName(document.File.Simulators[0], spring, skeleton) == "Firmness" &&
+                PhysicsKnobs.SpringAim(document.File.Simulators[0], spring, skeleton) is < 0.05f && spring.Stiffness == 0.0005f &&
+                MathF.Abs((spring.Offset - bone).Length() - (before - bone).Length()) < 1e-5f &&
+                !PhysicsKnobs.CanAimAtRest(document.File.Simulators[0], spring, skeleton),
+            "physics aim at rest: the spring now pulls at the rest place, as Firmness, with its strength and distance kept, and offers nothing more");
+        var undo = document.NextUndo();
+        var lines = undo is null ? Array.Empty<string>() : PhysicsChanges.Describe(document.File, undo.File);
+        Require(undo is { Name: "Aim at rest" } && lines.Count == 1 && lines[0].Contains(", j_mune_l spring: Point (", StringComparison.Ordinal),
+            $"physics aim at rest: undo names the step and the spring's point it moves back ({string.Join(" | ", lines)})");
+        Require(document.Undo() && document.File.Simulators[0].Attracts[0].Offset == before && document.NextUndo() is null &&
+                PhysicsKnobs.SpringName(document.File.Simulators[0], document.File.Simulators[0].Attracts[0], skeleton) != "Firmness",
+            "physics aim at rest: one undo puts the spring back where it was");
+
+        // A lift pushes away from its point: aimed at rest, its point goes behind, so it still pushes the tip out to where it rests.
+        var lift = new PhybAttract { Bone = PhybName.From("n_root"), Offset = new Vector3(0, 1, 0), Chain = 0, Node = 1, Stiffness = -0.001f };
+        Require(PhysicsKnobs.AimAtRest(chest, lift, skeleton) && lift.Stiffness == -0.001f && PhysicsKnobs.SpringAim(chest, lift, skeleton) is < 0.05f,
+            "physics aim at rest: a negative spring keeps its sign and pushes toward the rest place");
     }
 
     private static void CheckBust()

@@ -78,12 +78,50 @@ internal static class EditAgainFixture
               AnimationEditService.EditAgainProblem(Journal(capture, excluded: ["j_kubi"])) ==
               "This edit left out bones or repaired the skeleton, which can't be opened again.",
             "cuts open again without layers, as long as the motion from before them was kept");
+        // 286/287: a borrowed clip rebuilt for the character's race keeps the motion from before, rebuilt for that race.
+        AnimationEditJournal Rebuilt(string? model, string? baseHash = "base")
+        {
+            var journal = Journal(capture, layers: false, seconds: 80 / 30f, cuts: cuts, baseHash: baseHash);
+            journal.Request = journal.Request with { RepairTarget = SkeletonStandard.Vanilla, RepairModel = model };
+            return journal;
+        }
+        check(AnimationEditService.EditAgainProblem(Rebuilt("c0801")) == null &&
+              AnimationEditService.EditAgainProblem(Rebuilt(null)) == "This edit left out bones or repaired the skeleton, which can't be opened again." &&
+              AnimationEditService.EditAgainProblem(Rebuilt("c0801", null)) == "This edit kept no copy of the motion from before it.",
+            "a rebuild for another race opens again on its rebuilt motion; a repair onto the clip's own race still can't");
+        var rebuildRequest = Rebuilt("c0801").Request;
+        var plainDocument = new TimelineDocument(100, 100, null, [], 1);
+        var cutDocument = plainDocument with { Length = 80, Cuts = cuts };
+        check(AnimationBakeRules.RebuildKeepsEdits(rebuildRequest, cutDocument) &&
+              !AnimationBakeRules.RebuildKeepsEdits(rebuildRequest with { RepairModel = null }, cutDocument) &&
+              !AnimationBakeRules.RebuildKeepsEdits(rebuildRequest with { ExcludedBones = ["j_kubi"] }, cutDocument) &&
+              !AnimationBakeRules.RebuildKeepsEdits(rebuildRequest, plainDocument),
+            "only a rebuild with its edits and no bones left out keeps the motion from before it");
         check(AnimationEditService.EditAgainProblem(Journal(capture, baseHash: null)) != null,
             "nor one that kept no motion from before it, as edits saved before Edit again");
         check(AnimationEditService.EditAgainProblem(Journal(capture, state: "Undone")) == "This edit was undone." &&
               AnimationEditService.EditAgainProblem(Journal(capture, state: "FilesUndone")) == "This edit was not saved." &&
               AnimationEditService.EditAgainProblem(Journal(capture, state: "RecoveryRequired")) == "This edit did not finish.",
             "nor an edit that was undone, not saved (refused or rolled back) or did not finish");
+        // 141: a new mod whose folder couldn't be made rolls back to "Not saved"; its Undo has no files to put back.
+        AnimationEditJournal NewMod(string state, bool hashes = false)
+        {
+            var journal = Journal(capture, state: state);
+            return new AnimationEditJournal
+            {
+                Id = journal.Id, Request = journal.Request with { Destination = AnimationDestination.NewMod }, State = state, Files = journal.Files,
+                ModFileHashes = hashes ? new Dictionary<string, string> { ["meta.json"] = "hash" } : [],
+            };
+        }
+        check(AnimationCommitService.NoFilesLeft(NewMod("FilesUndone"), false) && AnimationCommitService.NoFilesLeft(NewMod("FilesUndone"), true) &&
+              AnimationCommitService.NoFilesLeft(Journal(capture, state: "FilesUndone"), false),
+            "an Undo of a \"Not saved\" row puts no files back: its files were never written or are back already");
+        check(AnimationCommitService.NoFilesLeft(NewMod("RecoveryRequired"), false) && AnimationCommitService.NoFilesLeft(NewMod("Committing"), false) &&
+              !AnimationCommitService.NoFilesLeft(NewMod("RecoveryRequired"), true),
+            "a new mod whose commit stopped before its metadata, with no folder, was never made");
+        check(!AnimationCommitService.NoFilesLeft(NewMod("Completed", true), false) && !AnimationCommitService.NoFilesLeft(NewMod("Activated", true), false) &&
+              !AnimationCommitService.NoFilesLeft(NewMod("RecoveryRequired", true), false) && !AnimationCommitService.NoFilesLeft(Journal(capture), false),
+            "a finished new mod whose folder is gone was moved, and its Undo is still refused (143)");
 
         var doc = new TimelineDocument(30, 30, null, [], 1);
         var layered = doc with { Motion = [Layer()] };

@@ -20,6 +20,8 @@ internal sealed class TimelineTexts(TimelineSession session)
     public string LengthText { get; private set; } = string.Empty;
     public string? HeaderNote { get; private set; }
     public string? PastEndWarning { get; private set; }
+    /// <summary>The note that a pose plays its events once (<see cref="TimelineWindowViews.PoseLoopNote"/>).</summary>
+    public string? PoseLoopNote { get; private set; }
     public string? LayerBonesWarning { get; private set; }
     public ImmutableArray<TimelineEffectCheck.Problem> EffectProblems { get; private set; } = [];
     public string? EffectWarning { get; private set; }
@@ -43,6 +45,7 @@ internal sealed class TimelineTexts(TimelineSession session)
         LengthText = TimelineWindowViews.LengthText(doc);
         HeaderNote = TimelineWindowViews.HeaderNote(doc);
         PastEndWarning = TimelineWindowViews.PastEndWarning(doc);
+        PoseLoopNote = session.Source is { } clip ? TimelineWindowViews.PoseLoopNote(doc, clip.Clip.GamePath) : null;
         LayerBonesWarning = session.Source is not { } source ? null : TimelineWindowViews.LayerBonesWarning(doc, session.Fresh(source).Clip,
             session.EditingSkeleton(source), session.Rebuild?.Model);
         EffectProblems = session.Source?.EffectProblems(doc) ?? [];

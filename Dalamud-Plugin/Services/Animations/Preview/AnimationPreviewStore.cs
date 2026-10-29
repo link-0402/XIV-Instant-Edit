@@ -37,6 +37,11 @@ internal static class AnimationPreviewRules
     /// <summary> The top-level cache folder. Keep in the cache's owned-entry lists (TextureFiles, cache.py). </summary>
     public const string CacheFolder = "animation-preview";
     public const int MaxFiles = 64;
+    /// <summary>
+    /// A prop from another mod brings its private body's model, materials and textures, each material in every material
+    /// folder (256 per material, see PropCopies.Flatten): counted apart from <see cref="MaxFiles"/>.
+    /// </summary>
+    public const int MaxPropFiles = 2048;
     public const int MaxFileBytes = 256 * 1024 * 1024;
     public const long MaxTotalBytes = 512L * 1024 * 1024;
     public const int MaxRevision = 999_999;
@@ -45,6 +50,8 @@ internal static class AnimationPreviewRules
     // Penumbra refuses redirect targets of 2048 characters or more.
     private const int MaxFullPath = 2047;
     private static readonly string[] Extensions = [".pap", ".tmb", ".scd", ".avfx", ".atex"];
+    // Only under a prop's private body (AnimationCommitService.PrivatePropBody), as the save allows them.
+    private static readonly string[] PropExtensions = [".mdl", ".mtrl", ".tex"];
     private static readonly Regex SessionName = new("^[0-9a-f]{16}$", RegexOptions.CultureInvariant);
     private static readonly Regex RevisionPattern = new("^[1-9][0-9]{0,5}$", RegexOptions.CultureInvariant);
 
@@ -59,14 +66,20 @@ internal static class AnimationPreviewRules
 
     /// <summary>
     /// Plain ASCII game paths of the file kinds an animation edit can replace, nothing that leaves the
-    /// folder. Spaces are allowed inside a name (mods add paths such as "emote/pose 1.pap"), but not at
-    /// either end of one, nor a trailing dot, which Windows would drop from the file name.
+    /// folder: models, materials and textures only as a prop's private copy. Spaces are allowed inside a name (mods add
+    /// paths such as "emote/pose 1.pap"), but not at either end of one, nor a trailing dot, which Windows would drop from
+    /// the file name.
     /// </summary>
     public static bool IsSafeGamePath(string gamePath)
         => gamePath.Length is > 0 and < 512 && !Path.IsPathRooted(gamePath) &&
            gamePath.All(c => char.IsAsciiLetterOrDigit(c) || c is '/' or '_' or '-' or '.' or ' ') &&
            gamePath.Split('/').All(segment => segment is not ("" or "." or "..") && segment[0] != ' ' && segment[^1] is not (' ' or '.')) &&
-           Extensions.Any(extension => gamePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+           (Extensions.Any(extension => gamePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase)) || IsPropFile(gamePath));
+
+    /// <summary>A model, material or texture of a prop's private copy (a weapon body in b9000..b9999).</summary>
+    public static bool IsPropFile(string gamePath)
+        => PropExtensions.Any(extension => gamePath.EndsWith(extension, StringComparison.OrdinalIgnoreCase)) &&
+           AnimationCommitService.PrivatePropBody.IsMatch(gamePath);
 
     public static string NewSessionName() => Guid.NewGuid().ToString("N")[..16];
 
@@ -132,8 +145,11 @@ internal static class AnimationPreviewRules
             if (!files.TryAdd(gamePath, file))
                 throw new InvalidDataException($"The preview has {gamePath} twice.");
         }
-        if (files.Count is 0 or > MaxFiles)
+        var props = files.Keys.Count(IsPropFile);
+        if (files.Count - props is 0 or > MaxFiles)
             throw new InvalidDataException($"A preview needs 1 to {MaxFiles} files.");
+        if (props > MaxPropFiles)
+            throw new InvalidDataException($"The preview's props bring more than {MaxPropFiles} files.");
         return files.ToImmutable();
     }
 

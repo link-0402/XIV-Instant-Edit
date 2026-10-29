@@ -51,14 +51,26 @@ Saving:
 - [x] Change row 1's base colour and let go: the character redraws with the new colour where the
   index texture picks pair 1. (Live since Task 9; checked on pair 16 of the Critique dress.)
 - [ ] Detail scale, rotation and shear change the pattern; Advanced shows the stored matrix. (Not
-  judged: the change doesn't show at screenshot size. Critique stores a detail scale of 250, but
-  the scale drags clamp to +-64 once touched.)
+  judged: the change doesn't show at screenshot size.)
+  Partly checked (XIV Bridge tests/instant-edit/materials/10, 2026-10-29): dragging Detail scale,
+  rotation and shear each changes the stored matrix to what the shown values compose, one undo step
+  each; a scale of 250 stays 250 after the scale is touched (no clamp to 64). How the pattern looks:
+  by eye. Test 10 fails tonight at "Advanced shows the Detail matrix field": the field isn't found by
+  its ID. A test problem, not a product bug.
+  The look, by screenshots (XIV Bridge tests/instant-edit/visual/m10s, 2026-10-29, smallclothes top
+  row 16 at scale 8): scale x3, rotation +45 and shear +60 each visibly change the pattern on the
+  character (edge directions or strength move 4x to 6x more than the idle sway does). Only the
+  Advanced matrix field is left.
 - [x] Copy a row and paste it onto another (Everything, Colours only, Surface only): only the
   chosen fields change, and Undo takes it back in one step. (Colours only, through the buttons.)
 - [ ] A legacy material (characterlegacy.shpk) shows the 16-row table; the dots menu's "Convert to
   Dawntrail" moves it to character.shpk with 32 rows, and the character still looks the same.
   (No characterlegacy.shpk material with a 16-row table under 60 MB in the library; vanilla e6015
   Crakows are characterlegacy.shpk with a 32-row Dawntrail table and show 16 pairs.)
+  Partly checked (XIV Bridge materials/18, Release 2026-10-29, on a 16-row legacy material built in a
+  test mod): the window shows the 16-row table; Convert to Dawntrail moves it to character.shpk with
+  32 rows, each old row filling both rows of its pair as the legacy shader drew it, and says "Moved
+  to character.shpk". Left: the character looks the same (the made material isn't worn).
 - [x] A character.shpk material with an old 16-row table shows the warning and Convert button.
   (Strawberry Halo copy: 32 rows, each old row in both rows of its pair, one undo step. Open: the
   material keeps no index texture after converting, so the rows can't map like the old ones did.)
@@ -103,14 +115,18 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   redrawing shows the dye again. Change the dye in Glamourer while bound: no crash, and the live
   rows come back within a second. (The dyed Critique dress shows its undyed rows while edited, as
   ruled.)
+  Not scripted: changing the dye in Glamourer would change your Glamourer state.
 - [x] A redraw, GPose enter/leave and a zone change while rows are edited: no crash; the edited
   rows come back.
 
 ## Index usage (Task 10, pending)
 
-- [ ] A Stellar Blade-style mod with a 32 x 32 one-colour index texture: two pairs at most are
+- [x] A Stellar Blade-style mod with a 32 x 32 one-colour index texture: two pairs at most are
   bright, the rest greyed; hovering a greyed pair says "Not used by the index texture".
-  (Critique dress, a one-colour index: only pair 16 bright, "Used by 100% of the index texture".)
+  (Critique dress, a one-colour index: only pair 16 bright, "Used by 100% of the index texture".
+  XIV Bridge tests/instant-edit/materials/11, 2026-10-29, a test mod with a 32 x 32 BC7 index: only
+  pair 4 bright, "Used by 100% of the index texture."; the other 15 greyed, "Not used by the index
+  texture.")
 - [x] A vanilla gear material: the pairs its index uses are bright, with their share in the tooltip.
   (e6015 Crakows: pairs 7 and 8.)
 - [x] "Show where" draws the index texture with the selected pair's texels lit (top yellow, bottom
@@ -128,24 +144,51 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   rows checked; the harness faces away, so the look is unjudged.)
 - [ ] Scrolling pattern: the character redraws on the scroll shader and the pattern visibly moves;
   the new `_fx.tex` sits beside the material after Save (in the mod, or in the new mod). (Redraw on
-  characterscroll.shpk with the `_fx.tex` loaded from the preview; movement and Save not checked.)
+  characterscroll.shpk with the `_fx.tex` loaded from the preview; movement not checked.)
+  Partly checked (XIV Bridge tests/instant-edit/materials/07, 2026-10-29): Save in a mod writes the
+  material on characterscroll.shpk and the new `_top_a_fx.tex` beside it, and Penumbra maps the
+  texture's game path to that file. That the pattern visibly moves: by eye.
+  Failed by screenshots (XIV Bridge tests/instant-edit/visual/m07s, 2026-10-29): on the pale
+  smallclothes top the preview glows flat white-blue with no veins, and the part moves less after
+  the preset (2% in 0.5 s) than before it (5%). Picture: XIV-Bridge tests/results/visual/
+  "2026-10-29_200416_085 m07s after the preset.png".
+  Failing by eye too (2026-10-29): the user applied Scrolling pattern by hand to other gear and the
+  glow fails on everything, and the card showed no option to add or fix the second UV map. Needs
+  another look: the UV2 check and option (MaterialWindow.Uv2.cs) and the glow itself.
+  Fixed 2026-10-29 (two causes). The scroll pattern shows only at the row's reflection strength (half 21),
+  which the preset left at 0: every scrolling row of five real characterscroll mods has 1 or more, so
+  scrolling rows now get 1. And nearly every gear mesh has a four-value UV whose second map is one point,
+  which counted as having a second map: such a map now counts as missing, and Add copies the first map
+  over it in place. Retest: XIV Bridge visual/m07s (the smallclothes top should be listed as missing a
+  second UV map).
 - [x] Glass, See-through and Matcap each look right after their redraw; Undo takes each back in one
   step. (All three apply, redraw and undo; Matcap names everything it removed. Detail pattern and
   Velvet too. Looks not judged on the back-facing harness.)
-- [ ] Dyeable adds a dye table (the rows' Dye section appears); Clean up's hover lists what it
+- [x] Dyeable adds a dye table (the rows' Dye section appears); Clean up's hover lists what it
   removes. (On a material that already has one, Dyeable sets 3 rows to channel 1; adding a table
-  is covered by Dyeable on/off in Task 12.)
+  is covered by Dyeable on/off in Task 12. XIV Bridge tests/instant-edit/materials/06, 2026-10-29:
+  on a material with no dye table, Dyeable adds one with every row on dye channel 1, one undo step,
+  and Undo takes it away; Clean up lists "Removes Velvet: this shader ignores it." and Cancel
+  changes nothing.)
 - [x] Rows to change offers Pair N, Pair N/1 and Pair N/2; Metal on Pair N/1 changes only the top row
   (row 2N - 1), and only the top half of that pair turns metallic on the character. (2026-10-18,
   Pentagram Boots sho_b, Pair 7/1: only row 13 changed; the pentagram and rivets took the white shine.)
-- [ ] Metal with Adjust mask ticked (default): the message names a new `…_mask_ie.tex`, the mask slot
+- [x] Metal with Adjust mask ticked (default): the message names a new `…_mask_ie.tex`, the mask slot
   reads it, and only the rows' area of that mask is red 255 / green 128 (open it in the Textures
   thumbnail or after Save). The rest of the model looks as before; Undo puts the old mask back in one
   step, and Save writes the new mask beside the material. (2026-10-18, same boots: slot moved to
   `…_s_1813c566_ie.tex`; 7/1 texels went from green 255 to 129 on average, 8.8k blended 7/2 texels moved
   slightly, 6/x and 8/x unchanged; one Undo restored mask and rows. The preview's "Shown on the
-  character" replaces the preset's message, as with every redraw. Save not tried.)
-- [ ] Adjust mask is greyed out with its reason on a material without a mask or index texture.
+  character" replaces the preset's message, as with every redraw. XIV Bridge
+  tests/instant-edit/materials/08, 2026-10-29: the slot reads the new `…_top_mask_ie.tex`, 512 x 1024
+  like the old one; 2012 texels changed, all red 255 / green 128, and 522276 stayed as they were;
+  one Undo puts the old mask back and Redo the new one; Save writes the new mask into the mod's
+  folder and Penumbra maps its game path to it.)
+  The test paints the least-used pair (pair 6, 0.4% of the index) to show that only part of the mask
+  changes: on a gear index every texel maps to a used row, so "Used rows" paints the whole mask.
+- [x] Adjust mask is greyed out with its reason on a material without a mask or index texture.
+  (XIV Bridge tests/instant-edit/materials/06, 2026-10-29: "Needs a mask texture." without a mask,
+  "Needs an index texture, which says where the rows show." without an index.)
 
 ## Dye rows and preview dyes (Task 12, pending)
 
@@ -193,21 +236,52 @@ Checked in game 2026-10-29 by XIV Bridge tests/instant-edit/materials/13 to 17, 
 
 ## Several windows and the one-row pulse (2026-10-17, need an in-game check)
 
-- [ ] Open a material, then another from a different row: a second window opens beside the first,
+- [x] Open a material, then another from a different row: a second window opens beside the first,
   and both keep their edits. Opening a material that a window already holds brings that window up.
-- [ ] Two windows with structural edits (a key or a preset) on the same character: both previews
+  (XIV Bridge tests/instant-edit/materials/01, 2026-10-29: the second window opens cascaded beside
+  the first, both keep their edits; opening the first material again brings its window to the front
+  and opens no new window.)
+- [x] Two windows with structural edits (a key or a preset) on the same character: both previews
   show at once (Penumbra lists "XIV Instant Edit material preview" and "... preview 2"); closing
   one takes only its preview down.
-- [ ] Close a window with no unsaved changes, then open a third material: it reuses that window
+  (XIV Bridge tests/instant-edit/materials/02, 2026-10-29: Penumbra lists both previews, each from
+  its own file, in the test collection; closing the second sends its material back to the game's
+  file and the first stays on its preview.)
+- [x] Close a window with no unsaved changes, then open a third material: it reuses that window
   instead of making a new one. A closed window with unsaved changes keeps them for its material.
-- [ ] Copy a row in one window and paste it in another.
-- [ ] Save in two windows at once into the same mod: both files land, meta.json intact.
-- [ ] Hover the top half of a pair swatch: only that row pulses (yellow) and the bottom row keeps
+  (XIV Bridge tests/instant-edit/materials/01, 2026-10-29: the third material takes the freed
+  window; a window closed with an edit isn't reused and brings the edit back when its material is
+  opened again.)
+- [x] Copy a row in one window and paste it in another.
+  (XIV Bridge tests/instant-edit/materials/03, 2026-10-29: row 1 pasted onto row 2 of the other
+  window, one undo step, Undo takes it back, the first window is unchanged.)
+- [x] Save in two windows at once into the same mod: both files land, meta.json intact.
+  (XIV Bridge tests/instant-edit/materials/09, 2026-10-29: both Save buttons pressed in the same
+  frame; both materials and both new `_fx.tex` files land and are mapped, meta.json parses and keeps
+  the mod's name.)
+- [x] Hover the top half of a pair swatch: only that row pulses (yellow) and the bottom row keeps
   its colours; the bottom half pulses only its row (blue). The tooltip names the row and its share
   of the pair; a sub row the index never picks is dimmed in its half.
-- [ ] Hover a row's name, copy, paste or discard button below: that row pulses; it keeps pulsing
+  Partly checked (XIV Bridge tests/instant-edit/materials/04, 2026-10-29): hovering a pair's top
+  half pulses its top row only, the bottom half its bottom row only, and off the swatches nothing
+  pulses. The colours, the tooltip and the dimmed sub row: by eye.
+  The colours, by screenshots (XIV Bridge tests/instant-edit/visual/m04s, 2026-10-29): the bottom half
+  turns its row's part blue on the character (shift 94), the other half doesn't. The tooltip and the
+  dimmed sub row are left for visual/m04v (not run yet).
+  (XIV Bridge visual/m04v, Release 2026-10-29: the top half's tooltip names its row, its share and
+  "pulses yellow", the bottom half's the other row and "pulses blue"; a sub row the index never
+  picks is dimmed in its half and the used half isn't.)
+- [x] Hover a row's name, copy, paste or discard button below: that row pulses; it keeps pulsing
   while the paste menu is open. `material` shows "highlightedRow".
-- [ ] Unload the plugin with two previews shown: both temporary mods go and the character redraws.
+  Partly checked (XIV Bridge tests/instant-edit/materials/04, 2026-10-29): hovering a row's copy or
+  paste button pulses that row, it keeps pulsing while the paste menu is open, and `material` shows
+  "highlightedRow". The row's name and the discard button weren't hovered.
+  (XIV Bridge tests/instant-edit/visual/m04s, 2026-10-29: hovering "Row 16" and its discard button
+  highlights row 16 and turns its part blue on the character, by screenshots; nothing pulses after.)
+- [x] Unload the plugin with two previews shown: both temporary mods go and the character redraws.
+  (XIV Bridge materials/20, Release 2026-10-29: with two Material windows' previews shown, unloading
+  Instant Edit takes both temporary mods away, redraws the player, and Penumbra shows both materials
+  from the game again.)
 
 ## Legacy shader to character.shpk (2026-10-18)
 
@@ -236,15 +310,27 @@ map), Limsa inn.
 - [ ] Pasting a row copied on characterlegacy.shpk onto a character.shpk row keeps its base colour
   (covered by the regression scenarios; not clicked in game). The legacy dye grid now has two columns,
   as "Shine strength" was cut off in three (not seen in game yet).
+  Partly checked (XIV Bridge tests/instant-edit/materials/12, 2026-10-29): a row copied on a legacy
+  material and pasted onto a character.shpk row keeps its base colour (<1, 1, 1> both), base
+  brightness stays 1, one undo step. The two-column dye grid: by eye.
 
 ## Half 11 is the base brightness (2026-10-18)
 
 The composite passes of all six packages that read the table (character, characterscroll, characterinc,
 characterstockings, characterglass, charactertransparency) multiply the base colour by half 11; the glow
 is the glow colour times the scene's glow scale only.
-- [ ] A character.shpk row's "Base brightness" at 0 turns that part black, 2 makes it brighter; the
+- [x] A character.shpk row's "Base brightness" at 0 turns that part black, 2 makes it brighter; the
   glow doesn't change. The base swatch darkens and brightens with it; the glow swatch doesn't.
-- [ ] The Glow preset lights the rows without making the base colour brighter.
+  Partly checked (XIV Bridge tests/instant-edit/materials/05, 2026-10-29): at 0 the base swatch is
+  black and at 2 it is twice the base colour, the base colour itself and the glow don't change, and
+  the glow swatch is the same at 0, 1 and 2. How the character looks: by eye.
+  (XIV Bridge tests/instant-edit/visual/m05s, 2026-10-29, by screenshots: the smallclothes bottom's
+  row 16 reads brightness 122.7 at 1, 29.3 at 0 (black but for lighting), 170.5 at 2, and 122.8 after
+  Revert. That row has no glow, so the glow stays with 05's data.)
+- [x] The Glow preset lights the rows without making the base colour brighter.
+  (XIV Bridge tests/instant-edit/materials/05, 2026-10-29: 32 rows get a glow at twice their base
+  colour; no row's base colour or base brightness changes, so no base swatch gets brighter; one undo
+  step.)
 
 ## Finish (Task 13, pending)
 

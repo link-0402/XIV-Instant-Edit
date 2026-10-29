@@ -148,6 +148,8 @@ internal static partial class MaterialEditorScenarios
         Require(doc.Constant(0x738A241C)?.Values.SequenceEqual([0.2f]) == true && doc.Constant(0x71CC9A45)?.Values.SequenceEqual([0.2f]) == true
                 && doc.Constant(0x43345395)?.Values.SequenceEqual([1.5f]) == true && doc.Table!.Rows.All(row => row.ScrollLayer == 1f),
             "layer 1 moves at 0.2 and repeats 1.5 times, and every row shows layer 1");
+        // The pattern is the rows' reflection: at reflection strength 0 the part glowed flat in game (2026-10-29).
+        Require(doc.Table!.Rows.All(row => row.SphereMapMask == 1f), "every scrolling row shows the pattern at full reflection strength");
         Require(doc.Slots.Select(slot => slot.SamplerId).ToHashSet().SetEquals([0x0C5EC1F1u, 0x8A4E82B6u, 0x565F8FD8u, CatchlightSampler]),
             "the result has the Hair RGB Shader mod's shape: normal, mask, index and catchlight");
         Require(doc.Table!.Rows.All(row => MathF.Max(row.Emissive.X, MathF.Max(row.Emissive.Y, row.Emissive.Z)) > 0f),

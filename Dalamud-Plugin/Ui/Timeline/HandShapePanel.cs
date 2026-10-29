@@ -54,7 +54,8 @@ internal sealed class HandShapePanel(TimelineSession session, BonePosing posing)
 
         DrawShape(current, layer, hand);
         Slider(current, layer, "Curl", "##hand-curl", "Close the fingers more, or open them. Ctrl+click to type.", hand.Curl, curl => hand with { Curl = curl });
-        Slider(current, layer, "Spread", "##hand-spread", "Spread the fingers apart, or bring them together. Ctrl+click to type.", hand.Spread, spread => hand with { Spread = spread });
+        Slider(current, layer, "Spread", "##hand-spread", "Spread the fingers apart, or bring them together. Ctrl+click to type.", hand.Spread, spread => hand with { Spread = spread },
+            (int)(HandShapes.MinSpread * 100));
 
         TimelineUi.Fact(string.Empty);
         var keep = hand.KeepMotion;
@@ -117,14 +118,15 @@ internal sealed class HandShapePanel(TimelineSession session, BonePosing posing)
         TimelineUi.Tip("The fingers' shape. Your saved shapes come after the built-in ones; right-click one to delete it.");
     }
 
-    /// <summary>A percent slider from -100% to 100% for a hand value; a drag is one undo step.</summary>
-    private static void Slider(TimelineEditor current, MotionLayer layer, string label, string id, string tooltip, float value, Func<float, MotionHand> with)
+    /// <summary>A percent slider from <paramref name="min"/>% to 100% for a hand value; a drag is one undo step.</summary>
+    private static void Slider(TimelineEditor current, MotionLayer layer, string label, string id, string tooltip, float value, Func<float, MotionHand> with,
+        int min = -100)
     {
         TimelineUi.Fact(label);
-        var percent = (int)MathF.Round(value * 100);
+        var percent = Math.Max((int)MathF.Round(value * 100), min);
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
-        var changed = ImGui.SliderInt(id, ref percent, -100, 100, "%d%%");
-        LayerPanel.TrackLayer(current, changed, changed ? With(layer, with(Math.Clamp(percent, -100, 100) / 100f)) : null);
+        var changed = ImGui.SliderInt(id, ref percent, min, 100, "%d%%");
+        LayerPanel.TrackLayer(current, changed, changed ? With(layer, with(Math.Clamp(percent, min, 100) / 100f)) : null);
         TimelineUi.Tip(tooltip);
     }
 
@@ -229,10 +231,13 @@ internal sealed class HandShapePanel(TimelineSession session, BonePosing posing)
         var sides = TimelineWindowViews.HandSides(hand.Side);
         bool Live(MotionSide side) => !usable || (side == MotionSide.Left ? known!.LiveLeft : known!.LiveRight);
         bool Mesh(MotionSide side) => !usable || (side == MotionSide.Left ? known!.MeshLeft : known!.MeshRight);
+        string? Model(MotionSide side) => side == MotionSide.Left ? known?.ModelLeft : known?.ModelRight;
+        var opened = session.Fresh(loaded);
+        var clipSkeleton = HandTipCheck.SkeletonName(opened.Clip.Resolution?.Selected, opened.Rebuild);
         string? line = null;
         foreach (var side in sides)
         {
-            line = HandRig.For(skeleton, side) is { } rig ? HandTipCheck.Reason(rig.HasTips, Live(side), Mesh(side)) : "The clip's skeleton has no finger bones for this hand.";
+            line = HandRig.For(skeleton, side) is { } rig ? HandTipCheck.Reason(rig.HasTips, Live(side), Mesh(side), clipSkeleton, Model(side)) : "The clip's skeleton has no finger bones for this hand.";
             if (line != null)
                 break;
         }

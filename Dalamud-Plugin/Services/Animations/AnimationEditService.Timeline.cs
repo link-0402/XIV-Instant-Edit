@@ -560,7 +560,8 @@ internal sealed partial class AnimationEditService
             if (replaced is { Count: > 0 })
                 outputs = TimelineSoundUsage.ReplacedOutputs(outputs, manifest.Resources, source.Resource, replaced);
             // The motion the layers were baked onto goes with the journal, so the edit can be opened again.
-            var motionBase = MotionBase(source, document, manifest.Files[edited], request.RepairTarget);
+            var motionBase = MotionBase(source, document, manifest.Files[edited], request.RepairTarget)
+                             ?? await RebuiltMotionBaseAsync(request, source, document, manifest.Files[edited], token);
             var journaled = motionBase == null ? request
                 : request with { Timeline = request.Timeline! with { MotionBaseHash = AnimationPap.Hash(motionBase) } };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
@@ -668,6 +669,25 @@ internal sealed partial class AnimationEditService
         source.Standalone || !(document.MotionChanged || document.Cut || document.Stretched) || AnimationBakeRules.BakesLayersIn(document, repair)
             ? null : source.BaseMotion ?? file;
 
+    /// <summary>
+    /// For a save that rebuilds the clip for another race (<see cref="AnimationBakeRules.RebuildKeepsEdits"/>): the motion
+    /// from before its edits, rebuilt for that race without its cuts, length or layers. The saved file is on that race's
+    /// skeleton, so Edit again brings the edits back on this. Null for every other save.
+    /// </summary>
+    private async Task<byte[]?> RebuiltMotionBaseAsync(AnimationBakeRequest request, AnimationTimelineSource source, TimelineDocument document,
+        byte[] file, CancellationToken token)
+    {
+        if (!AnimationBakeRules.RebuildKeepsEdits(request, document) ||
+            source.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
+            return null;
+        var skeleton = (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes;
+        var plain = request with { Timeline = request.Timeline! with { DurationSeconds = null, Motion = [], Cuts = null, CutSounds = null } };
+        var work = Path.Combine(journals.DirectoryFor(request.Id), "rebuilt-base");
+        Directory.CreateDirectory(work);
+        return await baker.BakeAsync(source.BaseMotion ?? file, skeleton, source.MotionClip, plain,
+            work, message => Status = message, token, () => CheckIdentityOnFramework(request.Capture, true));
+    }
+
     /// <summary>Keeps the motion beside the journal. Without it the edit still saves; it just can't be opened again.</summary>
     private void KeepMotionBase(Guid id, byte[] motion)
     {
@@ -689,7 +709,8 @@ internal sealed partial class AnimationEditService
         { State: "Undone" } => "This edit was undone.",
         { State: "FilesUndone" } => "This edit was not saved.",
         { State: not "Completed" } => "This edit did not finish.",
-        { Request.ExcludedBones.IsEmpty: false } or { Request.RepairTarget: not null } =>
+        // A rebuild for another race keeps the motion from before rebuilt for it (RebuiltMotionBaseAsync); a repair doesn't.
+        { Request.ExcludedBones.IsEmpty: false } or { Request.RepairTarget: not null, Request.RepairModel: null } =>
             "This edit left out bones or repaired the skeleton, which can't be opened again.",
         { Request.Timeline.MotionBaseHash: null } => "This edit kept no copy of the motion from before it.",
         _ => null,

@@ -24,8 +24,8 @@ internal static class ModCleanup
     /// <summary>
     /// Normalize and deduplicate a committed mod without relying on a
     /// Penumbra-version-specific IPC endpoint. The complete directory is
-    /// snapshotted before mutation so failures leave the committed mashup
-    /// exactly as it was before cleanup started. Once meta.json is written the
+    /// snapshotted before mutation so a failure puts back every file cleanup
+    /// wrote and leaves the rest of the folder alone. Once meta.json is written the
     /// mod is complete: old files that can't be deleted are warnings.
     /// </summary>
     internal static ModCleanupResult NormalizeAndDeduplicateMod(string modRoot, string modDirectory)
@@ -173,7 +173,7 @@ internal static class ModCleanup
             }
             catch
             {
-                RestoreCleanupSnapshot(root, snapshot);
+                RestoreCleanupSnapshot(root, snapshot, desiredFiles.Keys);
                 throw;
             }
 
@@ -328,25 +328,35 @@ internal static class ModCleanup
         }
     }
 
-    private static void RestoreCleanupSnapshot(string root, string snapshot)
+    private static void RestoreCleanupSnapshot(string root, string snapshot, IEnumerable<string> writtenFiles)
     {
         try
         {
-            // A rollback always comes before this run writes meta.json, so the file on disk stays: it may
-            // hold a Studio save made meanwhile.
-            File.Delete(Path.Combine(snapshot, "meta.json"));
-            foreach (var entry in Directory.EnumerateFileSystemEntries(root).ToArray())
+            // A rollback always comes before this run writes meta.json, and only the files this run wrote go
+            // back: meta.json and anything else in the folder may be a Studio save made meanwhile.
+            foreach (var relative in writtenFiles)
             {
-                var attributes = File.GetAttributes(entry);
-                if ((attributes & FileAttributes.ReparsePoint) != 0 ||
-                    string.Equals(Path.GetFileName(entry), "meta.json", StringComparison.OrdinalIgnoreCase))
+                var native = relative.Replace('/', Path.DirectorySeparatorChar);
+                var target = SafeContentPath(root, relative);
+                var saved = Path.Combine(snapshot, native);
+                if (File.Exists(saved))
+                {
+                    File.Copy(saved, target, true);
                     continue;
-                if ((attributes & FileAttributes.Directory) != 0)
-                    Directory.Delete(entry, true);
-                else
-                    File.Delete(entry);
+                }
+                if (File.Exists(target))
+                    File.Delete(target);
+                // Folders this run made for the file go once empty; folders the mod already had stay.
+                for (var parent = Path.GetDirectoryName(native); !string.IsNullOrEmpty(parent);
+                     parent = Path.GetDirectoryName(parent))
+                {
+                    var directory = Path.Combine(root, parent);
+                    if (Directory.Exists(Path.Combine(snapshot, parent)) || !Directory.Exists(directory) ||
+                        Directory.EnumerateFileSystemEntries(directory).Any())
+                        break;
+                    Directory.Delete(directory);
+                }
             }
-            CopyDirectoryContents(snapshot, root);
         }
         catch (Exception e)
         {

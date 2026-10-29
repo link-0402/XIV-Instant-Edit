@@ -14,12 +14,24 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// </summary>
 internal static partial class PropModelSources
 {
-    private const ushort FallbackSet = 9001;
+    // The set the game's own still props use (Eat Rice Ball is w9901 b0026). Seen in game 2026-10-29: a summon on w9001 never
+    // turns visible, shipped body or private, with or without a weapon animation or a C094 show; on w9901 the same copy does,
+    // on a private body without an IMC too.
+    private const ushort FallbackSet = 9901;
+    private const ushort HiddenSet = 9001;
     private const ushort FirstBody = 9000;
     private const ushort LastBody = 9999;
     private const int BodyCount = LastBody - FirstBody + 1;
 
     private static readonly string[] CandidateRoots = ["chara/weapon/", "chara/monster/", "chara/demihuman/"];
+
+    /// <summary>
+    /// Whether <paramref name="ev"/> is the summon of a prop from a mod: a C198 with a model and a source, or on a private
+    /// body (b9000..b9999) without one, such as one an earlier save wrote (as <see cref="Taken"/> counts them).
+    /// </summary>
+    internal static bool FromMod(TimelineEvent ev) =>
+        ev.Magic == "C198" && ev.Values is { } values && values.GetValueOrDefault("Model") > 0 &&
+        (ev.Source != null || values.GetValueOrDefault("Body") is >= FirstBody and <= LastBody);
 
     /// <summary>The weapon, monster and demihuman models among a mod's effective files, sorted.</summary>
     internal static ImmutableArray<string> Candidates(IReadOnlyDictionary<string, string> effective)
@@ -28,9 +40,14 @@ internal static partial class PropModelSources
                            CandidateRoots.Any(root => path.StartsWith(root, StringComparison.Ordinal)))
             .Order(StringComparer.Ordinal)];
 
-    /// <summary>The weapon set a prop goes to: a weapon keeps its own, anything else goes to 9001.</summary>
+    /// <summary>
+    /// The weapon set a prop goes to: a weapon keeps its own, except one of w9001, whose summons the game never shows;
+    /// that and anything else go to 9901.
+    /// </summary>
     internal static ushort TargetSet(string sourceModel)
-        => WeaponSet().Match(Normalise(sourceModel)) is { Success: true } match ? ushort.Parse(match.Groups[1].Value) : FallbackSet;
+        => WeaponSet().Match(Normalise(sourceModel)) is { Success: true } match && ushort.Parse(match.Groups[1].Value) is var set && set != HiddenSet
+            ? set
+            : FallbackSet;
 
     /// <summary>
     /// Whether a model can be a prop: a weapon always; anything else only when its meshes are skinned to
