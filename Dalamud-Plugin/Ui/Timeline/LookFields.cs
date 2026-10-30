@@ -56,7 +56,7 @@ internal static class LookFields
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(look.Follow == null ? "Spot: move the target with the gizmo. Pick a bone to follow it instead." : "Picking a bone drops the keyed spots.");
+            ImGui.SetTooltip(look.Follow == null ? "Move the target with the gizmo. Picking a bone drops the keyed spots." : "Pick Spot to key spots again.");
 
         TimelineUi.Fact("Limit");
         var limit = look.Limit;
