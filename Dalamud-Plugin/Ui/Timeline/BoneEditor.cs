@@ -694,6 +694,13 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ImGui.SetTooltip("The ball and the gizmo use the character's axes: up, forward and to the side.");
     }
 
+    /// <summary> What the gizmo on the character waits for, for a layer with no gizmo choice (a look moves its target only). </summary>
+    public void DrawGizmoWaits(MotionLayer layer, int frame, SkeletonDescription skeleton)
+    {
+        if (overlay.GizmoWaits(layer, frame, skeleton) is { } reason)
+            Widgets.HintWrapped(reason);
+    }
+
     /// <summary> Whether the gizmo on the character turns, moves or drags, and what it waits for. </summary>
     private void DrawGizmoChoice(MotionLayer layer, int frame, SkeletonDescription skeleton)
     {

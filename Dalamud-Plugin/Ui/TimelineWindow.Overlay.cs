@@ -174,7 +174,13 @@ public sealed partial class TimelineWindow
         if (posing.PathFrames(loaded, current.Document, frame) is { } path)
             DrawPaths(skeleton, index, layer, path.Frames, path.At, path.Cache, BonePosing.LoopFrames(loaded, current.Document), toClip, viewport);
         DrawOverlayBones(skeleton, layer, frame, animated, primary, hover);
-        DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
+        if (layer is { Kind: MotionLayerKind.LookAt })
+        {
+            DrawLookTarget(loaded, current.Document, skeleton, layer, frame, toClip, viewport);
+            DrawLookGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
+        }
+        else
+            DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
 
         // The mouse reached the gizmo this frame: it takes the click. A dot's tooltip would hide the gizmo's.
         if (hover < 0 || gizmoOver || gizmoTip > 0)
@@ -522,9 +528,11 @@ public sealed partial class TimelineWindow
             reason = "The layer is off. Tick it to pose with the gizmo.";
             return null;
         }
-        // A pin layer's gizmo changes keyed pins' keys only.
+        // A pin layer's gizmo changes keyed pins' keys only; a look's moves its target, whichever bone is selected.
         bool? pinMoves = null;
         if (layer.Kind == MotionLayerKind.Pin && (pinMoves = TimelineWindowViews.PinGizmo(layer, selection.Primary, gizmoMode, out reason)) == null)
+            return null;
+        if (layer.Kind == MotionLayerKind.LookAt && (reason = TimelineWindowViews.LookGizmo(layer)) != null)
             return null;
         if (!LiveShowing)
         {
@@ -538,12 +546,102 @@ public sealed partial class TimelineWindow
         }
         if (pinMoves is { } moves)
             return moves ? ImGuizmoOperation.Translate : ImGuizmoOperation.Rotate;
+        if (layer.Kind == MotionLayerKind.LookAt)
+            return ImGuizmoOperation.Translate;
         // A drag moves the bone; its limb's turns are what it keys.
         if (Drags(layer, skeleton))
             return ImGuizmoOperation.Translate;
         var turn = layer.Components.HasFlag(PoseComponents.Rotation);
         var move = layer.Components.HasFlag(PoseComponents.Position);
         return move && (gizmoMode == GizmoMode.Move || !turn) ? ImGuizmoOperation.Translate : turn ? ImGuizmoOperation.Rotate : null;
+    }
+
+    /// <summary>
+    /// Where a look-at layer looks at <paramref name="frame"/>, in character space: its keys' spot there, else a spot ahead of
+    /// the head as the layers before leave it; null while that is unknown, and for a look that follows a bone.
+    /// </summary>
+    private Vector3? LookSpot(AnimationTimelineSource loaded, TimelineDocument doc, SkeletonDescription skeleton, MotionLayer layer, int frame)
+    {
+        if (layer.Look is not { Follow: null })
+            return null;
+        if (MotionLooks.KeyedTarget(layer, frame, BonePosing.LoopFrames(loaded, doc)) is { } keyed)
+            return keyed;
+        return BoneTree(skeleton).Index.TryGetValue(MotionLooks.KeyBone, out var head) && FramesAt(loaded, doc, layer, frame) is { } frames
+            ? MotionLooks.DefaultTarget(skeleton, head, frames.BeforeModel)
+            : null;
+    }
+
+    /// <summary>
+    /// A look-at layer's target on the character: a dot at its spot, or the followed bone's dot, with a faint line from the head.
+    /// The spot is drawn where it is in character space; the followed bone where the game shows it.
+    /// </summary>
+    private void DrawLookTarget(AnimationTimelineSource loaded, TimelineDocument doc, SkeletonDescription skeleton, MotionLayer layer, int frame,
+        Matrix4x4 toClip, ImGuiViewportPtr viewport)
+    {
+        if (!actorPose.Index.TryGetValue(MotionLooks.KeyBone, out var head) ||
+            !PoseGizmo.Project(actorPose.Positions[head], toClip, viewport.Pos, viewport.Size, out var from))
+            return;
+        var spot = layer.Look?.Follow is { } follow
+            ? actorPose.Index.TryGetValue(follow, out var followed) ? actorPose.Positions[followed] : (Vector3?)null
+            : LookSpot(loaded, doc, skeleton, layer, frame);
+        if (spot is not { } target || !PoseGizmo.Project(target, toClip, viewport.Pos, viewport.Size, out var to))
+            return;
+        var drawList = ImGui.GetWindowDrawList();
+        var colour = TimelineWindowViews.LayerColour(MotionLayerKind.LookAt);
+        drawList.AddLine(from, to, ImGui.GetColorU32(Theme.WithAlpha(colour, .35f)), Theme.Scaled(1.5f));
+        if (layer.Look?.Follow != null)
+            return;
+        var radius = Theme.Scaled(6);
+        drawList.AddCircleFilled(to, radius + Theme.Scaled(1.5f), ImGui.GetColorU32(new Vector4(0, 0, 0, .5f)));
+        drawList.AddCircleFilled(to, radius, ImGui.GetColorU32(Theme.WithAlpha(colour, .9f)));
+    }
+
+    /// <summary>
+    /// The gizmo on a look-at layer's spot, Move only, in the character's axes: each frame of a drag keys the spot moved by
+    /// what the gizmo did since the frame before at the playhead, as one undo step, as a pin key's spot moves.
+    /// </summary>
+    private void DrawLookGizmo(TimelineEditor current, AnimationTimelineSource loaded, SkeletonDescription skeleton, MotionLayer layer, int frame,
+        Matrix4x4 modelView, Matrix4x4 projection, ImGuiViewportPtr viewport)
+    {
+        gizmoHeld = null;
+        gizmoTip = 0;
+        if (GizmoOperation(layer, frame, skeleton, out _) == null || LookSpot(loaded, current.Document, skeleton, layer, frame) is not { } spot)
+        {
+            EndGizmo(true);
+            return;
+        }
+        var matrix = PoseGizmo.Bone(spot, Quaternion.Identity);
+        var before = matrix;
+        var view = modelView;
+        ImGuizmo.SetID(GizmoId);
+        ImGuizmo.BeginFrame();
+        ImGuizmo.SetDrawlist();
+        ImGuizmo.SetRect(viewport.Pos.X, viewport.Pos.Y, viewport.Size.X, viewport.Size.Y);
+        ImGuizmo.SetOrthographic(false);
+        ImGuizmo.AllowAxisFlip(false);
+        var moved = ImGuizmo.Manipulate(ref view, ref projection, ImGuizmoOperation.Translate, ImGuizmoMode.World, ref matrix);
+        var dragging = ImGuizmo.IsUsing();
+        var over = ImGuizmo.IsOver();
+        gizmoOver = over;
+        ImGuizmo.Enable(true);
+        ImGuizmo.AllowAxisFlip(true);
+        ImGuizmo.SetID(NoGizmoId);
+        // The game must not turn its camera with the drag.
+        if (dragging || over)
+            ImGui.SetNextFrameWantCaptureMouse(true);
+        if (dragging && gizmoEditor == null)
+        {
+            current.BeginFieldEdit();
+            gizmoEditor = current;
+        }
+        if (gizmoEditor == null)
+            return;
+        // The spot is where the target is, whatever the layer's weight: it moves with the gizmo as it is.
+        var (_, move) = PoseGizmo.Delta(before, matrix);
+        if (moved && ReferenceEquals(gizmoEditor, current) && move.LengthSquared() > 0)
+            current.Change(MotionEdits.SetLookTarget(current.Document, layer.Key, frame, spot + move));
+        if (!dragging)
+            EndGizmo(false);
     }
 
     /// <summary>Whether the gizmo drags the primary bone in <paramref name="layer"/>: Drag chosen and able to; else a kept Drag acts as Turn.</summary>

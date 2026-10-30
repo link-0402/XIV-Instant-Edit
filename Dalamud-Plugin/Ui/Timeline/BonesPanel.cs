@@ -605,6 +605,14 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.Spacing();
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, false);
+        else if (layer.Kind == MotionLayerKind.LookAt)
+        {
+            LookFields.DrawBones(current, layer, readOnly);
+            Widgets.MutedWrapped(layer.Look?.Follow is { } follow
+                ? $"Follows {AnimationPresentation.BoneName(follow)}."
+                : "Move the target on the character with the gizmo to key it at the playhead.");
+            boneEditor.DrawGizmoWaits(layer, current.Playhead, skeleton);
+        }
         else if (layer.Kind == MotionLayerKind.Symmetry)
         {
             if (posing.Selection.Primary is { } primary && posing.BonesOf(layer, skeleton)?.Changed.Contains(primary) == true)

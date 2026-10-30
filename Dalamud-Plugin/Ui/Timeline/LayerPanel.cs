@@ -104,12 +104,12 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                     // A match or a close loop is anchored to the clip's ends, and a still face has no span to weigh over.
                     if (MotionEdits.TakesWeights(layer) && current.Document.Face is not { Still: true })
                         DrawWeight(current, layer);
-                    // A hand shape turns finger bones only, a root reset the root; a pin holds a spot and a turn, whatever parts are set.
+                    // A hand shape turns finger bones only, a root reset the root; a pin holds a spot and a turn, whatever parts are set, and a look only turns.
                     if (hand != null)
                         hands.DrawFields(current, layer, hand);
                     else if (reset)
                         DrawAxes(current, layer);
-                    else if (layer.Kind != MotionLayerKind.Pin)
+                    else if (layer.Kind is not (MotionLayerKind.Pin or MotionLayerKind.LookAt))
                         DrawComponents(current, layer);
                     if (layer.Kind == MotionLayerKind.Swing)
                         SwingFields.Draw(current, layer);
@@ -117,8 +117,11 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         SwingFields.DrawWindow(current, layer);
                     else if (layer.Kind == MotionLayerKind.Noise)
                         SwingFields.DrawNoise(current, layer);
+                    else if (layer.Kind == MotionLayerKind.LookAt)
+                        LookFields.Draw(current, layer, skeleton);
+                    // A look that follows a bone has no keys to go between.
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                        MotionLayerKind.Smooth or MotionLayerKind.Noise))
+                        MotionLayerKind.Smooth or MotionLayerKind.Noise) && layer.Look?.Follow == null)
                         DrawInterpolation(current, layer);
                 }
             }
@@ -163,6 +166,22 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         }
         else if (layer.Kind == MotionLayerKind.Symmetry)
             boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, true);
+        else if (layer.Kind == MotionLayerKind.LookAt)
+        {
+            LookFields.DrawBones(current, layer, readOnly);
+            if (layer.Look?.Follow == null)
+            {
+                ImGui.Spacing();
+                DrawLayerKeys(current, layer);
+                using (ImRaii.Disabled(readOnly))
+                    DrawSpread(current, layer);
+                if (current.SelectedKey is { } lookKeyFrame && MotionEdits.KeyIndex(layer, lookKeyFrame) is var lookKeyAt and >= 0)
+                {
+                    ImGui.Spacing();
+                    DrawKeyEase(current, layer, layer.Keys[lookKeyAt], readOnly);
+                }
+            }
+        }
         else if (layer.Kind == MotionLayerKind.Pin)
         {
             DrawPins(current, layer, skeleton, loaded, readOnly);
@@ -542,7 +561,8 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         var smooth = layer.Fix?.Kind == MotionFixKind.SmoothJitter;
         TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch
         {
-            MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise => "Strength",
+            MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
+                MotionLayerKind.LookAt => "Strength",
             MotionLayerKind.Amplitude => "Movement",
             MotionLayerKind.Pin => "Pull",
             _ => "Blend",
@@ -565,6 +585,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 MotionLayerKind.Idle => "How much of the borrowed motion applies, over the shares below. Ctrl+click to type.",
                 MotionLayerKind.Swing => "How much of the swing applies. Ctrl+click to type.",
                 MotionLayerKind.Noise => "How much of the wobble applies. Ctrl+click to type.",
+                MotionLayerKind.LookAt => "How far the head turns toward the target. Ctrl+click to type.",
                 MotionLayerKind.Smooth => "How far the bones go to the smoothed motion. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
@@ -857,7 +878,12 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         {
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Hint, layer.Kind == MotionLayerKind.Pin ? "None yet. Pin here adds one." : "None yet. Set a bone's value to add one.");
+            ImGui.TextColored(Theme.Hint, layer.Kind switch
+            {
+                MotionLayerKind.Pin => "None yet. Pin here adds one.",
+                MotionLayerKind.LookAt => "None yet. Move the target with the gizmo.",
+                _ => "None yet. Set a bone's value to add one.",
+            });
             return;
         }
         var picked = current.PickedKeys.Frames;

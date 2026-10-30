@@ -2749,3 +2749,18 @@ The offline skeleton's rest knees and elbows are bent; item 1 checks that the ga
   The row shows only for hand and foot pins.
 - [ ] 5 Hip drag on the seated pose and a head drag: the knees and elbows still bend forward, as before.
 - [ ] 6 Save (replace) and Edit again: the pin's Bend is back and the clip plays the same.
+
+## Look at (pending)
+
+The turn's maths is covered offline (LookAtFixture); these checks are the panel, the overlay and Live.
+
+- [ ] 1 Add a Look at layer over an idle with Live on and paused: a dot shows in front of the face with a faint line
+  from the head. Drag it with the gizmo to one side: the head, some of the neck and a little of the upper back turn
+  toward it, and a key appears at the playhead. Ctrl+Z puts the dot back.
+- [ ] 2 Key another spot later on and play: the head goes from one spot to the next, the way the layer eases.
+- [ ] 3 Move the dot behind the character: the head turns as far as Limit allows, level, never over the top. Lower
+  Limit: the turn gets smaller, without a snap near the limit.
+- [ ] 4 Looks at, pick Right Hand (j_te_r) on an emote that moves the hand: the keys go, the line runs to the hand and
+  the head follows it. Pick Spot again: the gizmo comes back.
+- [ ] 5 Untick Upper back and Neck: only the head turns, and the same angle. The Bones window shows the same pose as Live.
+- [ ] 6 Save and reopen with Edit again: the look is the same. Moving the dot makes no hitch in dalamud.log.

@@ -72,7 +72,7 @@ internal static class MotionLooks
             follow = index.TryGetValue(followed, out var at) ? at : throw MotionEvaluator.Missing(followed);
         if (!index.TryGetValue(KeyBone, out var head))
             return null;
-        if (follow >= 0 && (Chain.Contains(skeleton.Bones[follow].Name) || PinChains.IsBelow(skeleton, follow, head)))
+        if (follow >= 0 && !CanFollow(skeleton, follow, head))
         {
             var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
             throw new InvalidDataException($"{name} follows {AnimationPresentation.BoneName(skeleton.Bones[follow].Name)}, which turns with the head.");
@@ -86,6 +86,10 @@ internal static class MotionLooks
             follow >= 0 && chain.Any(b => PinChains.IsBelow(skeleton, follow, b)));
     }
 
+    /// <summary>Whether a look may follow <paramref name="bone"/>: not one of the chain's, nor one hanging from the head (<paramref name="head"/>), which turn with it.</summary>
+    public static bool CanFollow(SkeletonDescription skeleton, int bone, int head) =>
+        !Chain.Contains(skeleton.Bones[bone].Name) && bone != head && (head < 0 || !PinChains.IsBelow(skeleton, bone, head));
+
     private static int Depth(SkeletonDescription skeleton, int bone)
     {
         var depth = 0;
@@ -98,8 +102,9 @@ internal static class MotionLooks
     public static Vector3 Facing(LookPlan plan, ReadOnlySpan<MotionTransform> model) =>
         Vector3.Normalize(Vector3.Transform(plan.Forward, Quaternion.Normalize(model[plan.Head].Rotation)));
 
-    /// <summary>Where a look with no keys yet starts its target: <see cref="Ahead"/> in front of the head.</summary>
-    public static Vector3 DefaultTarget(LookPlan plan, ReadOnlySpan<MotionTransform> model) => model[plan.Head].Position + Facing(plan, model) * Ahead;
+    /// <summary>Where a look with no keys yet starts its target: <see cref="Ahead"/> in front of the head (<paramref name="head"/>) on a pose's model transforms.</summary>
+    public static Vector3 DefaultTarget(SkeletonDescription skeleton, int head, ReadOnlySpan<MotionTransform> model) =>
+        model[head].Position + Vector3.Normalize(Vector3.Transform(Axes(skeleton, head).Forward, Quaternion.Normalize(model[head].Rotation))) * Ahead;
 
     /// <summary>The spot the layer's keys hold at <paramref name="frame"/>, in character space; null without keys.</summary>
     public static Vector3? KeyedTarget(MotionLayer layer, float frame, float loop = 0) => MotionEvaluator.KeyValue(layer, KeyBone, frame, loop)?.Position;
