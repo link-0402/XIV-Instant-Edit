@@ -103,3 +103,11 @@ interactive checks have not been performed by the implementation agent.
   plugin opens the build window without a stall.
 - Material presets and placeholder textures (Flat normal, Metal) are found in the
   installed plugin: a material made from a preset builds without a missing-file error.
+- (pending) Modded items: in Add from game > Gear and Weapons, items an enabled mod of
+  the player's collection changes have a red title and a "modded" badge. Hovering lists
+  the mods. Turning one of those mods off clears the red a moment later. In a mod window,
+  the mod's own items aren't red.
+- (pending) Free sets: the layers button beside the slot list. Tick Body: every set with
+  a body no mod changes is listed, with its body items, which + adds. Ticking an
+  accessory clears the gear boxes. "Only these free" leaves only sets whose other slots
+  are all modded.

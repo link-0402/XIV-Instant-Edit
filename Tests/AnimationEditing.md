@@ -441,7 +441,7 @@ clip, so nothing in the animation drives them. Offline fixtures cover the list,
 the refusals, and the rewrite of tracks and expected samples. Whether the game's
 physics then takes over an untracked bone is the in-game claim still to verify.
 
-- [ ] Untick hair, skirt, tail or chest bones on the **Bones** tab for an emote that
+- [x] Untick hair, skirt, tail or chest bones on the **Bones** tab for an emote that
   animates them, then Save into a new mod and in place. Confirm those bones follow
   physics again and every other bone animates exactly as before.
   Partly checked (XIV Bridge tests/instant-edit/animations/145, 2026-10-10, Idle pose 3): 29 skirt, chest, hair and
@@ -449,6 +449,11 @@ physics then takes over an untracked bone is the in-game claim still to verify.
   their reference pose), every kept bone matches within 0.56° and 0.7 mm, and in game the other bones move as before
   (2.0° at most, the idle's sway). Not checked: that the bones then follow physics (watch a tail or skirt; hair is
   already driven by physics in game, test 16).
+  (XIV Bridge visual/145s, Release 2026-10-30: saved into a new mod and replayed, the unticked bones aren't frozen. A bone
+  with no track and no physics sits exactly at its reference pose (0.00 deg); the skirt bones sit 0.3-11 deg off it and
+  wander, the chest sits 0.94 deg off it (as it did with its track: physics drives the chest either way), and the tail
+  wanders 0.17-2.1 deg past its anchor. The "chest 0 of 2, tail 1 of 5" of 2026-10-29 came from thresholds sized for a
+  swinging skirt, not from frozen bones.)
 - [ ] Confirm validation passes on spline, interleaved and predictive sources, and
   on an additive clip: a bone without a track must sample at its reference pose.
   A pose-validation failure naming an unticked bone means that assumption is wrong
@@ -582,9 +587,12 @@ Saving:
 - [x] Add lip sync (cfxl_lip_nor1). It plays at its own pace.
   (XIV Bridge tests/instant-edit/animations/162, 2026-10-10: saved with no time control and the range 0..40; in game
   the mouth moves for 38 frames from frame 11 and then rests.)
-- [ ] Add a harvested prop (Toast: model 1962, WeaponTimeline 388 on c0101, 389 on
+- [x] Add a harvested prop (Toast: model 1962, WeaponTimeline 388 on c0101, 389 on
   c0801) and a still prop (Read). The prop appears without a T-pose flash, animates,
   and disappears when it ends.
+  (XIV Bridge visual/163s, Release 2026-10-30, Preview paused on the first pass against the same paused frame without the
+  prop: Toast at 26 changes 7,827 px around the hands, Read at 20 14,991 px, and after Toast's end, at 67, nothing (0 px);
+  two paused captures without props differ by 28 px. No T-pose flash and the animating: by eye on 2026-10-29, above.)
   Partly checked (XIV Bridge tests/instant-edit/animations/163, 2026-10-10): Toast adds the sync effect, model 1962,
   WeaponTimeline 389 on c0801 five frames after the spawn and the hide-then-fade visibility steps; Read adds the sync
   effect and the model; the save holds them. Not checked: seeing the prop (no T-pose flash, animating, gone at the end).
@@ -600,6 +608,10 @@ Saving:
   and lands at 14, while Toast holds summon 0 until 64. Fixed 2026-10-29: the summon is the one free where the prop
   lands (TimelineEdits.LandedSummon; TmbFileFixture.Props). (XIV Bridge 455, 2026-10-29, build with the fix: asked for
   at 66, the prop lands at 14 on summon 1, its animation targets summon 1, and Toast keeps summon 0.)
+- [ ] On a looping emote, add a prop: it starts at frame 1, lasts to the clip's end with no fade-out or hold, and still
+  shows on the second and later loops. Stretch an older prop to the clip's end: its fade-out and hold go. Shorten one
+  whose hold ran to the clip's end: the hold still ends there. (2026-10-30: a prop faded out at the clip's end stayed
+  hidden after the first loop, and stretching moved the hold past the end.)
 - [ ] Import a 44.1 kHz and a 48 kHz wav, a stereo wav, an ogg and an scd. Each plays
   once at full length and pitch; volume 50% is quieter. Import an .avfx whose
   textures sit in a sibling folder; the textures are packaged at their game paths.
@@ -975,7 +987,7 @@ of the model it takes, so the other mod can be off.
   Partly checked (XIV Bridge tests/instant-edit/animations-pending/436, 2026-10-29): the Hanzo phone, the Telephone and
   the Vibrator list their models as props that can be picked. Not checked: a model weighted to body bones shows
   disabled; none of the mods read has a monster or demihuman model weighted to body bones, pick one by hand.
-- [ ] Preview the Hanzo phone and the Telephone on swipe left: both draw with materials, and the log names `gdt`.
+- [x] Preview the Hanzo phone and the Telephone on swipe left: both draw with materials, and the log names `gdt`.
   Partly checked (XIV Bridge tests/instant-edit/animations-pending/437, 2026-10-29): both props show in their summon
   slots and the Preview learns `gdt`. Not checked: that both draw with materials (by eye: the phone case and the pink
   telephone in the paused preview). Rerun 2026-10-29 evening with the stricter draw check (NPropDrawNow): it reads both
@@ -1008,6 +1020,12 @@ of the model it takes, so the other mod can be off.
   decision: which summon or body a prop from a mod gets when Summon 0 is taken.
   Ruled 2026-10-29: a prop from a mod always takes Summon 0; a vanilla prop overlapping it moves to Summon 1; two props
   from mods at the same time are refused with a short reason.
+  (XIV Bridge visual/437s and tools/diagnostics/prop-phone-now, Release 2026-10-30 01:48: the Hanzo phone case on Summon 0
+  of Idle pose 3 draws textured in the Preview, the purple case with its camera light beside the right hand, 1,121 px
+  around the hands against 666 of noise, brightness spread 41; the visible flag is on. With the Telephone refused
+  beside it (one prop from a mod at a time) that half of the item no longer applies. Where it sits in the hand: by eye.
+  The attach code the Preview learns is `fdr` since props from mods moved to w9901; `gdt` was w9001's.)
+  Ticked 2026-10-30.
 - [x] A mod with a colour option (Telephone, Moogle Pink) copies the textures of the option you have on.
   (XIV Bridge tests/instant-edit/animations-pending/436, 2026-10-29: with Moogle Pink on, the copy's diffuse texture is
   the Moogle Pink file, differing from the default option's, and the built copy holds its bytes.)
@@ -1032,10 +1050,20 @@ of the model it takes, so the other mod can be off.
   Ruled 2026-10-29 (accepted as built): a mod prop over a C043 is refused; a drag that would overlap stops at the last
   allowed spot; a vanilla prop moved to Summon 1 stays there when the mod prop goes. Not covered: length changes with
   scaled events and cuts, which move props without the rule.
+  (XIV Bridge animations-pending/437, Release 2026-10-30 01:48: the phone case picked over Toast takes Summon 0 and moves
+  Toast to Summon 1, one undo puts both back, redo, and the Telephone over the phone case is refused with that text; in
+  the Preview paused at 30 both slots hold their models with the visible flag on (tools/diagnostics/prop-phone-now: Toast
+  shows; at that frame Toast's keg sits in front of the phone case). Left: both on screen at a frame where neither hides
+  the other, by eye.)
+  Found by 437 (2026-10-30): pausing the Preview before the props' fade-in (C094 at 9 to 16) and seeking past it leaves
+  them hidden, and a pause before a hide at 64 seeking to 67 left Toast showing (163s): a seek doesn't apply the visibility
+  events it skips. See the XIV Bridge handoff.
 - [x] The prop panel lists "Missing: <path>" for a texture the source lacks.
   (XIV Bridge tests/instant-edit/animations-pending/436, 2026-10-29: the phone case's copy lists
   chara/weapon/w9001/obj/body/b9000/texture/v01_unknown_d.tex as missing, and only it.)
-- [ ] Save, turn the source mod off: the prop still draws.
+- [x] Save, turn the source mod off: the prop still draws.
+  (XIV Bridge visual/437s, Release 2026-10-30 01:48: saved into a new mod with the source mod off, the replayed idle draws
+  the phone case textured, 980 px around the hands against 577 of noise, brightness spread 38.)
   Partly checked (XIV Bridge tests/instant-edit/animations-pending/437, 2026-10-29): with the source mods off the
   private model resolves into the new mod. Not checked: that the prop still draws (by eye: play the saved idle with the
   source mods off). In game 2026-10-29: fails, the saved props draw nothing at all (see the visual checks doc). Same
@@ -1059,11 +1087,17 @@ of the model it takes, so the other mod can be off.
   b9893 and b9894, each idle draws only its own bodies (the telephone too) and each resolves into its own mod. Not
   checked: that they are visible (the character hides weapons, which hides summons). Not checked in game 2026-10-29:
   props picked from mods draw nothing, even with "Display weapons when sheathed" on.
+  (XIV Bridge animations-pending/475, Release 2026-10-30 01:48, the weapon shown through Glamourer's temporary state: each
+  idle played on the GPose actor shows its own props, not hidden, model, materials and textures loaded, and none of the
+  other mod's. On screen: by eye.)
 - [ ] In place, a prop on a second animation of the same mod gets its own body and stays when the first's option is off.
   Partly checked (XIV Bridge tests/instant-edit/animations-pending/446, 2026-10-29): the second gets b9894 (the first
   b9893), each is mapped only in its own option, and with option A off the second still resolves into the mod and is
   drawn. Not checked: that it is visible (the character hides weapons). Not checked in game 2026-10-29: props picked
   from mods draw nothing, even with "Display weapons when sheathed" on.
+  (XIV Bridge animations-pending/476, Release 2026-10-30 01:48, the weapon shown through Glamourer: with option A off,
+  Idle pose 2's phone case (b9894) resolves into the mod and shows on the GPose actor, not hidden, its files loaded. On
+  screen: by eye.)
 
 ## Expressions (pending)
 
@@ -1111,10 +1145,13 @@ face once at its own length.
   without them**: that bone stops moving.
   (XIV Bridge tests/instant-edit/animations/201, 2026-10-10, after the fixes that send the matched clip and bake
   deprecated-additive faces the way the game applies them.)
-- [ ] Send an expression to Blender with the pen.
+- [x] Send an expression to Blender with the pen.
   Partly checked (XIV Bridge animations-pending/481, Release 2026-10-29): Smile sent with its row's pen to a headless
   Blender: the send dialog takes it and Blender keys it onto the armature. Not checked: that the motion in Blender is
   the face's (the script's own decode of the face PAP failed: "Invalid PAP header or size."); compare in Blender.
+  (XIV Bridge animations-pending/481, Release 2026-10-30: the face sampled as the pen samples it (AnimationClipExport) and
+  Blender's action read back agree on all 80 bones at every sample, 60 of them posed off their rest, 0.00 mm and 0.00 deg;
+  Smile is a held pose, 2 frames.)
 - [x] Open an expression's timeline. The header shows a face, the length can't change
   and Save writes only the TMB. Preview in GPose plays the expression on the face
   only: the body keeps its pose. Stop returns the face to neutral.
@@ -1811,15 +1848,35 @@ Blender add-on the plugin accepts, with the listener running.
   says "Blender's motion matches the clip's. Nothing changed." Then add a bone layer, send it again and
   read it back without editing: the line names the action, the layer is gone, the length is unchanged
   and Preview looks the same. Skirt and hair still swing.
-- [ ] 2 Turn an arm in Blender (keyed over the clip) and read it back: Live and Preview show the turn.
+  Partly checked (XIV Bridge animations/261 and 262, Release 2026-10-30): the motion sent to a headless Blender comes back
+  within the unchanged-bone tolerance, builds nothing, and the line says nothing changed. Not checked: the bone-layer half
+  (send with a layer, read back: the layer gone, the length kept, Preview the same) and skirt and hair swinging (by eye).
+  (XIV Bridge animations-pending/365, Release 2026-10-30 01:48: with a 15 deg neck layer on Idle pose 3, the motion sent to
+  a headless Blender and read back unedited builds a motion from Blender; the line reads "Motion from Blender: "Bridge layer
+  trip" on "Skeleton", 106 bones, 70 frames.", the layer is gone, the length stays 70 frames, and the timeline plays what it
+  played with the layer (0.52 deg, the neck within 0.07 deg); Ctrl+Z gives the layer back. Left: the Preview's look and skirt
+  and hair swinging, by eye.)
+- [x] 2 Turn an arm in Blender (keyed over the clip) and read it back: Live and Preview show the turn.
+  Partly checked (XIV Bridge animations/261, Release 2026-10-30): j_ude_a_l turned 25 deg in Blender comes back turned 25 deg
+  throughout, every other bone keeps the clip's motion, and Live shows the turn on the GPose actor. Not checked: Preview.
+  (XIV Bridge animations-pending/366, Release 2026-10-30 01:48, the same 25 deg turn built without Blender as 260 does: in
+  Preview the GPose actor's j_ude_a_l is 25.1 deg off a Preview of the clip's own motion; after Ctrl+Z two Previews of the
+  clip's own differ by 0.2 deg.)
 - [x] 3 Extend the scene End by 30 frames, key a pose there and read it back, once with Scale events
   off and once on. Sounds and faces stay where they were, or move with the new length.
   (XIV Bridge tests/instant-edit/animations-pending/300, 2026-10-29: a scene 30 frames longer than the clip builds a
   110-frame replacement (the clip has 80); j_ude_a_l ends turned 25 deg from the clip's last pose and follows the clip
   until its old end; with Scale events off sounds and faces keep their frames, on they move with the new length; Undo
   gives the clip its own motion back.)
-- [ ] 4 Ctrl+Z and "Use the clip's motion" both go back to the animation's own motion.
-- [ ] 5 Save to a new mod and in place; the saved animation plays the Blender motion. Undo the save.
+- [x] 4 Ctrl+Z and "Use the clip's motion" both go back to the animation's own motion.
+  (XIV Bridge animations/261 and 262, Release 2026-10-30: "Use the clip's motion" and Ctrl+Z each take the motion from
+  Blender out and the clip plays its own motion again, Live staying on.)
+- [x] 5 Save to a new mod and in place; the saved animation plays the Blender motion. Undo the save.
+  Partly checked (XIV Bridge animations/260, Release 2026-10-30): saved into a new mod, the clip plays the motion from
+  Blender and reads back with nothing pending. Not checked: the in-place save and undoing the save.
+  (XIV Bridge animations-pending/364, Release 2026-10-30 01:48: a second motion from Blender saved in place into the test mod
+  the first save made plays it (the arm turned 35.0-35.2 deg) and reads back with nothing pending; Undo last save puts the
+  first save's file back byte for byte and the clip plays the first motion again (20.0 deg).)
 - [x] 6 Add a bone layer on the Blender motion, save, then Edit again: the layer comes back on the
   Blender motion, not stacked on the saved file.
   (XIV Bridge tests/instant-edit/animations-pending/301, 2026-10-29: Edit again is offered and brings the layer back on
@@ -1830,8 +1887,10 @@ Blender add-on the plugin accepts, with the listener running.
   (XIV Bridge tests/instant-edit/animations-pending/302, 2026-10-29: Blender closed, the armature in Rest Position and
   an armature with no animation each end the read with a line that says why (108, 127 and 136 characters), and the
   timeline keeps the clip's motion. The line now shows only Blender's cause and remedy; it was 211-220 characters.)
-- [ ] 8 Press Motion from Blender, then Cancel on the progress line: it says "Reading stopped." and the
+- [x] 8 Press Motion from Blender, then Cancel on the progress line: it says "Reading stopped." and the
   timeline is unchanged.
+  (XIV Bridge animations/262, Release 2026-10-30: with Blender holding the read up, Cancel is drawn, ends the read, the
+  line says it stopped and nothing changed.)
 - [x] 9 With Key bone scale off, send, scale a bone in Blender (keyed) and read it back: the line under
   the toolbar ends with "Its scale was left out: Key bone scale was off when it was sent."
   (XIV Bridge tests/instant-edit/animations-pending/303, 2026-10-29: the line ends with that text; no other bone
@@ -2025,6 +2084,29 @@ are and the legs, arms and back follow. Spec: docs/superpowers/specs/2026-10-27-
 - [x] 7 Save (replace) and Edit again: the clip plays the posed frame the same, and the keys are back.
   (XIV Bridge 355, 2026-10-28, into a test mod: the saved file within 5 mm of the layers; the keys come back.)
 
+## Head drag (pending)
+
+Drag mode on the head (j_kao) moves it with the body following: the back leans whole about its lowest
+joint (j_sebo_a) toward the gizmo, the hips move by what the lean can't cover, and the head keeps
+facing the way it did. The other selected bones, or both feet, hold where they are; the arms ride
+with the body. On a layer that only turns bones the head drags as before (the neck bends). Decided
+2026-10-30 (user): feet only by default, the back leans at its length with the hips taking the rest,
+the head keeps its facing; the back stays straight (an even bend shortens it and lifts planted feet).
+
+- [ ] 1 A standing dance frame, an offset layer, select the head, Gizmo: Drag. In GPose with Live on and
+  paused, drag the head forward and down along an arc: the torso leans over from the waist, the feet
+  stay put, the head keeps looking ahead. The layer keys the head, j_sebo_a (turn and position), the
+  hips (position) and the legs.
+- [ ] 2 Drag the head straight down 20 cm: the character crouches, knees bending, back upright, feet
+  planted. Back up: it stands again.
+- [ ] 3 Drag the head straight up past the legs' reach: the legs straighten smoothly and the feet lift,
+  nothing snaps; back down, the feet are back on the floor.
+- [ ] 4 Select the left hand, then Ctrl+click the head (the hint names the hand): drag the head
+  forward: the hand holds, the arm and clavicle bend; the feet now ride with the body.
+- [ ] 5 The layer's amount at 50 %: the head still lands under the gizmo and the feet still hold.
+- [ ] 6 A pose layer with Position off: Drag on the head bends the neck as before, with the old tooltip.
+- [ ] 7 Undo once after a drag: the whole drag comes back in one step.
+
 ## Fix layer (pending)
 
 Fix layers repair the motion: Match startup to loop lands a startup's end on the loop frame the game shows
@@ -2151,10 +2233,16 @@ docs/superpowers/specs/2026-10-27-close-loop-fix-design.md.
 - [x] 3 Pin both feet near the seam (Pin feet) and set Blend over to 8: the planted feet don't slide visibly at the
   seam. The layer panel's hint warns that it may move pinned bones.
   (XIV Bridge 362, 2026-10-28: the feet travel 0.0 mm more over the seam; in Live at most 2.6 mm between frames.)
-- [ ] 4 Open [yllisne] Angel Dust - smoking animation pack's idle (common/9, j_pose02_loop), whose first frame alone
+- [x] 4 Open [yllisne] Angel Dust - smoking animation pack's idle (common/9, j_pose02_loop), whose first frame alone
   turns the legs up to 6 deg. Add > Close loop at each Place, then Smooth jitter alone: the legs no longer twitch at
   the seam, and the tail still closes. (Offline on the decoded clip, 2026-10-30: the legs' largest seam step 6.15 to
   0.04 deg with either fix, where Close loop used to swing them 14.6 deg; no other bone changed.)
+  (XIV Bridge animations-pending/363, Release 2026-10-30, the pack's own common/9 file as Ground sit pose 2 in a test mod,
+  each bone's seam step over 1.5x its typical step: the legs 6.15 deg plain; Close loop Before 0.15, Centered 0.08,
+  After 0.00, Smooth jitter alone 0.00; no other bone's seam worse; the tail's seam, 10.6 deg plain, closes to 1.3, 0.8
+  and 1.0 with Close loop (Smooth jitter leaves it, 10.7). In Live the twitching leg's largest step is 2.9 deg either way
+  at 60 fps. The legs at the seam by eye: left.) Note: the pack itself now maps the game path to an in-place save
+  (common/9/j_pose02_loop.iefcc3fe77.pap) whose legs are already 0.00 deg at the seam.
 
 ## Animations from scratch (pending)
 
@@ -2289,10 +2377,12 @@ offline in MotionEditsFixture (KeyPicks); these checks are the canvas, the panel
   play twice as fast in Preview, the first key stays put, and the field edit is one undo step. A number
   that would put two keys on one frame shows a reason in the toolbar and changes nothing.
   (XIV Bridge 392, 2026-10-28: "3 picked · Spread over 20"; half keeps the first key, one undo step.)
-- [ ] 7 Ctrl+C, move the playhead, Ctrl+V: the keys are pasted from the playhead on and picked. Paste into
+- [x] 7 Ctrl+C, move the playhead, Ctrl+V: the keys are pasted from the playhead on and picked. Paste into
   another animation's pose layer: they carry over. Into an offset layer: the toolbar says they came from a
   Pose layer. After copying an event, Ctrl+V pastes the event again, not the keys.
   Partly checked (XIV Bridge 392, 2026-10-29): all but the event, which was skipped: Idle pose 5 has no editable event.
+  (XIV Bridge 392, Release 2026-10-30, with a sound added at 12 to copy: copying it drops the copied keys and Ctrl+V pastes
+  the event again, not the keys.)
 - [x] 8 On a pin layer with a keyed pin, pick two of its keys and drag them: the pins move in time.
   (XIV Bridge 393, 2026-10-28.)
 

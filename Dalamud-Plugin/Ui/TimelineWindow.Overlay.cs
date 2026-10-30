@@ -44,8 +44,11 @@ public sealed partial class TimelineWindow
     private MotionTransform[]? dragFrom;
     // The limb a Drag bends, found once per drag.
     private (PinChain Chain, Vector3 RestNormal)? dragLimb;
-    // What a Drag on the hips holds where it is, found once per drag.
+    // What a Drag on the hips or the head holds where it is, found once per drag.
     private ImmutableArray<HipAnchor>? dragAnchors;
+    // The back a Drag on the head leans, found once per drag, and the hips' move the drag's last frame keyed.
+    private PinChain? dragBack;
+    private Vector3 dragHipsMove;
     // Whether the mouse was over the gizmo's rings or handles last frame: then the gizmo takes the click, not a dot.
     private bool gizmoOver;
     // Frames left of the "barely applies" tooltip; it's begun on each of them.
@@ -282,7 +285,8 @@ public sealed partial class TimelineWindow
     /// moves every bone the edit changes (see <see cref="PoseEdits.Turned"/>) by what the gizmo did since
     /// the frame before, in character space; a Drag instead bends the limb above the primary bone to follow
     /// (<see cref="PoseEdits.Reach"/>), or on the hips moves them and bends the body to hold the anchors
-    /// (<see cref="PoseEdits.DragHips"/>). While the mouse is over its rings or handles it takes the
+    /// (<see cref="PoseEdits.DragHips"/>), and on the head leans the back to it and moves the hips by the rest
+    /// (<see cref="PoseEdits.DragHead"/>). While the mouse is over its rings or handles it takes the
     /// click, and the dots under it don't (<see cref="gizmoOver"/>); a click elsewhere goes to a dot.
     /// </summary>
     private void DrawGizmo(TimelineEditor current, AnimationTimelineSource loaded, SkeletonDescription skeleton, MotionLayer? layer, int frame,
@@ -351,6 +355,8 @@ public sealed partial class TimelineWindow
             dragFrom = null;
             dragLimb = null;
             dragAnchors = null;
+            dragBack = null;
+            dragHipsMove = Vector3.Zero;
         }
         if (gizmoEditor == null)
             return;
@@ -382,6 +388,28 @@ public sealed partial class TimelineWindow
                                 moving.Add(new PoseTarget(name, value, PoseEdits.Moved(edited, name, frame)));
                         }
                         current.Change(current.WithReach(PoseEdits.Move(changed, layer.Key, frame, moving, follow.Move, frames.Space, offset,
+                            name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null)));
+                    }
+                    else if (TimelineWindowViews.HeadDrag(layer, bone, skeleton) && (dragBack ??= HeadSolver.Back(skeleton)) is { } back)
+                    {
+                        // The head: the back leans to it and the hips move by what the lean can't cover; their keys and the back base's then move as Move does.
+                        dragAnchors ??= HeadSolver.Anchors(skeleton, selection.Bones);
+                        var loop = BonePosing.LoopFrames(loaded, current.Document);
+                        var (changed, hipsMove) = PoseEdits.DragHead(current.Document, layer, frame, skeleton, frames.Before, frames.Through, dragFrom,
+                            from + move, back, dragAnchors.Value.AsSpan(), weight, loop);
+                        var offset = layer.Kind == MotionLayerKind.Offset;
+                        var under = offset ? null : frames.Before;
+                        var (index, _) = BoneTree(skeleton);
+                        var moving = new List<PoseTarget>();
+                        string[] carriers = HipSolver.Carried(skeleton) is >= 0 and var carried ? [PinChains.Hips, skeleton.Bones[carried].Name] : [PinChains.Hips];
+                        if (MotionEdits.Find(changed, layer.Key) is { } edited)
+                            foreach (var carrier in carriers)
+                                if (PoseEdits.Value(edited, carrier, frame, offset ? null : frames.Before[index[carrier]], loop) is { } value)
+                                    moving.Add(new PoseTarget(carrier, value, PoseEdits.Moved(edited, carrier, frame)));
+                        // The hips' move since the frame before, followed at the layer's weight as the gizmo's own move is.
+                        var step = (hipsMove - dragHipsMove) / weight;
+                        dragHipsMove = hipsMove;
+                        current.Change(current.WithReach(PoseEdits.Move(changed, layer.Key, frame, moving, step, frames.Space, offset,
                             name => under != null && index.TryGetValue(name, out var b) ? under[b].Position : null)));
                     }
                     else

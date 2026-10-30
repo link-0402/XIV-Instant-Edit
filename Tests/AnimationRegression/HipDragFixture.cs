@@ -349,7 +349,7 @@ internal static class HipDragFixture
         ClavicleL = 16, UpperArmL = 17, ForearmL = 18, HandL = 19, TailA = 20, TailB = 21, TailC = 22, TailD = 23,
         ClavicleR = 24, UpperArmR = 25, ForearmR = 26, HandR = 27;
 
-    private static SkeletonDescription Body() => new("body", "body-fingerprint",
+    internal static SkeletonDescription Body() => new("body", "body-fingerprint",
     [
         new("n_root", -1, 0, T(Vector3.Zero)),
         new("n_hara", Root, 0, T(new Vector3(0, 1, 0))),

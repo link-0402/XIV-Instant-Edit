@@ -233,6 +233,7 @@ try
     Scenarios.Run(() => ModCleanUpScenarios.RunDuplicates(testRoot));
     Scenarios.Run(() => LibraryFilterScenarios.Run(testRoot));
     Scenarios.Run(() => ModLibraryScenarios.Run(testRoot));
+    Scenarios.Run(FreeSetScenarios.Run);
     Scenarios.Run(() => ModBuildScenarios.Run(testRoot));
     Scenarios.Run(() => AlphaNormalScenarios.Run(testRoot));
     Scenarios.Run(() => DiffuseNormalScenarios.Run(testRoot));

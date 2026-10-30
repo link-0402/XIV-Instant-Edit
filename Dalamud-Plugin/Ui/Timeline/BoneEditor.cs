@@ -651,11 +651,15 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(dragHint ?? (posing.Selection.Primary == PinChains.Hips
                 ? "The gizmo drags the hips. The feet and hands hold where they are; the legs, arms and back follow."
-                : "The gizmo drags the bone; the limb above bends to follow."));
+                : TimelineWindowViews.HeadDrag(layer, posing.Selection.Primary, skeleton)
+                    ? "The gizmo drags the head. The feet hold where they are; the back leans and the hips follow."
+                    : "The gizmo drags the bone; the limb above bends to follow."));
         if (overlay.GizmoWaits(layer, frame, skeleton) is { } reason)
             Widgets.HintWrapped(reason);
         else if (drag && posing.Selection.Primary == PinChains.Hips)
             Widgets.HintWrapped(TimelineWindowViews.HipDragHint(skeleton, posing.Selection.Bones));
+        else if (drag && TimelineWindowViews.HeadDrag(layer, posing.Selection.Primary, skeleton))
+            Widgets.HintWrapped(TimelineWindowViews.HeadDragHint(skeleton, posing.Selection.Bones));
     }
 
     /// <summary>The rotation of the game camera's view, for the ball; null without a camera.</summary>

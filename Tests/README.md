@@ -113,7 +113,8 @@ updates the distribution archives or extension repository index.
   throwaway profile: create the folder first and point `BLENDER_USER_RESOURCES`
   at it, since Blender falls back to your real preferences when that folder
   doesn't exist yet. The Mod Browser's scenarios are named by feature: `ModLibrary`,
-  `ModBuild`, `ModEditing`, `ModResource`, `SimsImport`, `ModCheck` and `ModCleanUp`.
+  `ModBuild`, `ModEditing`, `ModResource`, `SimsImport`, `ModCheck`, `ModCleanUp` and
+  `FreeSet` (modded items and the free set finder).
 - `BlenderStatusRegression`: grouped connection states and bridge response,
   import handoff, diagnostic behavior, cache synchronization, and texture-session
   regressions in `TextureEditScenarios.cs`. Texture tests exercise the production

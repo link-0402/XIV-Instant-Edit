@@ -170,7 +170,8 @@ internal static class TimelineEditorFixture
               Event(started, "x").Start == 50 && started.History.UndoCount == 1,
             "typing a prop's start moves every part from where the edit began, as one step");
 
-        // Ruling R16: no hold after a prop that lasts to the clip's end, so the Add isn't pulled back for it.
+        // Ruling R16: no fade-out or hold after a prop that lasts to the clip's end, so the Add isn't pulled back for it and a
+        // looping clip doesn't hide it (2026-10-30).
         TimelineEvent[] AddProp(int start)
         {
             var adding = Editor(Doc(100, Ev("x", TimelineLane.Sound, 50)));
@@ -178,12 +179,13 @@ internal static class TimelineEditorFixture
             return [.. adding.Document.Events.Where(e => e.Magic != "C063")];
         }
         var ending = AddProp(40);
-        check(ending.Single(e => e.Magic == "C198").Start == 40 && ending.All(e => e.Start < 100) &&
-              !ending.Any(e => e.Magic == "C094" && e.Values["StartVisibility"] == 0 && e.Values["EndVisibility"] == 0 && e.Start >= 95),
-            "a prop added to end with the clip lands where it was added, without a hold past the end");
+        static bool FadesOut(TimelineEvent e) => e.Magic == "C094" && e.Values["StartVisibility"] == 1 && e.Values["EndVisibility"] == 0;
+        check(ending.Single(e => e.Magic == "C198").Start == 40 && ending.All(e => e.Start < 100) && !ending.Any(FadesOut) &&
+              ending.Count(e => e.Magic == "C094") == 2,
+            "a prop added to end with the clip lands where it was added, with no fade-out or hold");
         var past = AddProp(50);
-        check(past.Single(e => e.Magic == "C198").Start == 44 && past.Max(e => e.Start) == 99 && past.Count(e => e.Magic == "C094") == 3,
-            "a prop added to outlast the clip has no hold; its fade-out, past the end, still pulls the Add back to start by the end");
+        check(past.Single(e => e.Magic == "C198").Start == 50 && past.Count(e => e.Magic == "C094") == 2 && !past.Any(FadesOut),
+            "a prop added to outlast the clip lands where it was added, keeping only its opening hide and fade-in");
 
         // A prop place is an edit like any other: it lands, undoes in one step and Reset takes it off, on a C043 too.
         var place = new TimelinePropPlace(0, false, null, new Vector3(0, .05f, 0), Vector3.Zero, 1);

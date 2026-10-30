@@ -318,7 +318,22 @@ public sealed class PenumbraIpcService : IDisposable
     }
 
     private Penumbra.Api.IpcSubscribers.GetAllModSettings? _getAllModSettings;
+    private Penumbra.Api.IpcSubscribers.GetChangedItemsForCollection? _getCollectionItems;
     private Penumbra.Api.IpcSubscribers.GetChangedItemAdapterList? _getChangedItemList;
+
+    /// <summary>
+    /// The names of the items a collection changes: what its enabled mods' active options change.
+    /// Null when Penumbra cannot say. May be called off the framework thread.
+    /// </summary>
+    public IReadOnlyCollection<string>? GetChangedItemsForCollection(Guid collection)
+    {
+        try
+        {
+            _getCollectionItems ??= new Penumbra.Api.IpcSubscribers.GetChangedItemsForCollection(_pi);
+            return _getCollectionItems.Invoke(collection)?.Keys.ToArray();
+        }
+        catch (Exception ex) { _log.Debug(ex, "[Studio] GetChangedItemsForCollection failed"); return null; }
+    }
     private Penumbra.Api.IpcSubscribers.OpenMainWindow? _openMainWindow;
 
     /// <summary>

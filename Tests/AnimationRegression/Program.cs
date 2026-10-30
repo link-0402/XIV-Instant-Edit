@@ -40,6 +40,7 @@ Scenarios.Run(() => BoneMapFixture.Run(Check));
 Scenarios.Run(() => SymmetryLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => PinLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => HipDragFixture.Run(Check, Reject));
+Scenarios.Run(() => HeadDragFixture.Run(Check, Reject));
 Scenarios.Run(() => FixLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => SwingLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => SmoothMotionFixture.Run(Check, Reject));

@@ -75,12 +75,20 @@ internal sealed class ModLibrary : IDisposable
         // Settings change often (every slider): the scans only count them, so this runs on Penumbra's thread.
         Scans = new LibraryScans(() => ipc.GetCollections(), ipc.GetAllModSettings, ChangedItemKinds,
             cacheFile: () => Path.Combine(_host.CacheRoot, LibraryScanCache.FileName));
-        _onSetting = _ => Scans.InvalidateUsage();
+        Occupied = new OccupiedItems(ipc.GetChangedItemsForCollection, ipc.GetAllModSettings, AllChangedItemKinds, ipc.GetModList);
+        _onSetting = _ =>
+        {
+            Scans.InvalidateUsage();
+            Occupied.Invalidate();
+        };
         ipc.ModSettingChanged += _onSetting;
     }
 
     /// <summary>The library filters' data: mods enabled nowhere or in the player's collection, duplicates, what each mod changes, sizes.</summary>
     public LibraryScans Scans { get; }
+
+    /// <summary>The items the player's collection already changes, and by which mods, for the item browser.</summary>
+    public OccupiedItems Occupied { get; }
 
     private static readonly TimeSpan CollectionEvery = TimeSpan.FromSeconds(2);
     private DateTime _nextCollection;
@@ -104,7 +112,14 @@ internal sealed class ModLibrary : IDisposable
     /// <summary>A mod's changed items; null when Penumbra said nothing, which the scans tell apart from a mod with none.</summary>
     private IReadOnlyList<(string, ChangeKind)>? ChangedItemKinds(string folderName)
     {
-        IReadOnlyDictionary<string, IReadOnlyList<(string Name, ChangeKind Kind)>>? kinds;
+        if (AllChangedItemKinds() is not { } kinds)
+            return null;
+        return kinds.TryGetValue(folderName, out var items) ? items : Array.Empty<(string, ChangeKind)>();
+    }
+
+    /// <summary>Every mod's changed items by folder name, asked of Penumbra once until a mod changes; null when Penumbra said nothing.</summary>
+    private IReadOnlyDictionary<string, IReadOnlyList<(string Name, ChangeKind Kind)>>? AllChangedItemKinds()
+    {
         lock (_kindsGate)
         {
             // A failed ask is tried again after a few seconds, not once for every mod of the scan.
@@ -114,11 +129,8 @@ internal sealed class ModLibrary : IDisposable
                 if (_kinds == null)
                     _kindsRetry = DateTime.UtcNow + KindsRetry;
             }
-            kinds = _kinds;
+            return _kinds;
         }
-        if (kinds == null)
-            return null;
-        return kinds.TryGetValue(folderName, out var items) ? items : Array.Empty<(string, ChangeKind)>();
     }
 
     public void Dispose()
@@ -317,6 +329,7 @@ internal sealed class ModLibrary : IDisposable
         _changedItems.Remove(folderName);
         Scans.Invalidate(folderName);
         Scans.InvalidateUsage();
+        Occupied.Invalidate();
     }
 
     // ─────────────────────────────────────────────────────────────────────────

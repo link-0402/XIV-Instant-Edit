@@ -98,10 +98,15 @@ internal static partial class TmbFileFixture
         var doc = TimelineConvert.Read(TmbFile.Parse(sp50));
         TimelineEvent At(TimelineDocument d, short id) => TimelineEdits.Find(d, "t" + id)!;
 
-        var longer = TimelineEdits.ResizeGroup(doc, "t19", false, 30);
-        check(At(longer, 19).Duration == 111 && At(longer, 15) is { Start: 102, Duration: 9 } && At(longer, 16) is { Start: 111, Duration: 5 } &&
+        var longer = TimelineEdits.ResizeGroup(doc, "t19", false, 8);
+        check(At(longer, 19).Duration == 89 && At(longer, 15) is { Start: 80, Duration: 9 } && At(longer, 16) is { Start: 89, Duration: 5 } &&
               At(longer, 17).Start == 5 && At(longer, 12).Start == 0 && At(longer, 13) is { Start: 0, Duration: 5 } && At(longer, 14) is { Start: 5, Duration: 14 },
             "a longer prop keeps its fade-out at its end and the hold after it; the start parts stay");
+        // 2026-10-30: a prop faded out at the clip's end stayed hidden once the clip looped.
+        var whole = TimelineEdits.ResizeGroup(doc, "t19", false, 30);
+        check(At(whole, 19).Duration == 111 && TimelineEdits.Find(whole, "t15") == null && TimelineEdits.Find(whole, "t16") == null &&
+              At(whole, 13) is { Start: 0, Duration: 5 } && At(whole, 14) is { Start: 5, Duration: 14 } && At(whole, 17).Start == 5,
+            "a prop made to last to the clip's end loses its fade-out and hold; the start parts stay");
         var shortest = TimelineEdits.ResizeGroup(doc, "t19", false, -80);
         check(At(shortest, 19).Duration == 1 && At(shortest, 15) is { Start: 0, Duration: 1 } && At(shortest, 16) is { Start: 1, Duration: 5 } &&
               At(shortest, 17).Start == 5 && At(shortest, 14) is { Start: 5, Duration: 14 },
@@ -119,9 +124,9 @@ internal static partial class TmbFileFixture
         var shortSummon = shortProp.Events.Single(e => e.Magic == "C198").Key;
         var shortLonger = TimelineEdits.ResizeGroup(shortProp, shortSummon, false, 20);
         check(shortLonger.Events.Any(e => e.Magic == "C094" && e.Start == 27 && e.Duration == 5 && e.Values["StartVisibility"] == 1) &&
-              shortLonger.Events.Any(e => e.Magic == "C094" && e.Start == 32 && e.Duration == 82 && e.Values["StartVisibility"] == 0 && e.Values["EndVisibility"] == 0) &&
+              shortLonger.Events.Any(e => e.Magic == "C094" && e.Start == 32 && e.Duration == 62 && e.Values["StartVisibility"] == 0 && e.Values["EndVisibility"] == 0) &&
               shortLonger.Events.Single(e => e.Magic == "C031").Start == 5,
-            "a short added prop's fade-out follows its end though it starts in the prop's first frames");
+            "a short added prop's fade-out follows its end though it starts in the prop's first frames; its hold still ends with the clip");
         var later = TimelineEdits.ResizeGroup(doc, "t19", true, 10);
         check(At(later, 19) is { Start: 10, Duration: 81 } && new short[] { 12, 13, 14, 15, 16, 17 }.All(id => At(later, id).Start == At(doc, id).Start + 10) &&
               At(later, 20).Start == 0 && At(later, 15).Duration == 9,
@@ -133,8 +138,8 @@ internal static partial class TmbFileFixture
         var saved = TimelineConvert.Apply(sp50, longer);
         var reread = TimelineConvert.Read(TmbFile.Parse(saved));
         // A rewrite numbers entries again, so the group is named after the summon's new id.
-        check(reread.Events.Single(e => e.Magic == "C198") is { Duration: 111, Group: { } regrouped } && reread.Events.Count(e => e.Group == regrouped) == 7 &&
-              reread.Events.Single(e => e.Magic == "C094" && e.Start == 102).Duration == 9,
+        check(reread.Events.Single(e => e.Magic == "C198") is { Duration: 89, Group: { } regrouped } && reread.Events.Count(e => e.Group == regrouped) == 7 &&
+              reread.Events.Single(e => e.Magic == "C094" && e.Start == 80).Duration == 9,
             "a resized prop saves, and reads back as one group");
 
         // Review Focus 3: an animation a frame after the spawn still belongs, and keeps its frame.
@@ -145,9 +150,9 @@ internal static partial class TmbFileFixture
 
         var toast = TimelineConvert.Read(TmbFile.Parse(Toast()));
         var shorter = TimelineEdits.ResizeGroup(toast, "t20", false, -100);
-        check(At(shorter, 20) is { Start: 60, Duration: 25 } && At(shorter, 17) is { Start: 78, Duration: 5 } && At(shorter, 18) is { Start: 83, Duration: 17 } &&
+        check(At(shorter, 20) is { Start: 60, Duration: 25 } && At(shorter, 17) is { Start: 78, Duration: 5 } && At(shorter, 18) is { Start: 83, Duration: 117 } &&
               At(shorter, 14).Start == 3 && At(shorter, 19) is { Start: 0, Duration: 60 } && At(shorter, 16).Start == 5,
-            "Toast shortened keeps its animation at frame 3, the hand-off summon as it was and the fade-out at the new end");
+            "Toast shortened keeps its animation at frame 3, the hand-off summon as it was, the fade-out at the new end and its hold to the clip's end");
 
         var sp54 = Sp54();
         var chicken = TimelineConvert.Read(TmbFile.Parse(sp54));
@@ -222,11 +227,11 @@ internal static partial class TmbFileFixture
         check(prop.Any(e => Fade(e, 55, 5, 1, 0)) && prop.Any(e => Fade(e, 60, 140, 0, 0)) && prop.Select(e => e.Group).Distinct().Count() == 1,
             "an added prop fades out over its last 5 frames and stays hidden to the clip's end");
         var still = TimelineTemplates.Create(new(TimelineAddKind.Prop, 150, "", 60, Prop: new TimelinePropModel(1961, 1, 1, null), ClipLength: 200));
-        check(still.Any(e => Fade(e, 205, 5, 1, 0)) && !still.Any(e => e.Magic == "C094" && e.Start >= 210),
-            "a still prop fades out too, and gets no hold when it lasts past the clip");
+        check(!still.Any(e => e.Magic == "C094"), "a still prop that lasts past the clip gets no fade-out or hold");
         var toTheEnd = TimelineTemplates.Create(new(TimelineAddKind.Prop, 140, "", 60, Prop: new TimelinePropModel(1961, 1, 1, null), ClipLength: 200));
-        check(toTheEnd.Any(e => Fade(e, 195, 5, 1, 0)) && toTheEnd.Count(e => e.Magic == "C094") == 1,
-            "a prop that ends with the clip gets no hold after it");
+        check(!toTheEnd.Any(e => e.Magic == "C094"), "a prop that ends with the clip gets no fade-out or hold, so a loop never hides it");
+        var earlier = TimelineTemplates.Create(new(TimelineAddKind.Prop, 100, "", 60, Prop: new TimelinePropModel(1961, 1, 1, null), ClipLength: 200));
+        check(earlier.Any(e => Fade(e, 155, 5, 1, 0)) && earlier.Any(e => Fade(e, 160, 40, 0, 0)), "a still prop that ends earlier fades out too");
 
         // A prop shorter than its opening keeps its hide and fade-in, which start after its end.
         var bare = new Tmb().Head(94, null, 2).Actor(2, 3).Track(3, 20).Motion(20, 94).Build();
@@ -263,7 +268,8 @@ internal static partial class TmbFileFixture
         check(TimelineTemplates.FreeSummon(both, 40) == 0, "with both summons taken the next prop goes back to summon 0");
         // A prop asked for after Toast has ended is moved back by the Add to fit the clip, onto Toast's span: its summon is
         // the one free where it lands, not where it was asked for (2026-10-29: asked for at 66, it landed at 14 on summon 0).
-        var late = TimelineTemplates.Create(new(TimelineAddKind.Prop, 66, "", 0, Prop: new TimelinePropModel(1922, 1, 1, 235), ClipLength: 70));
+        // Without a clip length it keeps its fade-out and hold, which start past the end.
+        var late = TimelineTemplates.Create(new(TimelineAddKind.Prop, 66, "", 0, Prop: new TimelinePropModel(1922, 1, 1, 235)));
         var lands = late.Min(e => e.Start) + TimelineEdits.FitShift(toast, late);
         check(lands < 64 && TimelineTemplates.FreeSummon(toast, 66) == 0 && TimelineEdits.LandedSummon(toast, late) == 1,
             "a prop asked for late takes the summon free where the Add moves it, not where it was asked for");

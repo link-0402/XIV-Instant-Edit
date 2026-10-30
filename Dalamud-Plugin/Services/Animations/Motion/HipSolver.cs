@@ -50,13 +50,22 @@ internal static class HipSolver
         var candidates = Candidates(skeleton, selected);
         if (candidates.Count == 0)
             candidates = Candidates(skeleton, Defaults);
+        return Chains(skeleton, candidates, _ => false);
+    }
+
+    /// <summary>
+    /// <paramref name="candidates"/> as anchors, each with the chain from its farthest ancestor below the hips and below every bone
+    /// <paramref name="fixedBone"/> names (one another solve turns) down to it; one with nothing to bend is left out, and of two on one line only the lower holds.
+    /// </summary>
+    internal static ImmutableArray<HipAnchor> Chains(SkeletonDescription skeleton, IEnumerable<int> candidates, Func<string, bool> fixedBone)
+    {
         var index = MotionEvaluator.Index(skeleton);
         var held = new List<HipAnchor>();
         foreach (var bone in candidates)
         {
             var name = skeleton.Bones[bone].Name;
             // The farthest ancestor below the hips; none when the bone hangs right from them.
-            var top = PinChains.TopChoices(skeleton, name).TakeWhile(choice => choice != PinChains.Hips).LastOrDefault();
+            var top = PinChains.TopChoices(skeleton, name).TakeWhile(choice => choice != PinChains.Hips && !fixedBone(choice)).LastOrDefault();
             if (top == null)
                 continue;
             var chain = PinChains.Chain(skeleton, index, new MotionPin(name, Top: top));
@@ -169,7 +178,8 @@ internal static class HipSolver
     {
         foreach (var anchor in anchors)
         {
-            if (anchor.Chain.Shape != PinChainShape.Limb || anchor.Chain.Bones.Length < 4)
+            // A head drag's arm starts at its clavicle; a hip drag's at the back.
+            if (anchor.Chain.Shape != PinChainShape.Limb || anchor.Chain.Bones.Length < 3)
                 continue;
             var clavicle = anchor.Chain.Bones[^3];
             var parent = skeleton.Bones[clavicle].Parent;
@@ -220,6 +230,16 @@ internal static class HipSolver
             PinSolver.Refresh(skeleton, local, model, carried);
         }
         SettleBack(skeleton, local, model, anchors, startModel);
+        HoldAnchors(skeleton, local, model, anchors, startModel);
+    }
+
+    /// <summary>
+    /// Puts every anchor back at its transform in <paramref name="startModel"/> on the moved body: the clavicles follow their arms, every
+    /// chain bends (the shared ones twice over), then each anchor holds its turn.
+    /// </summary>
+    internal static void HoldAnchors(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, ReadOnlySpan<HipAnchor> anchors,
+        ReadOnlySpan<MotionTransform> startModel)
+    {
         FollowClavicles(skeleton, local, model, anchors, startModel);
         // Each chain bends on the running pose, in skeleton order; those sharing bones go again, so a lean one needs is seen by the other.
         foreach (var anchor in anchors)

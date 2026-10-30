@@ -149,17 +149,34 @@ outline, and the Include-vanilla dialog):
   up with an accent outline and "Let go to replace <texture> with <file>". Let go: the actor
   redraws with the image, the status says "Replaced <texture> with <file>. Undo is in the row's
   menu.", and the Textures tab lists the texture's session.
-- [ ] Let go before the row lights up: nothing is replaced and the status asks to hold the
+  Partly checked (XIV Bridge textures/11, Release 2026-10-30, an image dragged from a test window
+  that hands On Screen the same payload an Explorer drag does): the mod row fills from the left while
+  the tooltip says "Hold here to replace v01_c0201e0079_top_n.tex", lights up with "Let go to replace
+  ... with drop.png"; let go, the file changes, the character draws it, the status says "Replaced ...
+  with drop.png. Undo is in the row's menu." and the session is listed. Left: the drag from Explorer
+  itself and the look, by hand.
+- [x] Let go before the row lights up: nothing is replaced and the status asks to hold the
   image until the row lights up. Moving onto another row starts its fill over.
-- [ ] Drag over a model, a material, white.tex or a row with a folder or two files: no fill;
+  (XIV Bridge textures/11, Release 2026-10-30: held on one row it filled to 968 px, carried onto the
+  next row it started over (62 px) and, let go there at once, nothing was replaced and the status said
+  "Hold the image on the texture until its row lights up, then let go.")
+- [x] Drag over a model, a material, white.tex or a row with a folder or two files: no fill;
   texture rows that refuse the drag are outlined red and say why.
-- [ ] The row's menu (dots button or right-click) shows **Undo replace**. It puts the old
+  Partly checked (XIV Bridge textures/11, Release 2026-10-30): over a model row and a material row,
+  no fill and no outline. Not checked: white.tex, a folder or two files.
+  (XIV Bridge textures/12, Release 2026-10-30 01:48: a folder and two images held over a mod texture's row draw no fill, a red
+  outline and "Drop one image.", and let go there replace nothing, while one image over the same row fills; an image over
+  the blank id_16.tex row the character draws (white.tex's kin; this character draws no white.tex) is outlined red and
+  says "id_16.tex is a blank texture the game shares between many materials; editing it would change all of them.")
+- [x] The row's menu (dots button or right-click) shows **Undo replace**. It puts the old
   texture back, the actor redraws, and the item is gone. After another drop and an editor
   save of the texture's TGA, the item is gone too.
   Partly checked (XIV Bridge tests/instant-edit/textures/03, 2026-10-29): after another drop Undo
   replace is offered again, and after an editor save of the TGA it is gone. Undo puts the texture
   from before the drop back. Rerun 2026-10-29 after the power-of-two ruling: Undo replace is offered
   after a drop, puts the old texture back and is then gone. Not checked: the actor's redraw (by eye).
+  (XIV Bridge visual/t03s, Release 2026-10-30, on a gear mask rather than a ring's: on screenshots the
+  drop changes the part on the character and Undo replace puts its colour back.)
 - [x] Drop a JPEG, a TGA, a DDS and a mod's .tex: each replaces the texture. An image whose
   size isn't a power of two on each side is refused with why, and the file stays (ruled
   2026-10-29: every texture Instant Edit writes is a power of two, 4 to 8192).
@@ -167,9 +184,15 @@ outline, and the Include-vanilla dialog):
   .tex each replace the texture and change the mod's file; a 65 × 66 drop on the 64 × 64 texture is
   refused with "Texture sides must be a power of two from 4 to 8192; this one is 65 × 66." and the
   file stays.)
-- [ ] With "Include vanilla" on, drop on a Game Data texture: the "Replace a vanilla texture"
+- [x] With "Include vanilla" on, drop on a Game Data texture: the "Replace a vanilla texture"
   dialog asks for the mod name, the new mod shows the image, and Undo puts the game's texture
   back into that mod.
+  (XIV Bridge textures/09, Release 2026-10-30, the image from a test window: the row charges with "Hold
+  here to replace v01_c0201e0079_top_id.tex", lights with "Let go to replace ... with drop.png"; the
+  dialog says "Replace a vanilla texture" and "drop.png goes into a new mod with this name"; the new mod
+  is made under that name, on in the collection, the character draws it, its colour is the image's in
+  the channels the BC5 index map holds (red and green), and Undo replace from the row's menu puts the
+  game's texture back into that mod.)
 - [x] Reload the plugin after a drop: Undo replace is still offered and works.
   Partly checked (XIV Bridge tests/instant-edit/textures/03, 2026-10-29): a second texture service
   started on the same folder stands for the reload; Undo replace is still offered there and puts the
@@ -181,26 +204,40 @@ outline, and the Include-vanilla dialog):
 
 `Tests/BlenderStatusRegression` covers the service side (CopiedTextureAsync). These need the game
 (not scripted: the drag between rows, its texts and outlines):
-- [ ] Drag a mod texture's name onto a texture row of another material or model. The drag says
+- [x] Drag a mod texture's name onto a texture row of another material or model. The drag says
   "<texture> from <mod>" and "Hold it on another texture's row to copy it there". The target row
   fills and lights up as for an image, with "Let go to copy <texture> from <mod> onto <target>".
   Let go: the actor redraws with the copy and the status says "Replaced <target> with ...".
+  (XIV Bridge textures/08, Release 2026-10-30, real held drags: both drag texts, the fill, the lit
+  outline, "Let go to copy ... onto ...", the status, the target's file changed and the character draws
+  it; the look by eye. 08 failed 2026-10-29 because the test's line reader split "_dwn_norm" at the
+  underscore.)
 - [x] Undo replace in the target row's menu puts its old texture back.
   (XIV Bridge tests/instant-edit/textures/04, 2026-10-29, on the plugin's texture service: Undo
   replace is offered on the target and puts its old texture back, at its old 64 x 64 size.)
-- [ ] The row being dragged shows no outline. Another row that shows the same file is outlined
+- [x] The row being dragged shows no outline. Another row that shows the same file is outlined
   red: "This row already shows <texture>".
-- [ ] With "Include vanilla" on, drag a Game Data texture onto a mod texture: the game's texture
+  (XIV Bridge textures/08 and 09, Release 2026-10-30: the dragged row draws no outline; the other row
+  showing c0801f0002_etc_norm.tex is outlined red with "This row already shows c0801f0002_etc_norm.tex."
+  and neither fills nor lights; letting go there opens nothing.)
+- [x] With "Include vanilla" on, drag a Game Data texture onto a mod texture: the game's texture
   is copied. Drag one onto another Game Data texture: the new mod dialog says "the game's
   <texture> goes into a new mod".
+  (XIV Bridge textures/09, Release 2026-10-30: the drag says "the game's v01_c0201e0079_top_m.tex", the
+  mod row lights, the mod's file becomes the game's texture (same mean colour); onto another Game Data
+  row the dialog says "the game's v01_c0201e0079_top_m.tex goes into a new mod" and Cancel makes none.)
 - [x] Copy onto a texture of a different size (e.g. 1024 onto 2048): the target takes the
   copy's size and keeps its own compression.
   (XIV Bridge tests/instant-edit/textures/04, 2026-10-29: white.tex, 32 x 32, copied onto a 64 x 64
   target: the target becomes 32 x 32 and keeps its format (0x3420), and the session shows the new
   size.)
-- [ ] Let go too soon: nothing changes and the status says to hold the texture until the row
+- [x] Let go too soon: nothing changes and the status says to hold the texture until the row
   lights up.
-- [ ] Dragging a texture row over a Mod Browser tile: the tile refuses it in red.
+  (XIV Bridge textures/08, Release 2026-10-30: held 0.3 s and let go, the target's file is unchanged, no
+  copy starts, and the status says "Hold the texture on the other row until it lights up, then let go.")
+- [x] Dragging a texture row over a Mod Browser tile: the tile refuses it in red.
+  (XIV Bridge textures/10, 2026-10-29 and Release 2026-10-30: the tile of a Mod Browser mod window refuses
+  the row in red with why, and letting go there changes nothing.)
 
 ## Editing a texture as a separate copy in On Screen (2026-10-20, pending)
 
@@ -212,6 +249,9 @@ outline, and the Include-vanilla dialog):
   the first save makes the copy"; the first save puts the copy beside the material, the material now
   names the copy's game path and not the original, and the original file is untouched. Not checked:
   a second material sharing the texture, the redraw and the row's new name (by eye).
+  (XIV Bridge visual/t05v, Release 2026-10-30: after the first save the character draws the copy and On
+  Screen's row shows ie_<id>_v01_c0101a0073_ear_m.tex whole, from the material's mod. Left: a second
+  material sharing the texture staying unchanged.)
 - [x] In Penumbra the material's mod maps `<folder>/ie_<id>/<name>.tex` in every option that maps the material.
   (XIV Bridge tests/instant-edit/textures/05, 2026-10-29: the default files and the option that maps
   the material map the copy; the option without the material doesn't.)

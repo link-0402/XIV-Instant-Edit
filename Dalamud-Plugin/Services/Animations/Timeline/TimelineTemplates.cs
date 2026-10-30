@@ -13,8 +13,9 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// A prop follows the emote_sp pattern (sp54, sp50): the sync effect every animated emote prop
 /// uses (C173), the model (C198, summon slot 0 unless the request names 1, see <see cref="FreeSummon"/>; a model from a mod carries its source), and with a weapon timeline the animation
 /// (C031 on that summon, 5 frames after the spawn) behind a hide-then-fade on the summon
-/// (C094 0 to 0 for 5 frames, then 0 to 1 over 7), so its first pose never shows. It ends as vanilla's do
-/// (sp50, sp54): a fade-out over its last 5 frames, then hidden to the clip's end (C094 1 to 0, then 0 to 0).
+/// (C094 0 to 0 for 5 frames, then 0 to 1 over 7), so its first pose never shows. One that ends before the clip
+/// does ends as vanilla's do (sp50, sp54): a fade-out over its last 5 frames, then hidden to the clip's end (C094 1 to
+/// 0, then 0 to 0). One that lasts to the clip's end gets neither, so it still shows when the clip loops.
 /// </para>
 /// </summary>
 internal static class TimelineTemplates
@@ -24,6 +25,8 @@ internal static class TimelineTemplates
     public const int FadeOutFrames = 5;
     /// <summary>How long an added prop lasts when the Add gives no length, in frames.</summary>
     public const int PropLength = 60;
+    /// <summary>The frame a prop added from the picker starts on; it lasts from there to the clip's end.</summary>
+    public const int PropStart = 1;
     private static readonly byte[] SummonFilter = [1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
     /// <summary>
@@ -78,13 +81,15 @@ internal static class TimelineTemplates
                     events.Add(Event("C094", animated, 7, "", new() { ["StartVisibility"] = 0, ["EndVisibility"] = 1 }, group));
                 }
                 // The fade-out ends with the prop; the hold keeps it hidden to the clip's end, at least a frame. A prop
-                // that lasts to the clip's end gets none: it would start past the end (vanilla's never do).
+                // that lasts to the clip's end gets neither: a fade-out there hides it for good once the clip loops.
                 var end = Math.Min(request.Start + length, TimelineDocument.MaxFrames);
-                var fading = Math.Max(request.Start, end - FadeOutFrames);
-                events.Add(Event("C094", fading, Math.Max(1, end - fading), "", new() { ["StartVisibility"] = 1, ["EndVisibility"] = 0 }, group));
                 if (request.ClipLength <= 0 || end < request.ClipLength)
+                {
+                    var fading = Math.Max(request.Start, end - FadeOutFrames);
+                    events.Add(Event("C094", fading, Math.Max(1, end - fading), "", new() { ["StartVisibility"] = 1, ["EndVisibility"] = 0 }, group));
                     events.Add(Event("C094", end, Math.Clamp(request.ClipLength - end, 1, TimelineDocument.MaxFrames), "",
                         new() { ["StartVisibility"] = 0, ["EndVisibility"] = 0 }, group));
+                }
                 return events.ToImmutable();
             default:
                 throw new InvalidDataException($"Cannot add {request.Kind}.");

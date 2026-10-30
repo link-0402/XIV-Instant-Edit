@@ -255,7 +255,8 @@ internal static class TimelineEdits
     /// group along; any other event resizes on its own (<see cref="Resize"/>). The left edge moves every part the same
     /// way. The right edge changes the summon's length as <see cref="Resize"/> does, and then: a fade-out (a fade
     /// from visible to 0) keeps its distance to the end, starting no earlier than the summon; a 0 to 0 hold that
-    /// started where a fade-out ended starts where it now ends, with its length; other parts starting within
+    /// started where a fade-out ended starts where it now ends, with its length, or still ending at the clip's end when it
+    /// did; a summon that now lasts to the clip's end loses both, so a looping clip never hides it; other parts starting within
     /// <see cref="OpeningFrames"/> of the prop's start keep their frames; the rest, past a shorter end, move inside
     /// it, and those that can be resized end with it. A part that can only be moved keeps its length.
     /// </summary>
@@ -280,6 +281,8 @@ internal static class TimelineEdits
             ev.Values.GetValueOrDefault("EndVisibility") == 0;
         // Where each fade-out ended before and ends now, for the holds that follow them.
         var fadeEnds = new Dictionary<int, int>();
+        // The holds that follow a fade-out.
+        var holds = new HashSet<string>(StringComparer.Ordinal);
         var builder = resized.Events.ToBuilder();
         for (var i = 0; i < builder.Count; i++)
         {
@@ -296,9 +299,12 @@ internal static class TimelineEdits
             var ev = builder[i];
             if (i == index || ev.Group != group || !CanMove(ev) || FadesOut(ev))
                 continue;
-            var hold = ev.Magic == "C094" && ev.Values?.GetValueOrDefault("StartVisibility") == 0 && ev.Values.GetValueOrDefault("EndVisibility") == 0;
-            if (hold && fadeEnds.TryGetValue(ev.Start, out var after))
-                builder[i] = ev with { Start = after };
+            if (Hold(ev) && fadeEnds.TryGetValue(ev.Start, out var after))
+            {
+                // One that held to the clip's end still ends there, shrinking or growing with the prop.
+                builder[i] = ev with { Start = after, Duration = End(ev) >= doc.Length && CanResize(ev) ? Math.Max(1, doc.Length - after) : ev.Duration };
+                holds.Add(ev.Key);
+            }
             else if (ev.Start > opening && shift < 0 && End(ev) > newEnd)
             {
                 // Past the shorter end: inside it, and ending with it when its length can change.
@@ -306,7 +312,14 @@ internal static class TimelineEdits
                 builder[i] = ev with { Start = start, Duration = CanResize(ev) ? Math.Max(1, newEnd - start) : ev.Duration };
             }
         }
+        // Lasting to the clip's end, it keeps no fade-out or hold after it: they would hide it for good once the clip loops.
+        if (newEnd >= doc.Length)
+            builder.RemoveAll(ev => ev.Group == group && ev.Key != summonKey && CanMove(ev) &&
+                (FadesOut(ev) || holds.Contains(ev.Key)));
         return resized with { Events = builder.ToImmutable() };
+
+        static bool Hold(TimelineEvent ev) => ev.Magic == "C094" && ev.Values?.GetValueOrDefault("StartVisibility") == 0 &&
+            ev.Values.GetValueOrDefault("EndVisibility") == 0;
     }
 
     /// <summary>

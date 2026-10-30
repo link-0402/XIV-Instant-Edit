@@ -60,7 +60,7 @@ copy of the IE Physics mod in the test collection (build 6297dbaa, main 7b74c4f)
 jiggle's feel and walking in GPose are left for your eye.
 
 Settings:
-- [ ] An area shows Firmness (or the spring's own name), Settle, Swing limit, Weight, Follow pose
+- [x] An area shows Firmness (or the spring's own name), Settle, Swing limit, Weight, Follow pose
   and Tip length under Movement; Tip size and Collision with under Collision; and one Advanced
   header holding Max speed, Wind, Friction, Bump damping, Push back, Point shape, Tip place,
   Gravity direction, Wind direction, Steps, the Collision / Fast collision / Ground ticks, and
@@ -69,7 +69,8 @@ Settings:
   where it belongs, Advanced starts closed, and there is no Fixed length tick or slider. Test 11
   still skips the spring slider: the area's first chain has no spring (Add spring shows instead).
   Test 22 sees it on the Chest area of the IE Physics mod: the Firmness slider is drawn and there is
-  no Add spring button.
+  no Add spring button. (Test 22 again, Release 2026-10-30: the slider is drawn, no Add spring. Ticked:
+  between 11 and 22 every setting listed is seen.)
 - [x] Drag Settle from 0.100 to 0.200 and hover Undo: the tooltip reads "Chest: Settle 0.200 to 0.100" (your values),
   the change Undo makes; Redo's reads the other way.
   Checked (XIV Bridge tests/instant-edit/physics/12, 2026-10-29), with one question left: after
@@ -93,7 +94,7 @@ Overlay:
   Firmness lights the cone, the tip balls and the spring, and nothing else; the labels read 8°,
   1.0 cm and Firmness; dragging Swing limit from 8 to 114 opens the cone's rim from 2.0 to 13.2 cm
   and its label reads 114°.)
-- [ ] Only the selected area and the shapes it ticks draw; the file's other shapes don't. Tick a
+- [x] Only the selected area and the shapes it ticks draw; the file's other shapes don't. Tick a
   thigh under Collision with: its capsule turns green; untick it: it goes. Hover its row while
   unticked: it shows grey with its name.
   (XIV Bridge tests/instant-edit/physics/15, 2026-10-15: only ticked shapes draw; Left thigh
@@ -103,6 +104,9 @@ Overlay:
   as every hovered shape did. Fixed (ruled grey): PhysicsOverlayModel.ShapeState keeps a hovered
   shape's kind, so an unticked one lights grey; fixture in PhysicsOverlayScenarios. Retest p15v
   after a Release build.
+  (XIV Bridge visual/p15v-capsule-colours, Release 2026-10-30 01:48: ticked, the thigh's end circles
+  are green; unticked it isn't drawn; unticked with its row hovered it is drawn grey (#595E6E) with
+  "Left thigh (asi_l_a)" beside it in the same grey.)
 - [x] Open Collision shapes: every shape draws green; hover a shape's radius field and it lights.
   (XIV Bridge tests/instant-edit/physics/15 and 24, 2026-10-29: the shapes view draws all 10 shapes
   the character has bones for, as used shapes, none lit; hovering a shape's Radius field lights that
@@ -131,6 +135,10 @@ Overlay:
   "Both sides" ticked, one undo step (fixture: 58° off becomes Firmness, under 0.05° off). Pending in game: on a
   XIVBridgeTest copy of IE Physics, the button shows on "Pull down", the row reads "Firmness" after it, Undo puts it
   back; the chest settles where it rests (by eye).
+  Partly checked (XIV Bridge physics/35, Release 2026-10-30 01:48, a real click on the copy's chest with Both sides):
+  "Aim at rest" shows beside the "Pull down" slider; the click turns both springs from 57.6 and 57.8 deg off to 0.0,
+  both read "Firmness", strength kept at 0.0005, the button goes; one Undo puts both back at "Pull down". Left: the
+  chest settling where it rests, by eye. (physics/22 now reports the saved springs instead of failing on them.)
 - [x] "Fit to my body" lists "Chest, left: tip place" and "Chest, right: tip place", ticked, about
   17.2 to 17.1 cm, tooltip "Moves the tip 1.8 cm onto the front of your breast".
   (XIV Bridge tests/instant-edit/physics/17, 2026-10-15: both listed and ticked, 17.2 to 15.4 cm,
@@ -148,7 +156,7 @@ Overlay:
   nipple fit is what the tooltip names. Judged by Claude from a front crop with the overlay on: each
   tip sits at the front centre of its breast with the cone around it; a front view can't show depth,
   so "on the nipple" wants a side view.
-- [ ] With "Both sides" ticked, drag a Tip place field under Advanced: both tips move, the other
+- [x] With "Both sides" ticked, drag a Tip place field under Advanced: both tips move, the other
   side's to the mirrored place (its third number flips sign on your skeleton). Drag a point's
   Axis in the Points table: the other side's axis mirrors too. With "Both sides" off, only the
   chosen chain moves.
@@ -157,6 +165,11 @@ Overlay:
   1 mm); with it off only j_mune_l moved. The Points table's Axis isn't checked: test 27 fails
   tonight because it can't find the Axis field (it isn't drawn and in view), a test problem, not a
   product bug.
+  (XIV Bridge physics/27, Release 2026-10-30: a real drag of the first point's Axis with Both sides on
+  moved it from (0.010, 0.097, 0.023) to (0.160, 0.097, 0.023) and the twin's to (0.160, 0.097, -0.022),
+  the mirror; with Both sides off only the chosen chain's axis moved. 27 couldn't find the field because
+  the bridge hashed the table row's PushId(n) as a 4-byte int; Dalamud pushes ints as pointers, 8 bytes:
+  the bridge now takes "#ptr:n" for those.)
 
 ## Breast tip choice (2026-10-14, pending)
 
@@ -164,7 +177,7 @@ Overlay:
   when everything already fits. The choice is remembered for the next fit.
   (XIV Bridge tests/instant-edit/physics/19 and 28, 2026-10-29: both choices are offered, also once
   no ticked setting changes any more; picking Middle asks to save it and the next fit keeps it.)
-- [ ] Pick "Middle of the breast": the list is measured again (spinner, Apply disabled meanwhile);
+- [x] Pick "Middle of the breast": the list is measured again (spinner, Apply disabled meanwhile);
   "tip place" now moves the tip into the breast, its tooltip names the new tip length and "about
   N x as much", and the tip size grows to about the breast's own size. Settings you unticked stay
   unticked.
@@ -172,6 +185,11 @@ Overlay:
   tooltip reads "Moves the tip 2.8 cm into the middle of your breast ... Tip length 10.9 to 8.2 cm
   ... about 1.3x as much"; the tip size grows from 4.0 to 7.2 cm; an unticked Left thigh stays
   unticked. The measuring was over before the test could see Apply disabled.
+  (XIV Bridge physics/19, Release 2026-10-30 01:48, the measuring held open by a framework hook: Apply's text is drawn at
+  0.60 alpha while it measures and 1.00 before and after, as the disabled tip choice's is (1.00 to 0.60); the tooltip reads
+  "Moves the tip 4.9 cm into the middle of your breast ... Tip length 10.9 to 6.1 cm ... about 1.8x as much", the tip size
+  grows from 4.0 to 9.1 cm, an unticked Left thigh stays unticked. The old check found Apply with Ui.Locate, which also
+  finds disabled items, so it could never have failed.)
 - [ ] Apply and preview with the overlay: the tip balls sit inside the breasts and about fill them.
   Walk and run in GPose: arms crossing in front and at the sides stop at the breast instead of
   sinking into it, and the jiggle is livelier by about the factor the tooltip named.
@@ -229,6 +247,9 @@ that uses the game's j_sk bones.
   Not checked (XIV Bridge tests/instant-edit/physics/30, 2026-10-29): the butt cheeks aren't offered
   on this skeleton, which lacks iv_shiri and ya_shiri_phys bones, so the skirt gets no butt
   collision.
+  Still not checked (XIV Bridge physics/30 and 34 with --arg yas=true, Release 2026-10-30 01:48): with Yet Another Skeleton's
+  bones the fit notes "none of your skin moves with ya_shiri_phys_l" (and _r): the body model isn't weighted to butt bones, so
+  no ball is offered. Needs a body weighted to YAS or IVCS butt bones. (Same for the two butt items below.)
 - [x] Under the list, "Waistband: set in Customize+" names the skirt bones with X/Y/Z moves.
   Enter them in your Customize+ profile's Position and check the waistband in game.
   Partly checked (XIV Bridge tests/instant-edit/physics/30, 2026-10-29): it names j_sk_f_a, j_sk_s_a
@@ -255,14 +276,23 @@ that uses the game's j_sk bones.
 
 ## Adding areas back
 
-- [ ] Untick the skirt (or delete it), save, and reopen with Loaded now: "+ Skirt" is listed under
+- [x] Untick the skirt (or delete it), save, and reopen with Loaded now: "+ Skirt" is listed under
   Add an area. Click it: the skirt comes back with its thigh shapes, and the preview swings it again.
   XIV Bridge tests/instant-edit/physics/31 errors tonight (2026-10-29): it can't find the tick or name
   of area 0 in the area list. A test problem, not a product bug.
-- [ ] Same for the tail on a Miqo'te or Au Ra, and for the chest or butt: the chest and other jiggle
+  (XIV Bridge physics/31, Release 2026-10-30, on the test copy: a real click on the skirt's tick leaves it
+  out, the save goes into the copy, Loaded now opens it with no skirt, "+ Skirt" is offered and drawn, a
+  click brings the game's skirt back with its chains and the shapes it collides with (asi_r_c, asi_l_c,
+  asi_r_a, asi_l_a, the thighs), and the previewed file moves the skirt bones again; the swing itself
+  by eye. Same cause as 27: the area list's PushId(i) needs "#ptr:i".)
+- [x] Same for the tail on a Miqo'te or Au Ra, and for the chest or butt: the chest and other jiggle
   areas are built on your skeleton, the skirt, tail, earrings and hair are the game's own.
   Partly checked (XIV Bridge tests/instant-edit/physics/32, 2026-10-29): after deleting the tail,
   "+ Tail" is offered from the game's file and brings back the same bones (n_sippo_b), chain and tip
   places; after deleting the chest, "+ Chest" is offered as a template and builds j_mune_l and
   j_mune_r on this skeleton. The butt, earrings and hair weren't tried (the templates offered were
   chest and ears).
+  (XIV Bridge physics/36, Release 2026-10-30 01:48, with a test mod holding only Yet Another Skeleton's c0801 body skeleton:
+  "+ Butt (YAS)" is offered as a template, not from the game, and builds ya_shiri_phys_l/r with the template's cones and
+  springs measured on that skeleton; Earrings, Hair and Front hair have no template, and each, deleted, comes back from the
+  game's c0801 file with its own bones (n_ear_b_l/r, j_kami_a, j_kami_f_l, j_kami_f_r), chains and tip places.)

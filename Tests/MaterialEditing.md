@@ -50,7 +50,7 @@ Saving:
   shine, glow); clicking a pair shows its two rows side by side with named fields.
 - [x] Change row 1's base colour and let go: the character redraws with the new colour where the
   index texture picks pair 1. (Live since Task 9; checked on pair 16 of the Critique dress.)
-- [ ] Detail scale, rotation and shear change the pattern; Advanced shows the stored matrix. (Not
+- [x] Detail scale, rotation and shear change the pattern; Advanced shows the stored matrix. (Not
   judged: the change doesn't show at screenshot size.)
   Partly checked (XIV Bridge tests/instant-edit/materials/10, 2026-10-29): dragging Detail scale,
   rotation and shear each changes the stored matrix to what the shown values compose, one undo step
@@ -61,6 +61,9 @@ Saving:
   row 16 at scale 8): scale x3, rotation +45 and shear +60 each visibly change the pattern on the
   character (edge directions or strength move 4x to 6x more than the idle sway does). Only the
   Advanced matrix field is left.
+  (XIV Bridge materials/10, Release 2026-10-30: Advanced shows the Detail matrix field, and the drags
+  change the stored matrix to what the shown values compose. Run after physics tests in one batch its
+  drags once changed nothing; alone it passes.)
 - [x] Copy a row and paste it onto another (Everything, Colours only, Surface only): only the
   chosen fields change, and Undo takes it back in one step. (Colours only, through the buttons.)
 - [ ] A legacy material (characterlegacy.shpk) shows the 16-row table; the dots menu's "Convert to
@@ -116,6 +119,10 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   rows come back within a second. (The dyed Critique dress shows its undyed rows while edited, as
   ruled.)
   Not scripted: changing the dye in Glamourer would change your Glamourer state.
+  Scripted since (XIV Bridge materials/19, Glamourer's temporary state, put back on cleanup), but it skips
+  (2026-10-29, 2026-10-30): the character wears no dyeable gear with Dawntrail colour rows. Putting one
+  on through Glamourer (SetItem) was tried 2026-10-30: each call said Success, the character never drew
+  the item. Wear a dyeable Dawntrail piece and run 19 again.
 - [x] A redraw, GPose enter/leave and a zone change while rows are edited: no crash; the edited
   rows come back.
 
@@ -161,6 +168,14 @@ The `material` Bridge tool shows the window's state, the live binding and, with
   which counted as having a second map: such a map now counts as missing, and Add copies the first map
   over it in place. Retest: XIV Bridge visual/m07s (the smallclothes top should be listed as missing a
   second UV map).
+  Still failing (XIV Bridge visual/m07s, Release 2026-10-30 01:48, which has both fixes): on the
+  smallclothes bottom (mt_c0201e0000_dwn_a, row 16) the preset says "1 row show layer 1 at full
+  reflection strength and glow" and the redraw shows a flat white-blue glow with no veins, as before;
+  "models without a second UV map: none; 0 can take one here". Pictures: XIV-Bridge tests/results/visual/
+  "2026-10-30_150142_902 m07s before the preset.png" and "2026-10-30_150203_487 m07s after the preset.png".
+  The idle sway alone changes the part 21-25% in 0.5 s, so m07s's motion measure can't see a pattern
+  either way; the picture shows no pattern. Needs diagnosis (the generated `_fx.tex`, the scroll
+  constants, the UV2 check on this mesh).
 - [x] Glass, See-through and Matcap each look right after their redraw; Undo takes each back in one
   step. (All three apply, redraw and undo; Matcap names everything it removed. Detail pattern and
   Velvet too. Looks not judged on the back-facing harness.)

@@ -188,7 +188,8 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         var width = Theme.Scaled(500);
         using var wrap = ImRaii.TextWrapPos(width);
         var name = TimelineWindowViews.AddKindName(pickerKind).ToLowerInvariant();
-        ImGui.TextColored(Theme.Label, pickerTarget != null ? $"Choose another {name}" : $"Add {name} at {TimelineText.Seconds(pickerFrame)}");
+        ImGui.TextColored(Theme.Label, pickerTarget != null ? $"Choose another {name}"
+            : pickerKind == TimelineAddKind.Prop ? "Add prop for the whole animation" : $"Add {name} at {TimelineText.Seconds(pickerFrame)}");
         ImGui.Separator();
         DrawCatalogState();
         if (pickerKind is TimelineAddKind.Expression or TimelineAddKind.LipSync)
@@ -758,7 +759,8 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     /// <paramref name="target"/> a new path or prop model. Sets <see cref="pickerError"/> when refused.
     /// A face comes from one of the expression libraries that hold it (<paramref name="packs"/>), switching
     /// the timeline's when another holds all its faces (<see cref="TimelineEditor.ChoosePack"/>).
-    /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known. A prop goes on
+    /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known. A prop ignores
+    /// <paramref name="frame"/>: it lasts from <see cref="TimelineTemplates.PropStart"/> to the clip's end. It goes on
     /// summon slot <paramref name="summon"/>, or without one the first slot free over the span it lands on
     /// (<see cref="TimelineEdits.LandedSummon"/>); one from a mod stays still and takes Summon 0, moving a vanilla one there to
     /// Summon 1 (<see cref="TimelineEdits.ModPropSlots"/>).
@@ -783,10 +785,17 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             return Replace(current, kind, target, path, choice, prop);
         if (kind == TimelineAddKind.Prop && prop is { Source: null })
             prop = prop with { WeaponTimeline = WeaponChoice(prop) };
+        var length = kind == TimelineAddKind.LipSync ? frames : 0;
+        if (kind == TimelineAddKind.Prop)
+        {
+            // A prop shows for the whole clip, so it stays when the clip loops.
+            frame = Math.Min(TimelineTemplates.PropStart, Math.Max(0, current.Document.Length - 1));
+            length = Math.Max(1, current.Document.Length - frame);
+        }
         ImmutableArray<TimelineEvent> events;
         try
         {
-            var request = new TimelineAddRequest(kind, frame, path, kind == TimelineAddKind.LipSync ? frames : 0, pack, prop,
+            var request = new TimelineAddRequest(kind, frame, path, length, pack, prop,
                 current.Document.Length, kind == TimelineAddKind.Prop ? summon ?? 0 : 0);
             events = TimelineTemplates.Create(request);
             // The Add moves a prop that would run past the end back to fit, so its slot is the one free where it lands.

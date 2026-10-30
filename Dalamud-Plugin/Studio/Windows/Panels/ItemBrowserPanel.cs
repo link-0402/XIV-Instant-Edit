@@ -7,6 +7,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using InstantEdit.Studio.Models;
 using InstantEdit.Studio.Services;
+using InstantEdit.Studio.Services.Library;
 using InstantEdit.Studio.Windows.UI;
 using ComboWheel = InstantEdit.Ui.ComboWheel;
 
@@ -52,6 +53,18 @@ internal sealed class ItemBrowserPanel
     private int _slotIndex;
     private List<GameDataService.GameItem> _allItems = new();
     private List<GameDataService.GameItem> _filtered = new();
+
+    // ── Free set finder (Gear) ───────────────────────────────────────────────
+    private bool _findFree;
+    private bool _freeAccessory;
+    private readonly HashSet<EquipSlot> _freeSlots = new() { EquipSlot.Body };
+    private bool _onlyFree;
+    private readonly List<FreeRow> _freeRows = new();
+    private int _freeSetCount;
+    private int _freeRevision = -1;
+
+    /// <summary>A row of the finder's list: a set's header, or one item of a slot asked for.</summary>
+    private readonly record struct FreeRow(ItemSet Set, GameDataService.GameItem? Item);
 
     // ── Features ─────────────────────────────────────────────────────────────
     private string _featureRace;
@@ -107,6 +120,11 @@ internal sealed class ItemBrowserPanel
             FirstLoad();
         }
 
+        var occupied = _host.Library.Occupied;
+        occupied.Need(_host.Library.PlayerCollection());
+        if (_findFree && _kind == SubjectKind.Gear && occupied.Revision != _freeRevision)
+            RefreshFreeSets();
+
         Gui.SectionHeader("Browse the game", _session is PortSession
             ? "Press + on anything, or drag it onto the modpack list on the left, to add it. Set-ups are saved per item, so removing and re-adding one keeps its work."
             : $"Press + on gear or a feature, or drag it onto the list on the left, to add it to the {_session.ShelfName}: its game files are listed there, ready for files of your own.");
@@ -132,6 +150,7 @@ internal sealed class ItemBrowserPanel
         {
             switch (_kind)
             {
+                case SubjectKind.Gear when _findFree: DrawFreeSetList(); break;
                 case SubjectKind.Gear:      DrawGearList();      break;
                 case SubjectKind.Weapon:    DrawWeaponList();    break;
                 case SubjectKind.Animation: DrawAnimationList(); break;
@@ -142,6 +161,7 @@ internal sealed class ItemBrowserPanel
 
         var (shown, total) = _kind switch
         {
+            SubjectKind.Gear when _findFree => (_freeSetCount, _freeSetCount),
             SubjectKind.Gear      => (_filtered.Count, _allItems.Count),
             SubjectKind.Weapon    => (_filteredWeapons.Count, WeaponsInCategory().Count()),
             SubjectKind.Animation => (_filteredAnimations.Count, _host.GameData.AnimationTargets(_animationList == 0)?.Count ?? 0),
@@ -164,7 +184,7 @@ internal sealed class ItemBrowserPanel
 
     private string Noun(int n) => _kind switch
     {
-        SubjectKind.Gear      => "items",
+        SubjectKind.Gear      => _findFree ? "sets" : "items",
         SubjectKind.Weapon    => "weapon models",
         SubjectKind.Animation => _animationList == 0 ? "emotes" : "animations",
         _                     => $"{FeatureNaming.KindLabel(_kind).ToLowerInvariant()} ids",
@@ -214,15 +234,85 @@ internal sealed class ItemBrowserPanel
 
     private bool DrawGearFilters()
     {
-        ImGui.SetNextItemWidth(-1);
-        if (ComboWheel.Combo("##Slot", ref _slotIndex, _slotLabels))
+        float button = ImGui.GetFrameHeight();
+        if (_findFree)
         {
-            Reload();
-            SaveBrowserState();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Accent, "Free item sets");
+            ImGui.SameLine();
+            Gui.AlignRight(button);
         }
-        Gui.Tooltip("Equipment slot");
+        else
+        {
+            ImGui.SetNextItemWidth(-(button + ImGui.GetStyle().ItemSpacing.X));
+            if (ComboWheel.Combo("##Slot", ref _slotIndex, _slotLabels))
+            {
+                Reload();
+                SaveBrowserState();
+            }
+            Gui.Tooltip("Equipment slot");
+            ImGui.SameLine();
+        }
+
+        ImGui.PushStyleColor(ImGuiCol.Text, _findFree ? Theme.Accent : Theme.Muted);
+        if (Gui.IconButton(FontAwesomeIcon.LayerGroup, "FindFree", _findFree ? "Back to the slot list" : "Find item sets with free slots"))
+        {
+            _findFree = !_findFree;
+            ApplyFilter();
+        }
+        ImGui.PopStyleColor();
+
+        if (_findFree && DrawFreeSetFilters())
+            ApplyFilter();
         return true;
     }
+
+    /// <summary>The finder's slot boxes, gear on one row and accessories on the next, and "Only these free". Returns whether one changed.</summary>
+    private bool DrawFreeSetFilters()
+    {
+        bool changed = SlotBoxes(FreeSets.GearSlots, accessory: false);
+        changed |= SlotBoxes(FreeSets.AccessorySlots, accessory: true);
+        changed |= ImGui.Checkbox("Only these free##OnlyFree", ref _onlyFree);
+        Gui.Tooltip("Only sets whose other slots are all modded.");
+        return changed;
+    }
+
+    /// <summary>One group's slot boxes; ticking one clears the other group, as gear and accessory ids are counted apart.</summary>
+    private bool SlotBoxes(EquipSlot[] slots, bool accessory)
+    {
+        bool changed = false;
+        for (int i = 0; i < slots.Length; i++)
+        {
+            var slot = slots[i];
+            var label = $"{FreeSlotLabel(slot)}##free{slot}";
+            if (i > 0)
+            {
+                float width = ImGui.GetFrameHeight() + ImGui.GetStyle().ItemInnerSpacing.X + ImGui.CalcTextSize(FreeSlotLabel(slot)).X;
+                ImGui.SameLine();
+                if (ImGui.GetContentRegionAvail().X < width)
+                    ImGui.NewLine();
+            }
+            bool on = _freeAccessory == accessory && _freeSlots.Contains(slot);
+            if (!ImGui.Checkbox(label, ref on))
+                continue;
+            if (_freeAccessory != accessory)
+            {
+                _freeSlots.Clear();
+                _freeAccessory = accessory;
+            }
+            if (on) _freeSlots.Add(slot);
+            else    _freeSlots.Remove(slot);
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static string FreeSlotLabel(EquipSlot slot) => slot switch
+    {
+        EquipSlot.Earring                       => "Ears",
+        EquipSlot.RingRight or EquipSlot.RingLeft => "Ring",
+        _                                       => SlotInfo.DisplayLabelMap[slot],
+    };
 
     private bool DrawWeaponFilters()
     {
@@ -344,13 +434,55 @@ internal sealed class ItemBrowserPanel
         }
 
         int selected = _scrollToSelection ? _filtered.FindIndex(i => i.RowId == SelectedKey) : -1;
-        DrawTiles(_filtered.Count, selected, i =>
+        DrawTiles(_filtered.Count, selected, i => DrawGearTile(_filtered[i]));
+    }
+
+    private void DrawGearTile(GameDataService.GameItem item)
+        => DrawTile(item.RowId, item.Name, $"{SlotInfo.DisplayLabelMap[item.Slot]} · {item.ModelIdDisplay}", _session.HasWork(item.RowId),
+            () => new GearSubject(item), item.Icon,
+            $"{item.Name}\nModel {item.ModelIdDisplay}", item.Name);
+
+    /// <summary>The finder's results: each set's header, then the items of the slots asked for.</summary>
+    private void DrawFreeSetList()
+    {
+        var occupied = _host.Library.Occupied;
+        if (!occupied.Ready)
         {
-            var item = _filtered[i];
-            DrawTile(item.RowId, item.Name, $"{SlotInfo.DisplayLabelMap[item.Slot]} · {item.ModelIdDisplay}", _session.HasWork(item.RowId),
-                () => new GearSubject(item), item.Icon,
-                $"{item.Name}\nModel {item.ModelIdDisplay}");
+            Waiting(occupied.Unknown || _host.Library.PlayerCollection() == null ? "Penumbra isn't answering" : "Reading what your mods change");
+            return;
+        }
+        if (_freeSlots.Count == 0)
+        {
+            Gui.Hint("(tick a slot)");
+            return;
+        }
+        if (_freeRows.Count == 0)
+        {
+            Gui.Hint("(no sets match)");
+            return;
+        }
+
+        float header = ImGui.GetFrameHeight(), tile = Tile.Height();
+        var heights = _freeRows.Select(r => r.Item == null ? header : tile).ToList();
+        VirtualRows.Draw(heights, i =>
+        {
+            var row = _freeRows[i];
+            if (row.Item is { } item)
+                DrawGearTile(item);
+            else
+                DrawSetHeader(row.Set);
         });
+    }
+
+    private void DrawSetHeader(ItemSet set)
+    {
+        int free = set.Slots.Count(s => !s.Taken);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Accent, set.IdDisplay);
+        ImGui.SameLine();
+        Gui.Hint($"{free} of {set.Slots.Count} slots free");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(string.Join("\n", set.Slots.Select(s => $"{FreeSlotLabel(s.Slot)}: {(s.Taken ? "modded" : "free")}")));
     }
 
     private void DrawWeaponList()
@@ -369,7 +501,7 @@ internal sealed class ItemBrowserPanel
             DrawTile(subject.Key, subject.DisplayName,
                 $"{(weapon.Category.Length > 0 ? weapon.Category : "Weapon")} · {weapon.IdDisplay}{(weapon.OffHand ? " · off hand" : "")}",
                 _session.HasWork(subject.Key), () => subject, weapon.Icon,
-                $"{subject.DisplayName}\n{subject.ModelGamePath(default)}");
+                $"{subject.DisplayName}\n{subject.ModelGamePath(default)}", weapon.Name);
         });
     }
 
@@ -439,16 +571,22 @@ internal sealed class ItemBrowserPanel
     /// its set-up); adding takes the + button or a drag onto the modpack list, so a stray click never
     /// changes the modpack.
     /// </summary>
-    private void DrawTile(uint key, string name, string subtitle, bool configured, Func<PortSubject> subject, uint icon, string tooltip)
+    private void DrawTile(uint key, string name, string subtitle, bool configured, Func<PortSubject> subject, uint icon, string tooltip,
+        string? itemName = null)
     {
         bool inPack = _session.OnShelf(key);
         bool sel = key == _picked || key == SelectedKey;
+        // Gear and weapons: the mods of the player's collection that already change this item.
+        var changedBy = itemName != null ? _host.Library.Occupied.ModsChanging(itemName, OwnMod) : Array.Empty<ModRef>();
+        var modded = changedBy.Count > 0 ? ChangedByText(changedBy) : null;
 
         var badges = new List<Badge>();
         if (inPack)
             badges.Add(new Badge($"in the {_session.ShelfName}", Theme.Good));
         else if (configured)
             badges.Add(new Badge("set up before", Theme.Accent, "You have a set-up saved for this; adding it again brings it back."));
+        if (modded != null)
+            badges.Add(new Badge("modded", Theme.Bad, modded));
 
         var add = new TileAction(inPack ? FontAwesomeIcon.ArrowRight : FontAwesomeIcon.Plus,
             inPack ? $"In this {_session.ShelfName} — open it" : $"Add to this {_session.ShelfName}",
@@ -463,7 +601,7 @@ internal sealed class ItemBrowserPanel
         {
             Id          = $"k{key}",
             Title       = name,
-            TitleColor  = configured && !inPack ? Theme.Accent : null,
+            TitleColor  = modded != null ? Theme.Bad : configured && !inPack ? Theme.Accent : null,
             Subtitle    = subtitle,
             Icon        = _kind switch
             {
@@ -478,7 +616,8 @@ internal sealed class ItemBrowserPanel
             Actions     = new[] { add },
             Selected    = sel,
             AfterButton = () => SubjectDrop.Source(subject(), inPack, _session.ShelfName),
-            Tooltip     = tooltip + (inPack ? $"\n\nAlready in the {_session.ShelfName}." : "\n\nAdd it with + or by dragging it onto the list on the left."),
+            Tooltip     = tooltip + (modded != null ? $"\n\n{modded}" : string.Empty)
+                        + (inPack ? $"\n\nAlready in the {_session.ShelfName}." : "\n\nAdd it with + or by dragging it onto the list on the left."),
         }, new Vector2(ImGui.GetContentRegionAvail().X, Tile.Height()));
 
         if (result.Clicked)
@@ -488,6 +627,17 @@ internal sealed class ItemBrowserPanel
         }
         if (result.DoubleClicked)
             _session.AddToShelf(subject());
+    }
+
+    /// <summary>The mod open in Edit mode, whose own changes don't count as another mod's; null in Build mode.</summary>
+    private string? OwnMod => (_session as ModSession)?.Project?.FolderName;
+
+    private string ChangedByText(IReadOnlyList<ModRef> mods)
+    {
+        const int shown = 8;
+        var lines = string.Join("\n", mods.Take(shown).Select(m => $"• {m.Name}"));
+        var more = mods.Count > shown ? $"\nand {mods.Count - shown} more" : string.Empty;
+        return $"Changed in {_host.Library.Occupied.CollectionName} by:\n{lines}{more}";
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -604,6 +754,12 @@ internal sealed class ItemBrowserPanel
             return;
         }
 
+        if (_findFree)
+        {
+            RefreshFreeSets();
+            return;
+        }
+
         IEnumerable<GameDataService.GameItem> source = _allItems;
         if (_configuredOnly)
             source = source.Where(i => _session.HasWork(i.RowId));
@@ -627,6 +783,33 @@ internal sealed class ItemBrowserPanel
         var starts   = list.Where(StartsWithQ).OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase);
         var contains = list.Where(i => !StartsWithQ(i) && ContainsQ(i)).OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase);
         _filtered = starts.Concat(contains).ToList();
+    }
+
+    /// <summary>Finds the free sets again: the slots asked for, the search (a set id or an item name), and what the mods change now.</summary>
+    private void RefreshFreeSets()
+    {
+        var occupied = _host.Library.Occupied;
+        _freeRevision = occupied.Revision;
+        _freeRows.Clear();
+        _freeSetCount = 0;
+        if (!occupied.Ready)
+            return;
+
+        var own = OwnMod;
+        var q = _search.Trim();
+        var sets = FreeSets.Find(_allSlots.SelectMany(s => _host.GameData.GetAllItemsForSlot(s)), _freeAccessory, _freeSlots, _onlyFree,
+            item => occupied.IsChanged(item.Name, own));
+        foreach (var set in sets)
+        {
+            if (q.Length > 0 && !set.IdDisplay.Contains(q, StringComparison.OrdinalIgnoreCase) && !set.SetId.ToString().Contains(q, StringComparison.Ordinal)
+                && !set.Slots.Any(s => s.Items.Any(i => i.Name.Contains(q, StringComparison.OrdinalIgnoreCase))))
+                continue;
+            _freeSetCount++;
+            _freeRows.Add(new FreeRow(set, null));
+            foreach (var slot in set.Slots.Where(s => _freeSlots.Contains(s.Slot)))
+                foreach (var item in slot.Items)
+                    _freeRows.Add(new FreeRow(set, item));
+        }
     }
 
     private void SaveBrowserState()

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using InstantEdit.Models;
@@ -142,7 +142,27 @@ internal static partial class TimelineWindowViews
             return "The feet and hands hold where they are. To hold other bones instead, select them first, then Ctrl+click the hips.";
         return anchors.IsEmpty
             ? "Nothing holds; the hips move alone."
-            : "Holds where they are: " + string.Join(", ", anchors.Select(anchor => AnimationPresentation.BoneName(skeleton.Bones[anchor.Bone].Name))) + ".";
+            : HoldsLine(skeleton, anchors);
+    }
+
+    private static string HoldsLine(SkeletonDescription skeleton, ImmutableArray<HipAnchor> anchors) =>
+        "Holds where they are: " + string.Join(", ", anchors.Select(anchor => AnimationPresentation.BoneName(skeleton.Bones[anchor.Bone].Name))) + ".";
+
+    /// <summary>
+    /// Whether a Drag on <paramref name="primary"/> in <paramref name="layer"/> moves the head with the body following: the head, on a layer
+    /// that moves bones, of a skeleton whose back the hips carry (<see cref="HeadSolver.Back"/>). Otherwise the head drags as other bones do.
+    /// </summary>
+    public static bool HeadDrag(MotionLayer layer, string? primary, SkeletonDescription? skeleton) =>
+        primary == PinChains.Head && skeleton != null && layer.Components.HasFlag(PoseComponents.Position) && HeadSolver.Back(skeleton) != null;
+
+    /// <summary>The hint under the gizmo radios while Drag is chosen on the head (<see cref="HeadDrag"/>): what holds where it is, from the selection (the head included).</summary>
+    public static string HeadDragHint(SkeletonDescription skeleton, IReadOnlyList<string> selected)
+    {
+        // As for the hips: when none of the selection can hold, the feet don't come back.
+        var anchors = HeadSolver.Anchors(skeleton, selected);
+        if (HeadSolver.Candidates(skeleton, selected).Count == 0 && !anchors.IsEmpty)
+            return "The feet hold where they are. To hold other bones instead, select them first, then Ctrl+click the head.";
+        return anchors.IsEmpty ? "Nothing holds; the whole body follows the head." : HoldsLine(skeleton, anchors);
     }
 
     /// <summary>The bone layer rows' legend when there is no layer yet.</summary>

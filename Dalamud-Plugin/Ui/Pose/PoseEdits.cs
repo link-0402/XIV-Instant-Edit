@@ -216,6 +216,28 @@ internal static class PoseEdits
     }
 
     /// <summary>
+    /// Keys the turns a head drag makes in <paramref name="layer"/> at <paramref name="frame"/>, as <see cref="DragHips"/> keys a hip drag's:
+    /// from <paramref name="start"/> the head is put at <paramref name="aim"/>, <paramref name="back"/> leaning and the hips moving, with the
+    /// <paramref name="anchors"/> held (<see cref="HeadSolver.Solve"/>). Returns the keyed document and the hips' move from the start (model
+    /// space), which <see cref="Move"/> keys for the hips and the back they carry, not here. The document comes back unchanged, with no move,
+    /// when the weight is under MinFollowWeight, and unchanged when no rotation changes.
+    /// </summary>
+    public static (TimelineDocument Doc, Vector3 HipsMove) DragHead(TimelineDocument doc, MotionLayer layer, int frame, SkeletonDescription skeleton,
+        ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, MotionTransform[] start, Vector3 aim, PinChain back,
+        ReadOnlySpan<HipAnchor> anchors, float weight, float loop = 0)
+    {
+        if (!MotionEvaluator.Index(skeleton).TryGetValue(PinChains.Hips, out var hips))
+            throw MotionEvaluator.Missing(PinChains.Hips);
+        if (!(weight >= MinFollowWeight))
+            return (doc, Vector3.Zero);
+        var local = start.ToArray();
+        var startModel = MotionEvaluator.ModelSpace(skeleton, start);
+        var model = startModel.ToArray();
+        var move = HeadSolver.Solve(skeleton, local, model, hips, back, aim, anchors, startModel);
+        return (KeyTurns(doc, layer, frame, skeleton, before, through, local, HeadSolver.Turned(back, anchors), weight, loop), move);
+    }
+
+    /// <summary>
     /// Keys each of <paramref name="bones"/> in <paramref name="layer"/> at <paramref name="frame"/> so the layer, at
     /// <paramref name="weight"/>, turns it as in <paramref name="solved"/> (local): the turn from <paramref name="before"/> scaled
     /// by the weight's inverse, never a half turn or more. A bone already turned so in <paramref name="through"/> is left as it is.
