@@ -22,8 +22,130 @@ internal static class MotionEditsFixture
         Gestures(check);
         BoneRows(check);
         KeyPicks(check);
+        KeyTiming(check);
         Views(check);
         Symmetry(check);
+    }
+
+    private static void KeyTiming(Action<bool, string> check)
+    {
+        const string Arm = "j_ude_a_l";
+        // m1 over the whole clip: keys at 30 (hand and arm, stepped), 41 (arm) and 50 (hand).
+        var doc = Layered(Empty());
+        doc = doc with { Motion = doc.Motion.SetItem(0, doc.Motion[0] with { Start = 0, End = 100, FadeIn = 0, FadeOut = 0 }) };
+        doc = MotionEdits.SetKey(doc, "m1", 30, Arm, Turn(5));
+        doc = MotionEdits.SetKey(doc, "m1", 41, Arm, Turn(15));
+        doc = MotionEdits.SetEase(doc, "m1", 30, MotionInterpolation.Step);
+        static int[] Frames(TimelineDocument doc) => [.. doc.Motion[0].Keys.Select(key => key.Frame)];
+        static MotionKey KeyAt(TimelineDocument doc, int frame) => doc.Motion[0].Keys.Single(key => key.Frame == frame);
+        static string[] BonesAt(TimelineDocument doc, int frame) => [.. KeyAt(doc, frame).Bones.Keys.Order(StringComparer.Ordinal)];
+        KeyPick[] all = [new(30), new(41), new(50)];
+
+        var half = MotionEdits.ScaleKeysAbout(doc, "m1", all, 30, 50, out var landed, out var error);
+        check(error == null && Frames(half).SequenceEqual([30, 36, 40]) && landed.SequenceEqual([new KeyPick(30), new KeyPick(36), new KeyPick(40)]),
+            "scale 50% about a playhead on the first key brings the rest closer, rounded to whole frames");
+        check(Frames(MotionEdits.ScaleKeysAbout(doc, "m1", all, 45, 50, out _, out error)).SequenceEqual([37, 43, 48]) && error == null,
+            "about a playhead inside the pick, the keys close in on it from both sides");
+        var twice = MotionEdits.ScaleKeysAbout(doc, "m1", all, 10, 200, out _, out error);
+        check(error == null && Frames(twice).SequenceEqual([50, 72, 90]) && KeyAt(twice, 50) is { Ease: MotionInterpolation.Step, Bones.Count: 2 },
+            "200% about a playhead before the pick pushes the keys away from it, each with its bones and ease");
+        check(Frames(MotionEdits.ScaleKeysAbout(doc, "m1", [new(41, Arm)], 30, 50, out landed, out _)).SequenceEqual([30, 36, 50]) &&
+              landed.SequenceEqual([new KeyPick(36, Arm)]),
+            "a picked bone's value scales on its own");
+        check(ReferenceEquals(MotionEdits.ScaleKeysAbout(half, "m1", [new(30), new(36), new(40)], 30, 10, out _, out error), half) && error != null,
+            "a scale that would put two keys on one frame is refused");
+        check(ReferenceEquals(MotionEdits.ScaleKeysAbout(doc, "m1", [new(41)], 30, 182, out _, out error), doc) && error != null,
+            "a scale that would put a key on one that isn't picked is refused");
+        check(ReferenceEquals(MotionEdits.ScaleKeysAbout(doc, "m1", all, 0, 300, out _, out error), doc) && error != null,
+            "a scale that would take a key past the clip's end is refused");
+        var shorter = doc with { Motion = doc.Motion.SetItem(0, doc.Motion[0] with { End = 60 }) };
+        check(ReferenceEquals(MotionEdits.ScaleKeysAbout(shorter, "m1", all, 10, 200, out _, out error), shorter) && error != null,
+            "a key inside the layer is never scaled out of it");
+        check(ReferenceEquals(MotionEdits.ScaleKeysAbout(doc, "m1", all, 30, 100, out _, out error), doc) && error == null, "100% changes nothing");
+
+        var copied = MotionEdits.DuplicateKeys(doc, "m1", [new(30), new(41)], 60, out landed, out error);
+        check(error == null && Frames(copied).SequenceEqual([30, 41, 50, 60, 71]) && landed.SequenceEqual([new KeyPick(60), new KeyPick(71)]) &&
+              KeyAt(copied, 60) is { Ease: MotionInterpolation.Step } && BonesAt(copied, 60).SequenceEqual(BonesAt(doc, 30)),
+            "duplicated keys land from the playhead on with their spacing, bones and ease, and the copies are picked");
+        check(ReferenceEquals(MotionEdits.DuplicateKeys(doc, "m1", [new(30), new(41)], 39, out _, out error), doc) && error != null,
+            "a duplicate that would land on a key is refused");
+        var boneCopy = MotionEdits.DuplicateKeys(doc, "m1", [new(30, Hand)], 41, out landed, out error);
+        check(error == null && BonesAt(boneCopy, 41).SequenceEqual([Hand, Arm]) && BonesAt(boneCopy, 30).SequenceEqual([Hand, Arm]) &&
+              landed.SequenceEqual([new KeyPick(41, Hand)]),
+            "a duplicated bone's value joins a key without that bone");
+
+        var reversed = MotionEdits.ReverseKeys(doc, "m1", all, out landed, out error);
+        check(error == null && Frames(reversed).SequenceEqual([30, 39, 50]) && KeyAt(reversed, 50) is { Ease: MotionInterpolation.Step } &&
+              KeyAt(reversed, 50).Bones[Arm] == KeyAt(doc, 30).Bones[Arm] && BonesAt(reversed, 30).SequenceEqual([Hand]) && KeyAt(reversed, 30).Ease == null &&
+              landed.SequenceEqual([new KeyPick(50), new KeyPick(39), new KeyPick(30)]),
+            "reverse flips the picked keys between the first and the last; values and eases follow their keys");
+        var swapped = MotionEdits.ReverseKeys(doc, "m1", [new(30, Hand), new(50, Hand)], out _, out error);
+        check(error == null && Frames(swapped).SequenceEqual([30, 41, 50]) && KeyAt(swapped, 30).Bones[Hand] == KeyAt(doc, 50).Bones[Hand] &&
+              KeyAt(swapped, 50).Bones[Hand] == KeyAt(doc, 30).Bones[Hand] && KeyAt(swapped, 30).Bones[Arm] == KeyAt(doc, 30).Bones[Arm] &&
+              KeyAt(swapped, 30).Ease == MotionInterpolation.Step,
+            "reversing two bone values swaps them and leaves the rest of their keys");
+        check(ReferenceEquals(MotionEdits.ReverseKeys(doc, "m1", [new(30)], out _, out _), doc), "reversing one key changes nothing");
+
+        // Rows: 6 the layer.
+        var editor = new TimelineEditor(doc);
+        editor.SetWidth(440);
+        void Click(float frame, bool ctrl = false)
+        {
+            editor.Press(editor.HitTest(Geometry, At(frame, 6)), ctrl);
+            editor.Release();
+        }
+        void PickAll()
+        {
+            Click(30);
+            Click(41, true);
+            Click(50, true);
+        }
+        editor.SelectLayer("m1", 30);
+        editor.Playhead = 70;
+        check(editor.Key(TimelineKey.Duplicate) && Frames(editor.Document).SequenceEqual([30, 41, 50, 70]) && editor.SelectedKeys.SetEquals([new KeyPick(70)]) &&
+              editor.Document.Motion.Length == 2 && editor.History.UndoCount == 1,
+            "Ctrl+D with a key picked copies it to the playhead and picks the copy, not the layer");
+        editor.Undo();
+        check(Frames(editor.Document).SequenceEqual([30, 41, 50]), "undo takes the copies away");
+
+        PickAll();
+        check(editor.SelectedKeys.Count == 3 && editor.ReverseTiming() && Frames(editor.Document).SequenceEqual([30, 39, 50]) &&
+              editor.SelectedKeys.SetEquals([new KeyPick(30), new KeyPick(39), new KeyPick(50)]) && editor.History.UndoCount == 1,
+            "Reverse timing keeps the keys picked, as one undo step");
+        editor.Undo();
+        check(Frames(editor.Document).SequenceEqual([30, 41, 50]) && KeyAt(editor.Document, 30).Ease == MotionInterpolation.Step, "undo puts them back");
+
+        PickAll();
+        editor.Playhead = 30;
+        var before = editor.History.UndoCount;
+        check(editor.Key(TimelineKey.ScaleTiming) && editor.Gesture == TimelineGesture.ScaleKeys, "S starts scaling the picked keys");
+        editor.Drag(40);
+        editor.Drag(50);
+        check(Frames(editor.Document).SequenceEqual([30, 52, 70]) && editor.LastNotice == "Scale 200%",
+            "the mouse twice as far from the playhead as where it began scales them 200%, and the status line says so");
+        editor.Drag(35);
+        editor.Release();
+        check(Frames(editor.Document).SequenceEqual([30, 36, 40]) && editor.SelectedKeys.SetEquals([new KeyPick(30), new KeyPick(36), new KeyPick(40)]) &&
+              editor.History.UndoCount == before + 1 && editor.Gesture == TimelineGesture.None,
+            "a click applies the scale as one undo step, the keys still picked");
+        editor.Undo();
+        PickAll();
+        before = editor.History.UndoCount;
+        editor.Playhead = 30;
+        editor.Key(TimelineKey.ScaleTiming);
+        editor.Drag(40);
+        editor.Drag(60);
+        editor.Key(TimelineKey.Escape);
+        check(Frames(editor.Document).SequenceEqual([30, 41, 50]) && editor.SelectedKeys.SetEquals(all) && editor.History.UndoCount == before &&
+              editor.Gesture == TimelineGesture.None,
+            "Escape puts the keys and the picks back");
+
+        check(editor.ScaleTiming(50) && Frames(editor.Document).SequenceEqual([30, 36, 40]) && editor.History.UndoCount == before + 1,
+            "Scale timing from the menu scales about the playhead as one undo step");
+        check(!editor.ScaleTiming(10) && editor.LastError != null && Frames(editor.Document).SequenceEqual([30, 36, 40]),
+            "a refused scale says why and changes nothing");
+        editor.Undo();
+        check(Frames(editor.Document).SequenceEqual([30, 41, 50]), "undo puts the scaled keys back");
     }
 
     private static void Symmetry(Action<bool, string> check)

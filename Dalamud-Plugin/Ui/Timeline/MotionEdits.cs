@@ -672,6 +672,133 @@ internal static class MotionEdits
         return next;
     }
 
+    /// <summary>
+    /// Scales the timing of the picked keys and bone values of the layer by <paramref name="percent"/> about
+    /// <paramref name="pivot"/> (the playhead; <see cref="KeyTiming.Scaled"/>), as <see cref="Retime"/> moves them.
+    /// </summary>
+    public static TimelineDocument ScaleKeysAbout(TimelineDocument doc, string key, IEnumerable<KeyPick> picks, int pivot, int percent,
+        out ImmutableArray<KeyPick> landed, out string? error)
+    {
+        percent = Math.Clamp(percent, KeyTiming.MinPercent, KeyTiming.MaxPercent);
+        return Retime(doc, key, picks, frame => KeyTiming.Scaled(frame, pivot, percent), false, out landed, out error);
+    }
+
+    /// <summary>
+    /// Reverses the timing of the picked keys and bone values of the layer: each goes as far before the last as it was
+    /// after the first (<see cref="KeyTiming.Reversed"/>), as <see cref="Retime"/> moves them. A key keeps its values and ease.
+    /// </summary>
+    public static TimelineDocument ReverseKeys(TimelineDocument doc, string key, IEnumerable<KeyPick> picks,
+        out ImmutableArray<KeyPick> landed, out string? error)
+    {
+        var picked = Find(doc, key) is { } layer ? Picks(layer, picks) : [];
+        if (picked.IsEmpty)
+        {
+            landed = [];
+            error = null;
+            return doc;
+        }
+        var (first, last) = (picked[0].Frame, picked[^1].Frame);
+        return Retime(doc, key, picked, frame => KeyTiming.Reversed(frame, first, last), false, out landed, out error);
+    }
+
+    /// <summary>
+    /// Copies the picked keys and bone values of the layer to <paramref name="frame"/> on, keeping their spacing (the
+    /// first lands on it), as <see cref="Retime"/> places them; <paramref name="landed"/> picks the copies.
+    /// </summary>
+    public static TimelineDocument DuplicateKeys(TimelineDocument doc, string key, IEnumerable<KeyPick> picks, int frame,
+        out ImmutableArray<KeyPick> landed, out string? error)
+    {
+        var picked = Find(doc, key) is { } layer ? Picks(layer, picks) : [];
+        if (picked.IsEmpty)
+        {
+            landed = [];
+            error = null;
+            return doc;
+        }
+        var offset = frame - picked[0].Frame;
+        return Retime(doc, key, picked, at => at + offset, true, out landed, out error);
+    }
+
+    /// <summary>
+    /// Moves (or with <paramref name="copy"/>, copies) each picked key and bone value of the layer to <paramref name="target"/>
+    /// of its frame, in one go, so keys may pass each other. A whole key goes with its values and ease; a bone's value joins a
+    /// key without that bone it lands on, else starts one with its old key's ease. Unchanged with an <paramref name="error"/>
+    /// when two would land on one frame, one on a key or bone value that stays, one off the clip, or one the layer covers
+    /// outside it (dragging keys never grows a layer either). <paramref name="landed"/> is where the picks end up, in order.
+    /// </summary>
+    private static TimelineDocument Retime(TimelineDocument doc, string key, IEnumerable<KeyPick> picks, Func<int, int> target, bool copy,
+        out ImmutableArray<KeyPick> landed, out string? error)
+    {
+        error = null;
+        var index = IndexOf(doc, key);
+        landed = index < 0 ? [] : Picks(doc.Motion[index], picks);
+        if (landed.IsEmpty)
+            return doc;
+        var layer = doc.Motion[index];
+        var picked = landed;
+        // A still face has its keys on one frame.
+        int To(int frame) => KeyFrame(doc, target(frame));
+        var groups = picked.GroupBy(pick => pick.Frame).Select(group => (Frame: group.Key, To: To(group.Key),
+            Bones: group.Any(pick => pick.Bone == null) ? null : group.Select(pick => pick.Bone!).ToHashSet(StringComparer.Ordinal))).ToList();
+        if (!copy && groups.All(group => group.To == group.Frame))
+            return doc;
+        var end = Math.Min(TimelineDocument.MaxFrames, doc.Length);
+        string? Refused()
+        {
+            if (groups.Select(group => group.To).Distinct().Count() < groups.Count)
+                return "Two keys would land on one frame.";
+            var left = copy ? layer.Keys.ToDictionary(item => item.Frame, item => item.Bones.Keys.ToHashSet(StringComparer.Ordinal)) : LeftBehind(layer, picked);
+            foreach (var group in groups)
+            {
+                if (group.To < 0 || group.To > end)
+                    return "A key would leave the clip.";
+                if (group.Frame >= layer.Start && group.Frame <= layer.End && (group.To < layer.Start || group.To > layer.End))
+                    return "A key would leave the layer.";
+                if (left.TryGetValue(group.To, out var there) && (group.Bones == null || group.Bones.Overlaps(there)))
+                    return "Two keys would land on one frame.";
+            }
+            return null;
+        }
+        if ((error = Refused()) != null)
+            return doc;
+        var sources = groups.ToDictionary(group => group.Frame, group => layer.Keys[KeyIndex(layer, group.Frame)]);
+        var keys = new List<MotionKey>(layer.Keys.Length + groups.Count);
+        foreach (var item in layer.Keys)
+        {
+            if (copy || !sources.ContainsKey(item.Frame))
+                keys.Add(item);
+            else if (groups.First(group => group.Frame == item.Frame).Bones is { } bones &&
+                     item with { Bones = item.Bones.RemoveRange(bones), Moved = [.. item.Moved.Where(bone => !bones.Contains(bone))] } is { Bones.IsEmpty: false } rest)
+                keys.Add(rest);
+        }
+        foreach (var group in groups)
+        {
+            var source = sources[group.Frame];
+            if (group.Bones is not { } bones)
+            {
+                keys.Add(source with { Frame = group.To });
+                continue;
+            }
+            var values = source.Bones.Where(bone => bones.Contains(bone.Key)).ToList();
+            var at = keys.FindIndex(item => item.Frame == group.To);
+            if (at < 0)
+            {
+                keys.Add(new MotionKey(group.To, ImmutableDictionary.CreateRange(StringComparer.Ordinal, values),
+                    [.. source.Moved.Where(bones.Contains)], source.Ease, source.Curve));
+                continue;
+            }
+            var joined = keys[at];
+            keys[at] = joined with
+            {
+                Bones = joined.Bones.SetItems(values),
+                Moved = [.. joined.Moved, .. source.Moved.Where(bone => bones.Contains(bone) && !joined.Moved.Contains(bone))],
+            };
+        }
+        var targets = groups.ToDictionary(group => group.Frame, group => group.To);
+        landed = [.. picked.Select(pick => pick with { Frame = targets[pick.Frame] })];
+        return doc with { Motion = doc.Motion.SetItem(index, layer with { Keys = [.. keys.OrderBy(item => item.Frame)] }) };
+    }
+
     /// <summary>Deletes the picked keys and bone values of the layer; keys left empty go.</summary>
     public static TimelineDocument DeleteKeys(TimelineDocument doc, string key, IEnumerable<KeyPick> picks)
     {

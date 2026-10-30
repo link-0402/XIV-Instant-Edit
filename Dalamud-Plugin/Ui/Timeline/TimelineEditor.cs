@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
+using System.Globalization;
 using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
@@ -18,6 +19,8 @@ internal enum TimelineKey : byte
     RemoveAfter,
     /// <summary>Turns the selected part into a blend, or back into its own motion (B).</summary>
     Blend,
+    /// <summary>Starts scaling the picked keys' timing about the playhead with the mouse (S).</summary>
+    ScaleTiming,
 }
 
 /// <summary>What on the clip band is selected: a part, a join or the loop seam.</summary>
@@ -61,6 +64,8 @@ internal enum TimelineGesture : byte
     EaseLength,
     /// <summary>Plays a part slower or faster by its end (Shift on a part's right edge).</summary>
     Stretch,
+    /// <summary>Scales the picked keys' timing about the playhead as the mouse moves, without a button held (S).</summary>
+    ScaleKeys,
 }
 
 /// <summary>
@@ -739,6 +744,11 @@ internal sealed class TimelineEditor
             BoxPicks();
             return;
         }
+        if (gesture == TimelineGesture.ScaleKeys)
+        {
+            DragScale(frameAtMouse);
+            return;
+        }
         var magnet = Snap && !alt;
         if (gesture == TimelineGesture.Scrub)
         {
@@ -889,8 +899,10 @@ internal sealed class TimelineEditor
             History.Cancel();
         if (gesture is TimelineGesture.LayerKey or TimelineGesture.BoneKey)
             PickOnly(gestureKeyFrame, gestureBone);
-        if (gesture == TimelineGesture.LayerKeys)
+        if (gesture is TimelineGesture.LayerKeys or TimelineGesture.ScaleKeys)
             SetPicks(gesturePicks, new KeyPick(gestureKeyFrame, gestureBone));
+        if (gesture == TimelineGesture.ScaleKeys)
+            LastNotice = null;
         if (gesture == TimelineGesture.KeyBox && boxBefore.Layer is { } boxLayer)
         {
             if (SelectedLayer != boxLayer)
@@ -933,7 +945,9 @@ internal sealed class TimelineEditor
             case TimelineKey.RemoveBefore: return RemoveBeforePlayhead();
             case TimelineKey.RemoveAfter: return RemoveAfterPlayhead();
             case TimelineKey.Blend: return ToggleSelectedBlend();
+            case TimelineKey.Duplicate when SelectedLayer != null && SelectedKey != null: return DuplicateKeys();
             case TimelineKey.Duplicate: return SelectedLayer != null ? DuplicateLayer() : DuplicateSelection();
+            case TimelineKey.ScaleTiming: return BeginScaleKeys();
             case TimelineKey.Copy: return SelectedLayer != null ? CopyKeys() : Copy();
             case TimelineKey.Paste: return SelectedLayer != null && CanPasteKeys ? PasteKeys() : Paste();
             case TimelineKey.SelectAll:
@@ -1817,6 +1831,100 @@ internal sealed class TimelineEditor
         var at = spreadPrimary is { } primary ? spreadPicks.IndexOf(primary) : -1;
         SetPicks(landed, at >= 0 ? landed[at] : null);
         return true;
+    }
+
+    /// <summary>The picked keys of the selected layer, by frame then bone, and the selected key's place among them (-1 when not picked).</summary>
+    private (string Layer, ImmutableArray<KeyPick> Picks, int Primary)? TimingPicks()
+    {
+        if (SelectedLayer is not { } key || PickedKeys.Picks is not { IsEmpty: false } picks)
+            return null;
+        return (key, picks, SelectedKey is { } frame ? picks.IndexOf(new KeyPick(frame, SelectedBone)) : -1);
+    }
+
+    /// <summary>
+    /// Makes <paramref name="next"/>, a timing edit of the picks, current as one undo step and picks <paramref name="landed"/>,
+    /// the selected key's at <paramref name="primary"/>; refused with <paramref name="error"/> in <see cref="LastError"/>.
+    /// </summary>
+    private bool CommitTiming(TimelineDocument next, ImmutableArray<KeyPick> landed, int primary, string? error)
+    {
+        LastError = error;
+        if (error != null || !Commit(next))
+            return false;
+        SetPicks(landed, primary >= 0 && primary < landed.Length ? landed[primary] : null);
+        return true;
+    }
+
+    /// <summary>Scale timing: scales the picked keys' timing by <paramref name="percent"/> about the playhead (<see cref="MotionEdits.ScaleKeysAbout"/>), one undo step.</summary>
+    public bool ScaleTiming(int percent)
+    {
+        LastError = null;
+        if (TimingPicks() is not var (key, picks, primary))
+            return false;
+        var next = MotionEdits.ScaleKeysAbout(Document, key, picks, playhead, percent, out var landed, out var error);
+        return CommitTiming(next, landed, primary, error);
+    }
+
+    /// <summary>Reverse timing: the picked keys play backwards between the first and the last (<see cref="MotionEdits.ReverseKeys"/>), one undo step.</summary>
+    public bool ReverseTiming()
+    {
+        LastError = null;
+        if (TimingPicks() is not var (key, picks, primary))
+            return false;
+        var next = MotionEdits.ReverseKeys(Document, key, picks, out var landed, out var error);
+        return CommitTiming(next, landed, primary, error);
+    }
+
+    /// <summary>Duplicate keys (Ctrl+D): copies the picked keys to the playhead with their spacing and picks the copies, one undo step.</summary>
+    public bool DuplicateKeys()
+    {
+        LastError = null;
+        if (TimingPicks() is not var (key, picks, primary))
+            return false;
+        var next = MotionEdits.DuplicateKeys(Document, key, picks, playhead, out var landed, out var error);
+        return CommitTiming(next, landed, primary, error);
+    }
+
+    /// <summary>
+    /// S: starts scaling the picked keys' timing about the playhead with the mouse. The first <see cref="Drag"/> marks where the
+    /// mouse began; from then on, as many times as far from the playhead as there is the scale (<see cref="KeyTiming.DragPercent"/>,
+    /// never snapped), shown in <see cref="LastNotice"/>. <see cref="Release"/> applies it as one undo step, <see cref="Cancel"/> puts it back.
+    /// </summary>
+    public bool BeginScaleKeys()
+    {
+        if (gesture != TimelineGesture.None || TimingPicks() is not var (key, picks, _))
+            return false;
+        History.End();
+        LastError = null;
+        dragged = false;
+        gestureLayer = key;
+        gesturePicks = picks;
+        gestureKeyFrame = SelectedKey ?? picks[0].Frame;
+        gestureBone = SelectedKey != null ? SelectedBone : picks[0].Bone;
+        playheadAtPress = playhead;
+        pressFrame = float.NaN;
+        BeginEdit(TimelineGesture.ScaleKeys, [], [], []);
+        LastNotice = ScaleNotice(100);
+        return true;
+    }
+
+    private static string ScaleNotice(int percent) => $"Scale {percent.ToString(CultureInfo.InvariantCulture)}%";
+
+    /// <summary>A scale drag at <paramref name="frameAtMouse"/>: a refused scale says why and leaves the last one that worked.</summary>
+    private void DragScale(float frameAtMouse)
+    {
+        if (origin is not { } start || gestureLayer is not { } key)
+            return;
+        if (float.IsNaN(pressFrame))
+            pressFrame = frameAtMouse;
+        var percent = KeyTiming.DragPercent(playheadAtPress, pressFrame, frameAtMouse, View.Scale);
+        LastNotice = ScaleNotice(percent);
+        var next = MotionEdits.ScaleKeysAbout(start, key, gesturePicks, playheadAtPress, percent, out var landed, out var error);
+        LastError = error;
+        if (error != null)
+            return;
+        var primary = gesturePicks.IndexOf(new KeyPick(gestureKeyFrame, gestureBone));
+        SetPicks(landed, primary >= 0 ? landed[primary] : null, next);
+        History.Preview(next);
     }
 
     /// <summary>Deletes the picked keys and bone values, else the selected layer.</summary>
