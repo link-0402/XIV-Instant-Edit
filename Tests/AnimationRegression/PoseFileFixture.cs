@@ -21,6 +21,7 @@ internal static class PoseFileFixture
         Keys(check);
         Trial(check);
         Library(check);
+        Saving(check, reject);
     }
 
     private static Quaternion Q(Vector3 axis, float degrees) => Quaternion.CreateFromAxisAngle(axis, degrees * MathF.PI / 180);
@@ -295,5 +296,71 @@ internal static class PoseFileFixture
               PoseLibrary.EmbeddedImage(Json("""{"Base64Image":"not base64!"}""")) == null &&
               PoseLibrary.EmbeddedImage(Json("not a pose")) == null,
             "a pose file's own picture is read, and none is found in one without");
+    }
+
+    /// <summary>Saving the pose at the playhead: the file Anamnesis writes, read back the same, under any language, written whole.</summary>
+    private static void Saving(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var body = Body();
+        var model = MotionEvaluator.ModelSpace(body, Posed(body));
+        model[3] = model[3] with { Scale = new Vector3(1.05f, .95f, 1) };
+        var bones = body.Bones.Select((bone, i) => (bone.Name, model[i])).ToList();
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        byte[] bytes;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+            bytes = PoseFiles.Write(bones);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = culture;
+        }
+        var text = Encoding.UTF8.GetString(bytes);
+        var back = PoseFiles.Parse(bytes);
+        check(back.Bones.Count == body.Bones.Length && bones.All(pair => back.Bones[pair.Name] is var read &&
+                  Near(read.Position, pair.Item2.Position, 1e-6f) && Degrees(read.Rotation, pair.Item2.Rotation) < 1e-3f &&
+                  Near(read.Scale, pair.Item2.Scale, 1e-6f)),
+            "a saved pose reads back as the same bones in model space");
+        check(!System.Text.RegularExpressions.Regex.IsMatch(text, @"\d,\d") && text.Contains("0.4"),
+            "a saved pose's numbers don't follow the system's language");
+        using (var document = System.Text.Json.JsonDocument.Parse(bytes))
+        {
+            var root = document.RootElement;
+            check(bytes[0] == (byte)'{' && root.GetProperty("FileExtension").GetString() == ".pose" &&
+                  root.GetProperty("TypeName").GetString() == "Anamnesis Pose" && !root.TryGetProperty("FileVersion", out _) &&
+                  root.GetProperty("Position").GetString() == "0, 0, 0" && root.GetProperty("Rotation").GetString() == "0, 0, 0, 1" &&
+                  root.GetProperty("Scale").GetString() == "1, 1, 1" &&
+                  root.EnumerateObject().Select(property => property.Name).SequenceEqual(["FileExtension", "TypeName", "Position", "Rotation", "Scale", "Bones"]),
+                "a saved pose has Anamnesis's header, without a byte order mark");
+        }
+        reject(() => PoseFiles.Write([]), "a pose without bones is refused");
+
+        check(PoseFiles.NameProblem("Sitting 2") == null && PoseFiles.NameProblem(" [Tag] bow ") == null,
+            "an ordinary name is taken");
+        check(new[] { "", "  ", "a/b", "a\\b", "what?", "a:b", "x*", "<x>", "a|b", "\"q\"", "end.", "CON", "nul", "com1" }
+                .All(name => PoseFiles.NameProblem(name) != null),
+            "a name with characters files can't have, or a device's name, is refused");
+
+        var root2 = Path.Combine(Path.GetTempPath(), "InstantEditPoseSave-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root2);
+        try
+        {
+            var path = PoseFiles.PathFor(root2, " Bow ");
+            check(Path.GetFileName(path) == "Bow.pose", "a pose is named as typed, without the spaces around it");
+            PoseFiles.Save(path, bytes);
+            check(System.IO.File.ReadAllBytes(path).SequenceEqual(bytes) && Directory.GetFiles(root2).Length == 1,
+                "a pose is written whole and leaves no other file");
+            var other = PoseFiles.Write(bones.Take(2));
+            PoseFiles.Save(path, other);
+            check(System.IO.File.ReadAllBytes(path).SequenceEqual(other) && Directory.GetFiles(root2).Length == 1,
+                "saving over a pose replaces it and leaves no other file");
+            reject(() => PoseFiles.Save(Path.Combine(root2, "gone", "x.pose"), bytes), "a pose can't be saved into a folder that is gone");
+            check(Directory.GetFiles(root2, "*", SearchOption.AllDirectories).Length == 1, "a failed save leaves nothing behind");
+        }
+        finally
+        {
+            Directory.Delete(root2, true);
+        }
     }
 }
