@@ -299,9 +299,10 @@ internal sealed class TimelineEditor
     /// <summary>The row of <see cref="WeightLayer"/>, whose height a weight drag reads; null when none is edited.</summary>
     public int? WeightRow => MotionEdits.IndexOf(Document, WeightLayer) is var index and >= 0 ? Layout.LayerRow(index) : null;
 
-    /// <summary>Shows every layer's bone rows again, for another clip whose layers only share the keys.</summary>
+    /// <summary>Shows every layer's bone rows again and stops editing a weight, for another clip whose layers only share the keys.</summary>
     public void UnfoldAll()
     {
+        WeightLayer = null;
         if (folded.Count == 0)
             return;
         folded.Clear();

@@ -66,6 +66,9 @@ internal static class LayerWeightFixture
             "a right-click on a point deletes it");
         check(TimelineWindowViews.WeightText(new MotionWeight(12, .6f)) == "Frame 12, 60 %", "a point's tooltip says its frame and weight");
 
+        editor.UnfoldAll();
+        check(editor.WeightLayer == null, "another clip, whose layers only share the keys, starts with no weight edited");
+        editor.SetWeightEditing("m1", true);
         editor.Commit(MotionEdits.Remove(editor.Document, "m1"));
         check(editor.WeightLayer == null, "deleting the layer stops editing its weight");
     }
