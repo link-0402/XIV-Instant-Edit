@@ -47,6 +47,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     /// <summary> Scrolls the lanes back to the top, for another clip. </summary>
     public void ResetScroll() => scrollY = 0;
 
+    /// <summary>The names' column at the left of a strip <paramref name="width"/> wide, so the curve view's frames line up with the lanes'.</summary>
+    public static float LegendWidth(float width) => Math.Min(Theme.Scaled(118), width * .35f);
+
     private static string LaneGlyph(TimelineLane lane) => LaneGlyphs[Math.Min((int)lane, LaneGlyphs.Length - 1)];
 
     private static string LayerGlyph(MotionLayerKind kind) => LayerGlyphs[Math.Min((int)kind, LayerGlyphs.Length - 1)];
@@ -67,7 +70,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         var area = Vector2.Max(ImGui.GetContentRegionAvail(), Vector2.One);
         var row = ImGui.GetFrameHeight() + Theme.Scaled(4);
         var ruler = ImGui.GetFrameHeight() + Theme.Scaled(2);
-        var legend = Math.Min(Theme.Scaled(118), area.X * .35f);
+        var legend = LegendWidth(area.X);
         current.SnapTolerance = Theme.Scaled(8);
         current.SetWidth(Math.Max(1, area.X - legend));
         // Only a clip the game loops has a seam to blend or fix.

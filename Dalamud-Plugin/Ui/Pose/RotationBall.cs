@@ -16,8 +16,8 @@ internal static class RotationBall
 {
     private const int Points = 144;
     private const float HoverDistance = 10;
-    // ImGui colours are ABGR: X red, Y green, Z blue; faint where a ring runs behind the ball.
-    private static readonly uint[] Front = [0xFF3333FF, 0xFF33FF33, 0xFFFF3333];
+    // ImGui colours are ABGR: X red, Y green, Z blue; faint where a ring runs behind the ball. The curve view draws its axes in them.
+    internal static readonly uint[] Front =[0xFF3333FF, 0xFF33FF33, 0xFFFF3333];
     private static readonly uint[] Back = [0x103333FF, 0x1033FF33, 0x10FF3333];
     private const uint LockedFront = 0xFFFFFFFF;
     private const uint LockedBack = 0x10FFFFFF;

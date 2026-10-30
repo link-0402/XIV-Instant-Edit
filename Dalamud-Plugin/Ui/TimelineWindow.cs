@@ -47,6 +47,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly KeyMarkers keyMarkers;
     private readonly CutPanel cutPanel;
     private readonly TimelineCanvas canvas;
+    private readonly CurveView curveView;
     private readonly ShortcutKeys keys;
     private readonly PropertiesPanel properties;
     private readonly SoundSaveCheck soundSave;
@@ -121,6 +122,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         layerPanel = new LayerPanel(session, decode, posing, boneEditor, poseSources, bonesWindow);
         keys = new ShortcutKeys(keyState, framework);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
+        curveView = new CurveView(session, decode, posing);
         properties = new PropertiesPanel(session, effectPlace, new PropPlaceEditor(session), effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers)
             { OpenFace = OpenFace };
         soundSave = new SoundSaveCheck(session, soundFiles);
@@ -136,7 +138,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         blenderMotion = new BlenderMotionPanel(session, decode);
-        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, curveView);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures, keys, () =>
         {
             // Save pose: the pose browser at its last folder, the name to type in focused.
@@ -387,6 +389,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         timelinePreview.Stop();
         blenderMotion.Forget();
         decode.Forget();
+        curveView.Forget();
         poseSources.Drop();
         session.LoopPose.Drop();
         reader.Stop();
@@ -801,7 +804,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         Load(next.Capture, next.Startup, false, pendingAgain);
     }
 
-    /// <summary> The lanes on the left and the side panel on the right, with a splitter between them. </summary>
+    /// <summary> The lanes on the left, the curves under them when shown, and the side panel on the right, with a splitter between them. </summary>
     private void DrawBody(TimelineEditor current, float width, float height)
     {
         var splitter = Theme.Scaled(6);
@@ -811,7 +814,15 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         var minimumProperties = Theme.Scaled(220);
         propertiesWidth = Math.Clamp(propertiesWidth, minimumProperties, Math.Max(minimumProperties, width - minimumCanvas - splitter));
         var canvasWidth = Math.Max(Theme.Scaled(120), width - propertiesWidth - splitter);
-        canvas.Draw(current, new Vector2(canvasWidth, height));
+        // An expression's own timeline has no bones to draw.
+        var curves = curveView.Shown && current.Document.Layered;
+        var strip = curves ? curveView.Height(height) : 0;
+        using (ImRaii.Group())
+        {
+            canvas.Draw(current, new Vector2(canvasWidth, Math.Max(1, height - strip - (curves ? ImGui.GetStyle().ItemSpacing.Y : 0))));
+            if (curves)
+                curveView.Draw(current, new Vector2(canvasWidth, strip));
+        }
         ImGui.SameLine(0, 0);
         var dragged = canvasWidth;
         Widgets.Splitter("##timeline-splitter", ref dragged, minimumCanvas, Math.Max(minimumCanvas, width - minimumProperties - splitter), height);

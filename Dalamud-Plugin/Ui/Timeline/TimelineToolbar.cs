@@ -9,7 +9,7 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, then short messages. </summary>
 internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
-    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion)
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, CurveView curves)
 {
     private const string AddMenu = "##timeline-add-menu";
     private const string ControlsHelp =
@@ -56,6 +56,10 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         // An expression's own timeline takes no bone layers, so it has no bones to pose; its face does.
         if (current.Document.Layered)
         {
+            ImGui.SameLine(0, Theme.Scaled(2));
+            if (TimelineUi.Toggle("##timeline-curves", FontAwesomeIcon.ChartLine, curves.Shown,
+                    curves.Shown ? "Hide the curves." : "Show the selected bone's turns and moves over the clip, under the lanes."))
+                curves.Shown = !curves.Shown;
             ImGui.SameLine(0, Theme.Scaled(2));
             if (TimelineUi.Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
                     ? "Close the Bones window."

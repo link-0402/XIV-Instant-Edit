@@ -2716,3 +2716,19 @@ The wobble's maths is covered offline (NoiseLayerFixture); these checks are the 
   wobble; Ctrl+Z puts the old one back.
 - [ ] 4 A noise over part of a clip starts and ends at rest. The Bones window shows the same pose as Live.
 - [ ] 5 Save and reopen with Edit again: the wobble is the same. Dragging its sliders makes no hitch in dalamud.log.
+
+## Curve view (pending)
+
+- [ ] 1 Body emote, Curves on: the strip shows under the lanes; with no bone selected it says Select a bone. Pick the
+  left upper arm: Turn X, Y and Z draw in red, green and blue, keys line up with the rows above while scrolling and zooming
+  (wheel and Ctrl+wheel in the strip too). Drag the splitter: the strip and the lanes resize.
+- [ ] 2 Motion: with no layer the faint and solid lines are one; add an offset turn on the arm: "Reading" shows briefly,
+  then the solid line follows the layer and the faint one stays the clip's own. A spinning or flipping bone draws no jumps
+  at 180 degrees. Move X / Y / Z switches add the moves in cm.
+- [ ] 3 Layer, the offset layer selected: a dot per key, eased between them as Live plays. Drag a dot up: that one value
+  changes, Live and the Bones window's Turn fields follow; one Ctrl+Z undoes the whole drag. Ctrl+click a dot, type a value
+  and Enter: the key takes it.
+- [ ] 4 Layer on a pose layer whose keys set the hips' position on some keys: Move dots show only on those keys. On an
+  amplitude layer the strip says This layer has no keys to show.
+- [ ] 5 Click or drag on the graph: the playhead follows. Dragging a key on the canvas meanwhile holds the after curve
+  until the drop. No hitch in dalamud.log while the strip is open during playback.

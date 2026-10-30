@@ -96,6 +96,7 @@ internal static class ChangelogCatalog
             Entry("Copy one layer or all of them and paste them into another animation, such as a variant of the same one.", 1),
             Entry("Each key can set how bones get to the next key: smooth, slow start, slow end, hold, or a curve you shape.", 1),
             Entry("Tween, Push / pull and Relax in the Bones window key the selected bones from the layer's keys either side.", 1),
+            Entry("Curves under the lanes show the selected bone's turns and moves over the clip. Drag a key's dot to change one value.", 1),
             Entry("Unfold a layer to see a row per bone, and drag one bone's key on its own.", 1),
             Highlight("Animations: the tab is now the listener and the timeline. Every other animation tool is in the Timeline window."),
             Entry("Load any animation onto your GPose character from the timeline: emotes, idles, ground and chair sits and bed poses by number, every movement track, expressions, or anything else the game has.", 1),
