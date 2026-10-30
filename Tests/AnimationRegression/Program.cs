@@ -36,6 +36,7 @@ Scenarios.Run(() => TimelineWindowViewsFixture.Run(Check, Reject));
 Scenarios.Run(() => MotionLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => MotionEditsFixture.Run(Check, Reject));
 Scenarios.Run(() => BreakdownFixture.Run(Check, Reject));
+Scenarios.Run(() => MotionPathsFixture.Run(Check));
 Scenarios.Run(() => PoseEditorFixture.Run(Check, Reject));
 Scenarios.Run(() => BoneMapFixture.Run(Check));
 Scenarios.Run(() => SymmetryLayerFixture.Run(Check, Reject));
