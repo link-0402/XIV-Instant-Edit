@@ -82,6 +82,7 @@ internal static class ChangelogCatalog
             Entry("Drag mode on the head moves it and keeps the feet where they are; the back leans and the hips follow.", 1),
             Entry("The Bones window's crosshairs switch shows no bones, the selected ones, or all of them on your character.", 1),
             Entry("Onion skins beside it show faint bones for the pose at the layer's keys before and after the playhead.", 1),
+            Entry("Paths beside them draw where the selected bones go over the frames around the playhead, with a bigger dot at each key.", 1),
             Entry("Pick bones on a body map or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),
             Entry("The body map shows only the bones your character uses or the animation moves, like skirt bones while you wear a skirt. The filter button shows them all.", 1),
             Entry("Copy pose takes the selected bones at the playhead. Paste it at another frame or in another animation, or paste it mirrored onto the other side.", 1),

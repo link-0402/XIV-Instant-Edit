@@ -2687,3 +2687,19 @@ The maths and edits are covered offline (LayerWeightFixture); these checks are t
 - [ ] 4 An amplitude layer with a point at 0 over its first half changes nothing there in Live and the save.
 - [ ] 5 Move the layer and duplicate it: the points go with it. Save and reopen with Edit again: the points are back.
 - [ ] 6 Dragging points on a long clip makes no hitch in dalamud.log.
+
+## Motion paths (pending)
+
+The Bones window's paths switch, beside onion skins, draws lines on the GPose character through the selected bones'
+positions over the frames around the playhead. The frames and the cache are covered offline in MotionPathsFixture.
+
+- [ ] 1 Select a hand on a dance and turn on the switch: a line follows the hand's arc, blue before the playhead and
+  orange after, white at the playhead, on the hand's dot. Play or scrub: the path moves with the playhead.
+- [ ] 2 Key the hand in an offset layer at two frames inside the range: those frames have bigger dots.
+- [ ] 3 Range 5 and 60: the path gets shorter and longer. Near the clip's start or end it stops there; on a looping
+  emote it carries on round the seam.
+- [ ] 4 Select both hands and both feet: four paths. Select 10 bones: eight paths and the note beside the selection.
+- [ ] 5 Drag a key with the gizmo: the path follows without blanking. Undo: it goes back.
+- [ ] 6 Scrub a long dance with Range 60 and 8 bones: no hitch in dalamud.log.
+- [ ] 7 Turn the crosshairs Off: no paths. Close and reopen the Bones window: the switch and the range keep their state
+  until the plugin reloads.
