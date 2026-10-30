@@ -122,6 +122,23 @@ internal static class PainterScenarios
         return BuildModel(meshes, ["atr_a", "atr_b"], ["/mt_a.mtrl", "/mt_b.mtrl"], materialTableOrder: [1, 0]);
     }
 
+    /// <summary> One square mesh per material, laid out on the UV map from (U0, V0) to (U1, V1): float3 positions and float2 UVs in one stream. </summary>
+    internal static byte[] UvSquaresModel(params (string Material, float U0, float V0, float U1, float V1)[] squares)
+    {
+        var meshes = squares.Select((square, m) =>
+        {
+            var stream = new byte[4 * 20];
+            var uvs = new[] { (square.U0, square.V0), (square.U1, square.V0), (square.U1, square.V1), (square.U0, square.V1) };
+            for (var v = 0; v < 4; v++)
+            {
+                WriteF32(stream, v * 20, v % 2, v / 2, 0);
+                WriteF32(stream, v * 20 + 12, uvs[v].Item1, uvs[v].Item2);
+            }
+            return new MeshSpec([new Element(0, 0, 2, 0), new Element(0, 12, 1, 4)], [stream], [20], 4, [0, 1, 2, 0, 2, 3], (ushort)m, []);
+        }).ToArray();
+        return BuildModel(meshes, [], squares.Select(s => s.Material).ToArray(), Enumerable.Range(0, squares.Length).ToArray());
+    }
+
     private static byte[] BuildModel(MeshSpec[] meshes, string[] attributes, string[] materialStrings, int[] materialTableOrder)
     {
         // String block: attributes then materials.

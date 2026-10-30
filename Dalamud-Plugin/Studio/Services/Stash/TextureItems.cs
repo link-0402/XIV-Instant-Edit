@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Threading;
 using InstantEdit.Services.Previews;
 using InstantEdit.Services.TextureCompression;
@@ -110,6 +111,8 @@ internal static class TextureItems
 {
     private const int Grid = 64, Work = 256;
     private const double LayoutMatch = 0.6, LayoutMargin = 0.1, MinFill = 0.05, MaxFill = 0.95;
+    private const double MinBackground = 0.1, MaxBackground = 0.98;
+    private const byte Dark = 8;
     private const long MaxMaterialBytes = 1024 * 1024;
     private const int MaxLayoutImages = 120;
 
@@ -369,6 +372,55 @@ internal static class TextureItems
             return either == 0 ? 0 : both / (double)either;
         }
 
+        /// <summary>Of the cells <paramref name="other"/> paints, the share this one paints too; 0 when it paints none.</summary>
+        public double Covers(Layout other)
+        {
+            int both = 0, theirs = 0;
+            for (int i = 0; i < Cells.Length; i++)
+            {
+                if (!other.Cells[i]) continue;
+                theirs++;
+                if (Cells[i]) both++;
+            }
+            return theirs == 0 ? 0 : both / (double)theirs;
+        }
+
+        /// <summary>
+        /// Where triangles of a UV map lie, wrapped into the 0-1 square with the game's top-left origin: the
+        /// cells whose centre a triangle covers, and the cell a triangle too small to cover one starts in.
+        /// </summary>
+        public static Layout FromUvTriangles(IEnumerable<(Vector2 A, Vector2 B, Vector2 C)> triangles)
+        {
+            var cells = new bool[Grid * Grid];
+            foreach (var (a, b, c) in triangles)
+            {
+                var (pa, pb, pc) = (a * Grid, b * Grid, c * Grid);
+                if (!float.IsFinite(pa.X + pa.Y + pb.X + pb.Y + pc.X + pc.Y))
+                    continue;
+                var min = Vector2.Min(pa, Vector2.Min(pb, pc));
+                var max = Vector2.Max(pa, Vector2.Max(pb, pc));
+                if (max.X - min.X > Grid * 4 || max.Y - min.Y > Grid * 4)
+                    continue;   // a stray vertex far outside the map, not an island
+                Mark(cells, (int)MathF.Floor(pa.X), (int)MathF.Floor(pa.Y));
+                for (int y = (int)MathF.Floor(min.Y); y < (int)MathF.Ceiling(max.Y); y++)
+                    for (int x = (int)MathF.Floor(min.X); x < (int)MathF.Ceiling(max.X); x++)
+                        if (Inside(new Vector2(x + 0.5f, y + 0.5f), pa, pb, pc))
+                            Mark(cells, x, y);
+            }
+            return new Layout(cells);
+        }
+
+        private static void Mark(bool[] cells, int x, int y)
+            => cells[(((y % Grid) + Grid) % Grid) * Grid + ((x % Grid) + Grid) % Grid] = true;
+
+        private static bool Inside(Vector2 p, Vector2 a, Vector2 b, Vector2 c)
+        {
+            float d1 = (p.X - b.X) * (a.Y - b.Y) - (a.X - b.X) * (p.Y - b.Y);
+            float d2 = (p.X - c.X) * (b.Y - c.Y) - (b.X - c.X) * (p.Y - c.Y);
+            float d3 = (p.X - a.X) * (c.Y - a.Y) - (c.X - a.X) * (p.Y - a.Y);
+            return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
+        }
+
         /// <summary>
         /// The layout of an RGBA image of <see cref="Work"/> by <see cref="Work"/> pixels: colour (dimmed
         /// where transparent) and alpha gradients, summed into <see cref="Grid"/> cells, a cell counting as
@@ -420,6 +472,43 @@ internal static class TextureItems
         {
             return null;   // an image that can't be read just stays loose
         }
+    }
+
+    /// <summary>
+    /// Where an image's UV islands are, read off a flat background: the cells holding a quarter or more pixels
+    /// that are neither transparent nor near-black. An ambient occlusion or mask map baked by Substance Painter
+    /// has such a background; its colour and normal maps are dilated across the whole image, so they give null,
+    /// as does an image that is (nearly) all background or none.
+    /// </summary>
+    public static Layout? IslandsOf(string path, CancellationToken cancel)
+    {
+        cancel.ThrowIfCancellationRequested();
+        if (!LayoutExtensions.Contains(Path.GetExtension(path)))
+            return null;
+        Rgba32[] pixels;
+        try
+        {
+            using var image = LoadSmall(path);
+            image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(Work, Work), Mode = ResizeMode.Stretch, Sampler = KnownResamplers.NearestNeighbor }));
+            pixels = new Rgba32[Work * Work];
+            image.CopyPixelDataTo(pixels);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+
+        static bool Background(Rgba32 p) => p.A <= Dark || (p.R <= Dark && p.G <= Dark && p.B <= Dark);
+        var background = pixels.Count(Background) / (double)pixels.Length;
+        if (background is < MinBackground or > MaxBackground)
+            return null;
+        const int cell = Work / Grid;
+        var painted = new int[Grid * Grid];
+        for (int y = 0; y < Work; y++)
+            for (int x = 0; x < Work; x++)
+                if (!Background(pixels[y * Work + x]))
+                    painted[(y / cell) * Grid + x / cell]++;
+        return new Layout(painted.Select(p => p * 4 >= cell * cell).ToArray());
     }
 
     private static Image<Rgba32> LoadSmall(string path)

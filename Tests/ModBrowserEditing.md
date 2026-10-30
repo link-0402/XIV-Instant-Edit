@@ -86,6 +86,8 @@ interactive checks have not been performed by the implementation agent.
 - **+ Material > Fit to model** on an item that has materials asks first, then redoes them.
 - Pick a stash model with the inspector's browse button, or with Add file(s) on a race set to variants. An
   item with no materials gets them, as when the model is dropped.
+- A material whose name matches no texture gets the set its UVs lie on. Open `F:\Downloads\sin tonic` and
+  drop `top.mdl` on a Build item: material a ("4.0 Ribbon" in the model) gets the ASD textures.
 - Type a path into the Output field letter by letter: the window doesn't stutter.
 - Start over (top right) clears the modpack after its confirmation.
 - Weapons: add a weapon from Add from game > Weapons, drop a model and a texture,

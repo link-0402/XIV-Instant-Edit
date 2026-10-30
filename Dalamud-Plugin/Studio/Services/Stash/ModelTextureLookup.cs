@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Text.RegularExpressions;
 using System.Threading;
+using InstantEdit.Services.Previews;
 using InstantEdit.Studio.Models;
 
 namespace InstantEdit.Studio.Services.Stash;
@@ -11,7 +13,8 @@ namespace InstantEdit.Studio.Services.Stash;
 /// <summary>
 /// The stash's textures for the materials a model names: a model Blender saved into the stash (or any
 /// model of a stash folder) dropped on a Build item finds each material's textures in the package it
-/// came from. Reads the stash's files, and nothing of the game or the session.
+/// came from, by the material's name or else by where the model's UVs lie. Reads the stash's files and the
+/// model, and nothing of the game or the session.
 /// </summary>
 internal sealed class ModelTextureLookup
 {
@@ -20,16 +23,31 @@ internal sealed class ModelTextureLookup
     /// <summary>The number Blender gives a second material of the same name ("Body.001").</summary>
     private static readonly Regex BlenderSuffix = new(@"\.\d{3}$", RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// How much of a material's UV layout a texture set's islands must hold to be its set, and how far ahead of
+    /// any set of another name. Measured on a Substance Painter outfit (2026-10-30): a material's own set held all
+    /// of it, every other set at most 0.88.
+    /// </summary>
+    private const double UvMatch = 0.9, UvMargin = 0.1;
+
+    /// <summary>Words of an opacity map's name: its islands are where the part is see-through, not where it is painted.</summary>
+    private static readonly HashSet<string> OpacityWords = new(StringComparer.Ordinal) { "opacity", "alpha", "transparency" };
+
     /// <summary>The source model's entry: its Unity material remap, when it has one.</summary>
     private readonly StashEntry? _source;
+    /// <summary>The model file the materials are for, whose UV layouts a material's name can't tell are read from.</summary>
+    private readonly string? _model;
     private readonly CancellationToken _cancel;
     private (TextureItemList Items, TextureItemNames Names)? _items;
+    private Dictionary<string, TextureItems.Layout>? _uvs;
+    private readonly Dictionary<TextureItem, TextureItems.Layout?> _islands = new();
 
-    private ModelTextureLookup(string? folder, StashManifest? manifest, StashEntry? source, CancellationToken cancel)
+    private ModelTextureLookup(string? folder, StashManifest? manifest, StashEntry? source, string? model, CancellationToken cancel)
     {
         Folder   = folder;
         Manifest = manifest;
         _source  = source;
+        _model   = model;
         _cancel  = cancel;
     }
 
@@ -52,7 +70,7 @@ internal sealed class ModelTextureLookup
         var roots  = stashRoots.ToList();
         var opened = openedFolders.ToList();
         if (Full(modelPath) is not { } model || FolderHolding(model, roots, opened) is not { } modelFolder)
-            return new ModelTextureLookup(null, null, null, cancel);
+            return new ModelTextureLookup(null, null, null, null, cancel);
 
         string folder = modelFolder, source = model;
         if (ExportOf(modelFolder, model) is { Sources.Count: > 0 } export && Full(export.Sources[0]) is { } first
@@ -65,7 +83,7 @@ internal sealed class ModelTextureLookup
         var manifest = ReadManifest(folder);
         var relative = Relative(folder, source);
         var entry = manifest?.Entries.FirstOrDefault(e => string.Equals(e.Path, relative, StringComparison.OrdinalIgnoreCase));
-        return new ModelTextureLookup(folder, manifest, entry, cancel);
+        return new ModelTextureLookup(folder, manifest, entry, model, cancel);
     }
 
     /// <summary>
@@ -104,7 +122,8 @@ internal sealed class ModelTextureLookup
     /// The textures for one of the model's materials, by purpose, as full paths. First that has it: the
     /// Unity material the source model's remap gives the name, the stash material of the same name
     /// (ignoring case and Blender's ".001"), one named the same and more ("Thigh" → "Thigh Highs"), the
-    /// texture set the name's telling words point at (see <see cref="TextureItemNames"/>). A stash material
+    /// texture set the name's telling words point at (see <see cref="TextureItemNames"/>), the texture set
+    /// whose UV islands the model's meshes of the material lie on (see <see cref="ByUvs"/>). A stash material
     /// counts only while a texture of it fills a slot (a matcap alone fills none), and what it leaves out
     /// comes from the texture set its textures are in. Empty when none does.
     /// </summary>
@@ -126,7 +145,96 @@ internal sealed class ModelTextureLookup
         foreach (var candidate in names)
             if (MaterialNamedLonger(candidate) is { } longer)
                 return WithItsSet(longer);
-        return Absolute(ByWords(name));
+        var byWords = ByWords(name);
+        return Absolute(byWords.Count > 0 ? byWords : ByUvs(name));
+    }
+
+    /// <summary>
+    /// The textures of the item whose UV islands hold the model's meshes of the material, for a material whose
+    /// name tells nothing (Blender's "4.0 Ribbon" on a dress painted as "ASD"): one holding at least
+    /// <see cref="UvMatch"/> of the cells the meshes' UVs cover, by <see cref="UvMargin"/> more than any item
+    /// of another name. An item's islands come from its maps with a flat background (see
+    /// <see cref="TextureItems.IslandsOf"/>); an item with none of those can't be found this way.
+    /// </summary>
+    private IReadOnlyDictionary<TexturePurpose, string> ByUvs(string name)
+    {
+        if (Uvs().GetValueOrDefault(name) is not { } mesh)
+            return None;
+        var (list, _) = Items();
+        var ranked = list.Items.Select(i => (Item: i, Share: IslandsOf(i)?.Covers(mesh) ?? 0))
+                               .Where(r => r.Share > 0)
+                               .OrderByDescending(r => r.Share)
+                               .ToList();
+        if (ranked.Count == 0)
+            return None;
+        var second = ranked.Skip(1).FirstOrDefault(r => !string.Equals(r.Item.Name, ranked[0].Item.Name, StringComparison.OrdinalIgnoreCase)).Share;
+        if (ranked[0].Share < UvMatch || ranked[0].Share - second < UvMargin)
+            return None;
+
+        var item = ranked[0].Item;
+        var textures = new Dictionary<TexturePurpose, string>();
+        foreach (var texture in item.Textures.Where(t => t.Purpose is not (TexturePurpose.Other or TexturePurpose.Matcap))
+                                             .OrderBy(t => item.ByLayout.Contains(t) ? 1 : 0))
+            textures.TryAdd(texture.Purpose, texture.Path);
+        return textures;
+    }
+
+    /// <summary>
+    /// Where an item's UV islands are: the cells any of its maps with a flat background paints. Its colour,
+    /// normal and opacity maps are left out, and so are textures that joined it by their layout. Read once.
+    /// A finished mod's colour maps aren't dilated, but one painted over most of the image holds nearly any
+    /// mesh: with them, a Penumbra mod's stockings went to its choker (2026-10-30).
+    /// </summary>
+    private TextureItems.Layout? IslandsOf(TextureItem item)
+    {
+        if (_islands.TryGetValue(item, out var known))
+            return known;
+        bool[]? cells = null;
+        foreach (var texture in item.Textures)
+        {
+            if (item.ByLayout.Contains(texture) || texture.Purpose is TexturePurpose.Diffuse or TexturePurpose.Normal or TexturePurpose.Matcap
+                || TexturePurposes.Words(Path.GetFileNameWithoutExtension(texture.Path)).Any(OpacityWords.Contains))
+                continue;
+            if (TextureItems.IslandsOf(Path.Combine(Folder!, texture.Path.Replace('/', Path.DirectorySeparatorChar)), _cancel) is not { } islands)
+                continue;
+            cells ??= new bool[islands.Cells.Length];
+            for (int i = 0; i < cells.Length; i++)
+                cells[i] |= islands.Cells[i];
+        }
+        return _islands[item] = cells == null ? null : new TextureItems.Layout(cells);
+    }
+
+    /// <summary>
+    /// The UV layout of each of the model's materials, by its name as <see cref="NameOf"/> gives it: where its
+    /// LOD 0 meshes' first UV map lies. Read once; empty for a model that can't be read.
+    /// </summary>
+    private Dictionary<string, TextureItems.Layout> Uvs()
+    {
+        if (_uvs != null)
+            return _uvs;
+        _uvs = new Dictionary<string, TextureItems.Layout>(StringComparer.OrdinalIgnoreCase);
+        if (_model == null)
+            return _uvs;
+        ModelMesh model;
+        try
+        {
+            model = ModelMeshReader.Read(File.ReadAllBytes(_model));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException
+                                      or ArgumentException or OverflowException or IndexOutOfRangeException)
+        {
+            return _uvs;   // a model that can't be read just tells nothing by its UVs
+        }
+        foreach (var group in model.Meshes.GroupBy(m => NameOf(model.Materials[m.MaterialIndex]), StringComparer.OrdinalIgnoreCase))
+            _uvs[group.Key] = TextureItems.Layout.FromUvTriangles(group.SelectMany(Triangles));
+        return _uvs;
+    }
+
+    private static IEnumerable<(Vector2 A, Vector2 B, Vector2 C)> Triangles(ModelMeshPart mesh)
+    {
+        foreach (var submesh in mesh.Submeshes)
+            for (int i = 0; i + 2 < submesh.Indices.Length; i += 3)
+                yield return (mesh.Uvs[submesh.Indices[i]], mesh.Uvs[submesh.Indices[i + 1]], mesh.Uvs[submesh.Indices[i + 2]]);
     }
 
     /// <summary>

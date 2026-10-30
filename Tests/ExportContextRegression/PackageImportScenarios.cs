@@ -77,6 +77,7 @@ internal static class PackageImportScenarios
         LookupMatchesMaterials(root);
         LookupByWordsPrefersADiffuse(root);
         LookupByLongerNames(root);
+        LookupByUvs(root);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -642,6 +643,50 @@ internal static class PackageImportScenarios
         var metal = lookup.TexturesFor("/Metal.mtrl");
         Require(metal.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("Metal/Metal_Base_color.png") && !metal.ContainsKey(TexturePurpose.Matcap),
             $"a material whose textures fill no slot (a matcap alone) is passed over ({Show(metal)})");
+    }
+
+    /// <summary>
+    /// A model made in Blender whose materials are named for nothing in the folder ("4.0 Ribbon" on the Sin &amp; Tonic
+    /// dress, whose textures are "ASD_…"), beside Substance Painter sets: the set whose ambient occlusion islands
+    /// its UVs lie on is its set. Colour maps are painted everywhere, as Substance dilates them, and say nothing.
+    /// </summary>
+    private static void LookupByUvs(string root)
+    {
+        var folder = Path.GetFullPath(Path.Combine(root, "uv-opened"));
+        if (Directory.Exists(folder))
+            Directory.Delete(folder, true);
+        PaintedImage(folder, "PBR/Dress_Base_color.png", 1, 0, 1, 2, 3);
+        PaintedImage(folder, "PBR/Dress_Mixed_AO.png", 2, 0);
+        PaintedImage(folder, "PBR/Dress_Opacity.png", 3, 0, 1, 2, 3);
+        PaintedImage(folder, "PBR/Shoes_Base_color.png", 4, 0, 1, 2, 3);
+        PaintedImage(folder, "PBR/Shoes_Mixed_AO.png", 5, 3);
+        PaintedImage(folder, "PBR/Veil_Base_color.png", 6, 0, 1, 2, 3);
+        PaintedImage(folder, "PBR/Veil_Roughness.png", 7, 1, 2);
+        PaintedImage(folder, "PBR/Cape_Base_color.png", 8, 0, 1, 2, 3);
+        PaintedImage(folder, "PBR/Cape_Mixed_AO.png", 9, 2);
+        var model = Path.Combine(folder, "Outfit.mdl");
+        File.WriteAllBytes(model, PainterScenarios.UvSquaresModel(
+            ("/4.0 Ribbon.mtrl", 0.05f, 0.05f, 0.45f, 0.45f), ("/Material.mtrl", 0.55f, 1.55f, 0.95f, 1.95f),
+            ("/Strap.mtrl", 0.55f, 0.05f, 0.95f, 0.45f), ("/Pin.mtrl", 0.05f, 0.55f, 0.45f, 0.95f), ("/Shoes.mtrl", 0.05f, 0.05f, 0.45f, 0.45f)));
+
+        var lookup = ModelTextureLookup.Open(model, Array.Empty<string>(), new[] { folder });
+        string Texture(string relative) => Path.Combine(folder, relative.Replace('/', Path.DirectorySeparatorChar));
+        string Show(IReadOnlyDictionary<TexturePurpose, string> found) => string.Join(", ", found.Select(p => $"{p.Key}={Path.GetFileName(p.Value)}"));
+
+        var ribbon = lookup.TexturesFor("/4.0 Ribbon.mtrl");
+        Require(ribbon.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("PBR/Dress_Base_color.png")
+                && ribbon.GetValueOrDefault(TexturePurpose.Occlusion) == Texture("PBR/Dress_Mixed_AO.png"),
+            $"a material whose name tells nothing gets the set whose islands its UVs lie on, though every colour map is painted there ({Show(ribbon)})");
+        var material = lookup.TexturesFor("/Material.mtrl");
+        Require(material.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("PBR/Shoes_Base_color.png"),
+            $"UVs outside the 0-1 square count where they wrap to ({Show(material)})");
+        var strap = lookup.TexturesFor("/Strap.mtrl");
+        Require(strap.GetValueOrDefault(TexturePurpose.Diffuse) == Texture("PBR/Veil_Base_color.png"),
+            $"a roughness map shows the islands as well as an occlusion map ({Show(strap)})");
+        Require(lookup.TexturesFor("/Pin.mtrl").Count == 0, "UVs that lie on two sets' islands alike get neither");
+        Require(lookup.TexturesFor("/Shoes.mtrl").GetValueOrDefault(TexturePurpose.Diffuse) == Texture("PBR/Shoes_Base_color.png"),
+            "a material's name comes before where its UVs lie");
+        Require(lookup.TexturesFor("/Unknown.mtrl").Count == 0, "a material the model doesn't have finds nothing by UVs");
     }
 
     private static void StoppedReExtractKeepsTheEarlierOne(string root)
