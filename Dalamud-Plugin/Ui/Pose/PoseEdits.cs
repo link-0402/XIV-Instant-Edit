@@ -364,6 +364,46 @@ internal static class PoseEdits
     }
 
     /// <summary>
+    /// Breaks down <paramref name="bones"/> at <paramref name="frame"/> in an offset or pose layer against each bone's keys
+    /// before and after (<see cref="MotionBreakdown"/>), into the key there or a new one with the layer's ease. Bones
+    /// missing a key either side are skipped, and for Push / pull and Relax bones not keyed at the playhead too, as
+    /// nothing would change. A pose's position changes only where both keys either side set it (and for Push / pull and
+    /// Relax the key at the playhead too); its key then sets it. <paramref name="status"/> says why nothing changed.
+    /// </summary>
+    public static TimelineDocument Breakdown(TimelineDocument doc, string layerKey, int frame, IEnumerable<string> bones, BreakdownMode mode,
+        float amount, out string? status)
+    {
+        status = null;
+        if (MotionEdits.Find(doc, layerKey) is not { Kind: MotionLayerKind.Offset or MotionLayerKind.Pose } layer)
+            return doc;
+        var pose = layer.Kind == MotionLayerKind.Pose;
+        var at = MotionEdits.KeyIndex(layer, frame);
+        var spanned = false;
+        var written = false;
+        foreach (var bone in bones)
+        {
+            if (MotionBreakdown.Span(layer, bone, frame) is not { } span)
+                continue;
+            spanned = true;
+            var inter = MotionBreakdown.Inter(span, frame);
+            var keyed = at >= 0 && layer.Keys[at].Bones.ContainsKey(bone);
+            if (!keyed && mode != BreakdownMode.Tween)
+                continue;
+            var current = keyed ? MotionTransform.From(layer.Keys[at].Bones[bone]) : inter;
+            var parts = layer.Components;
+            var moves = pose && span.BeforeMoved && span.AfterMoved && (mode == BreakdownMode.Tween || layer.Keys[at].Moved.Contains(bone));
+            if (pose && !moves)
+                parts &= ~PoseComponents.Position;
+            var value = MotionBreakdown.Blend(mode, amount, span, inter, current, parts);
+            doc = MotionEdits.SetKey(doc, layerKey, frame, bone, value.ToBone(), moves && parts.HasFlag(PoseComponents.Position) ? true : null);
+            written = true;
+        }
+        if (!written)
+            status = spanned ? "Key this frame first." : "No keys either side.";
+        return doc;
+    }
+
+    /// <summary>
     /// Keys every bone at <paramref name="frame"/> back to the motion under the layer: no change for an offset, the
     /// transform the layers before leave (<paramref name="motion"/>) for a pose, which then leaves the position to them.
     /// Bones whose motion is unknown are left as they are.
