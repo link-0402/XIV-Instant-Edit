@@ -252,6 +252,8 @@ internal static class MotionEvaluator
                 throw new InvalidDataException($"{name} pins a bone twice or a bone without a name.");
             if (!Enum.IsDefined(pin.Sensitivity))
                 throw new InvalidDataException($"{name} has a pin whose sensitivity can't be read.");
+            if (!float.IsFinite(pin.Bend) || pin.Bend is < -180 or > 180)
+                throw new InvalidDataException($"{name} has a pin whose bend is out of range.");
         }
         var previous = -1;
         foreach (var key in layer.Keys)

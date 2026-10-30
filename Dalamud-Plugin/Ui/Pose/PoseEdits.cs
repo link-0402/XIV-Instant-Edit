@@ -178,17 +178,18 @@ internal static class PoseEdits
     /// A drag passes <paramref name="start"/>, <paramref name="through"/> as it began: every frame solves from there, so where the
     /// chain ends up depends only on the aim, and turns can't build up in its bones over a long drag. It may also pass
     /// <paramref name="limb"/>, <see cref="Limb"/> for <paramref name="bone"/>, so its frames don't find the chain again.
+    /// <paramref name="bend"/> turns a limb about the line from its upper bone to the aim, in degrees, as a pin's Bend does.
     /// </summary>
     public static TimelineDocument Reach(TimelineDocument doc, MotionLayer layer, int frame, SkeletonDescription skeleton,
         ReadOnlySpan<MotionTransform> before, ReadOnlySpan<MotionTransform> through, string bone, Vector3 aim, float weight, float loop = 0,
-        MotionTransform[]? start = null, (PinChain Chain, Vector3 RestNormal)? limb = null)
+        MotionTransform[]? start = null, (PinChain Chain, Vector3 RestNormal)? limb = null, float bend = 0)
     {
         var (chain, normal) = limb ?? Limb(skeleton, bone);
         if (chain.Shape == PinChainShape.None || !(weight >= MinFollowWeight))
             return doc;
         var local = start?.ToArray() ?? through.ToArray();
         var model = MotionEvaluator.ModelSpace(skeleton, local);
-        PinSolver.Reach(skeleton, local, model, chain, aim, normal);
+        PinSolver.Reach(skeleton, local, model, chain, aim, normal, 1, bend);
         return KeyTurns(doc, layer, frame, skeleton, before, through, local, chain.Bones, weight, loop);
     }
 

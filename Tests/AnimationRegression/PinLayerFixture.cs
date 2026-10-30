@@ -21,6 +21,7 @@ internal static class PinLayerFixture
         Journals(check);
         Chains(check, reject);
         Solver(check);
+        Limits(check);
         Planting(check);
         Clips(check, reject);
         Edits(check);
@@ -272,6 +273,8 @@ internal static class PinLayerFixture
         check(MotionEdits.Find(riding, key)! is { Keys.IsEmpty: true } rides && rides.Pins[2].RelativeTo == "j_sebo_c" &&
               MotionEdits.Find(holding, key)!.Keys.Single().Bones.ContainsKey("j_te_l"),
             "a pin that rides with another bone drops its keys, whose spots meant somewhere else; other settings keep them");
+        var bent = MotionEdits.SetPin(keyed, key, MotionEdits.Find(keyed, key)!.Pins[2] with { Bend = 30 });
+        check(MotionEdits.Find(bent, key)! is { Keys: [_] } bentLayer && bentLayer.Pins[2].Bend == 30, "a pin's bend changes without dropping its keys");
         check(MotionEdits.Find(MotionEdits.RemovePin(keyed, key, "j_te_l"), key) is { Keys.IsEmpty: true } removed && removed.Pins.Length == 2,
             "removing a pin drops it and its keys");
         check(ReferenceEquals(MotionEdits.SetPin(keyed, key, new("j_nothing")), keyed) && ReferenceEquals(MotionEdits.SetPin(keyed, key, MotionEdits.Find(keyed, key)!.Pins[2]), keyed),
@@ -803,6 +806,150 @@ internal static class PinLayerFixture
             "the held turn lands in model space and the toes follow");
     }
 
+    /// <summary>Whether the limb's mid joint bends to the rest pose's side, in its upper bone's own space; a straight limb counts as forward.</summary>
+    private static bool Forward(MotionTransform[] model, PinChain chain, Vector3 restNormal)
+    {
+        var upper = model[chain.Mid].Position - model[chain.Root].Position;
+        var lower = model[chain.End].Position - model[chain.Mid].Position;
+        var hinge = Vector3.Transform(Vector3.Cross(upper, lower), Quaternion.Inverse(Quaternion.Normalize(model[chain.Root].Rotation)));
+        return hinge.Length() < .0175f * upper.Length() * lower.Length() || Vector3.Dot(hinge, restNormal) > 0;
+    }
+
+    /// <summary>The angle between the limb's upper and lower bones, in degrees: 0 straight.</summary>
+    private static float Bent(MotionTransform[] model, PinChain chain)
+    {
+        var upper = Vector3.Normalize(model[chain.Mid].Position - model[chain.Root].Position);
+        var lower = Vector3.Normalize(model[chain.End].Position - model[chain.Mid].Position);
+        return MathF.Acos(Math.Clamp(Vector3.Dot(upper, lower), -1, 1)) * 180 / MathF.PI;
+    }
+
+    /// <summary>Knee and elbow limits, and the bend angle that turns a limb about the line from its root to its aim.</summary>
+    private static void Limits(Action<bool, string> check)
+    {
+        var body = Body();
+        // Aims all round the root, near and far: the knee and the elbow only ever bend forward, and the end still reaches.
+        foreach (var end in new[] { PinChains.FootL, "j_te_l" })
+        {
+            var chain = PinChains.Chain(body, new(end));
+            var normal = PinSolver.RestNormal(body, chain);
+            var rest = Model();
+            var reach = Vector3.Distance(rest[chain.Mid].Position, rest[chain.Root].Position) + Vector3.Distance(rest[chain.End].Position, rest[chain.Mid].Position);
+            var backwards = new List<string>();
+            var reaches = true;
+            for (var x = -1; x <= 1; x++)
+                for (var y = -1; y <= 1; y++)
+                    for (var z = -1; z <= 1; z++)
+                    {
+                        if (x == 0 && y == 0 && z == 0)
+                            continue;
+                        foreach (var share in new[] { .5f, .75f, .95f })
+                        {
+                            var (l, m) = Pose();
+                            var aim = m[chain.Root].Position + Vector3.Normalize(new Vector3(x, y, z)) * share * reach;
+                            PinSolver.Reach(body, l, m, chain, aim, normal);
+                            if (!Forward(m, chain, normal))
+                                backwards.Add($"({x},{y},{z})x{share}");
+                            reaches &= Vector3.Distance(m[chain.End].Position, aim) < 1e-4f;
+                        }
+                    }
+            check(backwards.Count == 0, $"{end} bends forward for aims all round its root{(backwards.Count > 0 ? ": backward at " + string.Join(" ", backwards) : "")}");
+            check(reaches, $"{end} reaches aims all round its root");
+        }
+
+        var leg = PinChains.Chain(body, new(PinChains.FootL));
+        var legNormal = PinSolver.RestNormal(body, leg);
+        // The foot raised sideways past the hip: the free solver bent the knee backwards here.
+        var (sl, sm) = Pose();
+        var side = sm[ThighL].Position + Vector3.Normalize(new Vector3(1, 1, 0)) * .6f;
+        PinSolver.Reach(body, sl, sm, leg, side, legNormal);
+        check(Forward(sm, leg, legNormal) && Vector3.Distance(sm[FootL].Position, side) < 1e-4f && Vector3.Dot(KneeSide(sm, leg), Vector3.UnitZ) > 0,
+            "a foot raised sideways past the hip bends the knee forward and still reaches");
+
+        // An aim pulled in toward the hip: the knee folds to MaxBend and no further, the foot falling short along the line, without a jump.
+        var most = MathF.Sqrt(.4f * .4f * 2 - 2 * .4f * .4f * MathF.Cos((180 - PinSolver.MaxBend) * MathF.PI / 180));
+        var line = Vector3.Normalize(Model()[FootL].Position - Model()[ThighL].Position);
+        float? last = null;
+        var limited = true;
+        var deepest = 0f;
+        for (var i = 0; i <= 20; i++)
+        {
+            var (l, m) = Pose();
+            var d = .42f - i * .02f;
+            var aim = m[ThighL].Position + line * d;
+            PinSolver.Reach(body, l, m, leg, aim, legNormal);
+            var got = Vector3.Distance(m[FootL].Position, m[ThighL].Position);
+            deepest = Math.Max(deepest, Bent(m, leg));
+            limited &= Bent(m, leg) <= PinSolver.MaxBend + .01f && got >= most - 1e-4f && got >= d - 1e-5f &&
+                       (last == null || got <= last + 1e-5f && last - got <= .02f + 1e-5f) && Forward(m, leg, legNormal) &&
+                       Vector3.Cross(m[FootL].Position - m[ThighL].Position, line).Length() < 1e-4f;
+            last = got;
+        }
+        check(limited && deepest > PinSolver.MaxBend - .5f, "an aim at the hip folds the knee to 150 degrees and no further, the foot falling short smoothly");
+        // A knee the motion folds past the limit isn't straightened by a pin where it is, and folds no further.
+        var (dl, _) = Pose();
+        dl[KneeL] = dl[KneeL] with { Rotation = Q(Vector3.UnitX, 160) };
+        var dm = MotionEvaluator.ModelSpace(body, dl);
+        var deepKnee = dm[KneeL].Position;
+        var deepFoot = dm[FootL].Position;
+        PinSolver.Reach(body, dl, dm, leg, deepFoot, legNormal);
+        check(Vector3.Distance(dm[KneeL].Position, deepKnee) < 1e-5f && Vector3.Distance(dm[FootL].Position, deepFoot) < 1e-5f,
+            "a knee the motion folds past the limit, pinned where it is, doesn't move");
+        var (fl, _) = Pose();
+        fl[KneeL] = fl[KneeL] with { Rotation = Q(Vector3.UnitX, 160) };
+        var fm = MotionEvaluator.ModelSpace(body, fl);
+        PinSolver.Reach(body, fl, fm, leg, fm[ThighL].Position + (fm[FootL].Position - fm[ThighL].Position) * .3f, legNormal);
+        check(Bent(fm, leg) <= 160.01f, "a knee the motion folds past the limit folds no further");
+
+        // Bend turns the bent limb about the line from its root to its aim; 0 is the solver's own pick.
+        var lifted = Model()[FootL].Position + new Vector3(0, .15f, .1f);
+        var (bl, bm) = Pose();
+        PinSolver.Reach(body, bl, bm, leg, lifted, legNormal);
+        var (zl, zm) = Pose();
+        PinSolver.Reach(body, zl, zm, leg, lifted, legNormal, 1, 0);
+        check(bl.SequenceEqual(zl), "a bend of 0 leaves the solve as it was");
+        var axis = Vector3.Normalize(lifted - Model()[ThighL].Position);
+        float Turned(MotionTransform[] from, MotionTransform[] to)
+        {
+            var a = KneeSide(from, leg);
+            var b = KneeSide(to, leg);
+            return MathF.Atan2(Vector3.Dot(Vector3.Cross(a, b), axis), Vector3.Dot(a, b)) * 180 / MathF.PI;
+        }
+        var (nl, nm) = Pose();
+        PinSolver.Reach(body, nl, nm, leg, lifted, legNormal, 1, 90);
+        check(MathF.Abs(Turned(bm, nm) - 90) < .5f && Vector3.Distance(nm[FootL].Position, lifted) < 1e-4f && MathF.Abs(Bent(nm, leg) - Bent(bm, leg)) < .01f &&
+              Forward(nm, leg, legNormal), "a bend of 90 turns the knee a quarter turn about the line to the aim and keeps the limb's shape");
+        var (hl, hm) = Pose();
+        PinSolver.Reach(body, hl, hm, leg, lifted, legNormal, .5f, 90);
+        check(MathF.Abs(Turned(bm, hm) - 45) < .5f, "the bend comes in with the pull");
+        var (ml, mm) = Pose();
+        PinSolver.Reach(body, ml, mm, leg, lifted, legNormal, 1, -90);
+        check(MathF.Abs(Turned(bm, mm) + 90) < .5f && Vector3.Distance(mm[FootL].Position, lifted) < 1e-4f, "a negative bend turns the other way");
+        // A pin carries its bend to the solver.
+        var (pl, pm) = Pose();
+        PinSolver.Pin(body, pl, pm, leg, new MotionPin(PinChains.FootL, HoldTurn: false, Bend: 90), -1, new MotionTransform(lifted, Quaternion.Identity, Vector3.One), 1, legNormal);
+        check(pl.SequenceEqual(nl), "a pin's bend turns its limb as the solver's does");
+
+        // A drag with a bend lands the hand and turns the elbow about the line to the aim.
+        var before = Rest();
+        before[UpperArmL] = before[UpperArmL] with { Rotation = Q(Vector3.UnitZ, -20) };
+        before[ForearmL] = before[ForearmL] with { Rotation = Q(Vector3.UnitY, 60) };
+        var hand = MotionEvaluator.ModelSpace(body, before)[HandL].Position;
+        var near = hand + new Vector3(.05f, 0, .05f);
+        var layer = BoneLayer(MotionLayerKind.Offset, 1);
+        var doc = new TimelineDocument(100, 100, null, [], 1) with { Motion = [layer] };
+        var arm = PinChains.Chain(body, new("j_te_l"));
+        MotionTransform[] Dragged(float bend) => MotionEvaluator.ModelSpace(body, MotionEvaluator.ApplyAt(body, before,
+            [MotionEdits.Find(PoseEdits.Reach(doc, layer, 0, body, before, before, "j_te_l", near, 1, bend: bend), "m1")!], 0));
+        var straight = Dragged(0);
+        var turned = Dragged(60);
+        var elbowAxis = Vector3.Normalize(near - straight[UpperArmL].Position);
+        var from = KneeSide(straight, arm);
+        var to = KneeSide(turned, arm);
+        check(Vector3.Distance(turned[HandL].Position, near) < .001f &&
+              MathF.Abs(MathF.Atan2(Vector3.Dot(Vector3.Cross(from, to), elbowAxis), Vector3.Dot(from, to)) * 180 / MathF.PI - 60) < .5f,
+            "a drag with a bend lands the hand and turns the elbow about the line to the aim");
+    }
+
     // A small body: both legs from the hips, the spine up to the left arm, and a tail. Each leg's knee
     // is bent 20° at rest and so is the left elbow, so the rest pose has bend normals.
     private const int Root = 0, Hara = 1, Kosi = 2, ThighL = 3, KneeL = 4, CalfL = 5, FootL = 6, ToesL = 7,
@@ -929,6 +1076,10 @@ internal static class PinLayerFixture
             "a pin's pull caps at 1 and the kind is named Pin");
         var a = PinLayer([new(foot)]);
         check(!MotionEdits.Same(a, a with { Pins = [new(foot, HoldTurn: false)] }) && MotionEdits.Same(a, a with { Pins = [new(foot)] }), "layers differ by their pins");
+        check(!MotionEdits.Same(a, a with { Pins = [new(foot, Bend: 30)] }), "layers differ by a pin's bend");
+        reject(() => MotionEvaluator.Validate(PinLayer([new(foot, Bend: float.NaN)])), "a bend that isn't a number is refused");
+        reject(() => MotionEvaluator.Validate(PinLayer([new(foot, Bend: 200)])), "a bend past a half turn is refused");
+        MotionEvaluator.Validate(PinLayer([new(foot, Bend: 180), new(PinChains.FootR, Bend: -180)]));
     }
 
     private static void Journals(Action<bool, string> check)
@@ -941,7 +1092,7 @@ internal static class PinLayerFixture
             var clip = new AnimationClip(resource.GamePath, "loop", 0, 0, 42, "chara/test.sklb");
             var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var foot = PinChains.FootL;
-            var layer = PinLayer([new(foot, HoldTurn: false, RelativeTo: "j_sebo_c", Top: "j_sako_l"), new(PinChains.FootR, Planted: true, Sensitivity: PinSensitivity.Loose)],
+            var layer = PinLayer([new(foot, HoldTurn: false, RelativeTo: "j_sebo_c", Top: "j_sako_l", Bend: 45), new(PinChains.FootR, Planted: true, Sensitivity: PinSensitivity.Loose)],
                 [Key(3, (foot, T(new Vector3(.1f, .2f, .3f), Q(Vector3.UnitY, 10))))]);
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
                 AnimationOperation.EditTimeline,
@@ -951,8 +1102,14 @@ internal static class PinLayerFixture
             check(loaded.Kind == MotionLayerKind.Pin && loaded.Pins.SequenceEqual(layer.Pins) && MotionEdits.Same(loaded, layer),
                 "a journal keeps a pin layer, its pins and their settings");
 
-            // Journals written before pin layers have no Pins.
             var path = Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json");
+            // Journals written before the bend angle have no Bend: their pins bend as the solver picks.
+            var unbent = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            check(unbent["Request"]!["Timeline"]!["Motion"]![0]!["Pins"]![0]!.AsObject().Remove("Bend"), "a journal stores a pin's bend as Bend");
+            File.WriteAllText(path, unbent.ToJsonString());
+            var plain = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion.Single();
+            check(plain.Pins[0] == layer.Pins[0] with { Bend = 0 } && plain.Pins[1] == layer.Pins[1], "an older journal's pins load with no bend");
+            // Journals written before pin layers have no Pins.
             var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
             check(json["Request"]!["Timeline"]!["Motion"]![0]!.AsObject().Remove("Pins"), "a journal stores a layer's pins as Pins");
             File.WriteAllText(path, json.ToJsonString());

@@ -11,8 +11,8 @@ namespace InstantEdit.Services.Animations.Motion;
 /// a segment's old and new direction, the upper bone also rolled so the mid joint only bends about its own
 /// hinge, so the lower bone keeps its twist; a chain's even curl turns every bone
 /// about one axis, which twists a bent chain's bones a little. Bone lengths come from the pose and never
-/// change. No joint limits: limbs bend in the plane the motion gives them, other chains spread
-/// the bend over their bones. Pure.
+/// change. A limb's knee or elbow bends only forward, as far as <see cref="MaxBend"/>, in the plane the motion gives it,
+/// turned about the line to the aim by a bend angle; other chains have no limits and spread the bend over their bones. Pure.
 /// </summary>
 internal static class PinSolver
 {
@@ -23,6 +23,8 @@ internal static class PinSolver
     public const float CcdTolerance = 0.0001f;
     /// <summary>Under this bend, in degrees, a limb's own bend plane is noise: the plane settles onto the rest pose's.</summary>
     public const float SettleDegrees = 5;
+    /// <summary>The most a knee or an elbow bends, in degrees from straight.</summary>
+    public const float MaxBend = 150;
     // sin(1°): a chain bent about this much curls its own way rather than the top bone's steadying way.
     private const float SteadyBend = 0.0175f;
     private const float Tiny = 1e-6f;
@@ -61,17 +63,19 @@ internal static class PinSolver
     /// Bends <paramref name="chain"/> so its end comes to <paramref name="aim"/> (model space). A limb first
     /// turns the bones above it, evenly from the top and only as far as it takes to bring the aim within
     /// the limb's reach, then bends on the motion's own plane (<paramref name="restNormal"/> decides for a
-    /// straight limb), easing short of an aim beyond its reach. Other chains use damped CCD.
+    /// straight limb), easing short of an aim beyond its reach or so near that it would bend past <see cref="MaxBend"/>.
+    /// A limb then turns whole about the line from its upper bone to the aim by <paramref name="bend"/> degrees,
+    /// times <paramref name="weight"/>. Other chains use damped CCD.
     /// </summary>
     public static void Reach(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, PinChain chain, Vector3 aim, Vector3 restNormal,
-        float weight = 1)
+        float weight = 1, float bend = 0)
     {
         if (!Finite(aim))
             return;
         switch (chain.Shape)
         {
             case PinChainShape.Limb:
-                ReachLimb(skeleton, local, model, chain, aim, restNormal, weight);
+                ReachLimb(skeleton, local, model, chain, aim, restNormal, weight, float.IsFinite(bend) ? bend : 0);
                 break;
             case PinChainShape.Chain:
                 ReachChain(skeleton, local, model, chain.Bones.AsSpan(), chain.End, aim);
@@ -96,7 +100,7 @@ internal static class PinSolver
         weight = Math.Min(weight, 1);
         var spot = relativeTo < 0 ? target : MotionEvaluator.Compose(model[relativeTo], target);
         var aim = MotionEvaluator.Lerp(model[chain.End], spot, weight);
-        Reach(skeleton, local, model, chain, aim.Position, restNormal, weight);
+        Reach(skeleton, local, model, chain, aim.Position, restNormal, weight, pin.Bend);
         if (pin.HoldTurn)
             HoldTurn(skeleton, local, model, chain.End, aim.Rotation);
     }
@@ -142,8 +146,28 @@ internal static class PinSolver
         return reach - zone;
     }
 
+    /// <summary>
+    /// How far from its root a limb puts its end when aimed <paramref name="d"/> away, at the near end: unchanged down to
+    /// the soft zone (<paramref name="zone"/> long) above <paramref name="fold"/>, then easing toward it, never nearer.
+    /// </summary>
+    public static float FoldDistance(float d, float fold, float zone)
+    {
+        if (d >= fold + zone)
+            return d;
+        if (zone <= Tiny)
+            return Math.Max(d, fold);
+        return fold + zone - zone * (1 - MathF.Exp(-(fold + zone - d) / zone));
+    }
+
+    /// <summary>How far apart a limb's root and end are when its mid joint bends <see cref="MaxBend"/> degrees.</summary>
+    public static float Folded(float l1, float l2)
+    {
+        var inside = (180 - MaxBend) * MathF.PI / 180;
+        return MathF.Sqrt(Math.Max(0, l1 * l1 + l2 * l2 - 2 * l1 * l2 * MathF.Cos(inside)));
+    }
+
     private static void ReachLimb(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, PinChain chain, Vector3 aim, Vector3 restNormal,
-        float weight)
+        float weight, float bend)
     {
         var l1 = Vector3.Distance(model[chain.Mid].Position, model[chain.Root].Position);
         var l2 = Vector3.Distance(model[chain.End].Position, model[chain.Mid].Position);
@@ -179,11 +203,63 @@ internal static class PinSolver
             PointAt(skeleton, local, model, chain.Root, l1 < Tiny ? chain.End : chain.Mid, a, aim);
             return;
         }
-        var target = a + direction * Math.Max(SoftDistance(d, reach, zone), Math.Abs(l1 - l2) + Tiny);
-        var reached = Vector3.Distance(target, a);
+        // The knee or elbow never folds past MaxBend, nor further than the motion folds it already, easing into that as into full reach.
+        var now = Vector3.Distance(model[chain.End].Position, a);
+        var fold = Math.Min(Folded(l1, l2), now);
+        var near = FoldDistance(SoftDistance(d, reach, zone), fold, Math.Min(SoftZone * reach, Math.Max(0, now - fold)));
+        var target = a + direction * Math.Max(near, Math.Abs(l1 - l2) + Tiny);
 
+        // Bent on the plane the solve picked, the upper bone rolling the least way. An aim far round the limb can leave that bending the
+        // mid joint backwards in its upper bone's own space (the plane stays put while the upper bone swings, so the roll takes the other
+        // side): then the mirrored plane, same aim. When neither bends forward, the upper bone rolls as far as it takes to bend it
+        // forward, on whichever plane needs the smaller roll.
+        var rootLocal = local[chain.Root];
+        var midLocal = local[chain.Mid];
+        var normal = Vector3.Transform(bendNormal, Quaternion.Normalize(model[chain.Root].Rotation));
+        // The way the pose's own hinge has to end up for the mid joint to bend forward: along it, or against it for a pose bent backwards.
+        var keep = Vector3.Dot(hinge, bendNormal) < 0 ? -1 : 1;
+        float Try(Vector3 plane, int roll, bool again)
+        {
+            if (again)
+            {
+                local[chain.Root] = rootLocal;
+                local[chain.Mid] = midLocal;
+                Refresh(skeleton, local, model, chain.Root);
+            }
+            return Bend(skeleton, local, model, chain, a, direction, target, plane, hinge, bent, roll);
+        }
+        Try(normal, 0, false);
+        if (Forwardness(model, chain, bendNormal, l1, l2) < 0)
+        {
+            Try(-normal, 0, true);
+            if (Forwardness(model, chain, bendNormal, l1, l2) < 0)
+            {
+                var mirrored = Try(-normal, keep, true);
+                if (Try(normal, keep, true) > mirrored)
+                    Try(-normal, keep, true);
+            }
+        }
+        // The bend angle turns the whole limb about the line to the aim, the end staying on it; the mid joint bends as before.
+        var turn = bend * Math.Clamp(weight, 0, 1);
+        if (MathF.Abs(turn) > 1e-4f)
+            Rotate(skeleton, local, model, chain.Root, Quaternion.CreateFromAxisAngle(direction, turn * MathF.PI / 180));
+    }
+
+    /// <summary>
+    /// Bends the limb so its end comes to <paramref name="target"/>: the upper bone turns to put the mid joint on the side of
+    /// <paramref name="normal"/>'s plane (model space), rolls so the pose's <paramref name="hinge"/> (upper bone space, bent
+    /// <paramref name="bent"/> degrees) lies across that plane, and the lower bone points the end at the target. The roll goes the
+    /// least way with <paramref name="roll"/> 0; with 1 or -1 it lays the hinge along the plane's normal or against it, however far
+    /// that is. Returns the roll's full angle, in radians.
+    /// </summary>
+    private static float Bend(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, PinChain chain, Vector3 a, Vector3 direction,
+        Vector3 target, Vector3 normal, Vector3 hinge, float bent, int roll)
+    {
+        var l1 = Vector3.Distance(model[chain.Mid].Position, a);
+        var l2 = Vector3.Distance(model[chain.End].Position, model[chain.Mid].Position);
+        var reached = Vector3.Distance(target, a);
         var b = model[chain.Mid].Position;
-        var side = Side(Vector3.Transform(bendNormal, Quaternion.Normalize(model[chain.Root].Rotation)), direction, b - a);
+        var side = Side(normal, direction, b - a);
         var cos = Math.Clamp((l1 * l1 + reached * reached - l2 * l2) / (2 * l1 * reached), -1, 1);
         var knee = a + l1 * (cos * direction + MathF.Sqrt(1 - cos * cos) * side);
 
@@ -192,13 +268,43 @@ internal static class PinSolver
         // bends, and a solve made again from its own result (a drag) never builds up a roll there.
         var plane = Vector3.Cross(knee - a, target - knee);
         var carried = Vector3.Transform(hinge, Quaternion.Normalize(model[chain.Root].Rotation));
+        var angle = 0f;
         if (plane.Length() > Tiny && carried.Length() > Tiny && bent > 0)
         {
-            var roll = Between(carried, Vector3.Dot(carried, plane) < 0 ? -plane : plane);
-            Rotate(skeleton, local, model, chain.Root, MotionEvaluator.Pow(roll, AnimationPoseRules.SmoothStep(Math.Clamp(bent / SettleDegrees, 0, 1))));
+            var share = AnimationPoseRules.SmoothStep(Math.Clamp(bent / SettleDegrees, 0, 1));
+            if (roll == 0)
+            {
+                var least = Between(carried, Vector3.Dot(carried, plane) < 0 ? -plane : plane);
+                angle = 2 * MathF.Acos(Math.Clamp(Math.Abs(least.W), 0, 1));
+                Rotate(skeleton, local, model, chain.Root, MotionEvaluator.Pow(least, share));
+            }
+            else
+            {
+                // About the upper bone itself, which both lie across, so a half turn has no other axis to pick.
+                var along = Vector3.Normalize(knee - a);
+                var to = roll * plane;
+                angle = MathF.Atan2(Vector3.Dot(Vector3.Cross(carried, to), along), Vector3.Dot(carried, to));
+                Rotate(skeleton, local, model, chain.Root, Quaternion.CreateFromAxisAngle(along, angle * share));
+                angle = MathF.Abs(angle);
+            }
         }
         var mid = model[chain.Mid].Position;
         Turn(skeleton, local, model, chain.Mid, model[chain.End].Position - mid, target - mid);
+        return angle;
+    }
+
+    /// <summary>
+    /// How far the limb's mid joint bends the way of <paramref name="normal"/> (the plane the solve meant, in the upper bone's own
+    /// space): the cosine between them, below 0 when it bends the other way. 0 for a limb about straight, which bends neither way.
+    /// </summary>
+    private static float Forwardness(MotionTransform[] model, PinChain chain, Vector3 normal, float l1, float l2)
+    {
+        var upper = model[chain.Mid].Position - model[chain.Root].Position;
+        var lower = model[chain.End].Position - model[chain.Mid].Position;
+        var own = Vector3.Transform(Vector3.Cross(upper, lower), Quaternion.Inverse(Quaternion.Normalize(model[chain.Root].Rotation)));
+        if (normal.Length() < Tiny || own.Length() <= SteadyBend * l1 * l2)
+            return 0;
+        return Vector3.Dot(Vector3.Normalize(own), Vector3.Normalize(normal));
     }
 
     /// <summary>
