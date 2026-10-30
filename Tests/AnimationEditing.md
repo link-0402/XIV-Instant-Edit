@@ -2660,3 +2660,16 @@ BonePosing.MapBones, PoseMap.Shows/Extras.
 - [ ] 4 Pose layer whose keys set the hips' position: Tween moves the hips too and the new key sets the position. A layer
   without Scale ticked keeps the key's scale.
 - [ ] 5 Select an amplitude or pin layer: the row is greyed with its hint. Ctrl+click the slider to type a value.
+
+## Key timing (pending)
+
+- [ ] 1 Pick three keys of a pose layer, put the playhead on the first and press S: moving the mouse right spreads them, left
+  draws them together, and the toolbar shows the percent. A click applies it (one Ctrl+Z puts it back); Escape or a right
+  click during it changes nothing. Preview plays the scaled keys.
+- [ ] 2 Right-click a picked key, Scale timing, type 50 and Enter: the keys close in on the playhead. A percent that would
+  put two keys on one frame shows a reason in the toolbar and changes nothing.
+- [ ] 3 Move the playhead past the keys and press Ctrl+D: copies land from the playhead on with the same spacing and are
+  picked. On a key, the toolbar says why nothing happened. With no key picked, Ctrl+D still copies the layer.
+- [ ] 4 Reverse timing on three keys with different eases: the motion plays backwards between the first and last key, each
+  key keeping its ease.
+- [ ] 5 S in the Timeline doesn't walk the character back, and outside the Timeline S walks as usual.

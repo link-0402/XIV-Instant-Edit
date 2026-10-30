@@ -85,6 +85,7 @@ internal static class ChangelogCatalog
             Entry("The body map shows only the bones your character uses or the animation moves, like skirt bones while you wear a skirt. The filter button shows them all.", 1),
             Entry("Copy pose takes the selected bones at the playhead. Paste it at another frame or in another animation, or paste it mirrored onto the other side.", 1),
             Entry("Pick several keys with Ctrl+click, Shift+click or a box on a layer's rows, then drag, nudge, delete, copy or paste them together. Spread over plays them faster or slower.", 1),
+            Entry("Scale picked keys about the playhead (S), duplicate them to it (Ctrl+D) or reverse them from the right-click menu.", 1),
             Entry("Key a whole pose from a .pose file (Anamnesis, Ktisis or Brio), your posed character or a frame of another animation.", 1),
             Entry("The pose browser shows your pose folders with their pictures. One click keys a pose at the playhead, and the next click swaps it.", 1),
             Entry("Save pose keeps the pose at the playhead as a .pose file that Anamnesis, Ktisis and Brio load.", 1),

@@ -35,6 +35,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     private float scrollY;
     private bool rightPressed;
     private TimelineHit menuHit;
+    // The percent Scale timing last used, offered again.
+    private int scalePercent = 100;
     private int menuFrame;
     // The pose match a right-click opened its menu on, and the playhead it matched then.
     private (PoseMatch Match, int Playhead)? menuMatch;
@@ -104,6 +106,18 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         bool readOnly, float row)
     {
         var io = ImGui.GetIO();
+        // A scale drag (S) follows the mouse with no button held: a click or Enter applies it, Escape or a right click puts it back.
+        if (current.Gesture == TimelineGesture.ScaleKeys)
+        {
+            if (keys.Pressed(ImGuiKey.Escape, VirtualKey.ESCAPE) || ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+                current.Cancel();
+            else if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || keys.Pressed(ImGuiKey.Enter, VirtualKey.RETURN) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter))
+                current.Release();
+            else
+                current.Drag(current.View.FrameAt(trackX));
+            ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
+            return;
+        }
         if (activated)
         {
             if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
@@ -792,6 +806,13 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                 current.DeleteLayerSelection();
             if (ImGui.MenuItem("Copy keys", "Ctrl+C"))
                 current.CopyKeys();
+            if (ImGui.MenuItem("Duplicate keys at the playhead", "Ctrl+D", false, !readOnly))
+                current.DuplicateKeys();
+            DrawScaleMenu(current, readOnly);
+            if (ImGui.MenuItem("Reverse timing", "", false, !readOnly && current.PickedKeys.Frames.Count > 1))
+                current.ReverseTiming();
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip("Play the picked keys backwards. Each keeps its values and ease.");
             DrawEaseMenu(current, layer, layer.Keys[at], readOnly);
             ImGui.Separator();
         }
@@ -805,7 +826,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.SetUnfolded(layer.Key, !current.IsUnfolded(layer.Key));
         if (ImGui.MenuItem(layer.Enabled ? "Turn off" : "Turn on", "", false, !readOnly))
             current.Commit(MotionEdits.SetEnabled(doc, layer.Key, !layer.Enabled));
-        if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, !readOnly))
+        // With a key picked, Ctrl+D duplicates the keys.
+        if (ImGui.MenuItem("Duplicate", current.SelectedKey == null ? "Ctrl+D" : "", false, !readOnly))
             current.DuplicateLayer();
         if (ImGui.MenuItem("Copy layer"))
             current.CopyLayers(layer.Key);
@@ -820,6 +842,25 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Commit(MotionEdits.Reorder(doc, layer.Key, 1));
         if (ImGui.MenuItem("Delete layer", "", false, !readOnly))
             current.Commit(MotionEdits.Remove(doc, layer.Key));
+    }
+
+    /// <summary> Scale timing: the picked keys' timing about the playhead, by a typed percent. </summary>
+    private void DrawScaleMenu(TimelineEditor current, bool readOnly)
+    {
+        using var menu = ImRaii.Menu("Scale timing", !readOnly);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Scale the picked keys about the playhead. S scales them with the mouse.");
+        if (!menu.Success)
+            return;
+        ImGui.SetNextItemWidth(Theme.Scaled(90));
+        var entered = ImGui.InputInt("%##scale-timing", ref scalePercent, 0, 0, flags: ImGuiInputTextFlags.EnterReturnsTrue);
+        var percent = Math.Clamp(scalePercent, KeyTiming.MinPercent, KeyTiming.MaxPercent);
+        if (ImGui.MenuItem($"Scale to {percent}%") || entered)
+        {
+            scalePercent = percent;
+            current.ScaleTiming(percent);
+            ImGui.CloseCurrentPopup();
+        }
     }
 
     /// <summary> Copy what you see: every bone as the lowest pose layer leaves it at the playhead, for Paste pose. </summary>
@@ -953,6 +994,11 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Key(TimelineKey.Home);
         else if (keys.Pressed(ImGuiKey.End, VirtualKey.END))
             current.Key(TimelineKey.End);
+        else if (!ctrl && !alt && current.SelectedKey != null && keys.Pressed(ImGuiKey.S, VirtualKey.S, ctrl: false))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.ScaleTiming);
+        }
         else if (!ctrl && keys.Pressed(ImGuiKey.F, VirtualKey.F, ctrl: false))
             current.Key(TimelineKey.Fit);
         else if (!ctrl && !alt && keys.Pressed(ImGuiKey.B, VirtualKey.B, ctrl: false))
