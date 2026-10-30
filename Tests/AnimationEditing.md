@@ -2638,3 +2638,13 @@ BonePosing.MapBones, PoseMap.Shows/Extras.
   body mod they don't show.
 - [ ] 7 Changing gear with the Bones window open, and a long gizmo drag on a layer with a symmetry and a pin layer, make
   no hitch in dalamud.log.
+
+## Save pose (pending)
+
+- [ ] 1 Open a body emote, key a pose layer, open a pose folder in the pose browser and save the playhead's pose: its tile
+  shows with the folder's picture. Click it on another frame: the same pose keys.
+- [ ] 2 Load the saved file in Brio and in Ktisis (and Anamnesis if installed) on the GPose character: the body takes the pose.
+- [ ] 3 Save under a name that is there: Replace it? shows; No keeps the file, Yes replaces it. A name with ? is refused.
+- [ ] 4 Bones window, Save pose: the pose browser opens at its last folder with the name focused; with no folder yet it
+  shows the folder list. In a face session the button is disabled with its hint.
+- [ ] 5 Saving makes no hitch in dalamud.log.

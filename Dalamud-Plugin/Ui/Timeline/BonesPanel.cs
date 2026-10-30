@@ -20,7 +20,8 @@ namespace InstantEdit.Ui.Timeline;
 /// shared with the properties panel's bone picker and the bones on the character.
 /// </summary>
 internal sealed class BonesPanel(TimelineSession session, string? animationError, BonePosing posing, BoneEditor boneEditor,
-    PoseSourcePanel poseSources, TimelinePreview timelinePreview, IBonesOverlay overlay, ITextureProvider textures, ShortcutKeys keys)
+    PoseSourcePanel poseSources, TimelinePreview timelinePreview, IBonesOverlay overlay, ITextureProvider textures, ShortcutKeys keys,
+    Action savePose)
 {
     private enum BonesPage : byte { Map, List }
 
@@ -245,6 +246,15 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             1 => AnimationPresentation.BoneName(posing.Selection.Primary!),
             _ => $"{posing.Selection.Count} bones selected",
         });
+        ImGui.SameLine(0, Theme.Scaled(12));
+        var face = session.Editor?.Document.Face != null;
+        using (ImRaii.Disabled(face))
+        {
+            if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Save, "Save pose", null, null, null, null))
+                savePose();
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(face ? "A face can't be saved as a pose." : "Save the pose at the playhead as a .pose file, in the pose browser.");
     }
 
     private void DrawGroupMenu(SkeletonDescription skeleton, MotionLayer? layer)

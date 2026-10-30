@@ -52,6 +52,13 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
     private string? note;
     private bool noteWarns;
     private float footerHeight;
+    // Save pose here: the name typed, the file of that name waiting for Replace it?, and the pose read at the click,
+    // then written on a task.
+    private string saveName = string.Empty;
+    private bool focusSave;
+    private string? confirmReplace;
+    private (string Path, string Name, AnimationTimelineSource Loaded, TimelineDocument Doc, int Frame)? saveWaiting;
+    private (string Name, Task Writing)? saveWriting;
 
     /// <summary>The settings the folders and the last folder shown are kept in.</summary>
     public void Attach(Configuration configuration, Action saveConfiguration)
@@ -87,6 +94,7 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
             return;
         PollList();
         PollDelete();
+        PollSave();
         var target = FindTarget(out var blocked);
         PollPick(target, blocked);
         DrawBar();
@@ -303,6 +311,130 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
     {
         note = text;
         noteWarns = warns;
+    }
+
+    // ── Saving ───────────────────────────────────────────────────────────────
+
+    /// <summary>Puts the cursor in Save pose here's name, the next time a folder shows (the Bones window's Save pose).</summary>
+    public void FocusSave() => focusSave = true;
+
+    /// <summary>Why the pose at the playhead can't be saved now; null when it can.</summary>
+    private string? SaveBlocked()
+    {
+        if (session.Source is not { Document: not null } loaded || session.Editor is not { } current)
+            return "Open an animation in the Timeline window.";
+        if (loaded.Standalone || current.Document.Face != null)
+            return "A face can't be saved as a pose.";
+        return session.EditingSkeleton(loaded) == null ? "Choose the skeleton this animation was made for under Source first." : null;
+    }
+
+    /// <summary>Saves the pose at the playhead in the folder shown, under the name typed; asks first when the file is there.</summary>
+    private void StartSave(bool replace)
+    {
+        var name = saveName.Trim();
+        if (PoseFiles.NameProblem(name) is { } problem)
+        {
+            Note(problem, true);
+            return;
+        }
+        var path = PoseFiles.PathFor(folder!, name);
+        if (!replace && File.Exists(path))
+        {
+            confirmReplace = path;
+            return;
+        }
+        confirmReplace = null;
+        note = null;
+        saveWaiting = (path, name, session.Source!, session.Editor!.Document, session.Editor.Playhead);
+    }
+
+    /// <summary>Writes the pose once the motion it is made of is read, then reads the folder again so its tile shows.</summary>
+    private void PollSave()
+    {
+        if (saveWaiting is { } wait)
+        {
+            if (posing.WholePose(wait.Loaded, wait.Doc, wait.Frame) is { } pose)
+            {
+                saveWaiting = null;
+                byte[] bytes;
+                try { bytes = PoseFiles.Write(pose.Skeleton.Bones.Select((bone, i) => (bone.Name, pose.Model[i]))); }
+                catch (InvalidDataException e)
+                {
+                    Note($"{wait.Name}: {e.Message}", true);
+                    return;
+                }
+                var path = wait.Path;
+                saveWriting = (wait.Name, Task.Run(() => PoseFiles.Save(path, bytes)));
+            }
+            else if (decode.FailedFor(wait.Loaded))
+            {
+                saveWaiting = null;
+                Note("The motion could not be read: " + decode.Error, true);
+            }
+        }
+        if (saveWriting is not { Writing.IsCompleted: true } done)
+            return;
+        saveWriting = null;
+        if (done.Writing.IsCompletedSuccessfully)
+        {
+            listed = null;
+            saveName = string.Empty;
+            Note($"Saved {done.Name}.", false);
+        }
+        else
+            Note($"{done.Name}: {TimelineSession.ErrorText(done.Writing.Exception)}", true);
+    }
+
+    /// <summary>Save pose here: a name, then Save, or Replace it? when a pose of that name is in the folder.</summary>
+    private void DrawSave()
+    {
+        var blocked = SaveBlocked();
+        var busy = saveWaiting != null || saveWriting != null;
+        Widgets.Icon(FontAwesomeIcon.Save, Theme.Muted);
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Label, "Save pose here");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(Theme.Scaled(220));
+        if (focusSave)
+        {
+            ImGui.SetKeyboardFocusHere();
+            focusSave = false;
+        }
+        var enter = ImGui.InputTextWithHint("##pose-save-name", "Name", ref saveName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
+        if (ImGui.IsItemEdited())
+            confirmReplace = null;
+        ImGui.SameLine();
+        if (confirmReplace != null)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Warning, "Replace it?");
+            ImGui.SameLine();
+            using (ImRaii.Disabled(blocked != null || busy))
+            {
+                if (ImGui.Button("Yes##pose-save-replace"))
+                    StartSave(true);
+            }
+            ImGui.SameLine(0, Theme.Scaled(2));
+            if (ImGui.Button("No##pose-save-keep"))
+                confirmReplace = null;
+        }
+        else
+        {
+            var ready = blocked == null && !busy && saveName.Trim().Length > 0;
+            using (ImRaii.Disabled(!ready))
+            {
+                if (ImGui.Button("Save##pose-save") || enter && ready)
+                    StartSave(false);
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(blocked ?? "Save the pose at the playhead as a .pose file in this folder.");
+        }
+        if (busy)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            Widgets.Spinner();
+        }
     }
 
     // ── Drawing ──────────────────────────────────────────────────────────────
@@ -627,6 +759,11 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
             if (options.Draw(again?.Import, shown.Skeleton, shown.Editor.Document, true) && again is { } redo && picking == null)
                 Key(target, blocked, redo.Path, redo.Name, redo.File);
         }
+
+        if (folder != null)
+            DrawSave();
+        else
+            focusSave = false;
 
         if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.FolderPlus, "Add folder", null, null, null, null))
             AddFolder();

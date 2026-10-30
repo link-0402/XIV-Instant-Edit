@@ -545,6 +545,13 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     }
 
     /// <summary>
+    /// Every bone of the clip's skeleton at <paramref name="frame"/> as the Bones window shows it, in model space, for
+    /// Save pose; null while the motion is read, which this starts.
+    /// </summary>
+    public (SkeletonDescription Skeleton, MotionTransform[] Model)? WholePose(AnimationTimelineSource loaded, TimelineDocument doc, int frame) =>
+        OutputClip(loaded) is { } clip && GhostPose(loaded, doc, frame) is { } model ? (clip.Skeleton, model) : null;
+
+    /// <summary>
     /// The local pose at <paramref name="frame"/> with every layer of <paramref name="doc"/> baked in, as Live and the save
     /// show it, amplitudes, fixes and planted pins included; null while the motion is read, which this starts.
     /// </summary>
