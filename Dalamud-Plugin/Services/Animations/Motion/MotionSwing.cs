@@ -62,6 +62,15 @@ internal static class MotionSwings
         foreach (var b in picked.OrderByDescending(b => b))
             if (above.TryGetValue(b, out var parent))
                 down[parent] = Math.Max(down[parent], down[b] + 1);
+        // Each bone takes an even part of what its chain above has left, so every run from a top bone to the end of a branch turns the set angle in all.
+        var share = new Dictionary<int, float>();
+        var used = new Dictionary<int, float>();
+        foreach (var b in picked.Order())
+        {
+            var before = above.TryGetValue(b, out var parent) ? used[parent] : 0;
+            share[b] = (1 - before) / (1 + down[b]);
+            used[b] = before + share[b];
+        }
         return
         [
             .. picked.Order().Select(b =>
@@ -69,7 +78,7 @@ internal static class MotionSwings
                 var name = bones[b].Name;
                 var twin = MotionMirror.Twin(name);
                 var opposite = swing.TwinsOpposite && MotionMirror.Side(name) == 'r' && twin != null && index.TryGetValue(twin, out var other) && picked.Contains(other);
-                return new SwingBone(b, up[b], swing.Spread ? 1f / (1 + up[b] + down[b]) : 1, up[b] == 0, opposite ? -1 : 1);
+                return new SwingBone(b, up[b], swing.Spread ? share[b] : 1, up[b] == 0, opposite ? -1 : 1);
             }),
         ];
     }

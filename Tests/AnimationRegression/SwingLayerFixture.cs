@@ -109,6 +109,11 @@ internal static class SwingLayerFixture
             "a chain shares the tilt out, so its last bone turns the set angle in all");
         var each = Applied(still, Swing(new MotionSwing(Count: 1, Tilt: 30, Delay: 0, Spread: false), Hips, Waist, Chest));
         check(MathF.Abs(Turn(each, still, 15, Chest) - 90) < .05f, "with Spread off every bone turns the full angle");
+        // Review: the chest with a left arm and forearm and a right arm alone: each branch ends at the set angle.
+        var branched = Applied(still, Swing(new MotionSwing(Count: 1, Tilt: 30, Delay: 0, TwinsOpposite: false), Chest, ArmL, "j_ude_b_l", ArmR));
+        var (left, right) = (Turn(branched, still, 15, "j_ude_b_l"), Turn(branched, still, 15, ArmR));
+        check(MathF.Abs(left - 30) < .05f && MathF.Abs(right - 30) < .05f && MathF.Abs(Turn(branched, still, 15, Chest) - 10) < .05f,
+            $"branches of a spread swing each turn the set angle in all ({left:0.##} and {right:0.##} degrees)");
     }
 
     private static void Slide(Action<bool, string> check)

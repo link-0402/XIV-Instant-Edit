@@ -173,6 +173,13 @@ internal static class RaceRebuildFixture
               !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.UnitY, enabled: false)] }) &&
               !TimelineWindowViews.LiveRebuiltPositions(doc),
             "Live says when a rebuilt clip's moves on bones other than the hips show only after the save");
+        // Review: a swing that only turns moves nothing.
+        var swing = new MotionLayer("m3", MotionLayerKind.Swing, "Swing 1", 0, 30, 0, 0, 1, PoseComponents.Rotation | PoseComponents.Position,
+            MotionInterpolation.Smooth, Bones: ["j_kosi"], Swing: new MotionSwing());
+        check(!TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [swing] }) &&
+              TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [swing with { Swing = new MotionSwing(Slide: .05f) }] }) &&
+              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [swing with { Bones = ["n_hara"], Swing = new MotionSwing(Slide: .05f) }] }),
+            "a swing counts for Live's move line only when it slides a bone other than the hips");
         check(TimelineWindowViews.LiveRebuiltPositionsNote == "Live shows position changes only on the hips while rebuilt. Preview, then Live, shows them all.",
             "the Live line for moves it can't show");
     }

@@ -24,6 +24,17 @@ internal static class SmoothMotionFixture
         Flip(check);
         Partway(check);
         Long(check);
+        Spin(check);
+    }
+
+    // Review: two whole turns inside a 60-frame window cancel out; the bone keeps its own turn, never a made-up one or NaN.
+    private static void Spin(Action<bool, string> check)
+    {
+        // 720/31 degrees a frame: the 61 samples a full window takes cancel exactly.
+        var spin = Clip(91, 90, (i, _) => [T(Vector3.Zero), T(Vector3.UnitX, Q(Vector3.UnitY, i * 720f / 31)), T(Vector3.UnitY)]);
+        var smoothed = Applied(spin, Smooth(MotionSmoothing.MaxWindow, 1, 0, 90));
+        var worst = Enumerable.Range(0, 91).Max(i => Finite(smoothed.Get(i, Index(B1))) ? Degrees(smoothed.Get(i, Index(B1)).Rotation, spin.Get(i, Index(B1)).Rotation) : 180);
+        check(worst < .1f, $"a bone spinning two turns inside the window keeps its own turn ({worst:0.###} degrees off at most)");
     }
 
     // Review: a layer over part of the clip must not make a jump of its own at its edges.

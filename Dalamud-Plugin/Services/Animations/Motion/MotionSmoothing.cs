@@ -95,9 +95,11 @@ internal static class MotionSmoothing
                 for (var c = 0; c < Parts; c++)
                     sum[c] = (twice[(e0 + r + 2) * Parts + c] - 2 * twice[(e0 + 1) * Parts + c] + twice[(e0 - r) * Parts + c]) / total;
                 var value = clip.Get(i, b);
-                if (turns)
+                // A bone that spins a whole turn or more inside the window has rotations that cancel out: they have no average, so it keeps its own.
+                var length = Math.Sqrt(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2] + sum[3] * sum[3]);
+                if (turns && length > 1e-4)
                 {
-                    var average = Quaternion.Normalize(new Quaternion((float)sum[0], (float)sum[1], (float)sum[2], (float)sum[3]));
+                    var average = new Quaternion((float)(sum[0] / length), (float)(sum[1] / length), (float)(sum[2] / length), (float)(sum[3] / length));
                     value = value with { Rotation = MotionEvaluator.Slerp(rotations[i], average, weight) };
                 }
                 if (moves)

@@ -984,14 +984,15 @@ internal static partial class TimelineWindowViews
 
     /// <summary>
     /// Whether <paramref name="document"/>'s layers may move a bone other than n_hara, which Live on a rebuilt clip can't
-    /// show: the game takes those lengths from the character. Offset and pose layers count by their keys; any other
-    /// layer that changes positions counts.
+    /// show: the game takes those lengths from the character. Offset and pose layers count by their keys, a swing when it
+    /// slides; any other layer that changes positions counts.
     /// </summary>
     public static bool LiveRebuiltPositions(TimelineDocument document) =>
         document.Motion.Any(layer => MotionEvaluator.Active(layer) && layer.Components.HasFlag(PoseComponents.Position) && layer.Kind switch
         {
             MotionLayerKind.Offset => layer.Keys.Any(key => key.Bones.Any(bone => bone.Key != "n_hara" && bone.Value.Position != Vector3.Zero)),
             MotionLayerKind.Pose => layer.Keys.Any(key => key.Moved.Any(bone => bone != "n_hara")),
+            MotionLayerKind.Swing => layer.Swing is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
             _ => true,
         });
 
