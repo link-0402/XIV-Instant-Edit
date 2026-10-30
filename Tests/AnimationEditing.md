@@ -2649,3 +2649,14 @@ BonePosing.MapBones, PoseMap.Shows/Extras.
 - [ ] 4 Bones window, Save pose: the pose browser opens at its last folder with the name focused; with no folder yet it
   shows the folder list. In a face session the button is disabled with its hint.
 - [ ] 5 Saving makes no hitch in dalamud.log.
+
+## Breakdowner (pending)
+
+- [ ] 1 Offset layer, an arm keyed at two frames: on a frame between, Tween at 50% keys it halfway, Live shows it; 0% and
+  100% match the keys; 150% overshoots. One Ctrl+Z takes the key out.
+- [ ] 2 Key the arm on that frame and turn it further: Push / pull at 150% exaggerates it, 50% softens it, Relax at 100%
+  lands it on the in-between. Without a key there, the status says Key this frame first.
+- [ ] 3 Select a bone with no key on one side: Apply says No keys either side. With other bones that have both, only those key.
+- [ ] 4 Pose layer whose keys set the hips' position: Tween moves the hips too and the new key sets the position. A layer
+  without Scale ticked keeps the key's scale.
+- [ ] 5 Select an amplitude or pin layer: the row is greyed with its hint. Ctrl+click the slider to type a value.

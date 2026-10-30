@@ -591,6 +591,10 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
         else
             boneEditor.Draw(current, layer, skeleton, loaded, readOnly, true);
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+        boneEditor.DrawBreakdown(current, layer, skeleton, readOnly);
         if (layer.Kind == MotionLayerKind.Pose)
         {
             ImGui.Spacing();

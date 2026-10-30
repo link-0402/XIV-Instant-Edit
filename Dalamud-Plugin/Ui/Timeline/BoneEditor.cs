@@ -46,6 +46,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
     private bool ballEditing;
     // Static so a copied pose carries to another clip and between the panel and the Bones window.
     private static PoseCopy? poseClipboard;
+    // The breakdown row's mode and each mode's own slider value, as fractions.
+    private BreakdownMode breakdownMode;
+    private readonly float[] breakdownAmounts = [.. Enum.GetValues<BreakdownMode>().Select(mode => MotionBreakdown.Range(mode).Default)];
 
     /// <summary>Puts <paramref name="copy"/> on the clipboard Paste pose reads.</summary>
     public static void CopyPose(PoseCopy copy) => poseClipboard = copy;
@@ -294,6 +297,81 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             DrawGizmoChoice(layer, frame, skeleton);
         }
     }
+
+    /// <summary>
+    /// The breakdown row: Tween, Push / pull or Relax, its slider and Apply, which keys the selected bones at the playhead
+    /// against the layer's keys either side as one undo step (<see cref="PoseEdits.Breakdown"/>). Only offset and pose
+    /// layers have the keys it needs; for the others the row is disabled with a hint. It reads only the layer's keys, so
+    /// it never waits for the motion.
+    /// </summary>
+    public void DrawBreakdown(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, bool readOnly)
+    {
+        var keyed = layer.Kind is MotionLayerKind.Offset or MotionLayerKind.Pose;
+        var frame = current.Playhead;
+        var index = posing.BoneTree(skeleton).Index;
+        string[] bones = [.. posing.Selection.Bones.Where(index.ContainsKey)];
+        var waits = !keyed ? null
+            : bones.Length == 0 ? "Select bones first."
+            : frame < layer.Start || frame > layer.End ? "Move the playhead into the layer."
+            : null;
+        using (ImRaii.Disabled(readOnly || !keyed))
+        {
+            ImGui.SetNextItemWidth(Theme.Scaled(96));
+            using (var combo = ImRaii.Combo("##breakdown-mode", BreakdownName(breakdownMode)))
+            {
+                if (combo.Success)
+                    foreach (var mode in Enum.GetValues<BreakdownMode>())
+                        if (ImGui.Selectable(BreakdownName(mode), mode == breakdownMode))
+                            breakdownMode = mode;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(BreakdownHint(breakdownMode));
+            ImGui.SameLine();
+            var (min, max, _) = MotionBreakdown.Range(breakdownMode);
+            var percent = breakdownAmounts[(int)breakdownMode] * 100;
+            var apply = ImGui.CalcTextSize("Apply").X + ImGui.GetStyle().FramePadding.X * 2 + ImGui.GetStyle().ItemSpacing.X;
+            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(70), ImGui.GetContentRegionAvail().X - apply));
+            if (ImGui.SliderFloat("##breakdown-amount", ref percent, min * 100, max * 100, "%.0f%%"))
+                breakdownAmounts[(int)breakdownMode] = Math.Clamp(percent / 100, min, max);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(breakdownMode switch
+                {
+                    BreakdownMode.Push => "100% changes nothing, less softens, more exaggerates. Ctrl+click to type.",
+                    BreakdownMode.Relax => "How far toward the keys either side. Ctrl+click to type.",
+                    _ => "0% is the key before, 100% the key after. Ctrl+click to type.",
+                });
+            ImGui.SameLine();
+            using (ImRaii.Disabled(waits != null))
+            {
+                if (ImGui.Button("Apply##breakdown"))
+                {
+                    var next = PoseEdits.Breakdown(current.Document, layer.Key, frame, bones, breakdownMode, breakdownAmounts[(int)breakdownMode], out var status);
+                    if (status != null)
+                        current.Note(status);
+                    else
+                        current.Commit(current.WithReach(next));
+                }
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(waits ?? BreakdownHint(breakdownMode));
+        }
+        if (!keyed)
+            Widgets.HintWrapped("Breakdowns need an offset or pose layer.");
+    }
+
+    private static string BreakdownName(BreakdownMode mode) => mode switch
+    {
+        BreakdownMode.Push => "Push / pull",
+        BreakdownMode.Relax => "Relax",
+        _ => "Tween",
+    };
+
+    private static string BreakdownHint(BreakdownMode mode) => mode switch
+    {
+        BreakdownMode.Push => "Exaggerate or soften the key at the playhead against the keys either side.",
+        BreakdownMode.Relax => "Take the key at the playhead toward the keys either side.",
+        _ => "Key the selected bones between their keys before and after.",
+    };
 
     /// <summary> The next button on this line, or on a new one when it would not fit. </summary>
     private static void FlowLine(string label)
