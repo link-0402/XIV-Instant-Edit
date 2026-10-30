@@ -66,7 +66,7 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
         DrawSplitter(size.X, grip);
         var padding = ImRaii.PushStyle(ImGuiStyleVar.WindowPadding, Vector2.Zero);
         var background = ImRaii.PushColor(ImGuiCol.ChildBg, Theme.PanelBg);
-        using var child = ImRaii.Child("##timeline-curves", new Vector2(size.X, Math.Max(1, size.Y - grip - spacing)), true,
+        using var child = ImRaii.Child("##timeline-curve-strip",new Vector2(size.X, Math.Max(1, size.Y - grip - spacing)), true,
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
         background.Dispose();
         padding.Dispose();
@@ -120,7 +120,7 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
         if (bone == null)
             return new Strip(null, "Select a bone.", null, null, false, null, null);
         if (session.Source is not { } loaded)
-            return new Strip(bone, "Open an animation.", null, null, false, null, null);
+            return new Strip(bone, null, null, null, false, null, null);
         var doc = current.Document;
         if (layerMode)
         {
@@ -147,7 +147,8 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
         // The after curve starts in the before curve's turn, so the two line up where the layers change little.
         var after = ReferenceEquals(baked, output) ? before
             : (baked ?? stale) is { } shown ? Curve(ref afterCurve, shown, index, before.Frames.Length > 0 ? (Vector3?)before.Turn(0) : null) : null;
-        return new Strip(bone, failed ? "The layers could not be applied." : null, before, after, baked == null && !failed,
+        // Held during a gesture nothing builds, so "Reading" waits for the drop.
+        return new Strip(bone, failed ? "The layers could not be applied." : null, before, after, baked == null && !failed && !gesture,
             current.SelectedLayerValue, null);
     }
 
