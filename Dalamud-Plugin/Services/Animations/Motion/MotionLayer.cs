@@ -21,6 +21,10 @@ internal enum MotionLayerKind : byte
     Fix,
     /// <summary>Plays another clip's idle motion over the bones, such as breathing (<see cref="MotionIdle"/>).</summary>
     Idle,
+    /// <summary>Swings bones back and forth over the layer (<see cref="MotionSwing"/>).</summary>
+    Swing,
+    /// <summary>Evens out sudden moves: each frame goes toward the average of the frames round it over <see cref="MotionLayer.Window"/>.</summary>
+    Smooth,
 }
 
 /// <summary>What a fix layer repairs. Saved as numbers.</summary>
@@ -250,6 +254,9 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 /// motion's strength. Other kinds have none.</param>
 /// <param name="Markers">For the Motion keys layer, an offset whose keys mark the motion's own key poses; null for every
 /// other layer, and for journals written before it.</param>
+/// <param name="Swing">For a swing layer, how its bones swing; its amount is the swing's strength. Other kinds have none.</param>
+/// <param name="Window">For a smooth motion layer, the frames each frame is averaged over; its amount is the blend toward
+/// that average. 0 on every other kind, and for journals written before it.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -269,7 +276,9 @@ internal sealed record MotionLayer(
     ImmutableArray<MotionPin> Pins = default,
     MotionFix? Fix = null,
     MotionIdle? Idle = null,
-    MotionMarkers? Markers = null)
+    MotionMarkers? Markers = null,
+    MotionSwing? Swing = null,
+    int Window = 0)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;

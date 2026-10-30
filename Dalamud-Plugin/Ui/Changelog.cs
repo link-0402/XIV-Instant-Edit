@@ -72,6 +72,8 @@ internal static class ChangelogCatalog
             Entry("Start an animation from scratch: Still pose holds one frame for the whole clip, and a pose layer builds the motion. Key a pose stands bent legs back on the ground.", 1),
             Entry("Motion keys layers change the motion at its own key poses, marked on the clip band and each bone's row. Each edit fades out over the next markers.", 1),
             Entry("Idle motion layers borrow breathing and a weight shift from another animation, such as your idle, with a share for the breath, arms, balance and tail.", 1),
+            Entry("Swing layers swing bones back and forth, like hips in a dance or arms while walking.", 1),
+            Entry("Smooth motion layers even out sudden moves.", 1),
             Entry("The gizmo's Drag mode pulls a bone where you want it and bends the limb above to follow.", 1),
             Entry("Drag mode on the hips moves them and keeps the feet and hands where they are; the legs, arms and back follow.", 1),
             Entry("The Bones window's crosshairs switch shows no bones, the selected ones, or all of them on your character.", 1),

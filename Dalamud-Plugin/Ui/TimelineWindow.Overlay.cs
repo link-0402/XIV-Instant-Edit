@@ -413,7 +413,8 @@ public sealed partial class TimelineWindow
     private ImGuizmoOperation? GizmoOperation(MotionLayer layer, int frame, SkeletonDescription skeleton, out string? reason)
     {
         reason = null;
-        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle || ReadOnly)
+        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
+                MotionLayerKind.Smooth || ReadOnly)
             return null;
         if (frame < layer.Start || frame > layer.End)
         {

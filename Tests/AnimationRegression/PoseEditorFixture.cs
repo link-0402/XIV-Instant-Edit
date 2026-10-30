@@ -216,6 +216,11 @@ internal static class PoseEditorFixture
         check(PoseEdits.Keyed(offset, Hand, 10) && !PoseEdits.Keyed(offset, Hand, 11) && PoseEdits.Changes(offset, Hand) && !PoseEdits.Changes(offset, Twin) &&
               PoseEdits.Changes(offset with { Kind = MotionLayerKind.Amplitude, Bones = [Twin] }, Twin),
             "a bone is keyed only at its key's frame; a layer changes the bones it keys, or an amplitude the ones it is limited to");
+        var swing = new MotionLayer("m2", MotionLayerKind.Swing, "Swing 1", 0, 30, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Smooth,
+            Bones: [Twin], Swing: new MotionSwing());
+        var smooth = swing with { Kind = MotionLayerKind.Smooth, Swing = null, Window = 10 };
+        check(PoseEdits.Changes(swing, Twin) && !PoseEdits.Changes(swing, Hand) && PoseEdits.Changes(smooth, Twin) && !PoseEdits.Changes(smooth, Hand),
+            "a swing or a smooth motion changes the bones it is limited to");
     }
 
     /// <summary>Two bones' frames, the rotations from character space to the spaces their values turn in, pointing different ways.</summary>

@@ -35,7 +35,8 @@ internal static partial class TimelineWindowViews
 
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
-        [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Pin];
+        [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
+            MotionLayerKind.Smooth, MotionLayerKind.Pin];
 
     /// <summary>The Add menus' item after the layer kinds: a pin layer that plants both feet.</summary>
     public const string PinFeetName = "Pin feet";
@@ -173,6 +174,8 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Pin => Theme.ModelKind,
         MotionLayerKind.Fix => Theme.MaskTexture,
         MotionLayerKind.Idle => Theme.Success,
+        MotionLayerKind.Swing => Theme.NormalTexture,
+        MotionLayerKind.Smooth => Theme.BaseTexture,
         _ => Theme.Important,
     };
 
@@ -185,6 +188,8 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Pin => "Hold bones at a spot while the limb bends to reach it.",
         MotionLayerKind.Fix => "Repair the motion.",
         MotionLayerKind.Idle => "Add breathing and a weight shift taken from another animation, such as an idle.",
+        MotionLayerKind.Swing => "Swing bones back and forth over the layer.",
+        MotionLayerKind.Smooth => "Even out sudden moves.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -250,6 +255,14 @@ internal static partial class TimelineWindowViews
                 moved.UnionWith(MotionIdles.Moved(layer));
                 continue;
             }
+            // A swing gives its bones motion, a smooth motion only reshapes what is there.
+            if (layer.Kind == MotionLayerKind.Swing)
+            {
+                moved.UnionWith(layer.Bones);
+                continue;
+            }
+            if (layer.Kind == MotionLayerKind.Smooth)
+                continue;
             foreach (var key in layer.Keys)
                 foreach (var bone in key.Bones.Keys)
                     if (layer.Bones.IsEmpty || layer.Bones.Contains(bone))
@@ -262,7 +275,7 @@ internal static partial class TimelineWindowViews
         return $"Bone layers move {names}, which other players' skeletons may not have. Sync plugins can refuse the saved file.";
     }
 
-    /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude or a fix has no keys, only the bones it is limited to.</summary>
+    /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude, a fix, a swing or a smooth motion has no keys, only the bones it is limited to.</summary>
     public static string LayerContent(MotionLayer layer)
     {
         if (layer.Kind == MotionLayerKind.Pin)
@@ -286,12 +299,13 @@ internal static partial class TimelineWindowViews
             return hand.Side switch { MotionHandSide.Left => "Left hand", MotionHandSide.Right => "Right hand", _ => "Both hands" };
         if (layer.Fix is { Kind: MotionFixKind.ResetRoot, Axes: var axes })
             return axes == MotionAxes.None ? "Root · no axes" : "Root · " + string.Join(", ", ResetAxes.Where(a => axes.HasFlag(a.Axis)).Select(a => a.Label));
-        var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix;
+        var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth;
         var bones = limited
             ? layer.Bones.Length
             : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct(StringComparer.Ordinal).Count();
+        // A swing without bones swings nothing; the other limited kinds then change every bone.
         if (limited)
-            return bones == 0 ? "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
+            return bones == 0 ? layer.Kind == MotionLayerKind.Swing ? "No bones" : "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
         var keys = layer.Keys.Length;
         return (keys == 1 ? "1 key" : $"{Whole(keys)} keys") + " · " + (bones == 1 ? "1 bone" : $"{Whole(bones)} bones");
     }
@@ -610,7 +624,7 @@ internal static partial class TimelineWindowViews
                     MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, editing),
                     MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot =>
                         editing?.Bones.Where(bone => bone.Parent < 0).Select(bone => bone.Name) ?? Enumerable.Empty<string>(),
-                    MotionLayerKind.Amplitude or MotionLayerKind.Fix => layer.Bones.AsEnumerable(),
+                    MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
                     MotionLayerKind.Pin => PinnedBones(layer, editing),
                     MotionLayerKind.Idle => MotionIdles.Moved(layer),

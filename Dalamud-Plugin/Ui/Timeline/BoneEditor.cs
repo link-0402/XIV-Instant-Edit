@@ -451,7 +451,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         ImGui.TextColored(Theme.Muted, "Bones");
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted(layer.Bones.IsEmpty ? "Every bone" : layer.Bones.Length == 1 ? "1 bone" : $"{layer.Bones.Length} bones");
+        // A swing with none listed swings nothing; the other limited kinds then change every bone.
+        var swing = layer.Kind == MotionLayerKind.Swing;
+        ImGui.TextUnformatted(layer.Bones.IsEmpty ? swing ? "None" : "Every bone" : layer.Bones.Length == 1 ? "1 bone" : $"{layer.Bones.Length} bones");
         foreach (var bone in layer.Bones)
         {
             using var id = ImRaii.PushId(bone);
@@ -474,13 +476,17 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
                 current.Commit(MotionEdits.SetBones(current.Document, layer.Key, layer.Bones.Concat(chosen)));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(layer.Kind == MotionLayerKind.Fix
-                ? "Add the selected bones to the ones this layer fixes. With none listed, it fixes every bone."
-                : "Add the selected bones to the ones this layer scales. With none listed, it scales every bone.");
+            ImGui.SetTooltip(layer.Kind switch
+            {
+                MotionLayerKind.Fix => "Add the selected bones to the ones this layer fixes. With none listed, it fixes every bone.",
+                MotionLayerKind.Swing => "Add the selected bones to the ones this layer swings.",
+                MotionLayerKind.Smooth => "Add the selected bones to the ones this layer smooths. With none listed, it smooths every bone.",
+                _ => "Add the selected bones to the ones this layer scales. With none listed, it scales every bone.",
+            });
         ImGui.SameLine();
         using (ImRaii.Disabled(readOnly || layer.Bones.IsEmpty))
         {
-            if (ImGui.Button("Every bone"))
+            if (ImGui.Button(swing ? "Clear" : "Every bone"))
                 current.Commit(MotionEdits.SetBones(current.Document, layer.Key, []));
         }
     }

@@ -130,6 +130,11 @@ internal static class MotionSymmetry
                         if (index.TryGetValue(name, out var moved))
                             animated.Add(moved);
                     break;
+                case MotionLayerKind.Swing:
+                    foreach (var name in layer.Bones)
+                        if (index.TryGetValue(name, out var swung))
+                            animated.Add(swung);
+                    break;
                 case MotionLayerKind.Symmetry:
                     try
                     {

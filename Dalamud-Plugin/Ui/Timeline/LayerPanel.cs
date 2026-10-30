@@ -105,7 +105,12 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         DrawAxes(current, layer);
                     else if (layer.Kind != MotionLayerKind.Pin)
                         DrawComponents(current, layer);
-                    if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle))
+                    if (layer.Kind == MotionLayerKind.Swing)
+                        SwingFields.Draw(current, layer);
+                    else if (layer.Kind == MotionLayerKind.Smooth)
+                        SwingFields.DrawWindow(current, layer);
+                    if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
+                        MotionLayerKind.Smooth))
                         DrawInterpolation(current, layer);
                 }
             }
@@ -141,8 +146,13 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             hands.Draw(current, layer, hand, loaded, skeleton, readOnly);
         else if (reset)
             Widgets.MutedWrapped("Changes the root bone only, so the whole body turns with it.");
-        else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
+        else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
+        else if (layer.Kind == MotionLayerKind.Swing)
+        {
+            boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
+            SwingFields.DrawNotes(layer);
+        }
         else if (layer.Kind == MotionLayerKind.Symmetry)
             boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, true);
         else if (layer.Kind == MotionLayerKind.Pin)
@@ -487,7 +497,13 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     private static void DrawAmount(TimelineEditor current, MotionLayer layer)
     {
         var smooth = layer.Fix?.Kind == MotionFixKind.SmoothJitter;
-        TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch { MotionLayerKind.Offset or MotionLayerKind.Idle => "Strength", MotionLayerKind.Amplitude => "Movement", MotionLayerKind.Pin => "Pull", _ => "Blend" });
+        TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch
+        {
+            MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth => "Strength",
+            MotionLayerKind.Amplitude => "Movement",
+            MotionLayerKind.Pin => "Pull",
+            _ => "Blend",
+        });
         var percent = layer.Amount * 100;
         ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(90), ImGui.GetContentRegionAvail().X));
         var changed = ImGui.SliderFloat("##layer-amount", ref percent, 0, MotionEdits.MaxAmount(layer.Kind) * 100, "%.0f%%");
@@ -504,6 +520,8 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot => "How far the root turns back. Ctrl+click to type.",
                 MotionLayerKind.Fix => "How far the end goes to the loop's first frame. Ctrl+click to type.",
                 MotionLayerKind.Idle => "How much of the borrowed motion applies, over the shares below. Ctrl+click to type.",
+                MotionLayerKind.Swing => "How much of the swing applies. Ctrl+click to type.",
+                MotionLayerKind.Smooth => "How far the bones go to the smoothed motion. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
     }
@@ -546,7 +564,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     private static void DrawComponents(TimelineEditor current, MotionLayer layer)
     {
         TimelineUi.Fact("Changes");
-        PoseComponents[] parts = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle
+        PoseComponents[] parts = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth
             ? [PoseComponents.Rotation, PoseComponents.Position]
             : [PoseComponents.Rotation, PoseComponents.Position, PoseComponents.Scale];
         var first = true;

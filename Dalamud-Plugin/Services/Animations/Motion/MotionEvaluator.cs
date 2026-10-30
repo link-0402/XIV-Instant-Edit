@@ -41,6 +41,10 @@ internal static class MotionEvaluator
         },
         MotionLayerKind.Idle => layer.Amount > 0 && layer.Idle is { } idle && MotionIdles.Moves(idle) &&
                                 (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
+        MotionLayerKind.Swing => layer.Amount > 0 && layer.Swing is { } swing && !layer.Bones.IsEmpty &&
+                                 ((swing.Tilt > 0 || swing.Twist > 0) && layer.Components.HasFlag(PoseComponents.Rotation) ||
+                                  swing.Slide > 0 && layer.Components.HasFlag(PoseComponents.Position)),
+        MotionLayerKind.Smooth => layer.Amount > 0 && (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -88,9 +92,9 @@ internal static class MotionEvaluator
         return BlendsAtMostFully(layer.Kind) ? Math.Min(1, weight) : weight;
     }
 
-    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's pull or a fix.</summary>
+    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's pull, a fix or a smooth.</summary>
     public static bool BlendsAtMostFully(MotionLayerKind kind) =>
-        kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix;
+        kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix or MotionLayerKind.Smooth;
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
@@ -113,7 +117,8 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} lists a bone twice or a bone without a name.");
         if (layer.Keys.Length > MaxKeys)
             throw new InvalidDataException($"{name} has too many keys.");
-        if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle && !layer.Keys.IsEmpty)
+        if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth &&
+            !layer.Keys.IsEmpty)
             throw new InvalidDataException($"{name} can't have keys.");
         if (layer.Kind != MotionLayerKind.Pin && !layer.Pins.IsEmpty)
             throw new InvalidDataException($"{name} can't have pins.");
@@ -127,6 +132,16 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} can't have markers.");
         if (layer.Markers is { Reach: < 1 or > MotionMarkers.MaxReach })
             throw new InvalidDataException($"{name} has an invalid reach.");
+        if (layer.Kind == MotionLayerKind.Swing && layer.Swing == null)
+            throw new InvalidDataException($"{name} has no swing.");
+        if (layer.Kind != MotionLayerKind.Swing && layer.Swing != null)
+            throw new InvalidDataException($"{name} can't have a swing.");
+        if (layer.Swing is { } swing)
+            MotionSwings.Validate(swing, name);
+        if (layer.Kind == MotionLayerKind.Smooth && layer.Window is < MotionSmoothing.MinWindow or > MotionSmoothing.MaxWindow)
+            throw new InvalidDataException($"{name} has a window out of range.");
+        if (layer.Kind != MotionLayerKind.Smooth && layer.Window != 0)
+            throw new InvalidDataException($"{name} can't have a window.");
         if (layer.Idle is { } idle)
             MotionIdles.Validate(idle, name);
         if (layer.Fix is { Kind: MotionFixKind.MatchLoop } match)
@@ -259,6 +274,12 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Idle:
                     ApplyIdle(clip, layer, index, mask, end, token);
+                    break;
+                case MotionLayerKind.Swing:
+                    MotionSwings.Apply(clip, layer, index, loop, end, token);
+                    break;
+                case MotionLayerKind.Smooth:
+                    MotionSmoothing.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
                     break;
             }
         }
@@ -539,9 +560,10 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape and root reset layers applied at <paramref name="frame"/>, in order, the way
+    /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape, root reset, idle and swing layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
-    /// around its average over their section, which one pose does not have, and so is a hand shape keeping finger motion; planted pins
+    /// around its average over their section, which one pose does not have, and so are smooth motions, which average the frames
+    /// round it, and a hand shape keeping finger motion; planted pins
     /// and the other fixes too, as finding where a bone is down or what its neighbours do takes the whole clip. The Bones window turns
     /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
@@ -573,7 +595,12 @@ internal static class MotionEvaluator
                 MotionFixes.ApplyResetRootAt(skeleton, pose, layer, Weight(layer, frame, end));
                 continue;
             }
-            if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix)
+            if (layer.Kind == MotionLayerKind.Swing)
+            {
+                MotionSwings.ApplyAt(skeleton, pose, layer, MotionSwings.Plan(skeleton, layer, index), frame, loop, Weight(layer, frame, end), end);
+                continue;
+            }
+            if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth)
                 continue;
             if (layer.Kind == MotionLayerKind.Symmetry)
             {

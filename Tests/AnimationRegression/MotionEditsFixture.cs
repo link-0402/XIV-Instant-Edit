@@ -165,6 +165,29 @@ internal static class MotionEditsFixture
         check(MotionEdits.Find(amplitude, amp) is { Amount: 1.5f, Components: PoseComponents.Rotation | PoseComponents.Position } &&
               MotionEdits.Find(pose, posed) is { Amount: 1, Components: PoseComponents.Rotation | PoseComponents.Position },
             "an amplitude starts at 150% and a pose at full strength; both turn and move, scale only on request");
+        var swing = MotionEdits.Add(Empty(), MotionLayerKind.Swing, 0, 100, out var swingKey, out _);
+        var smooth = MotionEdits.Add(Empty(), MotionLayerKind.Smooth, 0, 100, out var smoothKey, out _);
+        check(MotionEdits.Find(swing, swingKey) is { Name: "Swing 1", Amount: 1, Components: PoseComponents.Rotation | PoseComponents.Position, Window: 0 } s &&
+              s.Swing == new MotionSwing() &&
+              MotionEdits.Find(smooth, smoothKey) is { Name: "Smooth motion 1", Amount: 1, Window: MotionSmoothing.DefaultWindow, Swing: null },
+            "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
+        check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
+                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Pin]) &&
+              TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
+              TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
+              TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&
+              TimelineUi.LayerIcon(MotionLayerKind.Smooth) != TimelineUi.LayerIcon(MotionLayerKind.Swing) &&
+              TimelineWindowViews.LayerColour(MotionLayerKind.Swing) != TimelineWindowViews.LayerColour(MotionLayerKind.Smooth),
+            "the Add menu offers Swing and Smooth motion after Idle motion, each with its own hint, icon and colour");
+        var swung = MotionEdits.Find(swing, swingKey)!;
+        check(TimelineWindowViews.LayerContent(swung) == "No bones" && TimelineWindowViews.LayerContent(swung with { Bones = ["j_kosi", "j_sebo_a"] }) == "2 bones" &&
+              TimelineWindowViews.LayerContent(MotionEdits.Find(smooth, smoothKey)!) == "Every bone" &&
+              !TimelineLayout.Unfolds(swung) && !TimelineLayout.Unfolds(MotionEdits.Find(smooth, smoothKey)!),
+            "a swing without bones says so, a smooth motion without bones smooths every bone, and neither unfolds into bone rows");
+        var rest = new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.One);
+        check(ReferenceEquals(MotionEdits.SetKey(swing, swingKey, 10, "j_kosi", rest), swing) &&
+              ReferenceEquals(MotionEdits.SetKey(smooth, smoothKey, 10, "j_kosi", rest), smooth),
+            "swing and smooth motion layers take no keys");
         var full = Empty() with { Motion = [.. Enumerable.Range(0, MotionEvaluator.MaxLayers).Select(i => layer with { Key = "m" + i })] };
         var refused = MotionEdits.Add(full, MotionLayerKind.Offset, 0, 10, out _, out var tooMany);
         check(ReferenceEquals(refused, full) && tooMany != null, "a layer past the most an animation may have is refused with a reason");

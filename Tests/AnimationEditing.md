@@ -2466,3 +2466,23 @@ Code: Services/Animations/Motion (markers), Ui/Timeline/TimelineClipBand.cs, the
 - [x] 10 Hips drag on the Motion keys layer fades out (after the hip-drag work is committed and wrapped).
   (XIV Bridge 424, 2026-10-28, Idle pose 3: every keyed bone fades out at its markers. Where the next marker is the
   clip's end, the zero key at frame 0 closes it: the change eases to 0 at 70 and the seam stays Clean.)
+
+## Swing and Smooth motion (pending)
+
+Two keyless bone layers. Swing swings its bones back and forth a whole number of times over the layer, in the
+character's axes: Tilt and Twist turn, Slide moves the top bone of each chain; lower bones trail by Delay, left and
+right swing opposite, a chain shares the angle. Smooth motion averages each frame with the frames round it over its
+Window, so sudden moves soften. The maths is covered offline (SwingLayerFixture, SmoothMotionFixture); these checks
+are the look and Live. Code: Services/Animations/Motion/MotionSwing.cs, MotionSmoothing.cs, Ui/Timeline/SwingFields.cs.
+
+- [ ] 1 On a dance, Add > Swing, limit it to the hips (j_kosi), Slide 5 cm, Tilt 5°, then Add > Pin feet after it:
+  in Live the hips sway side to side and the feet stay planted.
+- [ ] 2 Add > Swing on both upper arms (j_ude_a_l, j_ude_a_r), Direction 90°, Tilt 30°, Twins opposite on: the arms
+  swing forward and back in turn, like walking. Untick Twins opposite: they swing together.
+- [ ] 3 A swing on the spine chain (j_sebo_a, j_sebo_b, j_sebo_c) with Delay 3: the upper back follows the lower back,
+  and the chest leans no further than the Tilt set (Spread over chain on).
+- [ ] 4 A swing covering a whole looping emote: no jump where the loop starts over in game.
+- [ ] 5 Add > Smooth motion on a snappy emote with Window 10: the sharp moves soften without slowing the emote down.
+  At Strength 0% it plays as before.
+- [ ] 6 Save both layers and play the saved animation: it matches Live. Edit again brings both layers back with their
+  settings.
