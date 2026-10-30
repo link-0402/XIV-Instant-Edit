@@ -939,13 +939,12 @@ internal static class PinLayerFixture
         {
             var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/pose06_loop.pap", "pose06_loop.pap", "hash");
             var clip = new AnimationClip(resource.GamePath, "loop", 0, 0, 42, "chara/test.sklb");
-            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource],
-                new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var foot = PinChains.FootL;
             var layer = PinLayer([new(foot, HoldTurn: false, RelativeTo: "j_sebo_c", Top: "j_sako_l"), new(PinChains.FootR, Planted: true, Sensitivity: PinSensitivity.Loose)],
                 [Key(3, (foot, T(new Vector3(.1f, .2f, .3f), Q(Vector3.UnitY, 10))))]);
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+                AnimationOperation.EditTimeline,
                 Timeline: new AnimationTimelineEdit(false, 0, null, [layer]));
             new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });
             var loaded = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion.Single();

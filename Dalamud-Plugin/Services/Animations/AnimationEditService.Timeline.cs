@@ -597,7 +597,7 @@ internal sealed partial class AnimationEditService
                         : s).ToImmutableArray();
                 await framework.RunOnFrameworkThread(() => Observer.UpdateSources(capture.Id, updated));
             }
-            journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
+            journal.State = "Completed";
             journal.Message = tooSmall ? SavedSkeletonTooSmall
                 : AnimationBakeRules.NewMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
             journals.Save(journal); Status = journal.Message;
@@ -612,8 +612,7 @@ internal sealed partial class AnimationEditService
     /// </summary>
     internal static AnimationBakeRequest TimelineRequest(AnimationTimelineSource source, TimelineDocument document,
         AnimationDestination destination, string modName, SkeletonStandard? repair = null, IReadOnlyDictionary<string, string>? cutSounds = null)
-        => new(Guid.NewGuid(), source.Capture, destination, modName, false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
-            AnimationOperation.EditTimeline,
+        => new(Guid.NewGuid(), source.Capture, destination, modName, false, AnimationOperation.EditTimeline,
             ExcludedBones: source.Standalone ? [] : document.ExcludedBones,
             RepairTarget: source.Standalone ? null : source.Rebuild?.Target.Standard ?? repair,
             Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),

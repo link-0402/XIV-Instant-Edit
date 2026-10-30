@@ -156,10 +156,9 @@ internal static class PropCopyCommitFixture
         var commits = new AnimationCommitService(null!, null!, null!, store);
         var clip = new AnimationClip(Pap, "laugh", 0, 0, 42, "chara/test.sklb");
         var capture = new AnimationCapture("a", 7, 1, Guid.NewGuid(), "Test", "Laugh", clip, null, [Pap],
-            [new AnimationResource(Pap, Path.Combine(mod, "files", "laugh.pap"), "hash", "Mod", mod, "files/laugh.pap")],
-            new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            [new AnimationResource(Pap, Path.Combine(mod, "files", "laugh.pap"), "hash", "Mod", mod, "files/laugh.pap")], DateTime.UtcNow, true);
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.InPlace, "", false,
-            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+            AnimationOperation.EditTimeline,
             Timeline: new AnimationTimelineEdit(false, 0, null));
         var manifest = new AnimationDependencyManifest(capture.Sources, ImmutableDictionary<string, byte[]>.Empty);
         var journal = commits.PrepareAsync(request, manifest, ImmutableDictionary<string, byte[]>.Empty, CancellationToken.None,

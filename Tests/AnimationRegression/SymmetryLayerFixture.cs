@@ -295,11 +295,10 @@ internal static class SymmetryLayerFixture
         {
             var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/pose04_loop.pap", "pose04_loop.pap", "hash");
             var clip = new AnimationClip(resource.GamePath, "loop", 0, 0, 42, "chara/test.sklb");
-            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource],
-                new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var layer = Sym(MotionSide.Right, .5f, PoseComponents.Rotation | PoseComponents.Scale, bones: "j_sako_l");
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+                AnimationOperation.EditTimeline,
                 Timeline: new AnimationTimelineEdit(false, 0, null, [layer]));
             new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });
             var loaded = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion.Single();

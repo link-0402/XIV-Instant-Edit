@@ -454,9 +454,8 @@ internal static class TimelineWindowViewsFixture
             "eaec0bf7bb474a29");
         var previewed = AnimationPreviewRules.PlanFiles(AnimationPreviewRules.RevisionFolder(session, 1), [pap])[pap];
         var clip = new AnimationClip(pap, "loop", 0, 0, 42, "chara/test.sklb");
-        var pose = new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, "");
         AnimationCapture Heard(string file, string hash, string id = "dance") => new(id, 1, 1, Guid.Empty, "Test", "Moogle Dance", clip, null,
-            [pap], [new AnimationResource(pap, file, hash)], pose, DateTime.UtcNow, true);
+            [pap], [new AnimationResource(pap, file, hash)], DateTime.UtcNow, true);
         var opened = Heard(mod, "A1");
         var current = new AnimationTimelineSource(opened, false, clip, opened.Sources[0], [], 0, [], null, null);
         var changed = Heard(mod, "B2");

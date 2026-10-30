@@ -458,13 +458,12 @@ internal static class MotionLayerFixture
             var resource = new AnimationResource("chara/human/c0101/animation/a0001/bt_common/emote/dance.pap", "dance.pap", "hash");
             var clip = new AnimationClip(resource.GamePath, "loop", 0, 0, 42, "chara/test.sklb");
             // Captured from the posed copy of the player in GPose.
-            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Dance", clip, null, [resource.GamePath], [resource],
-                new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true, ActorIndex: 201);
+            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Dance", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true, ActorIndex: 201);
             var layer = new MotionLayer("m3", MotionLayerKind.Pose, "Wave", 5, 25, 3, 4, .75f, PoseComponents.Rotation | PoseComponents.Position,
                 MotionInterpolation.Smooth, [Hand], [Key(5, (Hand, new BoneTransform(new Vector3(1, 2, 3), Q(Vector3.UnitX, 20), new Vector3(1, 1.1f, 1))))
                     with { Moved = [Hand], Ease = MotionInterpolation.Custom, Curve = new MotionCurve(.2f, -.1f, .8f, 1.2f) }]);
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+                AnimationOperation.EditTimeline,
                 Timeline: new AnimationTimelineEdit(false, 0, null, [layer]));
             var store = new AnimationJournalStore(temp);
             store.Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });

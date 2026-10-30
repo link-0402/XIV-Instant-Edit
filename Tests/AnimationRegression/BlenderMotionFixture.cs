@@ -58,7 +58,7 @@ internal static class BlenderMotionFixture
     {
         var clip = new AnimationClip(GamePath, "cbem_regression", 0, 0, 42, "chara/test.sklb");
         var capture = new AnimationCapture("a", 7, 1, Guid.NewGuid(), "Test", "Dance", clip, null, [clip.GamePath],
-            [new AnimationResource(clip.GamePath, "dance.pap", "hash")], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""),
+            [new AnimationResource(clip.GamePath, "dance.pap", "hash")],
             DateTime.UtcNow, true);
         return new AnimationTimelineSource(capture, false, clip, new AnimationResource(GamePath, "dance.pap", "file"), [1, 2, 3], 0, [],
             new TimelineDocument(30, 30, null, [], 1), null) { FileFingerprint = "file-print" };

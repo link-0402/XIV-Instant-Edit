@@ -2,7 +2,7 @@ namespace InstantEdit.Services.Animations;
 
 /// <summary>
 /// The game and Penumbra cannot refresh an animation resource from an unchanged
-/// physical path once it has been loaded, so an in-place rebake with LivePose or
+/// physical path once it has been loaded, so an in-place timeline save or
 /// Repair skeleton must land its output at a fresh path every time. A short
 /// marker keeps repeated edits from growing the file name without bound: a
 /// rebake replaces its own marker instead of stacking another one.

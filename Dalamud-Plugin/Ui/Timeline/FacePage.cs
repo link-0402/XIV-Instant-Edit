@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
@@ -9,8 +8,8 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Face page of an expression's timeline. The timeline saves only the expression's own file, so
-/// what changes the face's motion runs as an edit of the face's file of its own, with the save
-/// footer's new mod or in place: leaving bones out, and baking your LivePose face adjustments in.
+/// leaving the face's bones out runs as an edit of the face's file of its own, with the save
+/// footer's new mod or in place.
 /// </summary>
 internal sealed class FacePage(TimelineSession session, SaveFooter saveFooter, TimelinePreview timelinePreview)
 {
@@ -39,20 +38,6 @@ internal sealed class FacePage(TimelineSession session, SaveFooter saveFooter, T
         faceExcluded.IntersectWith(bones);
         var problem = FaceProblem(capture, clip);
         ImGui.Spacing();
-        ImGui.TextColored(Theme.Muted, "LivePose");
-        var adjusted = capture.Pose.Bones.Where(b => b.Id.Slot == 0 && b.Id.Partial == clip.Partial).ToImmutableArray();
-        var bakeMissing = problem ?? capture.PoseUnavailableReason ?? (adjusted.IsEmpty ? "Your face has no LivePose adjustments." : null)
-            ?? AnimationBones.OffsetConflict(faceExcluded, adjusted.Select(b => b.Id.Name));
-        using (ImRaii.Disabled(service.Busy || session.ReadOnly || bakeMissing != null))
-        {
-            if (ImGui.Button("Bake LivePose into the face"))
-                faceJob = StartFaceEdit(service, new AnimationBakeRequest(Guid.NewGuid(), capture, saveFooter.Destination, saveFooter.ModName.Trim(), false,
-                    [.. adjusted.Select(b => b.Id)], PoseComponents.All, ExcludedBones: [.. faceExcluded.Order(StringComparer.Ordinal)]));
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(bakeMissing ?? "Bake your LivePose face adjustments into the face, and clear them from LivePose.");
-
-        ImGui.Spacing();
         ImGui.TextColored(Theme.Muted, "Animated bones");
         if (bones.IsEmpty)
         {
@@ -65,8 +50,7 @@ internal sealed class FacePage(TimelineSession session, SaveFooter saveFooter, T
         {
             if (ImGui.Button("Save the face without them"))
                 faceJob = StartFaceEdit(service, new AnimationBakeRequest(Guid.NewGuid(), capture, saveFooter.Destination, saveFooter.ModName.Trim(), false,
-                    ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.ExcludeBones,
-                    ExcludedBones: [.. faceExcluded.Order(StringComparer.Ordinal)]));
+                    AnimationOperation.ExcludeBones, ExcludedBones: [.. faceExcluded.Order(StringComparer.Ordinal)]));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(excludeMissing ?? "Write the face without the unticked bones.");

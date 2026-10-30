@@ -709,13 +709,12 @@ internal static class HandShapeFixture
         {
             var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/pose06_start.pap", "pose06_start.pap", "hash");
             var clip = new AnimationClip(resource.GamePath, "start", 0, 0, 42, "chara/test.sklb");
-            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource],
-                new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var hand = HandLayer(new MotionHand(MotionHandSide.Both, "fist", .25f, -.5f, true, true, Turns(1)));
             var smooth = new MotionLayer("m2", MotionLayerKind.Fix, "Smooth jitter", 0, 30, 0, 0, .5f, PoseComponents.Rotation | PoseComponents.Position,
                 MotionInterpolation.Smooth, Fix: new MotionFix(MotionFixKind.SmoothJitter));
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+                AnimationOperation.EditTimeline,
                 Timeline: new AnimationTimelineEdit(true, 0, null, [hand, smooth]));
             new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });
             var loaded = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion;

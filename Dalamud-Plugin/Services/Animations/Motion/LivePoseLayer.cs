@@ -6,7 +6,7 @@ using InstantEdit.Models;
 namespace InstantEdit.Services.Animations.Motion;
 
 /// <summary>
-/// LivePose adjustments as an offset layer's key: what each bone's stacks add, in the terms an offset
+/// The adjustments of a .livepose file as an offset layer's key: what each bone's stacks add, in the terms an offset
 /// key holds (see <see cref="MotionKey"/>). A stack turns the bone in its own axes after what it had,
 /// moves it in character space and adds to its scale; each stack applies after the ones before it.
 /// Where a stack keeps a move or a scale from its children (LivePose leaves scale to the bone alone by
@@ -18,7 +18,7 @@ internal static class LivePoseLayer
 {
     /// <summary>
     /// The key's values by bone, how many bones had adjustments, and the bones left out: missing from
-    /// the skeleton, IK stacks, face bones; and the bones whose turn now carries their children along.
+    /// the skeleton, IK stacks; and the bones whose turn now carries their children along.
     /// </summary>
     internal sealed record Result(ImmutableDictionary<string, BoneTransform> Bones, int Adjusted,
         ImmutableArray<string> Missing, ImmutableArray<string> Ik, ImmutableArray<string> TurnsChildren);
@@ -48,7 +48,7 @@ internal static class LivePoseLayer
         {
             if (bone.Id.Slot != 0 || partial is { } wanted && bone.Id.Partial != wanted || bone.Stacks.IsDefaultOrEmpty)
                 continue;
-            if (bone.Face || !index.TryGetValue(bone.Id.Name, out var at))
+            if (!index.TryGetValue(bone.Id.Name, out var at))
             {
                 missing.Add(bone.Id.Name);
                 continue;
@@ -57,7 +57,7 @@ internal static class LivePoseLayer
             var added = Vector3.Zero;
             foreach (var stack in bone.Stacks)
             {
-                if (stack.Ik.Enabled)
+                if (stack.Ik)
                 {
                     ik.Add(bone.Id.Name);
                     continue;
@@ -98,7 +98,7 @@ internal static class LivePoseLayer
                 // LivePose adds to the scale the bone has; an offset multiplies it by a factor.
                 var factor = Vector3.Clamp(Vector3.One + added, new Vector3(MotionEvaluator.MinScale), new Vector3(MotionEvaluator.MaxScale));
                 scales[at] *= factor;
-                if (bone.Stacks.Any(s => !s.Ik.Enabled && s.Scale != Vector3.Zero && !s.Propagate.HasFlag(PoseComponents.Scale)))
+                if (bone.Stacks.Any(s => !s.Ik && s.Scale != Vector3.Zero && !s.Propagate.HasFlag(PoseComponents.Scale)))
                     foreach (var child in children[at] ?? [])
                         scales[child] /= factor;
             }
@@ -121,7 +121,7 @@ internal static class LivePoseLayer
 
     /// <summary>
     /// Reads a LivePose file (.livepose, TypeName "Live Pose"): its bones' stacks. IK settings are kept
-    /// only as on or off. Throws <see cref="InvalidDataException"/> for anything else.
+    /// only as on or off, and IK stacks are left out of the layer. Throws <see cref="InvalidDataException"/> for anything else.
     /// </summary>
     public static ImmutableArray<PoseBone> ReadFile(string json)
     {
@@ -168,8 +168,7 @@ internal static class LivePoseLayer
             ? (PoseComponents)value & PoseComponents.All
             : PoseComponents.Position | PoseComponents.Rotation;
         var ik = stack.TryGetProperty("IK_Enabled", out var enabled) && enabled.ValueKind == JsonValueKind.True;
-        return new PoseStack(position, Quaternion.Normalize(rotation), scale, propagate,
-            new PoseIk(ik, 0, false, 0, 0, 0, 0, 0, Vector3.Zero));
+        return new PoseStack(position, Quaternion.Normalize(rotation), scale, propagate, ik);
     }
 
     private static Vector3 Vector(JsonElement parent, string name, Vector3 fallback, string bone) =>

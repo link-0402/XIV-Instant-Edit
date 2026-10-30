@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
@@ -8,61 +7,30 @@ using InstantEdit.Services.Animations.Motion;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// LivePose adjustments as a bone layer: the ones your character has now, read fresh from LivePose, or
-/// the ones a .livepose file holds. Either becomes an offset layer over the whole clip that stays
-/// editable like any other; LivePose keeps its own until you clear them there, from the note it leaves.
+/// The adjustments a .livepose file holds as a bone layer: an offset layer over the whole clip that
+/// stays editable like any other.
 /// </summary>
 /// <param name="showLayer">Brings the side panel's properties back to show the new layer.</param>
 internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
 {
-    // A fresh read of LivePose for the open clip, handed back by the service on the framework thread.
-    private volatile AnimationCapture? livePoseRead;
-    private bool livePoseReading;
     // A .livepose file read on a task.
     private Task<(string Name, ImmutableArray<PoseBone> Bones)>? livePoseFile;
     private string? lastLivePoseFolder;
-    // What the last layer from LivePose did, and whether LivePose's own adjustments can be cleared from it.
+    // What the last layer from a file did.
     private string? livePoseNote;
     private bool livePoseNoteWarns;
-    private AnimationCapture? livePoseClearable;
 
     /// <summary> Drops the last layer's note, which belongs to the clip it was added to. </summary>
-    public void ForgetNote()
-    {
-        livePoseNote = null;
-        livePoseClearable = null;
-    }
+    public void ForgetNote() => livePoseNote = null;
 
-    /// <summary> Stops waiting for a read of LivePose and drops the note, when the window closes. </summary>
-    public void Reset()
+    /// <summary>The Add menu's LivePose item: a layer from a .livepose file.</summary>
+    public void DrawItems()
     {
-        livePoseReading = false;
-        ForgetNote();
-    }
-
-    /// <summary>The Add menu's LivePose items: a layer from your adjustments now, or from a file.</summary>
-    public void DrawItems(AnimationTimelineSource loaded)
-    {
-        var capture = session.Fresh(loaded).Capture;
-        var busy = session.Animations is not { Busy: false } || livePoseReading || livePoseFile != null;
-        if (ImGui.MenuItem("Offset layer from LivePose", "", false, !busy && capture.PoseUnavailableReason == null))
-            ReadLivePose(capture);
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(capture.PoseUnavailableReason is { } reason
-                ? "LivePose is unavailable: " + reason
-                : "Your LivePose adjustments now become a layer over the whole clip.");
+        var busy = session.Animations is not { Busy: false } || livePoseFile != null;
         if (ImGui.MenuItem("Offset layer from a .livepose file", "", false, !busy))
             PickLivePoseFile();
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("A saved LivePose pose becomes a layer over the whole clip.");
-    }
-
-    private void ReadLivePose(AnimationCapture capture)
-    {
-        livePoseReading = true;
-        livePoseNote = null;
-        livePoseClearable = null;
-        session.Animations!.Refresh(capture, refreshed => livePoseRead = refreshed);
     }
 
     private void PickLivePoseFile()
@@ -75,7 +43,6 @@ internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
             var path = files[0];
             lastLivePoseFolder = Path.GetDirectoryName(path);
             livePoseNote = null;
-            livePoseClearable = null;
             livePoseFile = Task.Run(async () => (Path.GetFileNameWithoutExtension(path), LivePoseLayer.ReadFile(await File.ReadAllTextAsync(path))));
         }, 1, start, false);
     }
@@ -83,60 +50,42 @@ internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
     /// <summary>Every frame: turns a finished read into a layer once the document can change.</summary>
     public void Poll(TimelineEditor current, AnimationTimelineSource loaded)
     {
-        if (livePoseReading && session.Animations is { Busy: false } service)
-        {
-            if (livePoseRead is { } read)
-            {
-                livePoseReading = false;
-                livePoseRead = null;
-                if (read.PoseUnavailableReason is { } reason)
-                    LivePoseMessage("LivePose is unavailable: " + reason, true);
-                else if (AddLivePoseLayer(current, loaded, "LivePose", read.Pose.Bones, read.Clip.Partial))
-                    livePoseClearable = read;
-            }
-            else
-            {
-                // The read ended without handing anything back.
-                livePoseReading = false;
-                LivePoseMessage(service.LastFailed ? "LivePose could not be read: " + service.Status : "LivePose could not be read.", true);
-            }
-        }
         if (livePoseFile is { IsCompleted: true } task && !session.ReadOnly)
         {
             livePoseFile = null;
             if (task.IsCompletedSuccessfully)
-                AddLivePoseLayer(current, loaded, task.Result.Name, task.Result.Bones, null);
+                AddLivePoseLayer(current, loaded, task.Result.Name, task.Result.Bones);
             else
                 LivePoseMessage("The file could not be read: " + TimelineSession.ErrorText(task.Exception), true);
         }
     }
 
     /// <summary>Adds the offset layer <paramref name="bones"/>' adjustments make, and says what came of it.</summary>
-    private bool AddLivePoseLayer(TimelineEditor current, AnimationTimelineSource loaded, string name, ImmutableArray<PoseBone> bones, int? partial)
+    private void AddLivePoseLayer(TimelineEditor current, AnimationTimelineSource loaded, string name, ImmutableArray<PoseBone> bones)
     {
         if (session.ReadOnly || current.Gesture != TimelineGesture.None)
         {
             LivePoseMessage("The timeline is busy. Try again.", true);
-            return false;
+            return;
         }
         if (session.EditingSkeleton(loaded) is not { } skeleton)
         {
             LivePoseMessage("Choose the skeleton this animation was made for under Source first.", true);
-            return false;
+            return;
         }
-        var offsets = LivePoseLayer.Offsets(bones, skeleton, partial);
+        var offsets = LivePoseLayer.Offsets(bones, skeleton);
         if (offsets.Bones.IsEmpty)
         {
             LivePoseMessage(offsets.Adjusted == 0 && offsets.Missing.IsEmpty && offsets.Ik.IsEmpty
                 ? "There are no LivePose adjustments to add."
                 : "None of the adjusted bones are on this animation's skeleton.", true);
-            return false;
+            return;
         }
         var next = MotionEdits.AddOffsets(current.Document, name, offsets.Bones, out var key, out var error);
         if (error != null || !current.Commit(next))
         {
             LivePoseMessage(error ?? "The layer could not be added.", true);
-            return false;
+            return;
         }
         current.SelectLayer(key, 0);
         showLayer();
@@ -147,7 +96,6 @@ internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
         if (!offsets.TurnsChildren.IsEmpty)
             text += " Some turns now carry the bones below them.";
         LivePoseMessage(text, left > 0 || !offsets.TurnsChildren.IsEmpty);
-        return true;
     }
 
     private void LivePoseMessage(string text, bool warns)
@@ -156,48 +104,18 @@ internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
         livePoseNoteWarns = warns;
     }
 
-    /// <summary>
-    /// The note a LivePose layer leaves, with the button that clears LivePose's own adjustments so they
-    /// don't show twice, and the one that puts them back.
-    /// </summary>
+    /// <summary>The note a layer from a file leaves.</summary>
     public void DrawNote()
     {
-        if (livePoseReading)
-        {
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, "Reading LivePose");
-            return;
-        }
         if (livePoseNote is not { } note)
             return;
         if (Widgets.GhostIconButton("##livepose-note-dismiss", Dalamud.Interface.FontAwesomeIcon.Times, "Dismiss"))
         {
             livePoseNote = null;
-            livePoseClearable = null;
             return;
         }
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(livePoseNoteWarns ? Theme.Warning : Theme.Success, note);
-        if (session.Animations is not { } service || livePoseClearable is not { } capture)
-            return;
-        ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(service.Busy))
-        {
-            if (ImGui.SmallButton("Clear them in LivePose"))
-                service.ClearOffsets(capture);
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("LivePose still applies them, so they show twice. This clears every LivePose adjustment.");
-        ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(service.Busy || !service.CanReapplyOffsets))
-        {
-            if (ImGui.SmallButton("Put them back"))
-                service.ReapplyOffsets(capture);
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Put back the LivePose adjustments the last clear removed.");
     }
 }

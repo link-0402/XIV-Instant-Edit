@@ -8,9 +8,9 @@ namespace InstantEdit.Models;
 [Flags]
 internal enum PoseComponents { None = 0, Position = 1, Rotation = 2, Scale = 4, All = 7 }
 internal enum AnimationDestination { NewMod, InPlace }
-// Journals store operations by number. 2-5 belonged to operations that were removed
-// (startup transitions, slot swaps, facial expressions, retiming) and stay unused so
-// those older journals still load and undo.
+// Journals store operations by number. BakeOffsets (LivePose bakes) and 2-5 belonged to
+// operations that were removed (startup transitions, slot swaps, facial expressions,
+// retiming) and stay unused so those older journals still load and undo.
 internal enum AnimationOperation { BakeOffsets = 0, RepairSkeleton = 1, ExcludeBones = 6, EditTimeline = 7 }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
@@ -62,17 +62,10 @@ internal sealed record SkeletonResolution(SkeletonResolutionState State, Immutab
 /// <paramref name="Model"/> it is a repair onto a standard of the clip's own race, edited on that standard as well.
 /// </summary>
 internal sealed record RaceRebuild(string? Model, StandardSkeleton Target);
+// A bone's adjustments in a .livepose file: its stacks in order, each with whether it is an IK stack.
 internal sealed record PoseBoneId(string Name, int Partial, int Slot = 0);
-internal sealed record PoseIk(bool Enabled, int Type, bool EnforceConstraints, int Depth, int Iterations,
-    int First, int Second, int End, Vector3 Axis);
-internal sealed record PoseStack(Vector3 Position, Quaternion Rotation, Vector3 Scale, PoseComponents Propagate, PoseIk Ik);
-internal sealed record PoseBone(PoseBoneId Id, ImmutableArray<PoseStack> Stacks, bool Face = false,
-    ImmutableArray<string> IkChain = default)
-{
-    public ImmutableArray<string> IkChain { get; init; } = IkChain.IsDefault ? [] : IkChain;
-}
-internal sealed record PoseSnapshot(ushort MainTimeline, ushort UpperTimeline, ushort FaceTimeline, bool Global,
-    ImmutableArray<PoseBone> Bones, DateTime CapturedUtc, string AdapterIdentity);
+internal sealed record PoseStack(Vector3 Position, Quaternion Rotation, Vector3 Scale, PoseComponents Propagate, bool Ik);
+internal sealed record PoseBone(PoseBoneId Id, ImmutableArray<PoseStack> Stacks);
 internal sealed record AnimationResource(string GamePath, string ResolvedPath, string Hash, string? ModDirectory = null,
     string? ModRoot = null, string? RelativePath = null, string? ModName = null);
 internal sealed record AnimationClip(string GamePath, string Name, int BindingIndex, int Partial,
@@ -84,11 +77,12 @@ internal sealed record AnimationClip(string GamePath, string Name, int BindingIn
 // resolved it. The face motion is Clip; the timeline is a file of its own, not part of the PAP.
 // ActorIndex is the object the animation was captured from: 0 for your own character, 200 or
 // more for a GPose actor. Captures journaled before it was kept load as your own character's.
+// Captures journaled before LivePose was dropped also hold a Pose; it is ignored on load.
 internal sealed record AnimationCapture(string Id, ulong ActorId, long ActorAddress, Guid CollectionId,
     string CollectionName, string DisplayName, AnimationClip Clip, AnimationClip? Startup,
-    ImmutableArray<string> FamilyPaths, ImmutableArray<AnimationResource> Sources, PoseSnapshot Pose,
+    ImmutableArray<string> FamilyPaths, ImmutableArray<AnimationResource> Sources,
     DateTime CapturedUtc, bool Playing, string? UnavailableReason = null,
-    ImmutableArray<string> LoadedResourcePaths = default, string? PoseUnavailableReason = null,
+    ImmutableArray<string> LoadedResourcePaths = default,
     ImmutableDictionary<string, ImmutableArray<string>>? ResourceAliases = null,
     AnimationResource? ExpressionTimeline = null, ushort ActorIndex = 0)
 {
@@ -96,9 +90,9 @@ internal sealed record AnimationCapture(string Id, ulong ActorId, long ActorAddr
     public ImmutableDictionary<string, ImmutableArray<string>> ResourceAliases { get; init; } =
         ResourceAliases ?? ImmutableDictionary<string, ImmutableArray<string>>.Empty;
 }
+// LivePose bakes journaled the offsets they baked too (SelectedBones, Components); they are ignored on load.
 internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, AnimationDestination Destination,
-    string ModName, bool IncludeStartup, ImmutableHashSet<PoseBoneId> SelectedBones, PoseComponents Components,
-    AnimationOperation Operation = AnimationOperation.BakeOffsets,
+    string ModName, bool IncludeStartup, AnimationOperation Operation,
     // Retained for old journal deserialization only; never bypasses source compatibility.
     bool AllowClosestSkeletonRepair = false,
     // Animated bones, by name, that a rebake leaves without a track so nothing in
@@ -145,9 +139,6 @@ internal sealed record AnimationSlot(string Family, int Index, bool Startup);
 internal sealed record AnimationDependencyManifest(ImmutableArray<AnimationResource> Resources,
     ImmutableDictionary<string, byte[]> Files, string ManipulationsJson = "[]");
 internal sealed record AnimationEditResult(Guid Id, bool Success, string Message, string? ModDirectory = null);
-/// <summary>One guarded, durable LivePose clear operation for the current player.</summary>
-internal sealed record LivePoseOffsetBackup(ulong ActorId, Guid CollectionId, PoseSnapshot Before,
-    PoseSnapshot Cleared, DateTime ClearedUtc);
 
 /// <summary>
 /// The Timeline window's unsaved edits of one clip, kept on disk so a plugin reload or a game crash doesn't
@@ -162,7 +153,10 @@ internal sealed record TimelineAutosave(AnimationCapture Capture, bool Startup, 
     public TimelineDocument Restored => Document with { SoundEdits = SoundEdits.ToImmutableDictionary(p => p.Key, p => p.Edit) };
 }
 
-/// <summary>Durable transaction state. File and pose recovery both use compare-before-write.</summary>
+/// <summary>
+/// Durable transaction state; file recovery uses compare-before-write. Journals of LivePose bakes also hold the
+/// offsets they cleared (PoseBefore, PoseAfter, OffsetsCleared, PoseClearOutcome); they are ignored on load.
+/// </summary>
 internal sealed class AnimationEditJournal
 {
     public int Version { get; set; } = 3;
@@ -173,10 +167,6 @@ internal sealed class AnimationEditJournal
     public string ModDirectory { get; set; } = "";
     public string ModRoot { get; set; } = "";
     public List<AnimationFileChange> Files { get; set; } = [];
-    public PoseSnapshot? PoseBefore { get; set; }
-    public PoseSnapshot? PoseAfter { get; set; }
-    public bool OffsetsCleared { get; set; }
-    public string PoseClearOutcome { get; set; } = "NotStarted";
     public Dictionary<string, string> ModFileHashes { get; set; } = [];
     // Game paths this edit's timeline uses that an earlier edit added and this one found
     // already in place: undoing that earlier edit would take them away, so it waits for this one.

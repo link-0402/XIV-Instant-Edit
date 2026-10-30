@@ -1,5 +1,4 @@
-// Havok load/save and animation construction adapted from VFXEditor (GPL-3.0).
-// IK setup/solver calls adapted from Caraxi/LivePose (GPL-3.0). See THIRD-PARTY-NOTICES.md.
+// Havok load/save and animation construction adapted from VFXEditor (GPL-3.0). See THIRD-PARTY-NOTICES.md.
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -32,11 +31,7 @@ internal unsafe sealed class AnimationNative
     private readonly nint splineVtbl;
     private readonly delegate* unmanaged<TrackCompression*, TrackCompression*> splineTrackDefaults;
     private readonly delegate* unmanaged<Spline*, Interleaved*, TrackCompression*, AnimationCompression*, void> splineInit;
-    private readonly delegate* unmanaged<void*, int, float, void> ccdCtor;
-    private readonly delegate* unmanaged<void*, byte*, hkArray<CcdConstraint>*, hkaPose*, byte*> ccdSolve;
-    private readonly delegate* unmanaged<byte*, TwoJointSetup*, hkaPose*, byte*> twoJointSolve;
     public string? UnavailableReason { get; }
-    public string? IkUnavailableReason { get; }
 
     public AnimationNative(ISigScanner scanner)
     {
@@ -54,16 +49,6 @@ internal unsafe sealed class AnimationNative
             splineInit = (delegate* unmanaged<Spline*, Interleaved*, TrackCompression*, AnimationCompression*, void>)spline.Init;
         }
         catch (Exception e) { UnavailableReason = "This game build is not compatible with animation baking: " + e.Message; }
-        try
-        {
-            ccdCtor = (delegate* unmanaged<void*, int, float, void>)scanner.ScanText("E8 ?? ?? ?? ?? 48 8D 43 ?? 48 C7 43");
-            ccdSolve = (delegate* unmanaged<void*, byte*, hkArray<CcdConstraint>*, hkaPose*, byte*>)scanner.ScanText(
-                "E8 ?? ?? ?? ?? 8B 44 24 ?? 48 8B 5C 24 ?? 48 3B 5C 24");
-            twoJointSolve = (delegate* unmanaged<byte*, TwoJointSetup*, hkaPose*, byte*>)scanner.ScanText("E8 ?? ?? ?? ?? 0F 28 55 ?? 41 0F 28 D8");
-            if (ccdCtor == null || ccdSolve == null || twoJointSolve == null)
-                throw new InvalidOperationException("An animation runtime signature was not resolved.");
-        }
-        catch (Exception e) { IkUnavailableReason = "IK is unavailable for this game build: " + e.Message; }
     }
 
     public void EnsureAvailable()
@@ -128,35 +113,6 @@ internal unsafe sealed class AnimationNative
         [FieldOffset(0xB0)] public hkaSkeleton* Skeleton;
         [FieldOffset(0xB8)] public int MaxCompressedBytesPerFrame;
     }
-    [StructLayout(LayoutKind.Explicit, Size = 0x20)]
-    private struct CcdConstraint
-    {
-        [FieldOffset(0)] public short Start;
-        [FieldOffset(2)] public short End;
-        [FieldOffset(0x10)] public Vector4 Target;
-    }
-    [StructLayout(LayoutKind.Explicit, Size = 0x90)]
-    private struct TwoJointSetup
-    {
-        [FieldOffset(0)] public short First;
-        [FieldOffset(2)] public short Second;
-        [FieldOffset(4)] public short End;
-        [FieldOffset(6)] public short FirstTwist;
-        [FieldOffset(8)] public short SecondTwist;
-        [FieldOffset(0x10)] public Vector4 Axis;
-        [FieldOffset(0x20)] public float MaxAngle;
-        [FieldOffset(0x24)] public float MinAngle;
-        [FieldOffset(0x28)] public float FirstGain;
-        [FieldOffset(0x2c)] public float SecondGain;
-        [FieldOffset(0x30)] public float EndGain;
-        [FieldOffset(0x40)] public Vector4 Target;
-        [FieldOffset(0x50)] public Quaternion TargetRotation;
-        [FieldOffset(0x60)] public Vector4 Offset;
-        [FieldOffset(0x70)] public Quaternion OffsetRotation;
-        [FieldOffset(0x80)] public byte EnforcePosition;
-        [FieldOffset(0x81)] public byte EnforceRotation;
-    }
-
     internal sealed class Arena : IDisposable
     {
         private readonly List<nint> allocations = [];
@@ -618,75 +574,6 @@ internal unsafe sealed class AnimationNative
         }
     }
 
-    public void Apply(Sampler sampler, ImmutableArray<PoseBone> bones, int partial, PoseComponents components,
-        ImmutableHashSet<PoseBoneId> selected)
-    {
-        var byName = bones.Where(b => b.Id.Slot == 0 && b.Id.Partial == partial && selected.Contains(b.Id))
-            .ToDictionary(b => b.Id.Name, StringComparer.Ordinal);
-        for (var i = 0; i < sampler.BoneCount; i++)
-        {
-            if (!byName.Remove(sampler.Skeleton->Bones[i].Name.String!, out var bone)) continue;
-            foreach (var original in bone.Stacks)
-            {
-                var s = AnimationPoseRules.Filter(original, components);
-                AnimationPoseRules.Validate(s);
-                if (s.Ik.Enabled && IkUnavailableReason != null) throw new InvalidOperationException(IkUnavailableReason);
-                var pose = sampler.Pose;
-                var model = pose->AccessBoneModelSpace(i, Prop(s.Propagate, PoseComponents.Position));
-                var position = Translation(*model) + s.Position;
-                if (s.Ik.Enabled) SolveIk(pose, i, s.Ik, position, bone.IkChain);
-                if (!s.Ik.Enabled || !s.Ik.EnforceConstraints)
-                {
-                    model = pose->AccessBoneModelSpace(i, Prop(s.Propagate, PoseComponents.Position));
-                    model->Translation.X = position.X; model->Translation.Y = position.Y; model->Translation.Z = position.Z;
-                }
-                model = pose->AccessBoneModelSpace(i, Prop(s.Propagate, PoseComponents.Rotation));
-                SetRotation(model, Quaternion.Normalize(Rotation(*model) * s.Rotation));
-                model = pose->AccessBoneModelSpace(i, Prop(s.Propagate, PoseComponents.Scale));
-                model->Scale.X += s.Scale.X; model->Scale.Y += s.Scale.Y; model->Scale.Z += s.Scale.Z;
-            }
-        }
-        if (byName.Count != 0) throw new InvalidDataException("Selected pose bones are missing from the animation skeleton: " + string.Join(", ", byName.Keys));
-        sampler.Pose->SyncLocalSpace();
-    }
-    private static hkaPose.PropagateOrNot Prop(PoseComponents flags, PoseComponents component) =>
-        flags.HasFlag(component) ? hkaPose.PropagateOrNot.Propagate : hkaPose.PropagateOrNot.DontPropagate;
-    private void SolveIk(hkaPose* pose, int bone, PoseIk ik, Vector3 target, ImmutableArray<string> capturedChain)
-    {
-        using var scratch = new Arena();
-        var chain = new List<short>();
-        if (capturedChain.IsDefaultOrEmpty) throw new InvalidDataException("The captured IK hierarchy is missing.");
-        for (var cursor = bone; cursor >= 0 && chain.Count < capturedChain.Length; cursor = pose->Skeleton->ParentIndices[cursor])
-        {
-            if (pose->Skeleton->Bones[cursor].Name.String != capturedChain[chain.Count])
-                throw new InvalidDataException("The captured IK hierarchy does not match the isolated skeleton.");
-            chain.Add((short)cursor);
-        }
-        if (chain.Count != capturedChain.Length) throw new InvalidDataException("The captured IK chain crosses skeletons.");
-        byte result = 0;
-        if (ik.Type == 0)
-        {
-            if (ik.Depth <= 0 || chain.Count <= 1) return;
-            var solver = scratch.Alloc<byte>(0x20);
-            ccdCtor(solver, ik.Iterations, 1f);
-            var constraints = scratch.Array<CcdConstraint>(1);
-            constraints.Data->Start = chain[Math.Min(ik.Depth, chain.Count - 1)];
-            constraints.Data->End = chain[0]; constraints.Data->Target = new Vector4(target, 0);
-            ccdSolve(solver, &result, &constraints, pose);
-        }
-        else
-        {
-            if (ik.First >= chain.Count || ik.Second >= chain.Count || ik.End >= chain.Count ||
-                ik.First <= ik.Second || ik.Second <= ik.End || ik.Axis.LengthSquared() < 1e-12f)
-                throw new InvalidDataException("Two-joint IK chain is not valid for this skeleton.");
-            var setup = scratch.Alloc<TwoJointSetup>();
-            *setup = new TwoJointSetup { First = chain[ik.First], Second = chain[ik.Second], End = chain[ik.End],
-                FirstTwist = -1, SecondTwist = -1, Axis = new Vector4(ik.Axis, 0), MaxAngle = -1, MinAngle = 1,
-                FirstGain = 1, SecondGain = 1, EndGain = 1, Target = new Vector4(target, 0),
-                TargetRotation = Quaternion.Identity, OffsetRotation = Quaternion.Identity, EnforcePosition = 1 };
-            twoJointSolve(&result, setup, pose);
-        }
-    }
     public static Vector3 Translation(hkQsTransformf t) => new(t.Translation.X, t.Translation.Y, t.Translation.Z);
     public static Quaternion Rotation(hkQsTransformf t) => new(t.Rotation.X, t.Rotation.Y, t.Rotation.Z, t.Rotation.W);
     public static Vector3 Scale(hkQsTransformf t) => new(t.Scale.X, t.Scale.Y, t.Scale.Z);

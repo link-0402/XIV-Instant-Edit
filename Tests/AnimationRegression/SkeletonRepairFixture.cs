@@ -175,11 +175,11 @@ internal static class SkeletonRepairFixture
             "changed file content invalidates a manual choice even when the decoded skeleton fingerprint is unchanged");
         var clip = new AnimationClip("example.pap", "walk", 0, 0, 1, game, target.Fingerprint, target, ambiguity, "motion");
         var capture = new AnimationCapture("walk", 1, 1, Guid.NewGuid(), "Test", "Walk", clip, clip,
-            ["example.pap"], [], new(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true, PoseUnavailableReason: "LivePose unavailable");
+            ["example.pap"], [], DateTime.UtcNow, true);
         var recent = capture with { Id = "idle", DisplayName = "Idle" };
         var merged = AnimationObserver.MergeHistory([capture], [recent]);
         check(merged.Length == 2 && merged[0].Playing && !merged[1].Playing && merged[0].Clip.Resolution?.State == SkeletonResolutionState.Ambiguous,
-            "a mismatched clip remains listed and playing without LivePose while old clips become recent");
+            "a mismatched clip remains listed and playing while old clips become recent");
         var staleSource = new AnimationResource(clip.GamePath, "resolved.pap", "before-edit-hash");
         var sourcedCapture = capture with { Sources = [staleSource] };
         var refreshedByEdit = AnimationObserver.ApplyUpdatedSources([sourcedCapture], "walk", [staleSource with { Hash = "after-edit-hash" }]);
@@ -197,7 +197,7 @@ internal static class SkeletonRepairFixture
             "an in-place edit refreshes other clips captured from the same file in the same collection, and nothing else");
         var selectedResolution = ambiguity with { State = SkeletonResolutionState.Matched, Selected = ambiguity.Candidates[0] };
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture with { Clip = clip with { Resolution = selectedResolution }, Startup = clip with { Resolution = selectedResolution } },
-            AnimationDestination.NewMod, "Repair", true, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.RepairSkeleton);
+            AnimationDestination.NewMod, "Repair", true, AnimationOperation.RepairSkeleton);
         var compact = AnimationCommitService.RecoveryRequest(request);
         check(compact.Operation == AnimationOperation.RepairSkeleton && compact.Capture.Clip.Resolution!.Candidates.Length == 1 &&
             compact.Capture.Startup!.Resolution!.Candidates.Length == 1 && compact.Capture.Clip.Resolution.Selected == selectedResolution.Selected &&

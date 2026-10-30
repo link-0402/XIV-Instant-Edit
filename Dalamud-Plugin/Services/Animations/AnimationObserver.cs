@@ -25,7 +25,6 @@ internal sealed class AnimationObserver : IDisposable
     private readonly PenumbraIpc penumbra;
     private readonly AnimationNative native;
     private readonly AnimationResources resources;
-    private readonly LivePoseAdapter poses;
     private readonly AnimationCatalog catalog;
     private readonly AnimationSkeletonIndex skeletons;
     private readonly IPluginLog log;
@@ -79,11 +78,11 @@ internal sealed class AnimationObserver : IDisposable
     private readonly LoopFadeWatch fadeWatch;
 
     public AnimationObserver(IFramework framework, IObjectTable objects, IClientState clientState, ITargetManager targets, PenumbraIpc penumbra,
-        AnimationNative native, AnimationResources resources, LivePoseAdapter poses, AnimationCatalog catalog, AnimationSkeletonIndex skeletons, IPluginLog log,
+        AnimationNative native, AnimationResources resources, AnimationCatalog catalog, AnimationSkeletonIndex skeletons, IPluginLog log,
         LoopFades loopFades)
     {
         this.framework = framework; this.objects = objects; this.clientState = clientState; this.targets = targets; this.penumbra = penumbra;
-        this.native = native; this.resources = resources; this.poses = poses; this.catalog = catalog;
+        this.native = native; this.resources = resources; this.catalog = catalog;
         this.skeletons = skeletons;
         this.log = log;
         LoopFades = loopFades;
@@ -242,37 +241,21 @@ internal sealed class AnimationObserver : IDisposable
         {
             // Timed inside the visit: from a worker, the wait for the next frame isn't framework time.
             var frameworkMillis = 0.0;
-            var pair = await framework.RunOnFrameworkThread(() =>
+            var observed = await framework.RunOnFrameworkThread(() =>
             {
                 var frameworkStarted = Stopwatch.GetTimestamp();
                 token.ThrowIfCancellationRequested();
-                var subject = Subject();
-                var runtime = AnimationRuntime.Capture(subject, runtimeCache);
+                var runtime = AnimationRuntime.Capture(Subject(), runtimeCache);
                 // Another character than the one this observation began with: the next update starts over.
                 if (runtime != null && runtime.ActorId != actor) runtime = null;
-                string? error = null;
-                PoseSnapshot pose;
-                try
-                {
-                    // LivePose keeps its offsets on your own character; GPose actors have none of them.
-                    if (subject == null || subject.ObjectIndex != objects.LocalPlayer?.ObjectIndex)
-                        throw new InvalidOperationException("LivePose adjustments are read from your own character outside GPose.");
-                    pose = poses.Capture();
-                    if (runtime != null && !pose.Global && (runtime.Timelines[0] != pose.MainTimeline || runtime.Timelines[1] != pose.UpperTimeline || runtime.Timelines[2] != pose.FaceTimeline))
-                        throw new InvalidOperationException("Waiting for LivePose to capture the current timeline transition.");
-                }
-                catch (Exception e)
-                {
-                    error = e.Message;
-                    pose = new(0, 0, 0, false, [], DateTime.UtcNow, "");
-                }
                 frameworkMillis = Stopwatch.GetElapsedTime(frameworkStarted).TotalMilliseconds;
-                return (Runtime: runtime, Pose: pose, PoseError: error);
+                return runtime;
             });
+            var capturedUtc = DateTime.UtcNow;
             if (frameworkMillis >= 2)
                 log.Debug($"Animation observation framework capture took {frameworkMillis:F2} ms.");
             token.ThrowIfCancellationRequested();
-            if (pair.Runtime is not { } runtime) { MarkNotPlaying(); Status = "Waiting for an eligible player animation."; return; }
+            if (observed is not { } runtime) { MarkNotPlaying(); Status = "Waiting for an eligible player animation."; return; }
             var active = runtime.Timelines.Distinct().Select(id => catalog.Find(id) ?? (heard.ContainsKey(id) ? catalog.FindAny(id) : null))
                 .OfType<AnimationCatalog.Timeline>().ToArray();
             if (active.Length == 0) { MarkNotPlaying(); Status = "No eligible emote, idle, or movement is playing."; return; }
@@ -465,9 +448,8 @@ internal sealed class AnimationObserver : IDisposable
                 }
                 var idString = $"{runtime.ActorId}:{timeline.Id}:{clip.GamePath}:{clip.BindingIndex}:{clip.Partial}";
                 captures.Add(new AnimationCapture(idString, runtime.ActorId, runtime.Address, collection.Id, collection.Name,
-                    timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(), pair.Pose,
-                    pair.Pose.CapturedUtc, true, LoadedResourcePaths: gamePaths.ToImmutableArray(),
-                    PoseUnavailableReason: pair.PoseError, ResourceAliases: resourceAliases,
+                    timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(),
+                    capturedUtc, true, LoadedResourcePaths: gamePaths.ToImmutableArray(), ResourceAliases: resourceAliases,
                     ExpressionTimeline: timeline.IsExpression ? timelineReferences.GetValueOrDefault(timeline.Id)?.Root : null,
                     ActorIndex: runtime.ObjectIndex));
             }

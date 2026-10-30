@@ -4,7 +4,6 @@ using System.IO.Compression;
 using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Reflection;
 using InstantEdit.Models;
 using InstantEdit.Services;
 using InstantEdit.Services.Animations;
@@ -187,25 +186,10 @@ static void CheckPapsPosesAndCommits()
           AnimationPoseRules.SmoothStep(0) == 0 && AnimationPoseRules.SmoothStep(1) == 1,
         "blending uses smoothstep translation, scale, float, and shortest-path quaternion interpolation");
 
-    var ik = new PoseIk(true, 1, true, 0, 0, 2, 1, 0, Vector3.UnitX);
-    var first = new PoseStack(new(1, 2, 3), Quaternion.CreateFromAxisAngle(Vector3.UnitY, .6f), new(.1f), PoseComponents.Position, ik);
-    var second = first with { Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitX, .9f), Ik = ik with { Enabled = false } };
-    var bone = new PoseBone(new("hand", 0), [first, second], IkChain: ["hand", "forearm", "arm"]);
-    var other = new PoseBone(new("face", 1), [second], true, ["face"]);
-    var pose = new PoseSnapshot(42, 0, 5, false, [bone, other], DateTime.UtcNow, "fixture-v1");
     var resource = new AnimationResource("chara/test.pap", "chara/test.pap", AnimationPap.Hash(papBytes));
     var capture = new AnimationCapture("clip", 42, 123, Guid.NewGuid(), "Test", "Emote", new(resource.GamePath, "loop", 0, 0, 42, "chara/test.sklb"), null,
-        [resource.GamePath], [resource], pose, pose.CapturedUtc, true);
-    var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Animation regression", false, ImmutableHashSet.Create(bone.Id), PoseComponents.Position);
-    var filtered = AnimationPoseRules.Filter(first, PoseComponents.Rotation | PoseComponents.Scale);
-    Check(!filtered.Ik.Enabled && filtered.Position == Vector3.Zero && filtered.Rotation == first.Rotation && filtered.Scale == first.Scale,
-        "excluding Position disables its IK operation and preserves other components");
-    var cleared = AnimationPoseRules.RemoveBaked(pose, request);
-    Check(cleared.Bones[0].Stacks.Length == 2 && cleared.Bones[0].Stacks[1].Rotation == second.Rotation && cleared.Bones[1] == other &&
-        cleared.Bones[0].Stacks.All(s => s.Position == Vector3.Zero && !s.Ik.Enabled), "scoped clearing preserves stack order, excluded components, and other partials");
-    Check(!AnimationPoseRules.Same(pose, pose with { Bones = [bone with { Stacks = [second, first] }, other] }), "reordered stacks count as a newer pose edit");
-    Check(AnimationPoseRules.Same(pose, pose with { CapturedUtc = pose.CapturedUtc.AddHours(1) }), "capture time alone does not cause a pose conflict");
-    Reject(() => AnimationPoseRules.Validate(first with { Position = new(float.NaN) }), "invalid pose components are rejected");
+        [resource.GamePath], [resource], DateTime.UtcNow, true);
+    var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Animation regression", false, AnimationOperation.RepairSkeleton);
     var presentationSkeleton = new SkeletonDescription("test", "presentation", [], [], [], []);
     var presentationCandidate = new SkeletonCandidate(new(SkeletonSourceKind.Game, resource), presentationSkeleton, 0, "fixture");
     var matched = new SkeletonResolution(SkeletonResolutionState.Matched, [presentationCandidate], presentationCandidate);
@@ -264,60 +248,12 @@ static void CheckPapsPosesAndCommits()
           AnimationPresentation.DefaultModName(capture with { DisplayName = "Joy" }) == "Joy - Instant Edit",
         "animation mod defaults use the source mod or readable game animation name");
 
-    var adapterType = typeof(LivePoseAdapter);
-    var entityManager = new LivePose.Entities.EntityManager();
-    Check(ReferenceEquals(LivePoseAdapter.FindEntity(entityManager, typeof(LivePose.Entities.Core.EntityId),
-            new LivePose.Entities.Core.EntityId("actor_123")), entityManager.Player),
-        "LivePose entity lookup selects the non-generic overload with the exact EntityId signature");
-    Check(LivePoseAdapter.FindEntity(entityManager, typeof(LivePose.Entities.Core.EntityId),
-            new LivePose.Entities.Core.EntityId("actor_missing")) == null,
-        "a missing LivePose entity remains unavailable without invoking another overload");
-    var hostType = adapterType.GetNestedType("Host", BindingFlags.NonPublic)!;
-    var host = Activator.CreateInstance(hostType, typeof(LivePose.FixtureCapability).Assembly, new LivePose.FixtureCapability(), pose.AdapterIdentity)!;
-    object BuildPose(PoseSnapshot before, PoseSnapshot after) => adapterType.GetMethod("BuildPose", BindingFlags.NonPublic | BindingFlags.Static)!
-        .Invoke(null, [host, new LivePose.Game.Posing.PoseInfo(), before, after, null])!;
-    ImmutableArray<PoseBone> ReadBones(object value) => (ImmutableArray<PoseBone>)adapterType.GetMethod("ReadBones", BindingFlags.NonPublic | BindingFlags.Static)!
-        .Invoke(null, [host, value])!;
-    var roundtrip = pose with { Bones = ReadBones(BuildPose(pose with { Bones = [] }, pose)) };
-    Check(AnimationPoseRules.Same(roundtrip, pose) && roundtrip.Bones[0].IkChain.SequenceEqual(bone.IkChain),
-        "adapter shape round trip preserves enabled and disabled IK options, constraints, hierarchy, and stack order");
-    var runtimeCleared = cleared with { Bones = ReadBones(BuildPose(pose, cleared)) };
-    Check(AnimationPoseRules.Same(runtimeCleared, cleared), "scoped adapter rebuilding preserves disabled IK tuning after Position clearing");
     Check(AnimationCatalog.IsExplicitIdle(642) && AnimationCatalog.IsExplicitIdle(643) &&
           AnimationCatalog.IsExplicitIdle(653) && AnimationCatalog.IsExplicitIdle(654) &&
         new ushort[] { 7, 8, 13, 14, 15, 16, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33 }.All(AnimationCatalog.IsMovement) &&
           !AnimationCatalog.IsMovement(17) && !AnimationCatalog.IsMovement(41) && !AnimationCatalog.IsMovement(50) &&
           AnimationCatalog.MovementName(30) == "Sprint" && AnimationCatalog.MovementName(3) == null,
         "chair/ground sit timelines and normal walk, run, sprint, jump and turn rows remain eligible without enabling battle movement rows");
-    var config = new List<LivePose.LivePoseCacheEntry>
-    {
-        new() { TimelineId = 42, Pose = [new() { BonePoseInfoId = new("hand", 0, 0), Stacks = [] },
-            new() { BonePoseInfoId = new("unrelated", 0, 0), Extra = new() { ["FutureField"] = "retained" } }] },
-        new() { TimelineId = 99, Pose = [] },
-    };
-    var updatedConfig = (List<LivePose.LivePoseCacheEntry>)adapterType.GetMethod("CloneConfigEntries", BindingFlags.NonPublic | BindingFlags.Static)!
-        .Invoke(null, [host, config, pose, cleared, false])!;
-    Check(ReferenceEquals(updatedConfig.Single(e => e.TimelineId == 99), config[1]) &&
-        (string?)updatedConfig.Single(e => e.TimelineId == 42).Pose.Single(b => b.BonePoseInfoId.BoneName == "unrelated").Extra!["FutureField"] == "retained",
-        "scoped persistence preserves other timeline entries and unknown fields on unrelated bones");
-
-    var persistentSave = adapterType.GetMethod("PersistentSave", BindingFlags.NonPublic | BindingFlags.Static)!;
-    try
-    {
-        persistentSave.Invoke(null, [host]);
-        Check(false, "missing LivePose persistence service blocks clearing before mutation");
-    }
-    catch (TargetInvocationException e) when (e.GetBaseException() is InvalidOperationException)
-    { Check(true, "missing LivePose persistence service blocks clearing before mutation"); }
-    var persistence = new LivePose.Config.ConfigurationService();
-    LivePose.LivePose.Configuration = persistence;
-    var save = (Action)persistentSave.Invoke(null, [host])!;
-    save();
-    Check(persistence.Saves == 1 && persistence.SavedContentId == 42, "checked persistence targets the captured character configuration");
-    persistence.Fail = true;
-    try { save(); Check(false, "LivePose persistence errors propagate to recovery"); }
-    catch (TargetInvocationException e) when (e.GetBaseException() is IOException)
-    { Check(true, "LivePose persistence errors propagate to recovery"); }
 
     var refs = AnimationDependencies.Read(resource.GamePath, papBytes);
     Check(refs.Problems.IsEmpty && refs.References.Select(r => r.Path).SequenceEqual(new[] { "loop", "start" }), "PAP dependency reader visits every embedded timeline");
@@ -491,31 +427,52 @@ static void CheckPapsPosesAndCommits()
     try
     {
         var store = new AnimationJournalStore(temp);
-        var offsetBackup = new LivePoseOffsetBackup(capture.ActorId, capture.CollectionId, pose, AnimationPoseRules.ClearAll(pose), DateTime.UtcNow);
-        store.SaveOffsetBackup(offsetBackup);
-        var persistedOffsets = new AnimationJournalStore(temp).LoadOffsetBackup();
-        Check(persistedOffsets != null && AnimationPoseRules.Same(persistedOffsets.Before, pose) && persistedOffsets.Cleared.Bones.IsEmpty &&
-              !AnimationPoseRules.Same(persistedOffsets.Cleared, pose with { Bones = [bone] }),
-            "LivePose full-clear backup survives restart and detects a changed pose before reapply");
-        store.ClearOffsetBackup();
-        Check(store.LoadOffsetBackup() == null, "reapplied LivePose backups are consumed");
-        var journal = new AnimationEditJournal { Id = request.Id, Request = request, PoseBefore = pose, PoseAfter = cleared, State = "ClearingOffsets" };
+        var journal = new AnimationEditJournal { Id = request.Id, Request = request, State = "Prepared" };
         store.Save(journal); var loaded = new AnimationJournalStore(temp).Load().Single();
-        Check(loaded.State == "ClearingOffsets" && AnimationPoseRules.Same(loaded.PoseBefore!, pose) && loaded.Request.SelectedBones.SetEquals(request.SelectedBones) &&
-            loaded.PoseBefore!.Bones[0].Stacks[0].Ik.EnforceConstraints, "restart recovery retains complete stacks, IK constraints, filters, and clearing intent");
+        Check(loaded.State == "Prepared" && loaded.Request.Operation == AnimationOperation.RepairSkeleton && loaded.Request.Capture.Id == capture.Id,
+            "restart recovery keeps the edit's state, operation and capture");
         journal.State = "Completed"; store.Save(journal);
         Check(store.Load().Single().State == "Completed", "journal transitions replace the previous durable state atomically");
-        journal.Version = 1; store.Save(journal);
-        Check(store.Load().Single().Request.Operation == AnimationOperation.BakeOffsets, "version-one journals retain offset-bake recovery semantics");
-        journal.Version = 2; journal.Request = request with { Operation = AnimationOperation.RepairSkeleton, SelectedBones = ImmutableHashSet<PoseBoneId>.Empty, Components = PoseComponents.None };
-        journal.PoseBefore = journal.PoseAfter = null; journal.PoseClearOutcome = "NotApplicable"; store.Save(journal);
-        var repairJournal = store.Load().Single();
-        Check(repairJournal.Request.Operation == AnimationOperation.RepairSkeleton && repairJournal.Request.SelectedBones.IsEmpty &&
-            repairJournal.PoseBefore == null && repairJournal.PoseAfter == null && repairJournal.PoseClearOutcome == "NotApplicable",
-            "repair-only recovery needs no offsets and cannot authorize pose restoration");
+        // LivePose bakes were removed. Their journals, with the offsets they baked and cleared, must still load for undo.
+        var journalPath = Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json");
+        var bakeJournal = JsonNode.Parse(File.ReadAllText(journalPath))!;
+        var bakePose = new JsonObject
+        {
+            ["MainTimeline"] = 42, ["UpperTimeline"] = 0, ["FaceTimeline"] = 5, ["Global"] = false, ["CapturedUtc"] = "2026-10-01T00:00:00Z",
+            ["AdapterIdentity"] = "livepose-v1:fixture",
+            ["Bones"] = new JsonArray(new JsonObject
+            {
+                ["Id"] = new JsonObject { ["Name"] = "hand", ["Partial"] = 0, ["Slot"] = 0 }, ["Face"] = false, ["IkChain"] = new JsonArray("hand", "forearm"),
+                ["Stacks"] = new JsonArray(new JsonObject
+                {
+                    ["Position"] = new JsonObject { ["X"] = 1, ["Y"] = 2, ["Z"] = 3 }, ["Propagate"] = 1,
+                    ["Ik"] = new JsonObject { ["Enabled"] = true, ["Type"] = 1, ["EnforceConstraints"] = true },
+                }),
+            }),
+        };
+        bakeJournal["Version"] = 1;
+        bakeJournal["State"] = "ClearingOffsets";
+        bakeJournal["Request"]!["Operation"] = 0;
+        bakeJournal["Request"]!["SelectedBones"] = new JsonArray(new JsonObject { ["Name"] = "hand", ["Partial"] = 0, ["Slot"] = 0 });
+        bakeJournal["Request"]!["Components"] = 1;
+        bakeJournal["Request"]!["Capture"]!["Pose"] = bakePose.DeepClone();
+        bakeJournal["Request"]!["Capture"]!["PoseUnavailableReason"] = null;
+        bakeJournal["PoseBefore"] = bakePose.DeepClone();
+        bakeJournal["PoseAfter"] = bakePose.DeepClone();
+        bakeJournal["OffsetsCleared"] = true;
+        bakeJournal["PoseClearOutcome"] = "Cleared";
+        bakeJournal["Files"] = new JsonArray(new JsonObject
+        {
+            ["GamePath"] = "chara/x.pap", ["Target"] = "target", ["ModDirectory"] = "mod", ["ModRoot"] = "root",
+            ["RelativePath"] = "files/chara/x.pap", ["BeforeHash"] = "", ["AfterHash"] = "after", ["Backup"] = "", ["Staged"] = "staged",
+        });
+        File.WriteAllText(journalPath, bakeJournal.ToJsonString());
+        Check(store.Load().Single() is { Version: 1, State: "ClearingOffsets", Request.Operation: AnimationOperation.BakeOffsets } bakeLoaded &&
+              bakeLoaded.Files.Single() is { RelativePath: "files/chara/x.pap", AfterHash: "after" } &&
+              bakeLoaded.Request.Capture.Id == capture.Id && AnimationEditService.EditAgainProblem(bakeLoaded) != null,
+            "a LivePose bake's journal still loads with its files for undo, and can't be edited again");
         // Startup transitions, slot swaps, expressions and length changes were removed.
         // Journals they wrote must still load, or those edits could never be undone.
-        var journalPath = Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json");
         var legacyJournal = JsonNode.Parse(File.ReadAllText(journalPath))!;
         legacyJournal["Version"] = 3;
         legacyJournal["Request"]!["Operation"] = 3;
@@ -540,11 +497,10 @@ static void CheckPapsPosesAndCommits()
         var timelineId = Guid.NewGuid();
         store.Save(new AnimationEditJournal
         {
-            Id = timelineId, State = "Completed", PoseClearOutcome = "NotApplicable",
+            Id = timelineId, State = "Completed",
             Request = request with
             {
-                Id = timelineId, Operation = AnimationOperation.EditTimeline, SelectedBones = ImmutableHashSet<PoseBoneId>.Empty,
-                Components = PoseComponents.None, Timeline = new AnimationTimelineEdit(true, 1, 2.5f),
+                Id = timelineId, Operation = AnimationOperation.EditTimeline, Timeline = new AnimationTimelineEdit(true, 1, 2.5f),
             },
             Files = [new AnimationFileChange("sound/instant_edit/a_00000000.scd", "target", "mod", "root",
                 "instant_edit/sound/instant_edit/a_00000000.scd", "", "after", "", "staged", AddedFor: "chara/x.pap")],

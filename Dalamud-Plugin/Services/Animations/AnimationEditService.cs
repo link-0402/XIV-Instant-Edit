@@ -13,7 +13,6 @@ internal sealed partial class AnimationEditService : IDisposable
     private readonly IObjectTable objects;
     private readonly PenumbraIpc penumbra;
     private readonly AnimationModService animationMods;
-    private readonly LivePoseAdapter poses;
     private readonly AnimationNative native;
     private readonly AnimationBakeService baker;
     private readonly AnimationResources resources;
@@ -31,7 +30,6 @@ internal sealed partial class AnimationEditService : IDisposable
     private readonly object launchLock = new();
     private bool disposed;
     private ImmutableArray<AnimationEditJournal> recovery;
-    private LivePoseOffsetBackup? offsetBackup;
     public AnimationObserver Observer { get; }
     /// <summary>PAP files no character is playing, such as a mod's animations sent from a mod window.</summary>
     public AnimationFiles Files { get; }
@@ -41,12 +39,11 @@ internal sealed partial class AnimationEditService : IDisposable
     internal PropAttachTypes PropTypes { get; }
     public bool Busy => !work.IsCompleted;
     public bool CanCancel { get; private set; }
-    public string Status { get; private set; } = "Select an animation and the offsets to bake.";
+    public string Status { get; private set; } = "Select an animation.";
     public ImmutableArray<AnimationEditJournal> Recovery => recovery;
     public AnimationEditResult? LastResult { get; private set; }
     /// <summary>Whether the most recent operation of any kind ended in an error.</summary>
     public bool LastFailed { get; private set; }
-    public bool CanReapplyOffsets => offsetBackup != null;
     /// <summary>How many days edit records are kept (Settings > Cache).</summary>
     public int RecordDays => (int)Math.Round(journals.CurrentRetention.TotalDays);
     /// <summary>Where the Timeline window keeps its unsaved edits (<see cref="TimelineAutosave"/>).</summary>
@@ -60,10 +57,9 @@ internal sealed partial class AnimationEditService : IDisposable
     {
         this.framework = framework; this.objects = objects; this.penumbra = penumbra; this.animationMods = animationMods; this.log = log; this.data = data;
         native = new AnimationNative(scanner);
-        poses = new LivePoseAdapter(pi, objects);
         catalog = new AnimationCatalog(data);
         resources = new AnimationResources(penumbra, animationMods, data, framework, log);
-        // Journals, the LivePose offset backup and the pre-edit file backups are the only
+        // Journals and the pre-edit file backups are the only
         // copies Undo relies on, so they live in the config folder: temp cleaners empty
         // the default %TEMP% cache (issue #8). Records from older versions move over once.
         var recoveryRoot = pi.ConfigDirectory.FullName;
@@ -71,7 +67,6 @@ internal sealed partial class AnimationEditService : IDisposable
         catch (Exception error) { log.Warning(error, "Could not move animation recovery records out of the cache."); }
         journals = new AnimationJournalStore(recoveryRoot, message => log.Warning("{Message}", message), () => configuration.CacheRetention);
         recovery = journals.Load().ToImmutableArray();
-        offsetBackup = journals.LoadOffsetBackup();
         commits = new AnimationCommitService(animationMods, resources, new ModelBackupStore(recoveryRoot, () => configuration.CacheRetention), journals, backups,
             () => configuration.Studio.ModAuthor);
         baker = new AnimationBakeService(native, framework);
@@ -82,7 +77,7 @@ internal sealed partial class AnimationEditService : IDisposable
                 catch (Exception e) when (e is not OutOfMemoryException) { return false; }
             },
             () => TextureFiles.EnsureCacheRoot(configuration.TextureCacheDirectory), log);
-        Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, poses, catalog, skeletons, log,
+        Observer = new AnimationObserver(framework, objects, clientState, targets, penumbra, native, resources, catalog, skeletons, log,
             new LoopFades(recoveryRoot, message => log.Warning("{Message}", message)));
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         HandShapes = new HandShapeLibrary(recoveryRoot, message => log.Warning("{Message}", message));
@@ -158,80 +153,6 @@ internal sealed partial class AnimationEditService : IDisposable
         return FaceLibraryIndex.Active(candidates, race, face, path => resolved.GetValueOrDefault(path));
     }
 
-    public void Refresh(AnimationCapture capture, Action<AnimationCapture> accept) => Launch(async token =>
-    {
-        await CheckActorAsync(capture);
-        await resources.CheckAsync(capture.CollectionId, capture.Sources, token);
-        if (capture.PoseUnavailableReason != null)
-        {
-            await framework.RunOnFrameworkThread(() => accept(capture));
-            Status = "Animation capture refreshed. " + capture.PoseUnavailableReason;
-            return;
-        }
-        var snapshot = await framework.RunOnFrameworkThread(() => { token.ThrowIfCancellationRequested(); return poses.ReadMatching(capture.Pose); });
-        await framework.RunOnFrameworkThread(() =>
-        {
-            token.ThrowIfCancellationRequested();
-            CheckIdentityOnFramework(capture, true);
-            accept(capture with { Pose = snapshot, CapturedUtc = snapshot.CapturedUtc });
-        });
-        Status = "Captured offsets refreshed for the selected timeline.";
-    });
-    public void ClearOffsets(AnimationCapture capture) => Launch(async token =>
-    {
-        if (capture.PoseUnavailableReason != null) throw new InvalidOperationException(capture.PoseUnavailableReason);
-        await CheckActorAsync(capture, false);
-        var backup = await framework.RunOnFrameworkThread(() =>
-        {
-            token.ThrowIfCancellationRequested();
-            CheckIdentityOnFramework(capture, false);
-            var before = poses.ReadMatching(capture.Pose);
-            poses.ValidateRoundTrip(before);
-            return new LivePoseOffsetBackup(capture.ActorId, capture.CollectionId, before,
-                AnimationPoseRules.ClearAll(before), DateTime.UtcNow);
-        });
-        // Persist before touching LivePose so Reapply remains available after an interruption or restart.
-        var previousBackup = offsetBackup;
-        journals.SaveOffsetBackup(backup);
-        var cleared = await framework.RunOnFrameworkThread(() =>
-        {
-            token.ThrowIfCancellationRequested();
-            CheckIdentityOnFramework(capture, false);
-            return poses.CompareAndSet(backup.Before, backup.Cleared);
-        });
-        if (!cleared)
-        {
-            RestoreOffsetBackup(previousBackup);
-            throw new IOException("LivePose changed before offsets could be cleared. Nothing was changed.");
-        }
-        offsetBackup = backup;
-        Status = "All current LivePose offsets were cleared. Reapply offsets is available.";
-    });
-    public void ReapplyOffsets(AnimationCapture capture) => Launch(async token =>
-    {
-        var backup = offsetBackup ?? throw new InvalidOperationException("There are no cleared LivePose offsets to reapply.");
-        if (backup.ActorId != capture.ActorId || backup.CollectionId != capture.CollectionId)
-            throw new InvalidOperationException("The saved offsets belong to a different player or collection.");
-        await CheckActorAsync(capture, false);
-        var outcome = await framework.RunOnFrameworkThread(() =>
-        {
-            token.ThrowIfCancellationRequested();
-            CheckIdentityOnFramework(capture, false);
-            var current = poses.ReadMatching(backup.Cleared);
-            if (AnimationPoseRules.Same(current, backup.Before)) return 1;
-            return poses.CompareAndSet(backup.Cleared, backup.Before) ? 2 : 0;
-        });
-        if (outcome == 0)
-            throw new IOException("LivePose changed after the clear. Saved offsets were not reapplied.");
-        journals.ClearOffsetBackup();
-        offsetBackup = null;
-        Status = outcome == 1 ? "LivePose offsets were already applied." : "Saved LivePose offsets were reapplied.";
-    });
-    private void RestoreOffsetBackup(LivePoseOffsetBackup? backup)
-    {
-        if (backup == null) journals.ClearOffsetBackup(); else journals.SaveOffsetBackup(backup);
-        offsetBackup = backup;
-    }
     private void Launch(Func<CancellationToken, Task> action, Guid? jobId = null, AnimationClip? clip = null)
     {
         lock (launchLock)
@@ -255,7 +176,7 @@ internal sealed partial class AnimationEditService : IDisposable
             }
             catch (OperationCanceledException)
             {
-                Status = "Cancelled before commit. Live offsets are unchanged.";
+                Status = "Cancelled before commit.";
                 if (jobId is { } id) LastResult = new AnimationEditResult(id, false, Status);
             }
             catch (Exception e)
@@ -274,30 +195,17 @@ internal sealed partial class AnimationEditService : IDisposable
         native.EnsureAvailable();
         if (request.Destination == AnimationDestination.NewMod && !ModPaths.IsSafeNewModName(request.ModName))
             throw new InvalidDataException("Choose a valid mod name before baking.");
-        if (request.Operation == AnimationOperation.BakeOffsets)
-        {
-            if (request.Capture.PoseUnavailableReason != null) throw new InvalidOperationException(request.Capture.PoseUnavailableReason);
-            if (request.SelectedBones.Count == 0 || request.Components == PoseComponents.None)
-                throw new InvalidDataException("Select at least one bone and transform component.");
-            if (request.SelectedBones.Any(b => b.Partial != request.Capture.Clip.Partial || b.Slot != 0 || !request.Capture.Pose.Bones.Any(p => p.Id == b)))
-                throw new InvalidDataException("A selected offset belongs to a different skeleton.");
-            if (!request.Capture.Pose.Bones.Where(b => request.SelectedBones.Contains(b.Id)).SelectMany(b => b.Stacks)
-                    .Any(s => !AnimationPoseRules.Empty(AnimationPoseRules.Filter(s, request.Components))))
-                throw new InvalidDataException("The selected components contain no applied adjustments.");
-        }
+        if (request.Operation is not (AnimationOperation.ExcludeBones or AnimationOperation.RepairSkeleton))
+            throw new InvalidOperationException("This kind of edit is no longer supported.");
         if (request.Operation == AnimationOperation.ExcludeBones && request.ExcludedBones.IsEmpty)
             throw new InvalidDataException("Untick at least one animated bone first.");
         if (AnimationBones.Problem(request.Capture.Clip, request.ExcludedBones) is { } exclusion)
             throw new InvalidDataException(exclusion);
-        if (request.Operation == AnimationOperation.BakeOffsets &&
-            AnimationBones.OffsetConflict(request.ExcludedBones, request.SelectedBones.Select(b => b.Name)) is { } conflict)
-            throw new InvalidDataException(conflict);
         if (request.Capture.UnavailableReason != null) throw new InvalidOperationException(request.Capture.UnavailableReason);
         if (request.IncludeStartup && request.Capture.Startup == null) throw new InvalidOperationException("No unique startup was identified.");
         // Rebakes use only the selected source skeleton and, on repair, a standard
         // skeleton; none of them touches the current rig.
         await CheckActorAsync(request.Capture, false);
-        if (request.Operation == AnimationOperation.BakeOffsets) await framework.RunOnFrameworkThread(() => poses.ValidateRoundTrip(request.Capture.Pose));
         await resources.CheckAsync(request.Capture.CollectionId, request.Capture.Sources, token);
         Status = "Capturing effective animation sources";
         var clips = request.IncludeStartup ? new[] { request.Capture.Clip, request.Capture.Startup! } : [request.Capture.Clip];
@@ -322,11 +230,7 @@ internal sealed partial class AnimationEditService : IDisposable
                 ? (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes
                 : manifest.Files[clip.SkeletonPath];
             outputs[clip.GamePath] = await baker.BakeAsync(source, skeletonBytes, clip, request, dir, message => Status = message, token,
-                () =>
-                {
-                    CheckIdentityOnFramework(request.Capture, true);
-                    if (request.Operation == AnimationOperation.BakeOffsets) poses.CheckModule(request.Capture.Pose);
-                });
+                () => CheckIdentityOnFramework(request.Capture, true));
         }
         var journal = await commits.PrepareAsync(request, manifest, outputs.ToImmutable(), token);
         recovery = recovery.Insert(0, journal);
@@ -357,38 +261,11 @@ internal sealed partial class AnimationEditService : IDisposable
                     : s).ToImmutableArray();
             await framework.RunOnFrameworkThread(() => Observer.UpdateSources(request.Capture.Id, updatedSources));
         }
-        if (request.Operation != AnimationOperation.BakeOffsets)
-        {
-            journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
-            journal.Message = request.Operation == AnimationOperation.ExcludeBones
-                ? "Animation activated without the unticked bones. Live offsets were retained."
-                : "Repaired animation activated. Live offsets were retained.";
-            journals.Save(journal); Status = journal.Message; return;
-        }
-        // Record clearing intent first. A restart can compare live state against both sides of this exact scope.
-        journal.PoseAfter = AnimationPoseRules.RemoveBaked(request.Capture.Pose, request);
-        journal.State = "ClearingOffsets"; journal.PoseClearOutcome = "Pending"; journals.Save(journal);
-        var bakedBackup = new LivePoseOffsetBackup(request.Capture.ActorId, request.Capture.CollectionId,
-            journal.PoseBefore!, journal.PoseAfter, DateTime.UtcNow);
-        var previousBackup = offsetBackup;
-        journals.SaveOffsetBackup(bakedBackup);
-        try
-        {
-            await CheckActorAsync(request.Capture, false);
-            journal.OffsetsCleared = await framework.RunOnFrameworkThread(() =>
-            {
-                if (disposed) throw new OperationCanceledException();
-                CheckIdentityOnFramework(request.Capture, true);
-                return poses.CompareAndSet(journal.PoseBefore!, journal.PoseAfter);
-            });
-            journal.Message = journal.OffsetsCleared ? "Animation activated; baked live offsets cleared." :
-                "Animation activated. Live offsets changed while baking, so automatic clearing was skipped.";
-            journal.PoseClearOutcome = journal.OffsetsCleared ? "Cleared" : "Skipped";
-            if (journal.OffsetsCleared) offsetBackup = bakedBackup;
-            else RestoreOffsetBackup(previousBackup);
-        }
-        catch (Exception e) { RestoreOffsetBackup(previousBackup); journal.Message = "Animation activated; live offsets were retained: " + e.Message; }
-        journal.State = "Completed"; journals.Save(journal); Status = journal.Message;
+        journal.State = "Completed";
+        journal.Message = request.Operation == AnimationOperation.ExcludeBones
+            ? "Animation activated without the unticked bones."
+            : "Repaired animation activated.";
+        journals.Save(journal); Status = journal.Message;
     }, request.Id, request.Capture.Clip);
 
     /// <summary>
@@ -452,12 +329,6 @@ internal sealed partial class AnimationEditService : IDisposable
         Status = await deliver(take, token);
     });
 
-    public void RestoreOffsets(AnimationEditJournal journal) => Launch(async _ =>
-    {
-        await CheckActorAsync(journal.Request.Capture, false);
-        await RestoreOffsetsAsync(journal);
-        Status = journal.Message;
-    });
     public void Undo(AnimationEditJournal journal) => Launch(async _ =>
     {
         // A later timeline edit that relies on a file this one added must be undone first.
@@ -465,33 +336,11 @@ internal sealed partial class AnimationEditService : IDisposable
         if (added.Count > 0 && recovery.Any(other => other.Id != journal.Id && other.State is not ("Undone" or "FilesUndone") &&
                 other.ReusedFiles.Any(added.Contains)))
             throw new IOException("A later timeline edit uses a file this edit added. Undo that edit first.");
-        // Files undo by their hashes alone; only live offsets to put back need the character.
-        if (RestoresOffsets(journal)) await CheckActorAsync(journal.Request.Capture, false);
+        // Files undo by their hashes alone, so no character is needed.
         CanCancel = false;
         await commits.UndoFilesAsync(journal);
-        await RestoreOffsetsAsync(journal);
-        journal.State = "Undone"; journals.Save(journal); Status = journal.Message;
+        journal.State = "Undone"; journal.Message = "Files recovered."; journals.Save(journal); Status = journal.Message;
     });
-    /// <summary>
-    /// Whether undoing <paramref name="journal"/> puts live offsets back: a LivePose bake that cleared
-    /// them, or may have. Timeline saves and repairs clear none, so they undo outside GPose too.
-    /// </summary>
-    internal static bool RestoresOffsets(AnimationEditJournal journal) =>
-        journal.PoseBefore != null && journal.PoseAfter != null && (journal.OffsetsCleared || journal.PoseClearOutcome is "Pending");
-    private async Task RestoreOffsetsAsync(AnimationEditJournal journal)
-    {
-        if (!RestoresOffsets(journal) || journal.PoseBefore is not { } before || journal.PoseAfter is not { } after)
-        { journal.Message = "Files recovered; live offsets were not cleared."; journals.Save(journal); return; }
-        var restored = await framework.RunOnFrameworkThread(() =>
-        {
-            CheckIdentityOnFramework(journal.Request.Capture, false);
-            var current = poses.ReadMatching(before);
-            if (AnimationPoseRules.Same(current, before)) return true;
-            return poses.CompareAndSet(after, before);
-        });
-        if (!restored) throw new IOException("Live offsets changed after this edit. They were retained; automatic restoration was skipped.");
-        journal.OffsetsCleared = false; journal.PoseClearOutcome = "Restored"; journal.Message = "Captured live offsets restored."; journals.Save(journal);
-    }
     /// <summary>Why a clip can't be played on a character: it moves bones the character's skeleton lacks.</summary>
     public const string SkeletonTooSmall = "Your character's skeleton lacks bones this animation moves. Playing it could crash the game.";
 
@@ -571,7 +420,7 @@ internal sealed partial class AnimationEditService : IDisposable
         if (disposed) throw new OperationCanceledException();
         var identity = AnimationRuntime.Identity(objects[capture.ActorIndex]);
         if (identity == null || identity.Value.ActorId != capture.ActorId || address && identity.Value.Address != capture.ActorAddress)
-            throw new InvalidOperationException("The captured player changed. Live offsets were retained.");
+            throw new InvalidOperationException("The captured player changed. Refresh the animation capture.");
         animationMods.CheckAnimationCollectionOnFramework(identity.Value.Index, capture.CollectionId);
     }
     public void Dispose()

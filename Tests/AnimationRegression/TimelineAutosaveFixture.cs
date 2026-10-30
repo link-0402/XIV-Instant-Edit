@@ -77,7 +77,7 @@ internal static class TimelineAutosaveFixture
     {
         var clip = new AnimationClip(Pap, "loop", 0, 0, 42, "chara/test.sklb");
         var capture = new AnimationCapture("cap", 1, 1, Guid.NewGuid(), "Test", "Dance", clip, clip, [clip.GamePath],
-            [new AnimationResource(clip.GamePath, "dance.pap", "hash")], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""),
+            [new AnimationResource(clip.GamePath, "dance.pap", "hash")],
             DateTime.UtcNow, true);
         var layer = new MotionLayer("m1", MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1, PoseComponents.All, MotionInterpolation.Smooth, ["j_kubi"],
             [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_kubi",

@@ -218,7 +218,7 @@ unsupported records, metadata scope, journal restart, and PAP backup conflicts.
 They also check missing native buffers, inconsistent frame counts, and failure
 propagation from the checked LivePose persistence service without calling Havok.
 The LivePose entity fixture includes both `GetEntity(EntityId)` and
-`GetEntity<T>(EntityId)` to exercise overload resolution. Predictive-compressed
+`GetEntity<T>(EntityId)` to exercise overload resolution (both removed 2026-10-30 with the LivePose integration). Predictive-compressed
 fixtures cover animation identity, source sample density, buffer/offset bounds,
 runtime-only fields, and reference skeleton compatibility.
 Candidate discovery/matching fixtures cover absent skeletal PAPs in Penumbra's
@@ -307,39 +307,16 @@ The job journal and staged PAPs are under the plugin's config folder, in
 
 ## LivePose and IK
 
-- [ ] Compare the complete stacks a Face page bake or "Clear them in LivePose" captures
-  to the loaded LivePose plugin: names, partials, slots, timeline keys, stack order,
-  propagation, CCD depth/iterations, two-joint indices/axis, and constraint enforcement.
-  Include disabled IK stacks with saved solver tuning and identity-transform stacks with
-  active IK.
-  Partly checked (XIV Bridge tests/instant-edit/animations/120, 2026-10-10): all 56 .livepose files read into the
-  stacks their JSON holds (558 bones, 573 stacks: names, partials, slots, order, transforms, propagation, IK on/off);
-  a disabled-IK stack with tuning reads as a plain stack, an identity stack with active IK keeps IK on, and IK bones
-  are left out of the layer as the note counts. Not checked: what the loaded LivePose plugin captures (timeline keys,
-  CCD depth/iterations, two-joint indices/axis, constraint enforcement).
-- [ ] The Face page bake validates capture/rebuild before committing. Verify both cached
-  recent poses and active poses, with body and facial scopes active together.
-  Partly checked (XIV Bridge tests/instant-edit/animations/121, 2026-10-10): a stack on another partial changes
-  nothing in the clip, and selecting only another partial's bones is refused with a reason. Cached and active poses
-  need LivePose.
-- [ ] On a Face page bake, compare CCD and two-joint results against LivePose, with
-  constraints on/off, reachable/unreachable targets, hidden parent boundaries, and
-  constrained chains. Check every indirect solver joint. A layer from LivePose leaves IK
-  bones out ("… bones were left out.").
-  Partly checked (XIV Bridge tests/instant-edit/animations/121, 2026-10-10, with made-up IK stacks): CCD reaches a
-  reachable target (0.8 mm), keeps bone lengths with constraints on, stops short of an unreachable one, and places the
-  bone with constraints off; bones above the depth stay; two-joint keeps lengths and reaches with a fitting hinge axis.
-  Test 120 covers the "bones were left out" note. Not compared with LivePose's own results.
-- [ ] Verify a successful Face page bake clears only the baked face adjustments in the
-  matching scope. Switch timelines, reload LivePose, and restart the game: baked offsets
-  must not return. Body adjustments, unrelated timelines, weapon/minion poses,
-  playback speed, freeze state, and other configuration must survive.
-- [ ] Change an offset during a Face page bake. The result may activate, but automatic
-  clearing must be skipped ("… so automatic clearing was skipped."). A skipped clear
-  must not authorize a later automatic pose restoration.
-- [ ] Unload/reload LivePose or change its public/private data shape during a Face page
-  bake. Stop native work safely, retain live offsets, and keep other Instant Edit
-  tabs working. Test plugin unload, logout, and partial-skeleton replacement too.
+Dropped 2026-10-30: Instant Edit no longer talks to the LivePose plugin. The Face page bake, Add > Offset layer
+from LivePose, "Clear them in LivePose" / "Put them back", an Edits row's Restore offsets and the native CCD and
+two-joint solvers are gone, and with them the checks that were here. Old LivePose bakes still load on the Edits page
+and undo their files. Only .livepose files remain (Timeline > LivePose files below).
+
+- [x] All 56 .livepose files read into the stacks their JSON holds, and IK bones are left out of the layer as the
+  note counts.
+  (XIV Bridge tests/instant-edit/animations/120, 2026-10-10: 558 bones, 573 stacks: names, partials, slots, order,
+  transforms, propagation, IK on/off; a disabled-IK stack with tuning reads as a plain stack, an identity stack with
+  active IK keeps IK on.)
 
 ## Dependencies and activation
 
@@ -428,23 +405,18 @@ The job journal and staged PAPs are under the plugin's config folder, in
   injected from a script; the resolved-output check was timing-dependent and not reached (the hook never saw the job
   Committed).
 - [ ] Interrupt the plugin/game after the first file replacement, after activation,
-  during a Face page bake's offset clearing, and halfway through undo. Restart with the
+  and halfway through undo. Restart with the
   same player and collection; the Edits tab marks the edit and its Undo resumes recovery.
   Never rely on a persisted native address after restarting the game.
   Partly checked (XIV Bridge tests/instant-edit/animations/142, 2026-10-10): records left Activated, Undoing and
   Committing (after an in-place replacement), read back from disk as a restart does and with a stale native address,
-  are marked on the Edits tab, and their Undo finishes the recovery. Not checked: a real interruption and restart, and
-  a Face page bake's offset clearing.
-- [ ] **Put them back** in the LivePose note restores the state "Clear them in LivePose"
-  cleared, and an Edits row's Restore offsets the state a Face page bake cleared, keeping
-  its files. Both refuse to overwrite newer LivePose changes.
-- [ ] Change a PAP, new-mod metadata, or offsets after a successful edit. Undo and
-  restoration must refuse conflicting changes. Test moved/renamed mods, expired
+  are marked on the Edits tab, and their Undo finishes the recovery. Not checked: a real interruption and restart.
+- [ ] Change a PAP or new-mod metadata after a successful edit. Undo must refuse
+  conflicting changes. Test moved/renamed mods, expired
   backups, a different player, and a different collection.
   Partly checked (XIV Bridge tests/instant-edit/animations/143, 2026-10-29): Undo refuses, naming why and changing
   nothing, for a changed PAP, changed new-mod metadata, a renamed mod ("ownership marker is missing"), a changed
-  in-place output and an expired backup; once the conflict is undone it goes through. Not checked: changed offsets
-  (LivePose is manual). A different player and a different collection are no longer tested: since commit 04e93b0
+  in-place output and an expired backup; once the conflict is undone it goes through. A different player and a different collection are no longer tested: since commit 04e93b0
   (2026-10-19) Undo of a timeline save needs no captured character and doesn't check the player or collection, on
   purpose.
 - [x] Test multiple successive edits and undo them in reverse order. Preserve the
@@ -1135,9 +1107,6 @@ face once at its own length.
   (XIV Bridge tests/instant-edit/animations/200, 2026-10-10, played from the loader: Smile, Taunt and Shut Eyes, with
   the PAPs nonresident/smile.pap, nonresident/comeon.pap and resident/face.pap and the timelines facial/pose/smile.tmb,
   comeon.tmb and bow.tmb, all from Game Data.)
-- [ ] Adjust face bones in LivePose during an expression, then Face page > **Bake LivePose
-  into the face**. The expression plays with the adjustment and LivePose's face pose for
-  it is cleared.
 - [x] Untick a face bone under Animated bones on the Face page, then **Save the face
   without them**: that bone stops moving.
   (XIV Bridge tests/instant-edit/animations/201, 2026-10-10, after the fixes that send the matched clip and bake
@@ -1243,8 +1212,7 @@ copy of your character; outside GPose your own character):
   It shows under Playing now without leaving GPose, and the list's status reads
   "Listening in GPose". Target another GPose actor: its animations are listed instead.
 - [x] With Live on, the clip stays listed as playing while you edit.
-- [x] A clip captured in GPose: its LivePose tab says the adjustments are read from your own
-  character outside GPose. Save its timeline in GPose: it works. Leave GPose and save
+- [x] A clip captured in GPose: save its timeline in GPose: it works. Leave GPose and save
   again: the message says the GPose character is gone.
 - [x] Leave GPose: the list follows your own character again, and what played in GPose
   stays under Played recently.
@@ -1507,14 +1475,7 @@ Side panel:
   a receiver answering as Blender's add-on, after a status request, and "Send last recording again" sends the same
   bytes. A run against real Blender isn't needed, 2026-10-29.)
 
-LivePose:
-- [ ] Add > Offset layer from LivePose: a layer named LivePose covering the clip with one key
-  appears and is selected; with Live on the pose shows twice until "Clear them in LivePose",
-  and "Put them back" restores LivePose's own.
-  Partly checked (XIV Bridge tests/instant-edit/animations/241, 2026-10-10, a LivePose read handed in as the service
-  hands it): a layer named LivePose over the whole clip with one key is added and selected, the note counts the bones,
-  Clear them in LivePose / Put them back are offered; unavailable or empty LivePose adds nothing and says why. Not
-  checked: Live with LivePose loaded, and the two buttons (they write LivePose).
+LivePose files (the live LivePose items were dropped 2026-10-30):
 - [x] Add > Offset layer from a .livepose file: pick one from D:\Mods\Poses\LivePose; the
   layer is named after the file and Live shows the pose. Bones the skeleton lacks are counted.
   (XIV Bridge tests/instant-edit/animations/15, 2026-10-10: bend2.livepose on Idle pose 3, the file's result
@@ -1525,11 +1486,10 @@ LivePose:
   that scales only that bone: with Live on, its children keep their size, as in LivePose.
   (XIV Bridge tests/instant-edit/animations/242, 2026-10-10, from a .livepose file: j_ude_a_l x1.5; its children get
   x0.667, and with Live on the arm is 1.5x bigger while j_ude_b_l and n_hkata_l keep their size in the model (x1.000).)
-- [ ] On an expression: Face page > Bake LivePose into the face and Save the face without
-  them run the old face rebakes, into a new mod or in place as the footer says.
-  Partly checked (XIV Bridge tests/instant-edit/animations/243, 2026-10-10): Save the face without them saves Smile
-  into a new mod (which then plays) and in place. Not checked: Bake LivePose into the face (manual: it clears
-  LivePose).
+- [x] On an expression: Face page > Save the face without them runs the old face rebake, into a new mod or in
+  place as the footer says.
+  (XIV Bridge tests/instant-edit/animations/243, 2026-10-10: Save the face without them saves Smile into a new mod
+  (which then plays) and in place.)
 
 Save footer:
 - [x] Skeleton: Keep its own / Repair onto Vanilla, IVCS, IVCS + YAS (missing ones greyed with a

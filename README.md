@@ -49,8 +49,8 @@ Penumbra mods.
 - [XIVLauncher](https://goatcorp.github.io/) with Dalamud enabled
 - [Penumbra](https://github.com/xivdev/Penumbra) 1.7.1.0 or newer
 - [Blender](https://www.blender.org/) 4.5.0 or newer for model editing
-- Optional: an image editor that saves 32-bit TGA files, [Substance 3D Painter](https://www.adobe.com/products/substance3d/apps/painter.html)
-  10.0.1 or newer, and the LivePose plugin for animation editing
+- Optional: an image editor that saves 32-bit TGA files, and [Substance 3D Painter](https://www.adobe.com/products/substance3d/apps/painter.html)
+  10.0.1 or newer
 
 ## Installation
 
@@ -76,8 +76,8 @@ supported editor versions and manual setup, and the add-on's [README](Blender-Ad
 
 - The Blender add-on was initially derived from [Yet Another Addon](https://github.com/Arrenval/Yet-Another-Addon) and
   [XIVPy](https://github.com/Arrenval/XIVPy) by Arrenval; see [its credits](Blender-Addon/README.md#credits-and-license).
-- The animation tools adapt code from [VFXEditor](https://github.com/0ceal0t/Dalamud-VFXEditor) by 0ceal0t and follow
-  [LivePose](https://github.com/Caraxi/LivePose) by Caraxi; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- The animation tools adapt code from [VFXEditor](https://github.com/0ceal0t/Dalamud-VFXEditor) by 0ceal0t and read
+  [LivePose](https://github.com/Caraxi/LivePose) files as Caraxi's plugin writes them; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 - The motion editor's Bones window and its bones on the character adapt [Brio](https://github.com/Etheirys/Brio) by
   Etheirys and contributors, including its posing artwork.
 

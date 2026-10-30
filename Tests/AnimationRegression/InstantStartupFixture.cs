@@ -146,13 +146,11 @@ internal static class InstantStartupFixture
         var clip = new AnimationClip(Loop, "pose01_loop", 0, 0, 1, "", IsLoop: true);
         var startup = new AnimationClip(Startup, "pose01_start", 0, 0, 2, "", Resolution: matched);
         var game = new AnimationResource(Loop, Loop, "hash");
-        return new AnimationCapture("capture", 1, 1, Guid.Empty, "Collection", "Pose", clip, startup, [], [loop ?? game],
-            new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+        return new AnimationCapture("capture", 1, 1, Guid.Empty, "Collection", "Pose", clip, startup, [], [loop ?? game], DateTime.UtcNow, true);
     }
 
     private static AnimationBakeRequest Request(AnimationCapture capture, AnimationTimelineEdit timeline) =>
-        new(Guid.NewGuid(), capture, AnimationDestination.InPlace, "", false, ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None,
-            AnimationOperation.EditTimeline, Timeline: timeline);
+        new(Guid.NewGuid(), capture, AnimationDestination.InPlace, "", false, AnimationOperation.EditTimeline, Timeline: timeline);
 
     private static readonly BoneTransform Identity = new(Vector3.Zero, Quaternion.Identity, Vector3.One);
 

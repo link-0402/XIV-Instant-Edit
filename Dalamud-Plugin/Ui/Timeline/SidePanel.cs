@@ -67,7 +67,7 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
         if (!loaded.Standalone)
             SideTab(SidePage.Bones, "Bones", "The bones it animates. Untick one to leave it out of the save.", () => DrawAnimatedBones(current, loaded));
         else
-            SideTab(SidePage.Bones, "Face", "The face's bones and LivePose adjustments, saved into the face's own file.", () => facePage.Draw(loaded));
+            SideTab(SidePage.Bones, "Face", "The face's bones, saved into the face's own file.", () => facePage.Draw(loaded));
         DrawEditsTab();
         if (drawRecorder != null)
             SideTab(SidePage.Record, "Record", "Record a character's live pose for Blender.", drawRecorder);

@@ -32,7 +32,7 @@ internal static class EditAgainFixture
     private static AnimationCapture Capture(string id, ulong actor, AnimationClip clip, AnimationClip? startup = null, Guid? collection = null,
         AnimationResource? expression = null, ushort index = 0) =>
         new(id, actor, 1, collection ?? Collection, "Test", "Dance", clip, startup, [clip.GamePath],
-            [new AnimationResource(clip.GamePath, "dance.pap", "hash")], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""),
+            [new AnimationResource(clip.GamePath, "dance.pap", "hash")],
             DateTime.UtcNow, true, ExpressionTimeline: expression, ActorIndex: index);
 
     private static MotionLayer Layer(bool enabled = true) => new("m1", MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1,
@@ -45,7 +45,7 @@ internal static class EditAgainFixture
         string afterHash = "after", MotionCuts? cuts = null, ImmutableArray<string> excluded = default)
     {
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.InPlace, "", false,
-            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, operation,
+            operation,
             ExcludedBones: excluded.IsDefault ? [] : excluded,
             Timeline: operation == AnimationOperation.EditTimeline
                 ? new AnimationTimelineEdit(startup, 0, seconds, layers ? [Layer()] : [], baseHash, cuts)

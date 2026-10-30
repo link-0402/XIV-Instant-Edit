@@ -139,7 +139,7 @@ public sealed class FirstTimeSetupWindow : Window
 
         ImGui.BulletText("Models: edit what your character wears, or any game model, in Blender and export it back in one click.");
         ImGui.BulletText("Textures: edit them in any image editor that saves TGA files, or paint them on the model in Substance Painter.");
-        ImGui.BulletText("Animations: bake LivePose adjustments into them, repair their skeletons, or send them to Blender.");
+        ImGui.BulletText("Animations: edit them in the timeline, repair their skeletons, or send them to Blender.");
         ImGui.BulletText("Game Files: browse the game's own models and export their files.");
         ImGui.Spacing();
 
@@ -157,7 +157,7 @@ public sealed class FirstTimeSetupWindow : Window
                             "and set up later in Settings.");
     }
 
-    /// <summary> Penumbra, Glamourer and LivePose, looked up at most every two seconds. </summary>
+    /// <summary> Penumbra and Glamourer, looked up at most every two seconds. </summary>
     private IReadOnlyList<PluginCheck> PluginChecks()
     {
         if (DateTime.UtcNow - _pluginsChecked < TimeSpan.FromSeconds(2))
@@ -173,15 +173,11 @@ public sealed class FirstTimeSetupWindow : Window
         {
             _log.Debug($"Could not list installed plugins: {error.Message}");
         }
-        bool livePose;
-        try { livePose = _pi.GetIpcSubscriber<(int, int)>("LivePose.ApiVersion").HasFunction; }
-        catch (Exception error) { _log.Debug(error.Message); livePose = false; }
 
         _plugins =
         [
             Check("Penumbra", true, "Reads modded files and writes your edits back into mods."),
             Check("Glamourer", false, "Refreshes On Screen when your appearance changes."),
-            new PluginCheck("LivePose", false, livePose, livePose ? "available" : "not found", "Required to bake pose offsets into animations."),
         ];
         return _plugins;
 

@@ -385,8 +385,7 @@ internal static class MotionKeyMarkersFixture
         {
             var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/pose06_start.pap", "pose06_start.pap", "hash");
             var clip = new AnimationClip(resource.GamePath, "start", 0, 0, 42, "chara/test.sklb");
-            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource],
-                new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var marked = motionKeys with
             {
                 Markers = new MotionMarkers(MarkerDetail.Fewer, 2),
@@ -394,7 +393,7 @@ internal static class MotionKeyMarkersFixture
                     new BoneTransform(Vector3.Zero, Quaternion.CreateFromAxisAngle(Vector3.UnitZ, .2f), Vector3.One)))],
             };
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+                AnimationOperation.EditTimeline,
                 Timeline: new AnimationTimelineEdit(true, 0, null, [marked]));
             var path = Path.Combine(temp, "AnimationEdits", request.Id.ToString("N"), "journal.json");
             new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });

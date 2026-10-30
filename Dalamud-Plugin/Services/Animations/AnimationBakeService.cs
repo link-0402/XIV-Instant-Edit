@@ -102,8 +102,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         var motionPath = Path.Combine(workDirectory, Guid.NewGuid().ToString("N") + ".motion");
         // A timeline edit with nothing to change: the source's own length on the source's own skeleton, or the rebuild's.
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "", false,
-            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
-            RepairTarget: rebuild?.Target.Standard, RepairModel: rebuild?.Model);
+            AnimationOperation.EditTimeline, RepairTarget: rebuild?.Target.Standard, RepairModel: rebuild?.Model);
         try
         {
             session = await framework.RunOnFrameworkThread(() =>
@@ -144,7 +143,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         var path = Path.Combine(workDirectory, Guid.NewGuid().ToString("N") + ".hkx");
         // A timeline edit with nothing to change: the template's own skeleton, no layers, no cuts.
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "", false,
-            ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline);
+            AnimationOperation.EditTimeline);
         try
         {
             session = await framework.RunOnFrameworkThread(() =>
@@ -292,7 +291,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     outputMetadata->FloatTrackToFloatSlotIndices = arena.Copy<short>(retarget.FloatMap);
                     outputMetadata->PartitionIndices = arena.Copy<short>(retarget.PartitionMap);
                 }
-                // Own a normal, one-frame destination pose/control for the existing offset and IK adapter.
+                // Own a normal, one-frame destination pose/control the mapped values are set on.
                 var poseAnimation = arena.Alloc<AnimationNative.Interleaved>(); native.Initialize(poseAnimation, originalAnimation);
                 poseAnimation->Animation.NumberOfTransformTracks = skeleton->Bones.Length; poseAnimation->Animation.NumberOfFloatTracks = 0;
                 poseAnimation->Transforms = arena.Copy<hkQsTransformf>(new ReadOnlySpan<hkQsTransformf>(skeleton->ReferencePose.Data, skeleton->Bones.Length));
@@ -356,8 +355,6 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     originalBinding->TransformTrackToBoneIndices.Length).ToArray();
                 blendHint = originalBinding->BlendHint.Storage;
                 foreach (var bone in retarget?.MapTracks(sourceTracks) ?? sourceTracks) affected.Add(bone);
-                var applicable = request.Capture.Pose.Bones.Where(b => b.Id.Partial == clip.Partial && request.SelectedBones.Contains(b.Id)).ToArray();
-                if (request.Operation == AnimationOperation.BakeOffsets && applicable.Length == 0) throw new InvalidDataException("No selected offsets belong to this animation's partial skeleton.");
             }
             catch { Dispose(); throw; }
         }
@@ -391,8 +388,6 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 var mappedValues = retarget == null ? sourceValues : retarget.Map(sourceValues.Select(AnimationSkeleton.Transform).ToArray())
                     .Select(AnimationSkeleton.Transform).ToArray();
                 targetSampler!.SetPose(mappedValues);
-                if (request.Operation == AnimationOperation.BakeOffsets)
-                    native.Apply(targetSampler, request.Capture.Pose.Bones, clip.Partial, request.Components, request.SelectedBones);
                 var targetValues = new hkQsTransformf[targetSampler.BoneCount];
                 for (var i = 0; i < targetValues.Length; i++)
                 {

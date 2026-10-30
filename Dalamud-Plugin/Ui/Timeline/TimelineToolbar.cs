@@ -38,7 +38,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             current.Redo();
 
         ImGui.SameLine(0, Theme.Scaled(12));
-        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or your LivePose adjustments", !readOnly))
+        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or a .livepose file", !readOnly))
             ImGui.OpenPopup(AddMenu);
         DrawAddMenu(current);
         ImGui.SameLine(0, Theme.Scaled(2));
@@ -145,7 +145,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         if (session.Source == null)
             return;
         ImGui.Separator();
-        livePose.DrawItems(session.Source);
+        livePose.DrawItems();
     }
 
     /// <summary>

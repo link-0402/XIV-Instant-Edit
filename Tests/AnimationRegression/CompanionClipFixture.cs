@@ -26,8 +26,7 @@ internal static class CompanionClipFixture
     private static AnimationCapture Capture(string? loopMod, string? startMod, bool hasStartup = true, string start = Start) =>
         new("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", new AnimationClip(Loop, "loop", 0, 0, 1, "s.sklb", IsLoop: true),
             hasStartup ? new AnimationClip(start, "start", 0, 0, 1, "s.sklb") : null, [Loop, start],
-            [Resource(Loop, loopMod), .. start == Loop ? Array.Empty<AnimationResource>() : [Resource(start, startMod)]],
-            new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            [Resource(Loop, loopMod), .. start == Loop ? Array.Empty<AnimationResource>() : [Resource(start, startMod)]], DateTime.UtcNow, true);
 
     private static void Rule(Action<bool, string> check)
     {

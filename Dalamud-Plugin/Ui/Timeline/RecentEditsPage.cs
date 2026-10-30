@@ -8,8 +8,8 @@ using InstantEdit.Services.Animations;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Edits page: every animation edit of the days kept (Settings > Cache), newest first, with Undo, Edit again for a
-/// save with bone layers, and putting back the LivePose offsets an old LivePose bake cleared.
+/// The Edits page: every animation edit of the days kept (Settings > Cache), newest first, with Undo and Edit again for a
+/// save with bone layers.
 /// </summary>
 /// <param name="loading">Whether the timeline is being read.</param>
 /// <param name="editAgain">Opens a saved edit again with its layers (Edit again).</param>
@@ -104,7 +104,7 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
         var startup = request.Timeline?.Startup == true;
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(AnimationPresentation.AnimationName(request.Capture, startup));
-        var buttons = Theme.Scaled(84);
+        var buttons = Theme.Scaled(56);
         ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + Theme.Gap, ImGui.GetContentRegionMax().X - buttons));
         // Opening another clip waits for a running read, save or undo; with no clip open nothing does.
         var working = loading() || saveFooter.Working;
@@ -130,14 +130,6 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
                 }
                 service.Undo(journal);
             }
-        }
-        ImGui.SameLine(0, Theme.Scaled(2));
-        var canRestore = journal.OffsetsCleared || journal.PoseClearOutcome == "Pending";
-        using (ImRaii.Disabled(service.Busy || !canRestore))
-        {
-            if (Widgets.IconButton("##restore-offsets", FontAwesomeIcon.History,
-                    canRestore ? "Put back the LivePose offsets this edit cleared, keeping its files" : "This edit cleared no LivePose offsets"))
-                service.RestoreOffsets(journal);
         }
         var (colour, state) = JournalState(journal);
         if (Widgets.Badge(state, colour) && journal.Message.Length > 0)

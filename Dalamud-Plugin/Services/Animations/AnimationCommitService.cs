@@ -27,8 +27,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             IReadOnlyDictionary<string, AddedCopies>? Copies, IReadOnlyDictionary<string, string>? Aliases)? added = null,
         (string For, IReadOnlyList<Timeline.AtchManipulation> Atch)? manipulations = null)
     {
-        var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request),
-            PoseBefore = request.Operation == AnimationOperation.BakeOffsets ? request.Capture.Pose : null };
+        var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request) };
         var dir = store.DirectoryFor(request.Id);
         Directory.CreateDirectory(dir);
         if (request.Destination == AnimationDestination.NewMod)
@@ -52,12 +51,11 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             ? SelectNewModFiles(manifest, outputs)
             : outputs;
         // The game and Penumbra cannot refresh an animation resource from an
-        // unchanged physical path once it has been cached, so a LivePose rebake,
+        // unchanged physical path once it has been cached, so a timeline edit,
         // skeleton repair or bone exclusion applied in place must land at a fresh
         // path each time instead of overwriting the original file.
         var renamesOutput = request.Destination == AnimationDestination.InPlace &&
-            request.Operation is AnimationOperation.BakeOffsets or AnimationOperation.RepairSkeleton
-                or AnimationOperation.ExcludeBones or AnimationOperation.EditTimeline;
+            request.Operation is AnimationOperation.RepairSkeleton or AnimationOperation.ExcludeBones or AnimationOperation.EditTimeline;
         foreach (var (gamePath, bytes) in files)
         {
             token.ThrowIfCancellationRequested();

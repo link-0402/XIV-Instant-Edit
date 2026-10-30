@@ -5,7 +5,7 @@ using InstantEdit.Services.PenumbraMods;
 
 /// <summary>
 /// The game and Penumbra cannot refresh an animation resource from an unchanged
-/// physical path once it has been cached, so an in-place rebake with LivePose or
+/// physical path once it has been cached, so an in-place timeline save or
 /// Repair skeleton has to land at a fresh path each time. These fixtures cover the
 /// two pieces that make that safe: the file name never grows without bound across
 /// repeated edits, and the owning mod's own Files mapping is repointed - not just

@@ -11,7 +11,6 @@ internal sealed class AnimationJournalStore
     private readonly string root;
     private readonly Action<string>? warn;
     private readonly Func<TimeSpan>? retention;
-    private string OffsetBackupPath => Path.Combine(root, "livepose-offset-backup.json");
     public AnimationJournalStore(string configDirectory, Action<string>? warn = null, Func<TimeSpan>? retention = null)
     {
         root = Path.Combine(Path.GetFullPath(configDirectory), "AnimationEdits");
@@ -123,24 +122,6 @@ internal sealed class AnimationJournalStore
     {
         var dir = DirectoryFor(record.Id); Directory.CreateDirectory(dir);
         WriteAtomic(Path.Combine(dir, "journal.json"), JsonSerializer.SerializeToUtf8Bytes(record, Json));
-    }
-    public LivePoseOffsetBackup? LoadOffsetBackup()
-    {
-        var path = OffsetBackupPath;
-        if (!File.Exists(path)) return null;
-        TextureFiles.EnsureLocalPath(path);
-        if (new FileInfo(path).Length > 16 * 1024 * 1024) throw new InvalidDataException("The LivePose offset backup exceeds 16 MiB.");
-        return JsonSerializer.Deserialize<LivePoseOffsetBackup>(File.ReadAllText(path), Json)
-            ?? throw new InvalidDataException("Invalid LivePose offset backup.");
-    }
-    public void SaveOffsetBackup(LivePoseOffsetBackup backup)
-        => WriteAtomic(OffsetBackupPath, JsonSerializer.SerializeToUtf8Bytes(backup, Json));
-    public void ClearOffsetBackup()
-    {
-        var path = OffsetBackupPath;
-        if (!File.Exists(path)) return;
-        TextureFiles.EnsureLocalPath(path);
-        File.Delete(path);
     }
     private string AutosavePath => Path.Combine(root, "timeline-autosave.json");
     /// <summary>The Timeline window's kept unsaved edits; null when there are none.</summary>

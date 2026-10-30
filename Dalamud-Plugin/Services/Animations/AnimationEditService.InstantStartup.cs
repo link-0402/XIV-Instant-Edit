@@ -117,7 +117,7 @@ internal sealed partial class AnimationEditService
                 }
                 : s).ToImmutableArray();
             await framework.RunOnFrameworkThread(() => Observer.UpdateSources(capture.Id, updated));
-            journal.State = "Completed"; journal.PoseClearOutcome = "NotApplicable";
+            journal.State = "Completed";
             journal.Message = $"Instant startup saved in {loop.ModName ?? loop.ModDirectory}.";
             journals.Save(journal); Status = journal.Message;
         }, id, capture.Startup);

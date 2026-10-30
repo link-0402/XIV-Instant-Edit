@@ -52,20 +52,6 @@ internal static class AnimationBones
         return animated.All(set.Contains) ? "Keep at least one bone animated." : null;
     }
 
-    /// <summary>
-    /// An offset baked into a bone that the rebake then leaves out would be lost, and
-    /// a successful bake clears every offset it baked, so the two cannot overlap.
-    /// </summary>
-    public static string? OffsetConflict(IReadOnlyCollection<string> excluded, IEnumerable<string> offsetBones)
-    {
-        if (excluded.Count == 0) return null;
-        var set = excluded.ToHashSet(StringComparer.Ordinal);
-        var both = offsetBones.Where(set.Contains).Distinct().Order(StringComparer.Ordinal).ToArray();
-        return both.Length == 0 ? null :
-            "Selected for LivePose baking but unticked under Animated Bones: " +
-            $"{string.Join(", ", both.Select(AnimationPresentation.BoneName))}. Tick the bone again, or deselect its offset.";
-    }
-
     /// <summary>The highest bone index a rebake that leaves out these bones writes, or -1 when none is left.</summary>
     public static int HighestIndex(AnimationClip clip, IReadOnlyCollection<string> excluded)
     {

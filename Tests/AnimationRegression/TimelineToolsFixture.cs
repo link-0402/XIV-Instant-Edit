@@ -8,8 +8,8 @@ using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Animations tab's tools as Timeline functions: LivePose adjustments (live or from a .livepose
-/// file) as an offset layer, the loader's animation list, unticked bones and skeleton repair as part
+/// The Animations tab's tools as Timeline functions: the adjustments of a .livepose file as an
+/// offset layer, the loader's animation list, unticked bones and skeleton repair as part
 /// of a timeline save, and what such a save refuses. Live display, playback and the bake need the game.
 /// </summary>
 internal static class TimelineToolsFixture
@@ -35,8 +35,7 @@ internal static class TimelineToolsFixture
 
     private static PoseStack Stack(Vector3? position = null, Quaternion? rotation = null, Vector3? scale = null,
         PoseComponents propagate = PoseComponents.Position | PoseComponents.Rotation, bool ik = false) =>
-        new(position ?? Vector3.Zero, rotation ?? Quaternion.Identity, scale ?? Vector3.Zero, propagate,
-            new PoseIk(ik, 0, false, 0, 0, 0, 0, 0, Vector3.Zero));
+        new(position ?? Vector3.Zero, rotation ?? Quaternion.Identity, scale ?? Vector3.Zero, propagate, ik);
 
     private static PoseBone Bone(string name, int partial = 0, params PoseStack[] stacks) => new(new PoseBoneId(name, partial), [.. stacks]);
 
@@ -116,7 +115,7 @@ internal static class TimelineToolsFixture
         check(bones.Length == 2 && bones[0].Id == new PoseBoneId("j_te_l", 0) && bones[0].Stacks[0].Propagate == (PoseComponents)3 &&
               Math.Abs(bones[0].Stacks[0].Rotation.W - .99185055f) < 1e-5f,
             "a .livepose file reads as LivePose's own stacks; a bone without stacks is skipped");
-        check(bones[1].Stacks[0].Rotation == Quaternion.Identity && bones[1].Stacks[0].Ik.Enabled &&
+        check(bones[1].Stacks[0].Rotation == Quaternion.Identity && bones[1].Stacks[0].Ik &&
               bones[1].Stacks[0].Propagate == (PoseComponents.Position | PoseComponents.Rotation),
             "an all-zero rotation reads as none, IK is kept as on, and a missing Propogate reaches the children as LivePose's default");
         reject(() => LivePoseLayer.ReadFile("{ \"Bones\": {} }"), "a .pose file is not a LivePose file");
@@ -226,7 +225,7 @@ internal static class TimelineToolsFixture
     internal static AnimationTimelineSource Source(AnimationClip clip, TimelineDocument doc, int entry = 0)
     {
         var capture = new AnimationCapture("a", 7, 1, Collection, "Test", "Dance", clip, null, [clip.GamePath],
-            [new AnimationResource(clip.GamePath, "dance.pap", "hash")], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""),
+            [new AnimationResource(clip.GamePath, "dance.pap", "hash")],
             DateTime.UtcNow, true);
         return new AnimationTimelineSource(capture, false, clip, new AnimationResource(clip.GamePath, "dance.pap", "file"), [1], entry, [], doc, null);
     }
@@ -274,13 +273,6 @@ internal static class TimelineToolsFixture
                   Request = journal.Request with { ExcludedBones = [], RepairTarget = null }, State = "Completed",
               }) == null,
             "such an edit can't be opened again with its layers; the same edit without them can");
-        // Undo outside GPose (2026-10-19): a timeline save clears no offsets, so it needs no GPose character to undo.
-        var pose = new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, "");
-        check(!AnimationEditService.RestoresOffsets(journal) &&
-              !AnimationEditService.RestoresOffsets(new AnimationEditJournal { PoseBefore = pose, PoseAfter = pose, PoseClearOutcome = "NotApplicable" }) &&
-              AnimationEditService.RestoresOffsets(new AnimationEditJournal { PoseBefore = pose, PoseAfter = pose, OffsetsCleared = true }) &&
-              AnimationEditService.RestoresOffsets(new AnimationEditJournal { PoseBefore = pose, PoseAfter = pose, PoseClearOutcome = "Pending" }),
-            "only an undo that puts cleared live offsets back needs the captured character");
     }
 
     // A PAP envelope around no motion: one entry per binding, the header naming the model and its type.

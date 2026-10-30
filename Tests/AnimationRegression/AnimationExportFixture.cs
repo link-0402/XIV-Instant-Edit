@@ -193,7 +193,7 @@ internal static class AnimationExportFixture
         var loop = new AnimationClip(loopPath, "cbem_dance01lp", 0, 0, 42, "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb");
         var start = loop with { GamePath = startPath, Name = "cbem_dance01st" };
         var capture = new AnimationCapture("dance", 1, 1, Guid.NewGuid(), "Test", "Dance", loop, start, [loopPath, startPath],
-            [modded, vanilla], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            [modded, vanilla], DateTime.UtcNow, true);
 
         var row = InstantEdit.Ui.ResourceViews.FromAnimation(capture, false, 0);
         check(row.Name == "Dance" && row.GamePath == loopPath && row.ActualPath == modded.ResolvedPath &&
@@ -212,8 +212,7 @@ internal static class AnimationExportFixture
             new SkeletonDescription("skl_c0801b0001", "print", [], [], [], []), 0, "exact match");
         var matched = new SkeletonResolution(SkeletonResolutionState.Matched, [skeleton], skeleton);
         var idle = new AnimationCapture("idle", 1, 1, Guid.NewGuid(), "Test", "Idle",
-            loop with { GamePath = idlePath, Resolution = matched }, null, [idlePath], [modded with { GamePath = idlePath }],
-            new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, false);
+            loop with { GamePath = idlePath, Resolution = matched }, null, [idlePath], [modded with { GamePath = idlePath }], DateTime.UtcNow, false);
         var unmatched = idle with { Id = "unmatched", Clip = idle.Clip with { Resolution = new(SkeletonResolutionState.Searching, []) } };
         var rows = InstantEdit.Ui.AnimationRows.Build([capture, idle, unmatched]);
         check(rows.Length == 3 &&
@@ -242,7 +241,7 @@ internal static class AnimationExportFixture
         var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/yes.pap", "x", "hash");
         var clip = new AnimationClip(resource.GamePath, "cbem_yes", 0, 0, 42, "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb");
         AnimationCapture Capture(string display) => new("clip", 1, 1, Guid.NewGuid(), "Test", display, clip, null, [resource.GamePath],
-            [resource], new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            [resource], DateTime.UtcNow, true);
         check(AnimationPresentation.ExportName(Capture("Yes")) == "Yes (cbem_yes)",
             "a Blender action is named after the animation and its clip inside the PAP");
         check(AnimationPresentation.ExportName(Capture("CBEM_YES loop")) == "CBEM_YES loop",

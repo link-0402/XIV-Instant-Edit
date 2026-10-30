@@ -317,7 +317,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         pendingRestore = null;
         autosaver.Closed();
         loader.Reset();
-        livePose.Reset();
+        livePose.ForgetNote();
         // The listener stays on while the Animations tab still shows it.
         if (mainListens?.Invoke() != true)
             animations?.StopObservation();

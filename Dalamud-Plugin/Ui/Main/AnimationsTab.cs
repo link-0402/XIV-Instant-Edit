@@ -124,7 +124,6 @@ internal sealed class AnimationsTab
                 LoadedResourcePaths = current.LoadedResourcePaths, ResourceAliases = current.ResourceAliases,
                 ExpressionTimeline = current.ExpressionTimeline,
                 UnavailableReason = current.UnavailableReason,
-                PoseUnavailableReason = current.PoseUnavailableReason,
             };
         }
         if (animationSelection != null && animationSelection.ActorId != observer.Actor)
@@ -439,7 +438,7 @@ internal sealed class AnimationsTab
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Hint, expression != null
             ? "Sounds, effects and faces, a kept face, and a preview in GPose."
-            : "Events, length, bone layers, LivePose, animated bones, skeleton repair and a preview in GPose.");
+            : "Events, length, bone layers, animated bones, skeleton repair and a preview in GPose.");
     }
 
     /// <summary>Names the animation the section is about.</summary>

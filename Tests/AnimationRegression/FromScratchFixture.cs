@@ -192,11 +192,10 @@ internal static class FromScratchFixture
         {
             var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/stretch.pap", "stretch.pap", "hash");
             var clip = new AnimationClip(resource.GamePath, "stretch", 0, 0, 42, "chara/test.sklb");
-            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Stretch", clip, null, [resource.GamePath], [resource],
-                new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Stretch", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var plain = layer with { Key = "m2", Idle = null };
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.EditTimeline,
+                AnimationOperation.EditTimeline,
                 Timeline: new AnimationTimelineEdit(false, 0, null, [layer, plain]));
             new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });
             var loaded = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion;

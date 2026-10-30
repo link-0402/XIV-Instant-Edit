@@ -42,12 +42,6 @@ internal static class AnimationBonesFixture
         check(AnimationBones.Problem(clip with { Resolution = null }, ["j_kami_a"]) != null,
             "unticked bones are refused while the animation's bones are still unknown");
 
-        check(AnimationBones.OffsetConflict(["j_kami_a"], ["j_te_l", "j_kami_a"]) is { } conflict &&
-              conflict.Contains("j_kami_a") && !conflict.Contains("j_te_l"),
-            "a LivePose offset on an unticked bone blocks the bake instead of being cleared without being baked");
-        check(AnimationBones.OffsetConflict(["j_kami_a"], ["j_te_l"]) == null && AnimationBones.OffsetConflict([], ["j_te_l"]) == null,
-            "offsets on bones that stay animated do not conflict");
-
         check(AnimationBones.Indices(skeleton, ["j_kami_b", "not_in_this_rig"]).SetEquals([3]),
             "unticked names resolve on the output skeleton, skipping names it does not have");
 
@@ -75,10 +69,9 @@ internal static class AnimationBonesFixture
         Directory.CreateDirectory(temp);
         try
         {
-            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Emote", clip, null, [resource.GamePath], [resource],
-                new PoseSnapshot(0, 0, 0, false, [], DateTime.UtcNow, ""), DateTime.UtcNow, true);
+            var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Emote", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Animated bones", false,
-                ImmutableHashSet<PoseBoneId>.Empty, PoseComponents.None, AnimationOperation.ExcludeBones, ExcludedBones: ["j_kami_a"]);
+                AnimationOperation.ExcludeBones, ExcludedBones: ["j_kami_a"]);
             var store = new AnimationJournalStore(temp);
             store.Save(new AnimationEditJournal { Id = request.Id, Request = AnimationCommitService.RecoveryRequest(request) });
             var loaded = new AnimationJournalStore(temp).Load().Single().Request;
