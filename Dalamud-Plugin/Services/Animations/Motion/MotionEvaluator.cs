@@ -51,6 +51,8 @@ internal static class MotionEvaluator
         MotionLayerKind.Noise => layer.Amount > 0 && layer.Noise is { } noise && !layer.Bones.IsEmpty &&
                                  ((noise.Tilt > 0 || noise.Twist > 0) && layer.Components.HasFlag(PoseComponents.Rotation) ||
                                   noise.Slide > 0 && layer.Components.HasFlag(PoseComponents.Position)),
+        MotionLayerKind.LookAt => layer.Amount > 0 && layer.Look is { Limit: > 0 } look && !layer.Bones.IsEmpty &&
+                                  (look.Follow != null || layer.Keys.Any(key => key.Bones.ContainsKey(MotionLooks.KeyBone))),
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -143,9 +145,9 @@ internal static class MotionEvaluator
         return BlendsAtMostFully(layer.Kind) ? Math.Min(1, weight) : weight;
     }
 
-    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's pull, a fix or a smooth.</summary>
+    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's pull, a fix, a smooth or a look.</summary>
     public static bool BlendsAtMostFully(MotionLayerKind kind) =>
-        kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix or MotionLayerKind.Smooth;
+        kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.LookAt;
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
@@ -195,6 +197,18 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} can't have a noise.");
         if (layer.Noise is { } noise)
             MotionNoises.Validate(noise, name);
+        if (layer.Kind == MotionLayerKind.LookAt && layer.Look == null)
+            throw new InvalidDataException($"{name} has nothing to look at.");
+        if (layer.Kind != MotionLayerKind.LookAt && layer.Look != null)
+            throw new InvalidDataException($"{name} can't look at anything.");
+        if (layer.Look is { } look)
+        {
+            MotionLooks.Validate(look, name);
+            if (layer.Bones.Any(bone => !MotionLooks.Chain.Contains(bone)))
+                throw new InvalidDataException($"{name} turns a bone other than the head, neck and upper back.");
+            if (look.Follow != null && !layer.Keys.IsEmpty)
+                throw new InvalidDataException($"{name} follows a bone, so it can't have keys.");
+        }
         if (layer.Kind == MotionLayerKind.Smooth && layer.Window is < MotionSmoothing.MinWindow or > MotionSmoothing.MaxWindow)
             throw new InvalidDataException($"{name} has a window out of range.");
         if (layer.Kind != MotionLayerKind.Smooth && layer.Window != 0)
@@ -271,6 +285,8 @@ internal static class MotionEvaluator
                     throw new InvalidDataException($"{name} has a key whose scale is out of range.");
                 if (layer.Kind == MotionLayerKind.Pin && (!pinned.TryGetValue(bone, out var pin) || pin.Planted))
                     throw new InvalidDataException($"{name} has a key for a bone it doesn't pin by keys.");
+                if (layer.Kind == MotionLayerKind.LookAt && bone != MotionLooks.KeyBone)
+                    throw new InvalidDataException($"{name} has a key for a bone other than the head.");
             }
             if (key.Moved.Any(bone => !key.Bones.ContainsKey(bone)))
                 throw new InvalidDataException($"{name} moves a bone its key has no value for.");
@@ -354,6 +370,9 @@ internal static class MotionEvaluator
                 case MotionLayerKind.Noise:
                     MotionNoises.Apply(clip, layer, index, loop, end, token);
                     break;
+                case MotionLayerKind.LookAt:
+                    MotionLooks.Apply(clip, layer, index, LookTrack(layer, index), WrapOf(layer, loop), end, token);
+                    break;
                 case MotionLayerKind.Smooth:
                     MotionSmoothing.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
                     break;
@@ -386,8 +405,14 @@ internal static class MotionEvaluator
                         throw Missing(name);
             if (layer.Kind == MotionLayerKind.Pin)
                 PinChains.Check(skeleton, layer);
+            if (layer.Kind == MotionLayerKind.LookAt)
+                MotionLooks.Plan(skeleton, layer, index);
         }
     }
+
+    /// <summary>A look-at layer's keyed spots on the head, read with no bone limit; null when it follows a bone or has none.</summary>
+    private static Track? LookTrack(MotionLayer layer, Dictionary<string, int> index) =>
+        layer.Look is { Follow: null } && index.TryGetValue(MotionLooks.KeyBone, out var head) ? Tracks(layer, index, null, false).GetValueOrDefault(head) : null;
 
     /// <summary>Bone indices by name.</summary>
     public static Dictionary<string, int> Index(SkeletonDescription skeleton)
@@ -636,7 +661,7 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape, root reset, idle, swing and noise layers applied at <paramref name="frame"/>, in order, the way
+    /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape, root reset, idle, swing, noise and look-at layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
     /// around its average over their section, which one pose does not have, and so are smooth motions, which average the frames
     /// round it, and a hand shape keeping finger motion; planted pins
@@ -679,6 +704,12 @@ internal static class MotionEvaluator
             if (layer.Kind == MotionLayerKind.Noise)
             {
                 MotionNoises.ApplyAt(skeleton, pose, layer, MotionNoises.Plan(skeleton, layer, index), frame, loop, Weight(layer, frame, end), end);
+                continue;
+            }
+            if (layer.Kind == MotionLayerKind.LookAt)
+            {
+                MotionLooks.ApplyAt(skeleton, pose, layer, MotionLooks.Plan(skeleton, layer, index), LookTrack(layer, index), frame, WrapOf(layer, loop),
+                    Weight(layer, frame, end));
                 continue;
             }
             if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth)

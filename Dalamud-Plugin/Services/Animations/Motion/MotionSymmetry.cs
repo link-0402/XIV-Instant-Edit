@@ -132,6 +132,7 @@ internal static class MotionSymmetry
                     break;
                 case MotionLayerKind.Swing:
                 case MotionLayerKind.Noise:
+                case MotionLayerKind.LookAt:
                     foreach (var name in layer.Bones)
                         if (index.TryGetValue(name, out var swung))
                             animated.Add(swung);

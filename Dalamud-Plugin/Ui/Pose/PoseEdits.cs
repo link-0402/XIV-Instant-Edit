@@ -43,7 +43,8 @@ internal static class PoseEdits
     /// </summary>
     public static bool Changes(MotionLayer layer, string bone, IReadOnlySet<string>? changed = null) => layer.Kind switch
     {
-        MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise => layer.Bones.Contains(bone),
+        MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
+            MotionLayerKind.LookAt => layer.Bones.Contains(bone),
         MotionLayerKind.Symmetry or MotionLayerKind.Pin => changed?.Contains(bone) == true,
         MotionLayerKind.Idle => changed?.Contains(bone) ?? MotionIdles.Moved(layer).Contains(bone),
         _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),

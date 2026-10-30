@@ -36,7 +36,7 @@ internal static partial class TimelineWindowViews
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
         [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
-            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Pin];
+            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Pin];
 
     /// <summary>The bone layer items a face's Add menu has: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
     public static readonly ImmutableArray<MotionLayerKind> FaceLayerKinds = [.. LayerKinds.Where(kind => TimelineFace.Allows(kind, null))];
@@ -105,6 +105,10 @@ internal static partial class TimelineWindowViews
         }
         return mode == GizmoMode.Move || !layer.Pins[at].HoldTurn;
     }
+
+    /// <summary>Why the gizmo can't move a look-at layer's target, whichever bone is selected; null when it can.</summary>
+    public static string? LookGizmo(MotionLayer layer) =>
+        layer.Look is { Follow: { } follow } ? $"This layer follows {AnimationPresentation.BoneName(follow)}. Pick Spot to move a target." : null;
 
     /// <summary>
     /// Why the gizmo can't drag <paramref name="primary"/> in <paramref name="layer"/>, bending the limb above it, or for
@@ -205,6 +209,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Swing => Theme.NormalTexture,
         MotionLayerKind.Smooth => Theme.BaseTexture,
         MotionLayerKind.Noise => Theme.IndexTexture,
+        MotionLayerKind.LookAt => Theme.AnimationKind,
         _ => Theme.Important,
     };
 
@@ -220,6 +225,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Swing => "Swing bones back and forth over the layer.",
         MotionLayerKind.Smooth => "Even out sudden moves.",
         MotionLayerKind.Noise => "Random wobble on bones.",
+        MotionLayerKind.LookAt => "Turn the head toward a spot.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -289,8 +295,8 @@ internal static partial class TimelineWindowViews
                 moved.UnionWith(MotionIdles.Moved(layer));
                 continue;
             }
-            // A swing or a noise gives its bones motion, a smooth motion only reshapes what is there.
-            if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise)
+            // A swing, a noise or a look gives its bones motion, a smooth motion only reshapes what is there.
+            if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.LookAt)
             {
                 moved.UnionWith(layer.Bones);
                 continue;
@@ -326,6 +332,13 @@ internal static partial class TimelineWindowViews
         }
         if (layer.Kind == MotionLayerKind.Idle)
             return layer.Idle is { } idle ? $"From {idle.Donor}" : "No motion read yet";
+        if (layer.Kind == MotionLayerKind.LookAt)
+        {
+            var turned = layer.Bones.Length == 0 ? "no bones" : layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones";
+            if (layer.Look?.Follow is { } follow)
+                return $"Follows {AnimationPresentation.BoneName(follow)} · {turned}";
+            return (layer.Keys.Length == 0 ? "No keys" : layer.Keys.Length == 1 ? "1 key" : $"{Whole(layer.Keys.Length)} keys") + " · " + turned;
+        }
         if (layer.Kind == MotionLayerKind.Symmetry)
             return (layer.From == MotionSide.Left ? "From the left · " : "From the right · ") +
                    (layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones");
@@ -658,7 +671,8 @@ internal static partial class TimelineWindowViews
                     MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, editing),
                     MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot =>
                         editing?.Bones.Where(bone => bone.Parent < 0).Select(bone => bone.Name) ?? Enumerable.Empty<string>(),
-                    MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise => layer.Bones.AsEnumerable(),
+                    MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
+                        MotionLayerKind.LookAt => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
                     MotionLayerKind.Pin => PinnedBones(layer, editing),
                     MotionLayerKind.Idle => MotionIdles.Moved(layer),
@@ -1028,6 +1042,7 @@ internal static partial class TimelineWindowViews
             MotionLayerKind.Pose => layer.Keys.Any(key => key.Moved.Any(bone => bone != "n_hara")),
             MotionLayerKind.Swing => layer.Swing is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
             MotionLayerKind.Noise => layer.Noise is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
+            MotionLayerKind.LookAt => false,
             _ => true,
         });
 

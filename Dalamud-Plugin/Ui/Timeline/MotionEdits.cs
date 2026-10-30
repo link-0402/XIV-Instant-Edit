@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
@@ -87,6 +88,7 @@ internal static class MotionEdits
         MotionLayerKind.Swing => "Swing",
         MotionLayerKind.Smooth => "Smooth motion",
         MotionLayerKind.Noise => "Noise",
+        MotionLayerKind.LookAt => "Look at",
         _ => "Pose",
     };
 
@@ -97,7 +99,8 @@ internal static class MotionEdits
     /// Adds a layer of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/> after
     /// the others, so it applies last, named "Offset 2" and so on, with no fades, so a loop
     /// stays seamless. An amplitude starts at 150%, every other kind at full strength; a swing starts with the
-    /// default swing, a smooth motion with the default window and a noise with the default noise.
+    /// default swing, a smooth motion with the default window, a noise with the default noise and a look turning the
+    /// head, neck and upper back with the default limit.
     /// </summary>
     public static TimelineDocument Add(TimelineDocument doc, MotionLayerKind kind, int start, int end, out string key, out string? error)
     {
@@ -127,13 +130,15 @@ internal static class MotionEdits
             kind switch
             {
                 MotionLayerKind.Offset => PoseComponents.All,
-                MotionLayerKind.Symmetry => PoseComponents.Rotation,
+                MotionLayerKind.Symmetry or MotionLayerKind.LookAt => PoseComponents.Rotation,
                 _ => PoseComponents.Rotation | PoseComponents.Position,
             },
             MotionInterpolation.Smooth,
+            Bones: kind == MotionLayerKind.LookAt ? MotionLooks.Chain : default,
             Swing: kind == MotionLayerKind.Swing ? new MotionSwing() : null,
             Window: kind == MotionLayerKind.Smooth ? MotionSmoothing.DefaultWindow : 0,
-            Noise: kind == MotionLayerKind.Noise ? new MotionNoise() : null);
+            Noise: kind == MotionLayerKind.Noise ? new MotionNoise() : null,
+            Look: kind == MotionLayerKind.LookAt ? new MotionLook() : null);
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
     }
 
@@ -1058,11 +1063,13 @@ internal static class MotionEdits
     {
         frame = KeyFrame(doc, frame);
         var index = IndexOf(doc, key);
-        // Symmetry, fix, idle-motion, swing, smooth motion and noise layers never hold keys; a pin layer keys only its keyed pins.
+        // Symmetry, fix, idle-motion, swing, smooth motion and noise layers never hold keys; a pin layer keys only its keyed pins,
+        // a look only the head's spot, and none while it follows a bone.
         if (index < 0 || string.IsNullOrEmpty(bone) ||
             doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
                 MotionLayerKind.Noise ||
-            doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted))
+            doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted) ||
+            doc.Motion[index].Kind == MotionLayerKind.LookAt && (bone != MotionLooks.KeyBone || doc.Motion[index].Look?.Follow != null))
             return doc;
         frame = Math.Clamp(frame, 0, TimelineDocument.MaxFrames);
         var layer = doc.Motion[index];
@@ -1170,16 +1177,21 @@ internal static class MotionEdits
         return doc with { Motion = doc.Motion.SetItem(index, layer with { Keys = keys }) };
     }
 
-    /// <summary>Limits the layer to <paramref name="bones"/> (distinct, in order); empty lifts the limit.</summary>
+    /// <summary>Limits the layer to <paramref name="bones"/> (distinct, in order); empty lifts the limit. A look takes only the head chain's bones.</summary>
     public static TimelineDocument SetBones(TimelineDocument doc, string key, IEnumerable<string> bones)
     {
         var index = IndexOf(doc, key);
         if (index < 0)
             return doc;
-        ImmutableArray<string> limited = [.. bones.Where(bone => !string.IsNullOrEmpty(bone)).Distinct(StringComparer.Ordinal)];
         var layer = doc.Motion[index];
+        ImmutableArray<string> limited = [.. bones.Where(bone => !string.IsNullOrEmpty(bone) && (layer.Kind != MotionLayerKind.LookAt || MotionLooks.Chain.Contains(bone)))
+            .Distinct(StringComparer.Ordinal)];
         return layer.Bones.SequenceEqual(limited, StringComparer.Ordinal) ? doc : doc with { Motion = doc.Motion.SetItem(index, layer with { Bones = limited }) };
     }
+
+    /// <summary>Keys a look's target at <paramref name="frame"/> on <paramref name="spot"/> in character space; unchanged while it follows a bone.</summary>
+    public static TimelineDocument SetLookTarget(TimelineDocument doc, string key, int frame, Vector3 spot) =>
+        SetKey(doc, key, frame, MotionLooks.KeyBone, new BoneTransform(spot, Quaternion.Identity, Vector3.One));
 
     public static TimelineDocument SetEnabled(TimelineDocument doc, string key, bool enabled)
     {
@@ -1306,9 +1318,18 @@ internal static class MotionEdits
     private static int Limit(TimelineDocument doc, MotionLayer layer) =>
         Math.Min(TimelineDocument.MaxFrames, Math.Max(Math.Max(doc.Length, TimelineDocument.MinLength), layer.End));
 
-    /// <summary>The layer kept valid: on the timeline, a frame long or more, fades that fit, an amount in range, a short name, and only the weight points inside it.</summary>
+    /// <summary>
+    /// The layer kept valid: on the timeline, a frame long or more, fades that fit, an amount in range, a short name, only the
+    /// weight points inside it, and a look's limit in range, its keyed spots dropped once it follows a bone.
+    /// </summary>
     private static MotionLayer Normalize(MotionLayer layer)
     {
+        if (layer.Look is { } look)
+            layer = layer with
+            {
+                Look = look with { Limit = float.IsFinite(look.Limit) ? Math.Clamp(look.Limit, 0, MotionLooks.MaxLimit) : new MotionLook().Limit },
+                Keys = look.Follow != null ? [] : layer.Keys,
+            };
         var start = Math.Clamp(layer.Start, 0, TimelineDocument.MaxFrames - 1);
         var end = Math.Clamp(layer.End, start + 1, TimelineDocument.MaxFrames);
         var length = end - start;
@@ -1336,7 +1357,7 @@ internal static class MotionEdits
         (a.Fix == null ? b.Fix == null
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade && a.Fix.Axes == b.Fix.Axes && a.Fix.Placement == b.Fix.Placement &&
               SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&
-        SameIdle(a.Idle, b.Idle) && Equals(a.Markers, b.Markers) && Equals(a.Swing, b.Swing) && a.Window == b.Window && Equals(a.Noise, b.Noise) &&
+        SameIdle(a.Idle, b.Idle) && Equals(a.Markers, b.Markers) && Equals(a.Swing, b.Swing) && a.Window == b.Window && Equals(a.Noise, b.Noise) && Equals(a.Look, b.Look) &&
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));
