@@ -78,6 +78,7 @@ internal sealed class MotionPathCache
     private Dictionary<int, Vector3[]> fallback = [];
     private int[] wanted = [];
     private int at;
+    private bool failed;
 
     /// <summary>How many frames the current document has evaluated.</summary>
     public int Count
@@ -109,6 +110,7 @@ internal sealed class MotionPathCache
                 frames = [];
                 doc = document;
                 clip = motion;
+                failed = false;
             }
             state = pass;
             wanted = window;
@@ -120,6 +122,13 @@ internal sealed class MotionPathCache
                     frames.Remove(frame);
             }
         }
+    }
+
+    /// <summary>Evaluates nothing more for the current document and clip: a frame of it failed.</summary>
+    public void Fail()
+    {
+        lock (gate)
+            failed = true;
     }
 
     /// <summary>Wants no frames: the paths are hidden.</summary>
@@ -134,7 +143,7 @@ internal sealed class MotionPathCache
     {
         lock (gate)
         {
-            if (doc != null && clip != null)
+            if (doc != null && clip != null && !failed)
                 for (var step = 0; step <= wanted.Length; step++)
                 {
                     if (Missing(at - step) is { } before)

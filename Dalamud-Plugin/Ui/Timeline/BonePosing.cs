@@ -49,6 +49,10 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     private (TimelineDocument Doc, string Layer, int Frame, MotionClip Clip, BoneFrames Frames)? boneFrames;
     // The onion skins' poses in model space, apart from motionPose so the gizmo's pose at the playhead stays cached.
     private readonly List<(TimelineDocument Doc, MotionClip Clip, int Frame, MotionTransform[] Model)> ghostPoses = [];
+    // The motion paths' frames, filled by pathWorker off the draw.
+    private readonly MotionPathCache paths = new();
+    private Task? pathWorker;
+    private int pathRange = MotionPaths.DefaultRange;
     // What the character's models have weight on, read again as they change.
     private readonly WornBones worn = new(session.Data, session.Log);
     // The bones the clip and its layers move, for the moved bones, the document and the skeleton they were found from.
@@ -58,6 +62,16 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
 
     /// <summary>The Bones window's onion skins switch: the overlay also shows the pose at the selected layer's keys either side of the playhead.</summary>
     public bool Ghosts { get; set; }
+
+    /// <summary>The Bones window's paths switch: the overlay draws the selected bones' paths over the frames around the playhead.</summary>
+    public bool Paths { get; set; }
+
+    /// <summary>How many frames before and after the playhead the paths cover.</summary>
+    public int PathRange
+    {
+        get => pathRange;
+        set => pathRange = MotionPaths.Range(value);
+    }
 
     /// <summary>The Bones window's filter switch: while it is off, the map and the bones on the character show only <see cref="MapBones"/>.</summary>
     public bool EveryBone { get; set; }
@@ -542,6 +556,65 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             ghostPoses.RemoveAt(0);
         ghostPoses.Add((doc, clip, frame, model));
         return model;
+    }
+
+    /// <summary>
+    /// The motion paths' frames around <paramref name="playhead"/>, in time order with the playhead's place, and the cache
+    /// to read every bone's model-space position at them from; null while the motion is read, which this starts. Frames
+    /// missing from the cache are evaluated on a worker, as <see cref="GhostPose"/> evaluates them, playhead first.
+    /// </summary>
+    public (int[] Frames, int At, MotionPathCache Cache)? PathFrames(AnimationTimelineSource loaded, TimelineDocument doc, int playhead)
+    {
+        if (!Paths || OutputClip(loaded) is not { } clip)
+        {
+            paths.Hide();
+            return null;
+        }
+        var loop = LoopFrames(loaded, doc);
+        var (frames, at) = MotionPaths.Window(playhead, pathRange, doc.Length, (int)MathF.Round(loop));
+        paths.Show(doc, clip, (loop, MotionEnd(loaded, doc)), frames, at);
+        if (pathWorker is not { IsCompleted: false } && paths.TryNext(out _))
+            pathWorker = Task.Run(FillPaths);
+        return (frames, at, paths);
+    }
+
+    /// <summary>Hides the motion paths: their worker stops after the frame it is on.</summary>
+    public void HidePaths() => paths.Hide();
+
+    // The paths' worker: evaluates their missing frames until none are left. Pure motion maths, no game state.
+    private void FillPaths()
+    {
+        try
+        {
+            while (paths.TryNext(out var job))
+            {
+                var doc = (TimelineDocument)job.Doc;
+                var clip = (MotionClip)job.Clip;
+                var (loop, end) = ((float, float))job.State!;
+                var own = clip.Pose(job.Frame);
+                MotionTransform[] local;
+                try
+                {
+                    local = MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, job.Frame, loop, end, clip.SourceTracks);
+                }
+                catch (InvalidDataException)
+                {
+                    // A layer names a bone this skeleton lacks: the clip's own pose still shows.
+                    local = own;
+                }
+                var model = MotionEvaluator.ModelSpace(clip.Skeleton, local);
+                var positions = new Vector3[model.Length];
+                for (var b = 0; b < model.Length; b++)
+                    positions[b] = model[b].Position;
+                paths.Put(doc, clip, job.Frame, positions);
+            }
+        }
+        catch (Exception e)
+        {
+            // Stops for this document rather than evaluate the same frame again every draw.
+            paths.Fail();
+            session.Log.Warning(e, "Motion paths could not be worked out.");
+        }
     }
 
     /// <summary>

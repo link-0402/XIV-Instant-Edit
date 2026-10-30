@@ -61,6 +61,10 @@ public sealed partial class TimelineWindow
     // An onion skin's dots, reused for the key before the playhead and the one after.
     private Vector2[] ghostAt = [];
     private bool[] ghostShown = [];
+    // A motion path's frames, points and which of them show, reused for each selected bone.
+    private Vector3[]?[] pathPoses = [];
+    private Vector2[] pathAt = [];
+    private bool[] pathShown = [];
 
     internal BonesOverlay Overlay => overlayWindow;
 
@@ -165,6 +169,8 @@ public sealed partial class TimelineWindow
             DrawGhost(skeleton, loaded, current.Document, before, playhead, Theme.Info, toClip, viewport);
             DrawGhost(skeleton, loaded, current.Document, after, playhead, Theme.Important, toClip, viewport);
         }
+        if (posing.PathFrames(loaded, current.Document, frame) is { } path)
+            DrawPaths(skeleton, index, layer, path.Frames, path.At, path.Cache, BonePosing.LoopFrames(loaded, current.Document), toClip, viewport);
         DrawOverlayBones(skeleton, layer, frame, animated, primary, hover);
         DrawGizmo(current, loaded, skeleton, layer, frame, modelView, camera.Projection, viewport);
 
@@ -215,6 +221,61 @@ public sealed partial class TimelineWindow
         for (var b = 0; b < ghostShown.Length; b++)
             if (ghostShown[b])
                 drawList.AddCircleFilled(ghostAt[b], radius, dotColour);
+    }
+
+    /// <summary>
+    /// The motion paths: for each selected bone (the first <see cref="MotionPaths.MaxBones"/>, primary first) a line
+    /// through where it is at each of <paramref name="frames"/>, blue before the playhead and orange after, with a dot at
+    /// each frame, a bigger one where the selected layer keys the bone, and a white one at the playhead. Each point sits
+    /// off the bone's dot by how far the bone is from where it is at the playhead, as an onion skin's does. Only frames
+    /// already in <paramref name="cache"/> draw; drawn before the dots, so under them.
+    /// </summary>
+    private void DrawPaths(SkeletonDescription skeleton, Dictionary<string, int> index, MotionLayer? layer, int[] frames, int at, MotionPathCache cache,
+        float loop, Matrix4x4 toClip, ImGuiViewportPtr viewport)
+    {
+        if (pathPoses.Length < frames.Length)
+        {
+            pathPoses = new Vector3[]?[frames.Length];
+            pathAt = new Vector2[frames.Length];
+            pathShown = new bool[frames.Length];
+        }
+        cache.Read(frames, pathPoses);
+        if (pathPoses[at] is not { } playhead || playhead.Length != skeleton.Bones.Length)
+            return;
+        var drawList = ImGui.GetWindowDrawList();
+        var small = Theme.Scaled(2);
+        var big = Theme.Scaled(4.5f);
+        var width = Theme.Scaled(1.5f);
+        var shadow = ImGui.GetColorU32(new Vector4(0, 0, 0, .45f));
+        var before = ImGui.GetColorU32(Theme.WithAlpha(Theme.Info, .85f));
+        var after = ImGui.GetColorU32(Theme.WithAlpha(Theme.Important, .85f));
+        var now = ImGui.GetColorU32(new Vector4(1, 1, 1, 1));
+        var keyLoop = (int)MathF.Round(loop);
+        var drawn = 0;
+        foreach (var bone in selection.Primary is { } primary ? selection.Bones.Where(name => name != primary).Prepend(primary) : selection.Bones)
+        {
+            if (drawn >= MotionPaths.MaxBones)
+                break;
+            if (!index.TryGetValue(bone, out var b) || !actorPose.Index.TryGetValue(bone, out var on))
+                continue;
+            drawn++;
+            var origin = actorPose.Positions[on] - playhead[b];
+            for (var i = 0; i < frames.Length; i++)
+                pathShown[i] = pathPoses[i] is { } pose && pose.Length == playhead.Length &&
+                               PoseGizmo.Project(origin + pose[b], toClip, viewport.Pos, viewport.Size, out pathAt[i]);
+            for (var i = 1; i < frames.Length; i++)
+                if (pathShown[i - 1] && pathShown[i])
+                    drawList.AddLine(pathAt[i - 1], pathAt[i], i <= at ? before : after, width);
+            var keys = MotionPaths.KeyFrames(layer, bone, keyLoop);
+            for (var i = 0; i < frames.Length; i++)
+            {
+                if (!pathShown[i])
+                    continue;
+                var radius = keys.Contains(frames[i]) ? big : small;
+                drawList.AddCircleFilled(pathAt[i], radius + Theme.Scaled(1), shadow);
+                drawList.AddCircleFilled(pathAt[i], radius, i == at ? now : i < at ? before : after);
+            }
+        }
     }
 
     /// <summary>

@@ -236,6 +236,26 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 "\nThey leave out amplitude and fix layers and planted pins."))
             posing.Ghosts = !posing.Ghosts;
         ImGui.SameLine(0, Theme.Scaled(2));
+        if (TimelineUi.Toggle("##bones-paths", FontAwesomeIcon.Route, posing.Paths, (posing.Paths
+                ? "Paths: lines show where the selected bones go over the frames around the playhead, blue before and orange after. Click to hide them."
+                : "Show paths: lines for where the selected bones go over the frames around the playhead.") +
+                "\nThey leave out amplitude and fix layers and planted pins."))
+        {
+            posing.Paths = !posing.Paths;
+            if (!posing.Paths)
+                posing.HidePaths();
+        }
+        if (posing.Paths)
+        {
+            ImGui.SameLine(0, Theme.Scaled(2));
+            var range = posing.PathRange;
+            ImGui.SetNextItemWidth(Theme.Scaled(36));
+            if (ImGui.DragInt("##bones-path-range", ref range, .2f, MotionPaths.MinRange, MotionPaths.MaxRange, "%d"))
+                posing.PathRange = range;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Frames before and after the playhead the paths show.");
+        }
+        ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", posing.Selection.Count > 0))
             posing.Selection.Clear();
         ImGui.SameLine(0, Theme.Gap);
@@ -246,6 +266,11 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             1 => AnimationPresentation.BoneName(posing.Selection.Primary!),
             _ => $"{posing.Selection.Count} bones selected",
         });
+        if (posing.Paths && posing.Selection.Count > MotionPaths.MaxBones)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.TextColored(Theme.Muted, $"(paths for the first {MotionPaths.MaxBones})");
+        }
         ImGui.SameLine(0, Theme.Scaled(12));
         var face = session.Editor?.Document.Face != null;
         using (ImRaii.Disabled(face))
