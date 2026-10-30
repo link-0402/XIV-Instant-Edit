@@ -623,8 +623,23 @@ def half_precision_fits_the_vertex_limit(addon):
     print("[PASS] a LOD over the vertex buffer limit is written at half precision without flow; under it, unchanged")
 
 
+def faceless_meshes_keep_one_triangle(addon):
+    validators = importlib.import_module(f"{addon.__name__}.io.model.exp.validators")
+    with temporary_scene_data():
+        for count in (1, 3):
+            data = bpy.data.meshes.new(f"Faceless {count}")
+            data.from_pydata([(0.5 * i, 0, 0) for i in range(count)], [], [])
+            obj = bpy.data.objects.new(f"0.0 Faceless {count}", data)
+            bpy.context.collection.objects.link(obj)
+            validators.remove_loose_verts(obj)
+            assert (len(obj.data.vertices), len(obj.data.polygons)) == (3, 1), (count, len(obj.data.vertices), len(obj.data.polygons))
+            assert all(v.co == obj.data.vertices[0].co for v in obj.data.vertices), [tuple(v.co) for v in obj.data.vertices]
+    print("[PASS] a faceless mesh of one vertex or more exports as one zero-area triangle on its first vertex")
+
+
 def run():
     with addon_session("_xiv_ie_correctness_regression") as addon:
+        faceless_meshes_keep_one_triangle(addon)
         half_precision_fits_the_vertex_limit(addon)
         mashup_output_context_takes_user_meshes(addon)
         export_refuses_empty_meshes_as_empty(addon)

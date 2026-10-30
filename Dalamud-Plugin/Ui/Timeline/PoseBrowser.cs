@@ -229,6 +229,8 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
             return PoseFiles.Parse(File.ReadAllBytes(path));
         }, cancel.Token), cancel);
         note = null;
+        // Another pose: whether positions are keyed follows it again until chosen, as in the pose panel.
+        options.NewPose();
     }
 
     /// <summary>Keys the pose clicked once its file is read and the motion it keys over is.</summary>

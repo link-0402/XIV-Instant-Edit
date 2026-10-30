@@ -601,7 +601,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             var (resolved, mapped) = await Task.Run(() => (
                 PropModelSources.Resolve(mod.Directory, mod.Name, model.GamePath, set, body, PropModelSources.ModFiles(mod.Root, settings), game, session.GameFileExists),
                 inPlace is null ? new HashSet<(ushort, ushort)>() : PropModelSources.ModBodies(inPlace))).ConfigureAwait(false);
-            if (PropModelSources.MaterialUnsavable(resolved))
+            if (PropModelSources.PickProblem(resolved, session.GameFileExists) != null)
                 return new PropPicked(resolved, null);
             // Each model path is resolved on the framework thread (the service hops there), one body at a time.
             var bodies = await PropModelSources.FindBody(resolved, taken, mapped, session.GameFileExists,
@@ -645,7 +645,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         }
         if (bodies is null)
         {
-            Fail(PropModelSources.UnsavableMaterial);
+            Fail(PropModelSources.PickProblem(source, session.GameFileExists) ?? PropModelSources.UnsavableMaterial);
             return;
         }
         // The body is chosen now, from the snapshot and the timeline as they are: the same files share a prop's body,

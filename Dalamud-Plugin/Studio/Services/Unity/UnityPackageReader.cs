@@ -270,7 +270,9 @@ internal static class UnityPackageReader
 
     /// <summary>
     /// A package path made safe to write under the output folder: "Assets/A/b.png" becomes "A/b.png".
-    /// Null for a rooted path, a drive, or one that climbs with "..".
+    /// One that would land in the Blender/ folder or sidecar Blender saves into keeps "Assets/" (or gets it), so a
+    /// re-extraction never takes a model Blender saved for the package's. Null for a rooted path, a drive, or one
+    /// that climbs with "..".
     /// </summary>
     public static string? SafeRelative(string packagePath)
     {
@@ -280,6 +282,9 @@ internal static class UnityPackageReader
         var segments = path.Split('/').ToList();
         if (segments.Count > 1 && string.Equals(segments[0], "Assets", StringComparison.OrdinalIgnoreCase))
             segments.RemoveAt(0);
+        if (segments.Count > 1 && string.Equals(segments[0], Stash.BlenderExports.FolderName, StringComparison.OrdinalIgnoreCase) ||
+            segments.Count == 1 && segments[0].StartsWith(Stash.BlenderExports.FileName, StringComparison.OrdinalIgnoreCase))
+            segments.Insert(0, "Assets");
         if (segments.Any(s => s.Length == 0 || s is "." or ".."))
             return null;
         return string.Join('/', segments.Select(PathNormalizer.SafeSegment));

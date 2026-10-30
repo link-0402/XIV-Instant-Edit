@@ -240,6 +240,11 @@ internal static class PropModelSourcesFixture
         check(!PropModelSources.MaterialUnsavable(fine) && PropModelSources.MaterialUnsavable(spaced) &&
               PropModelSources.UnsavableMaterial == "This model's material name can't be saved.",
             "a material name a save would refuse is refused at the pick");
+        var gameMaterial = source with { Files = source.Files.Add(root + "material/v0001/mt_phone_b.mtrl", "game:chara/monster/m8044/obj/body/b0001/material/v0001/mt_phone_b.mtrl") };
+        check(PropModelSources.PickProblem(fine, _ => false) == null && PropModelSources.PickProblem(spaced, _ => true) == PropModelSources.UnsavableMaterial &&
+              PropModelSources.PickProblem(gameMaterial, _ => true) == null &&
+              PropModelSources.PickProblem(gameMaterial, _ => false) == "This model's material mt_phone_b.mtrl is in neither the mod nor the game.",
+            "a material the game is to give but doesn't have is refused at the pick, as every save would fail");
     }
 
     private static void CandidateModels(Action<bool, string> check)
@@ -449,6 +454,10 @@ internal static class PropModelSourcesFixture
             check(PropModelSources.PrivateTexturePath("chara/weapon/w9001/obj/body/b9000/", "chara/c/x.tex", owners) == root + "x_3.tex" &&
                   PropModelSources.PrivateTexturePath("chara/weapon/w9001/obj/body/b9000/", "chara/b/x.tex", owners) == root + "x_2.tex",
                 "a third texture of one name gets _3, and a texture keeps the name it was given");
+            var dashed = new Dictionary<string, string> { [root + "--y.tex"] = "chara/a/--y.tex" };
+            check(PropModelSources.PrivateTexturePath("chara/weapon/w9001/obj/body/b9000/", "chara/b/y.tex", dashed, dx11Copy: true) == root + "y_2.tex" &&
+                  PropModelSources.PrivateTexturePath("chara/weapon/w9001/obj/body/b9000/", "chara/b/y.tex", dashed) == root + "y.tex",
+                "a texture with a DX11 copy takes a name whose -- name is free too");
         }
         finally
         {

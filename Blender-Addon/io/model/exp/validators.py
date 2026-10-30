@@ -24,6 +24,7 @@ def remove_loose_verts(obj: Object) -> None:
     bm.from_mesh(obj.data)
     
     loose_verts = [vert for vert in bm.verts if len(vert.link_faces) == 0]
+    changed = bool(loose_verts)
     if loose_verts and not bm.faces:
         # A faceless mesh (a vanilla VFX container whose degenerate triangle the import dropped)
         # exports as one zero-area triangle on its first vertex, keeping its weights and material.
@@ -32,7 +33,8 @@ def remove_loose_verts(obj: Object) -> None:
         loose_verts = loose_verts[1:]
     if loose_verts:
         bmesh.ops.delete(bm, geom=loose_verts, context='VERTS')
-    
+    # A lone vertex leaves nothing to delete, but its triangle is still written.
+    if changed:
         bm.verts.ensure_lookup_table()
         bm.edges.ensure_lookup_table()
         bm.to_mesh(obj.data)

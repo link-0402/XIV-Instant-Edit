@@ -249,8 +249,9 @@ internal sealed class HandShapePanel(TimelineSession session, BonePosing posing)
             Widgets.MutedWrapped("Checking fingertips");
 
         // Tips follow the check for every changed side, one undo step; an undone write stays undone until the hand or the check changes.
-        // Read again: a field above may have committed this frame, and the write must not undo it.
-        if (usable && !readOnly && current.Gesture == TimelineGesture.None && !current.History.InGesture &&
+        // Read again: a field above may have committed this frame, and the write must not undo it. It waits while there is
+        // something to redo, which the write would throw away.
+        if (usable && !readOnly && current.Gesture == TimelineGesture.None && !current.History.InGesture && !current.History.CanRedo &&
             MotionEdits.Find(current.Document, layer.Key) is { Fix.Hand: { } now } fresh && now.Side == hand.Side)
         {
             var want = sides.All(side => Live(side) && Mesh(side));

@@ -61,6 +61,8 @@ internal static partial class TmbFileFixture
         check(TimelineEdits.FillFields(kept, opened).Events[0].Place == modPlace && TimelineEdits.FillFields(kept, opened).Events[2].Place == null &&
               TimelineEdits.FillFields(opened with { Events = opened.Events.SetItem(0, opened.Events[0] with { Place = mine }) }, opened).Events[0].Place == mine,
             "kept edits from before places were read from the mod take the mod's place; one of their own stays");
+        check(TimelineEdits.FillFields(kept, opened, placesKept: true).Events[0].Place == null,
+            "kept edits of a build that keeps places keep a prop put back where the game has it");
         var saved = TmbFile.Parse(TimelineConvert.Apply(bytes, filled));
         var summons = saved.Entries.Where(e => e.Magic == "C198").ToList();
         check(summons.Count == 2 && summons.Single(e => e.Time == 0) is { } first && first.Int32(12) == 70 && first.Byte(29) == 3 &&

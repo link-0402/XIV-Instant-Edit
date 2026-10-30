@@ -23,6 +23,25 @@ internal static class InstantStartupFixture
         Document(check);
         Paths(check);
         Mapping(check);
+        UndoOrder(check);
+    }
+
+    /// <summary>An instant startup added to the loop's mod waits for a later in-place save of that startup to be undone first.</summary>
+    private static void UndoOrder(Action<bool, string> check)
+    {
+        static AnimationFileChange Change(string root, string relative, string? addedFor) =>
+            new(Startup, root + "/" + relative, "Mod", root, relative, "", "hash", "", "staged", AddedFor: addedFor);
+        var at = new DateTime(2026, 10, 30, 12, 0, 0, DateTimeKind.Utc);
+        AnimationEditJournal Journal(AnimationFileChange file, int minutes, string state = "Completed") =>
+            new() { Id = Guid.NewGuid(), State = state, Files = [file], CreatedUtc = at.AddMinutes(minutes) };
+        var instant = Journal(Change("root", "instant_edit/start.pap", Loop), 0);
+        var savedOver = Journal(Change("root", "instant_edit/start_1.pap", null) with { RenamedFromRelativePath = "instant_edit/start.pap" }, 5);
+        check(AnimationEditService.LaterEditUsesAdded(instant, [instant, savedOver]),
+            "undoing an instant startup waits for a later in-place save of that startup");
+        check(!AnimationEditService.LaterEditUsesAdded(instant, [instant, Journal(savedOver.Files[0], 5, "Undone")]) &&
+              !AnimationEditService.LaterEditUsesAdded(instant, [instant, Journal(savedOver.Files[0], -5)]) &&
+              !AnimationEditService.LaterEditUsesAdded(instant, [instant, Journal(Change("other", "start.pap", null), 5)]),
+            "an undone save, an earlier one, or one of the same startup in another mod doesn't hold it up");
     }
 
     private static void Pose(Action<bool, string> check, Action<Action, string> reject)

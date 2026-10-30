@@ -210,11 +210,12 @@ internal static class TimelineEdits
     /// <summary>
     /// <paramref name="kept"/> (edits an older build kept, such as an autosave) with every field its events' kinds
     /// now have and they lack: the value of the entry it was loaded from or copies (in <paramref name="loaded"/>,
-    /// the file read again), else 0. Saving refuses an event without all of its kind's fields. A prop summon without a
-    /// place takes the loaded one's, which the mod's attach override makes: kept by an older build, it never had it, and
-    /// a save would take it for one put back. The same instance when nothing is missing.
+    /// the file read again), else 0. Saving refuses an event without all of its kind's fields. Unless <paramref name="placesKept"/>,
+    /// a prop summon without a place takes the loaded one's, which the mod's attach override makes: kept by an older build,
+    /// it never had it, and a save would take it for one put back. With <paramref name="placesKept"/> one without a place was
+    /// put back (Reset place) and stays so. The same instance when nothing is missing.
     /// </summary>
-    public static TimelineDocument FillFields(TimelineDocument kept, TimelineDocument loaded)
+    public static TimelineDocument FillFields(TimelineDocument kept, TimelineDocument loaded, bool placesKept = false)
     {
         var events = Events(kept);
         var sources = Events(loaded).ToDictionary(ev => ev.Key, StringComparer.Ordinal);
@@ -222,7 +223,7 @@ internal static class TimelineEdits
         for (var index = 0; index < events.Length; index++)
         {
             var ev = events[index];
-            if (ev.Place == null && sources.TryGetValue(ev.Key, out var placed) && placed.Magic == ev.Magic && placed.Place != null)
+            if (!placesKept && ev.Place == null && sources.TryGetValue(ev.Key, out var placed) && placed.Magic == ev.Magic && placed.Place != null)
             {
                 builder ??= events.ToBuilder();
                 builder[index] = ev = ev with { Place = placed.Place };

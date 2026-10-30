@@ -508,6 +508,9 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         catch (Exception e)
         {
             _log.Warning(e, "The animation preview playback failed.");
+            // The character gets its speeds, draw offset and timeline back, as a stop gives them.
+            try { StopSession(restore: true); }
+            catch (Exception restore) { _log.Warning(restore, "Could not restore the character after the failed playback."); }
             End("Playback stopped after an error.");
         }
     }

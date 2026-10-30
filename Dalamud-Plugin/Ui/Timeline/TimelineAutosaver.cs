@@ -110,7 +110,7 @@ internal sealed class TimelineAutosaver(TimelineSession session, Action<Timeline
         var source = session.Source!;
         var doc = editor.Document;
         return new TimelineAutosave(source.Capture, source.Startup, source.Resource.Hash, source.BaseHash, doc,
-            [.. doc.SoundEdits.Select(p => (p.Key, p.Value))], [.. session.Imports.Values], DateTime.UtcNow);
+            [.. doc.SoundEdits.Select(p => (p.Key, p.Value))], [.. session.Imports.Values], DateTime.UtcNow, TimelineAutosave.PlacesFormat);
     }
 
     private TimelineAutosave? Read(AnimationJournalStore store)

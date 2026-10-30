@@ -296,7 +296,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private void Restore(TimelineAutosave kept)
     {
         IsOpen = true;
-        Load(kept.Capture, kept.Startup, false, afterUndo: kept.BaseHash != null);
+        // The kept capture names the character of the run that kept it; the clip is opened on the newest capture of it.
+        var capture = animations is { } service ? AnimationEditService.LatestCapture(kept.Capture, kept.Startup, service.Observer.History) : kept.Capture;
+        Load(capture, kept.Startup, false, afterUndo: kept.BaseHash != null);
         pendingRestore = kept;
     }
 
@@ -492,7 +494,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         {
             foreach (var import in restore.Imports)
                 session.Imports[import.GamePath] = import with { Files = import.Files.WithComparers(StringComparer.OrdinalIgnoreCase) };
-            editor.Commit(TimelineEdits.FillFields(restore.Restored, doc));
+            editor.Commit(TimelineEdits.FillFields(restore.Restored, doc, restore.Format >= TimelineAutosave.PlacesFormat));
         }
     }
 

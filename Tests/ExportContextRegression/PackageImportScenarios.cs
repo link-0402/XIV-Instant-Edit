@@ -1600,6 +1600,11 @@ internal static class PackageImportScenarios
         Require(File.Exists(Path.Combine(output, "hostile", "ok", "good.png")), "a good asset beside them is still written");
         Require(UnityPackageReader.SafeRelative("Assets/a/b.png") == "a/b.png" && UnityPackageReader.SafeRelative("x/../y.png") == null,
             "paths lose their leading Assets/ and may not climb");
+        Require(UnityPackageReader.SafeRelative("Assets/Blender/m.fbx") == "Assets/Blender/m.fbx" &&
+                UnityPackageReader.SafeRelative("blender/m.fbx") == "Assets/blender/m.fbx" &&
+                UnityPackageReader.SafeRelative("Assets/blender-exports.json") == "Assets/blender-exports.json" &&
+                UnityPackageReader.SafeRelative("Assets/Blenders/m.fbx") == "Blenders/m.fbx",
+            "a path into the Blender/ folder or sidecar Blender saves into keeps Assets/, so a re-extraction never replaces Blender's models");
     }
 
     private static void ExtractKeepsLayout(string root)

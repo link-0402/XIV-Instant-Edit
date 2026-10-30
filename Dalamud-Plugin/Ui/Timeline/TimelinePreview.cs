@@ -922,14 +922,16 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     /// <summary>
     /// Ends Live's temporary mod with looks, when it has one. A look update redrew the character to load them (previewRedrawn),
-    /// so Stop redraws it again for the effects' own files; Preview redraws it anyway.
+    /// so it is redrawn again for the effects' own files, however Live ends.
     /// </summary>
     private void StopLiveLooks()
     {
         if (!liveLooks && lookSyncing is not { Live: true })
             return;
         ForgetPreviewLooks();
-        StopTemporaryMod();
+        var redraw = previewRedrawn ? previewActor : null;
+        previewRedrawn = false;
+        StopTemporaryMod(redraw);
     }
 
     /// <summary>

@@ -15,6 +15,8 @@ internal sealed unsafe class LoopFadeWatch(LoopFades fades, Func<ushort, ushort,
     private const int MaximumControls = 256;
     // How long (seconds) after the slot turns the loop's control may take to show.
     private const float Patience = .5f;
+    // The most one frame counts toward the patience: a long one (the game loading the loop as it starts) is looked at, not waited out.
+    private const float LongestFrame = 1f / 30;
     // A control counts as just started below this local time (seconds) and weight: the loop's, seen late when a
     // frame took long (it loads as it starts). Its own time is taken off, so a late look measures the same.
     private const float StartTime = .25f, StartWeight = .5f;
@@ -52,16 +54,13 @@ internal sealed unsafe class LoopFadeWatch(LoopFades fades, Func<ushort, ushort,
         }
         if (waiting is not { } pair)
             return;
-        if ((waited += delta) > Patience)
-        {
-            waiting = null;
-            return;
-        }
         if (FramesLeft(chara, ref startup) is { } frames)
         {
             fades.Record(pair.Startup, pair.Loop, frames);
             waiting = null;
         }
+        else if ((waited += Math.Min(delta, LongestFrame)) > Patience)
+            waiting = null;
     }
 
     /// <summary>

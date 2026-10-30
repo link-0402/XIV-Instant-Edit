@@ -331,16 +331,27 @@ internal sealed partial class AnimationEditService : IDisposable
 
     public void Undo(AnimationEditJournal journal) => Launch(async _ =>
     {
-        // A later timeline edit that relies on a file this one added must be undone first.
-        var added = journal.Files.Where(f => f.AddedFor != null).Select(f => f.GamePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (added.Count > 0 && recovery.Any(other => other.Id != journal.Id && other.State is not ("Undone" or "FilesUndone") &&
-                other.ReusedFiles.Any(added.Contains)))
+        if (LaterEditUsesAdded(journal, recovery))
             throw new IOException("A later timeline edit uses a file this edit added. Undo that edit first.");
         // Files undo by their hashes alone, so no character is needed.
         CanCancel = false;
         await commits.UndoFilesAsync(journal);
         journal.State = "Undone"; journal.Message = "Files recovered."; journals.Save(journal); Status = journal.Message;
     });
+    /// <summary>
+    /// Whether an edit of <paramref name="journals"/> that isn't undone relies on a file <paramref name="journal"/> added, or a
+    /// later one saved over it (an in-place save of an added startup renames it): that edit must be undone first.
+    /// </summary>
+    internal static bool LaterEditUsesAdded(AnimationEditJournal journal, IEnumerable<AnimationEditJournal> journals)
+    {
+        var files = journal.Files.Where(f => f.AddedFor != null).ToList();
+        var added = files.Select(f => f.GamePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool SavedOver(AnimationFileChange change) => change.AddedFor == null && files.Any(f =>
+            string.Equals(f.GamePath, change.GamePath, StringComparison.OrdinalIgnoreCase) && string.Equals(f.ModRoot, change.ModRoot, StringComparison.OrdinalIgnoreCase));
+        return added.Count > 0 && journals.Any(other => other.Id != journal.Id && other.State is not ("Undone" or "FilesUndone") &&
+            (other.ReusedFiles.Any(added.Contains) || other.CreatedUtc > journal.CreatedUtc && other.Files.Any(SavedOver)));
+    }
+
     /// <summary>Why a clip can't be played on a character: it moves bones the character's skeleton lacks.</summary>
     public const string SkeletonTooSmall = "Your character's skeleton lacks bones this animation moves. Playing it could crash the game.";
 

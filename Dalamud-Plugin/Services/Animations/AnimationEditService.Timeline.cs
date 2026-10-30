@@ -720,9 +720,15 @@ internal sealed partial class AnimationEditService
     /// same clip in the same collection, the same character's first; else the one the edit was made from.
     /// </summary>
     internal static AnimationCapture EditAgainCapture(AnimationEditJournal journal, IEnumerable<AnimationCapture> history)
+        => LatestCapture(journal.Request.Capture, journal.Request.Timeline?.Startup == true, history);
+
+    /// <summary>
+    /// The capture to open <paramref name="saved"/>'s clip (its startup with <paramref name="startup"/>) again with: the newest the
+    /// listener saw of the same clip in the same collection, the same character's first; else <paramref name="saved"/>. Kept edits
+    /// come back on it, so a save after a game restart checks the character as it is now.
+    /// </summary>
+    internal static AnimationCapture LatestCapture(AnimationCapture saved, bool startup, IEnumerable<AnimationCapture> history)
     {
-        var saved = journal.Request.Capture;
-        var startup = journal.Request.Timeline?.Startup == true;
         if ((startup ? saved.Startup : saved.Clip) is not { } clip)
             return saved;
         var same = history.Where(capture => capture.CollectionId == saved.CollectionId && (startup || capture.ExpressionTimeline == null) &&

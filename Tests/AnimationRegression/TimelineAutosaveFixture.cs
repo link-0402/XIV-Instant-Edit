@@ -51,10 +51,13 @@ internal static class TimelineAutosaveFixture
                         if (ev is JsonObject item && item.ContainsKey("Source") && item["Source"] is null)
                             item.Remove("Source");
             check(!older.ToJsonString().Contains("\"Source\":null", StringComparison.Ordinal), "the older autosave has no Source entries");
+            older.AsObject().Remove("Format");
             File.WriteAllText(file, older.ToJsonString());
             var olderBack = store.LoadAutosave()!;
             check(olderBack.Restored.Events[0].Source == null && olderBack.Restored.Events[1].Source == null &&
                   olderBack.Restored.Events[2].Source is { Body: 9000 }, "an autosave without sources loads with none");
+            check(back.Format == TimelineAutosave.PlacesFormat && olderBack.Format == 0,
+                "kept edits say they keep places; an older build's, written without a format, read as format 0");
             check(doc.Events[1].Look is { Stop: 12 } placed && placed.Move == new Vector3(0, .25f, 0) && placed.Turn == new Vector3(0, MathF.PI / 2, 0) &&
                   doc.Events[2] is { Group: "p1", Place: { State: 1, OwnState: true, Bone: "n_buki_l", Size: 1.25f } prop } &&
                   prop.Move == new Vector3(.1f, 0, 0) && prop.Turn == new Vector3(0, 0, .5f),
@@ -116,6 +119,7 @@ internal static class TimelineAutosaveFixture
         var import = new TimelineImport("instant_edit/step.scd",
             ImmutableDictionary<string, byte[]>.Empty.Add("instant_edit/step.scd", [1, 2, 3]), 1.5f,
             Rebuild: ImmutableDictionary<string, Func<byte[], byte[]>>.Empty.Add("instant_edit/step.scd", b => b));
-        return new TimelineAutosave(capture, true, "file", "base", doc, [.. doc.SoundEdits.Select(p => (p.Key, p.Value))], [import], DateTime.UtcNow);
+        return new TimelineAutosave(capture, true, "file", "base", doc, [.. doc.SoundEdits.Select(p => (p.Key, p.Value))], [import], DateTime.UtcNow,
+            TimelineAutosave.PlacesFormat);
     }
 }

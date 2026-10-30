@@ -689,10 +689,11 @@ internal static class ModOptionGroups
 
     /// <summary>
     /// The file a mod serves for each game path under <paramref name="enabledOptions"/> (group name to picked
-    /// option names): the default files, then each group's picked options, lowest priority first so a higher
-    /// priority replaces a lower one, and of equal priority the group listed first wins. In a group a Single
-    /// serves its picked option, a Multi its picked options in the group's option order (a later one replaces
-    /// an earlier one) and a Combining the container its picked options select. A group without an entry in
+    /// option names), as Penumbra builds it: the first mapping of a path wins, taken from the groups highest
+    /// priority first (of equal priority the group listed later), then the default files. In a group a Single
+    /// serves its picked option, a Multi its picked options highest option priority first (of equal priority the
+    /// option listed first) and a Combining the container its picked options select. A file swap takes its path
+    /// too, though no file of the mod serves it, so the path is left out. A group without an entry in
     /// <paramref name="enabledOptions"/> contributes nothing. Keys are lower case with '/', values absolute
     /// paths under <paramref name="modFolder"/>; a mapping whose file is missing, or lies outside the mod, is skipped.
     /// </summary>
@@ -703,28 +704,30 @@ internal static class ModOptionGroups
         var meta = LoadV4ModMetadata(modFolder);
         var root = Path.GetFullPath(modFolder);
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var taken = new HashSet<string>(StringComparer.Ordinal);
 
         void Apply(JsonNode? container)
         {
-            if (container?["Files"] is not JsonObject files)
-                return;
-            foreach (var (key, value) in files)
-            {
-                var relative = JsonString(value);
-                var gamePath = PathRules.NormalizeGamePath(key).ToLowerInvariant();
-                if (string.IsNullOrWhiteSpace(relative) || gamePath.Length == 0)
-                    continue;
-                var file = Path.Combine(root, relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar));
-                if (IsSafeModResourceFile(root, file))
-                    result[gamePath] = Path.GetFullPath(file);
-            }
+            if (container?["Files"] is JsonObject files)
+                foreach (var (key, value) in files)
+                {
+                    var relative = JsonString(value);
+                    var gamePath = PathRules.NormalizeGamePath(key).ToLowerInvariant();
+                    if (string.IsNullOrWhiteSpace(relative) || gamePath.Length == 0)
+                        continue;
+                    var file = Path.Combine(root, relative.Replace('\\', '/').Replace('/', Path.DirectorySeparatorChar));
+                    if (IsSafeModResourceFile(root, file) && taken.Add(gamePath))
+                        result[gamePath] = Path.GetFullPath(file);
+                }
+            if (container?["FileSwaps"] is JsonObject swaps)
+                foreach (var (key, _) in swaps)
+                    if (PathRules.NormalizeGamePath(key).ToLowerInvariant() is { Length: > 0 } gamePath)
+                        taken.Add(gamePath);
         }
-
-        Apply(meta["DefaultData"]);
 
         var groups = ReadAllVariantGroups(modFolder)
             .Select((group, index) => (Group: group, Index: index))
-            .OrderBy(item => JsonInt(item.Group["Priority"]))
+            .OrderByDescending(item => JsonInt(item.Group["Priority"]))
             .ThenByDescending(item => item.Index);
         foreach (var (group, _) in groups)
         {
@@ -751,11 +754,13 @@ internal static class ModOptionGroups
             }
 
             var picked = options.OfType<JsonObject>().Where(Picked);
-            if (string.Equals(type, "Single", StringComparison.OrdinalIgnoreCase))
-                picked = picked.Take(1);
+            picked = string.Equals(type, "Single", StringComparison.OrdinalIgnoreCase)
+                ? picked.Take(1)
+                : picked.OrderByDescending(option => JsonInt(option["Priority"]));
             foreach (var option in picked)
                 Apply(option);
         }
+        Apply(meta["DefaultData"]);
         return result.ToImmutableDictionary(StringComparer.Ordinal);
     }
 }

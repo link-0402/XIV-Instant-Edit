@@ -146,10 +146,13 @@ internal static class HipSolver
             // The chest stays as far from the back's foot as it is: the back leans rather than shortens.
             var joint = model[back[0]].Position;
             var aim = joint + Vector3.Normalize(target - joint) * Vector3.Distance(follow, joint);
-            var before = Quaternion.Normalize(model[last].Rotation);
+            var before = Quaternion.Normalize(local[last].Rotation);
             PinSolver.Reach(skeleton, local, model, chain, aim, Vector3.Zero);
-            var lean = Quaternion.Normalize(Quaternion.Normalize(model[last].Rotation) * Quaternion.Inverse(before));
-            PinSolver.HoldTurn(skeleton, local, model, chest, Quaternion.Normalize(lean * Quaternion.Normalize(model[chest].Rotation)));
+            // The chest already turns with the whole lean below it; it turns again by the last bone's own turn, in model space.
+            var parent = skeleton.Bones[last].Parent;
+            var frame = parent >= 0 ? Quaternion.Normalize(model[parent].Rotation) : Quaternion.Identity;
+            var share = Quaternion.Normalize(frame * Quaternion.Normalize(local[last].Rotation) * Quaternion.Inverse(before) * Quaternion.Inverse(frame));
+            PinSolver.HoldTurn(skeleton, local, model, chest, Quaternion.Normalize(share * Quaternion.Normalize(model[chest].Rotation)));
         }
     }
 

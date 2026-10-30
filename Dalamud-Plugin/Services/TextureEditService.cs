@@ -1317,15 +1317,24 @@ public sealed class TextureEditService : IDisposable
             return ExternalTextureOutcome.Unchanged;
         }
         // A drop replaces whatever the file holds now (a restored backup, say); the commit backs that up first.
-        // A Painter export still stops at the conflict check, as watched saves do.
-        if (dropped is not null && !holdsLastSave) s.LastCommittedHash = TextureFiles.Hash(TextureFiles.Read(s.TargetFile));
+        // A Painter export still stops at the conflict check, as watched saves do. Only the commit takes that file
+        // for the last save: a drop that fails before it leaves the session's own.
+        var expected = dropped is not null && !holdsLastSave ? TextureFiles.Hash(TextureFiles.Read(s.TargetFile)) : s.LastCommittedHash;
         // Nothing is encoded for a texture that can't be applied now.
         await _backend.CheckAsync(s, _life.Token).ConfigureAwait(false);
         s.Status = dropped is null ? "Converting Painter texture" : $"Converting {dropped}";
         Publish();
         var (converted, format, kept) = await EncodeSaveAsync(s, snapshot, width, height).ConfigureAwait(false);
         if (!Current()) throw new OperationCanceledException("The session was paused.");
-        var result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false);
+        var held = s.LastCommittedHash;
+        s.LastCommittedHash = expected;
+        TextureCommit result;
+        try { result = await _backend.CommitAsync(s, converted, Current, _life.Token).ConfigureAwait(false); }
+        catch
+        {
+            s.LastCommittedHash = held;
+            throw;
+        }
         s.LastCommittedHash = result.Hash;
         RecordBackup(s, result.Backup);
         s.PixelHash = pixelHash;

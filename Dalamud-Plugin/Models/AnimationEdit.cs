@@ -145,11 +145,15 @@ internal sealed record AnimationEditResult(Guid Id, bool Success, string Message
 /// lose them. <paramref name="FileHash"/> and <paramref name="BaseHash"/> are the clip's file and the motion
 /// its layers apply to: the edits come back only onto the same ones. The document's sound edits travel in
 /// <paramref name="SoundEdits"/>, since JSON can't key a dictionary by <see cref="TimelineSoundKey"/>.
+/// <paramref name="Format"/> is 0 for edits kept by a build from before <see cref="PlacesFormat"/>.
 /// </summary>
 internal sealed record TimelineAutosave(AnimationCapture Capture, bool Startup, string FileHash, string? BaseHash,
     TimelineDocument Document, ImmutableArray<(TimelineSoundKey Key, TimelineSoundEdit Edit)> SoundEdits,
-    ImmutableArray<TimelineImport> Imports, DateTime SavedUtc)
+    ImmutableArray<TimelineImport> Imports, DateTime SavedUtc, int Format = 0)
 {
+    /// <summary>The format whose prop summons keep their places: one without a place was put back where the game has it.</summary>
+    public const int PlacesFormat = 1;
+
     public TimelineDocument Restored => Document with { SoundEdits = SoundEdits.ToImmutableDictionary(p => p.Key, p => p.Edit) };
 }
 

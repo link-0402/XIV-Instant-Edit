@@ -132,8 +132,15 @@ internal static class ModEffectiveFilesFixture
             Group("Second", "Single", 2, Option("Pick", ("chara/x/shared.tex", "second/shared.tex")))],
             "first/shared.tex", "second/shared.tex");
         check(At(ModOptionGroups.EffectiveFiles(tie, Picks(("First", ["Pick"]), ("Second", ["Pick"]))),
-                  "chara/x/shared.tex", tie) == "first/shared.tex",
-            "of two groups of equal priority, the one listed first wins");
+                  "chara/x/shared.tex", tie) == "second/shared.tex",
+            "of two groups of equal priority, the one listed later wins, as in Penumbra");
+
+        var swapped = Mod(dir, "swapped", Files(("chara/x/shared.tex", "def/shared.tex")), [
+            Group("Swap", "Single", 3, new JsonObject { ["Name"] = "Pick", ["FileSwaps"] = new JsonObject { ["chara/x/shared.tex"] = "chara/y/other.tex" } }),
+            Group("Low", "Single", 1, Option("Pick", ("chara/x/shared.tex", "low/shared.tex")))],
+            "def/shared.tex", "low/shared.tex");
+        check(!ModOptionGroups.EffectiveFiles(swapped, Picks(("Swap", ["Pick"]), ("Low", ["Pick"]))).ContainsKey("chara/x/shared.tex"),
+            "a higher-priority file swap takes the path: no lower file of the mod serves it");
 
         var fallback = Mod(dir, "fallback", Files(("chara/x/shared.tex", "def/shared.tex")), [
             Group("High", "Single", 3, Option("Pick", ("chara/x/shared.tex", "high/missing.tex"))),
@@ -154,12 +161,20 @@ internal static class ModEffectiveFilesFixture
             "def/extra.tex", "one/extra.tex", "one/one.tex", "two/extra.tex", "three/extra.tex", "three/three.tex");
 
         var files = ModOptionGroups.EffectiveFiles(folder, Picks(("Extras", ["One", "Two"])));
-        check(At(files, "chara/x/extra.tex", folder) == "two/extra.tex" && At(files, "chara/x/one.tex", folder) == "one/one.tex",
-            "of two picked options in a Multi group, the later one wins and the earlier one's other files stay");
+        check(At(files, "chara/x/extra.tex", folder) == "one/extra.tex" && At(files, "chara/x/one.tex", folder) == "one/one.tex",
+            "of two picked options of equal priority in a Multi group, the one listed first wins, as in Penumbra");
         check(!files.ContainsKey("chara/x/three.tex"), "a Multi option that isn't picked contributes no paths");
         var reversed = ModOptionGroups.EffectiveFiles(folder, Picks(("Extras", ["Two", "One"])));
-        check(At(reversed, "chara/x/extra.tex", folder) == "two/extra.tex",
+        check(At(reversed, "chara/x/extra.tex", folder) == "one/extra.tex",
             "the options of a Multi group count in the group's order, not the order they were picked in");
+
+        var two = Option("Two", ("chara/x/extra.tex", "two/extra.tex"));
+        two["Priority"] = 5;
+        var ranked = Mod(dir, "multi-ranked", Files(), [
+            Group("Extras", "Multi", 0, Option("One", ("chara/x/extra.tex", "one/extra.tex")), two)],
+            "one/extra.tex", "two/extra.tex");
+        check(At(ModOptionGroups.EffectiveFiles(ranked, Picks(("Extras", ["One", "Two"]))), "chara/x/extra.tex", ranked) == "two/extra.tex",
+            "in a Multi group the option of higher priority wins, wherever it is listed");
         var empty = ModOptionGroups.EffectiveFiles(folder, Picks(("Extras", [])));
         check(At(empty, "chara/x/extra.tex", folder) == "def/extra.tex" && empty.Count == 1,
             "a Multi group with nothing picked leaves the default mapping");

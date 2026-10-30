@@ -202,6 +202,23 @@ internal static partial class PropModelSources
     internal static bool MaterialUnsavable(TimelinePropSource source)
         => source.Files.Keys.Any(path => path.Contains("/material/", StringComparison.Ordinal) && !AnimationDependencies.SafeGamePath(path));
 
+    /// <summary>The status text for a model naming a material neither the mod nor the game has: every save of the prop would fail.</summary>
+    internal static string MissingMaterial(string name) => $"This model's material {name} is in neither the mod nor the game.";
+
+    /// <summary>
+    /// Why <paramref name="source"/> can't be placed: a material name a save refuses (<see cref="MaterialUnsavable"/>), or a
+    /// material the game is to give that it doesn't have (<see cref="MissingMaterial"/>); null when it can be.
+    /// </summary>
+    internal static string? PickProblem(TimelinePropSource source, Func<string, bool> gameExists)
+    {
+        if (MaterialUnsavable(source))
+            return UnsavableMaterial;
+        foreach (var (path, from) in source.Files)
+            if (path.EndsWith(".mtrl", StringComparison.Ordinal) && from.StartsWith("game:", StringComparison.Ordinal) && !gameExists(from[5..]))
+                return MissingMaterial(path[(path.LastIndexOf('/') + 1)..]);
+        return null;
+    }
+
     /// <summary>
     /// The private bodies <paramref name="doc"/> uses: each prop source's set and body, the model and body of each summon
     /// with a source, and any summon on a private body (b9000..b9999) without one, such as a prop from a mod an earlier
@@ -364,15 +381,18 @@ internal static partial class PropModelSources
                 var stored = Normalise(texture.StoredPath);
                 if (textures.ContainsKey(stored))
                     continue;
-                var key = PrivateTexturePath(target, stored, owners);
-                owners[key] = stored;
-                textures[stored] = key;
                 var dx11 = Normalise(texture.Dx11Path);
+                var twin = dx11 != stored;
+                var key = PrivateTexturePath(target, stored, owners, twin);
+                owners[key] = stored;
+                if (twin)
+                    owners[PathRules.Dx11TexturePath(key, 0x8000)] = stored;
+                textures[stored] = key;
                 var source = TextureSource([stored, dx11], effective, gameExists);
                 if (source is null)
                     continue;
                 files[key] = source;
-                if (dx11 != stored)
+                if (twin)
                     files[PathRules.Dx11TexturePath(key, 0x8000)] = source;
             }
         }
@@ -393,9 +413,10 @@ internal static partial class PropModelSources
     /// The private path of texture <paramref name="stored"/> in body folder <paramref name="target"/>:
     /// <c>texture/&lt;file name&gt;</c>, each character of its stem other than a letter, digit, <c>_</c>, <c>.</c> or
     /// <c>-</c> made <c>_</c> so a save takes it, with <c>_2</c>, <c>_3</c>, ... before the extension while another
-    /// source texture already holds the name (<paramref name="owners"/>: private path to the source it was given to).
+    /// source texture already holds the name (<paramref name="owners"/>: private path to the source it was given to), or
+    /// with <paramref name="dx11Copy"/> its <c>--</c> name, which the texture's DX11 copy takes too.
     /// </summary>
-    internal static string PrivateTexturePath(string target, string stored, IReadOnlyDictionary<string, string> owners)
+    internal static string PrivateTexturePath(string target, string stored, IReadOnlyDictionary<string, string> owners, bool dx11Copy = false)
     {
         var file = stored[(stored.LastIndexOf('/') + 1)..];
         var dot = file.LastIndexOf('.');
@@ -403,7 +424,8 @@ internal static partial class PropModelSources
         stem = string.Concat(stem.Select(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.' or '-' ? c : '_'));
         var name = stem + extension;
         var path = $"{target}texture/{name}";
-        for (var n = 2; owners.TryGetValue(path, out var owner) && owner != stored; ++n)
+        bool Taken(string at) => owners.TryGetValue(at, out var owner) && owner != stored;
+        for (var n = 2; Taken(path) || dx11Copy && Taken(PathRules.Dx11TexturePath(path, 0x8000)); ++n)
             path = $"{target}texture/{stem}_{n}{extension}";
         return path;
     }
