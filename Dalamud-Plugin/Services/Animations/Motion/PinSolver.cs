@@ -226,13 +226,13 @@ internal static class PinSolver
                 local[chain.Mid] = midLocal;
                 Refresh(skeleton, local, model, chain.Root);
             }
-            return Bend(skeleton, local, model, chain, a, direction, target, plane, hinge, bent, roll);
+            return Bend(skeleton, local, model, chain, a, direction, target, plane, hinge, bent, roll, bendNormal);
         }
         Try(normal, 0, false);
-        if (Forwardness(model, chain, bendNormal, l1, l2) < 0)
+        if (Backward(model, chain, bendNormal, l1, l2))
         {
             Try(-normal, 0, true);
-            if (Forwardness(model, chain, bendNormal, l1, l2) < 0)
+            if (Backward(model, chain, bendNormal, l1, l2))
             {
                 var mirrored = Try(-normal, keep, true);
                 if (Try(normal, keep, true) > mirrored)
@@ -250,10 +250,11 @@ internal static class PinSolver
     /// <paramref name="normal"/>'s plane (model space), rolls so the pose's <paramref name="hinge"/> (upper bone space, bent
     /// <paramref name="bent"/> degrees) lies across that plane, and the lower bone points the end at the target. The roll goes the
     /// least way with <paramref name="roll"/> 0; with 1 or -1 it lays the hinge along the plane's normal or against it, however far
-    /// that is. Returns the roll's full angle, in radians.
+    /// that is, and a pose about straight lays <paramref name="reference"/> (the plane the solve meant, upper bone space) along it.
+    /// Returns the roll's full angle, in radians.
     /// </summary>
     private static float Bend(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, PinChain chain, Vector3 a, Vector3 direction,
-        Vector3 target, Vector3 normal, Vector3 hinge, float bent, int roll)
+        Vector3 target, Vector3 normal, Vector3 hinge, float bent, int roll, Vector3 reference)
     {
         var l1 = Vector3.Distance(model[chain.Mid].Position, a);
         var l2 = Vector3.Distance(model[chain.End].Position, model[chain.Mid].Position);
@@ -267,24 +268,28 @@ internal static class PinSolver
         // The upper bone rolls about itself, the least way, until the hinge lies across the new bend plane: the mid joint then only
         // bends, and a solve made again from its own result (a drag) never builds up a roll there.
         var plane = Vector3.Cross(knee - a, target - knee);
-        var carried = Vector3.Transform(hinge, Quaternion.Normalize(model[chain.Root].Rotation));
+        var rootRotation = Quaternion.Normalize(model[chain.Root].Rotation);
+        var carried = Vector3.Transform(hinge, rootRotation);
         var angle = 0f;
-        if (plane.Length() > Tiny && carried.Length() > Tiny && bent > 0)
+        if (plane.Length() > Tiny && roll == 0 && carried.Length() > Tiny && bent > 0)
         {
-            var share = AnimationPoseRules.SmoothStep(Math.Clamp(bent / SettleDegrees, 0, 1));
-            if (roll == 0)
-            {
-                var least = Between(carried, Vector3.Dot(carried, plane) < 0 ? -plane : plane);
-                angle = 2 * MathF.Acos(Math.Clamp(Math.Abs(least.W), 0, 1));
-                Rotate(skeleton, local, model, chain.Root, MotionEvaluator.Pow(least, share));
-            }
-            else
+            var least = Between(carried, Vector3.Dot(carried, plane) < 0 ? -plane : plane);
+            angle = 2 * MathF.Acos(Math.Clamp(Math.Abs(least.W), 0, 1));
+            Rotate(skeleton, local, model, chain.Root, MotionEvaluator.Pow(least, AnimationPoseRules.SmoothStep(Math.Clamp(bent / SettleDegrees, 0, 1))));
+        }
+        else if (plane.Length() > Tiny && roll != 0)
+        {
+            // A pose about straight has no hinge of its own: the plane the solve meant stands in for it, laid along the new one.
+            var own = bent >= SettleDegrees && carried.Length() > Tiny;
+            var along = Vector3.Normalize(knee - a);
+            var from = own ? carried : Vector3.Transform(reference, rootRotation);
+            from -= Vector3.Dot(from, along) * along;
+            if (from.Length() > Tiny)
             {
                 // About the upper bone itself, which both lie across, so a half turn has no other axis to pick.
-                var along = Vector3.Normalize(knee - a);
-                var to = roll * plane;
-                angle = MathF.Atan2(Vector3.Dot(Vector3.Cross(carried, to), along), Vector3.Dot(carried, to));
-                Rotate(skeleton, local, model, chain.Root, Quaternion.CreateFromAxisAngle(along, angle * share));
+                var to = (own ? roll : 1) * plane;
+                angle = MathF.Atan2(Vector3.Dot(Vector3.Cross(from, to), along), Vector3.Dot(from, to));
+                Rotate(skeleton, local, model, chain.Root, Quaternion.CreateFromAxisAngle(along, angle));
                 angle = MathF.Abs(angle);
             }
         }
@@ -294,17 +299,17 @@ internal static class PinSolver
     }
 
     /// <summary>
-    /// How far the limb's mid joint bends the way of <paramref name="normal"/> (the plane the solve meant, in the upper bone's own
-    /// space): the cosine between them, below 0 when it bends the other way. 0 for a limb about straight, which bends neither way.
+    /// Whether the limb's mid joint bends against <paramref name="normal"/> (the plane the solve meant, in the upper bone's own
+    /// space), or square across it, which bends it sideways. Never for a limb about straight, which bends neither way.
     /// </summary>
-    private static float Forwardness(MotionTransform[] model, PinChain chain, Vector3 normal, float l1, float l2)
+    private static bool Backward(MotionTransform[] model, PinChain chain, Vector3 normal, float l1, float l2)
     {
         var upper = model[chain.Mid].Position - model[chain.Root].Position;
         var lower = model[chain.End].Position - model[chain.Mid].Position;
         var own = Vector3.Transform(Vector3.Cross(upper, lower), Quaternion.Inverse(Quaternion.Normalize(model[chain.Root].Rotation)));
         if (normal.Length() < Tiny || own.Length() <= SteadyBend * l1 * l2)
-            return 0;
-        return Vector3.Dot(Vector3.Normalize(own), Vector3.Normalize(normal));
+            return false;
+        return Vector3.Dot(Vector3.Normalize(own), Vector3.Normalize(normal)) < 1e-3f;
     }
 
     /// <summary>

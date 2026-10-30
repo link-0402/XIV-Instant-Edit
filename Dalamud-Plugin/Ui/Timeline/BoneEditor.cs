@@ -743,8 +743,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         else if (drag && TimelineWindowViews.HeadDrag(layer, posing.Selection.Primary, skeleton))
             Widgets.HintWrapped(TimelineWindowViews.HeadDragHint(skeleton, posing.Selection.Bones));
         // A hand's or a foot's drag can turn the elbow or knee about the line to the aim; the drag keys the turned pose.
-        if (drag && posing.Selection.Primary is { } end &&
-            PinChains.Chain(skeleton, posing.BoneTree(skeleton).Index, new MotionPin(end)).Shape == PinChainShape.Limb)
+        if (drag && posing.Selection.Primary is { } end && posing.BoneTree(skeleton).Index is var bones && bones.ContainsKey(end) &&
+            PinChains.Chain(skeleton, bones, new MotionPin(end)).Shape == PinChainShape.Limb)
         {
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, "Bend");

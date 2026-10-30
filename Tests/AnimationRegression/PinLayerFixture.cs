@@ -827,10 +827,18 @@ internal static class PinLayerFixture
     private static void Limits(Action<bool, string> check)
     {
         var body = Body();
-        // Aims all round the root, near and far: the knee and the elbow only ever bend forward, and the end still reaches.
-        foreach (var end in new[] { PinChains.FootL, "j_te_l" })
+        // Aims all round the root, near and far: the knee and the elbow only ever bend forward, and the end still reaches. From the
+        // rest pose's bend, and from a limb the motion has straight or nearly so, where the roll eases out and only the mirror helps.
+        foreach (var (end, start) in new[] { (PinChains.FootL, 20f), (PinChains.FootL, 0), (PinChains.FootL, 2), ("j_te_l", 20), ("j_te_l", 0), ("j_te_l", 2) })
         {
             var chain = PinChains.Chain(body, new(end));
+            (MotionTransform[], MotionTransform[]) Pose()
+            {
+                var l = Rest();
+                if (start != 20)
+                    l[chain.Mid] = l[chain.Mid] with { Rotation = Q(end == PinChains.FootL ? Vector3.UnitX : Vector3.UnitY, start) };
+                return (l, MotionEvaluator.ModelSpace(body, l));
+            }
             var normal = PinSolver.RestNormal(body, chain);
             var rest = Model();
             var reach = Vector3.Distance(rest[chain.Mid].Position, rest[chain.Root].Position) + Vector3.Distance(rest[chain.End].Position, rest[chain.Mid].Position);
@@ -852,8 +860,8 @@ internal static class PinLayerFixture
                             reaches &= Vector3.Distance(m[chain.End].Position, aim) < 1e-4f;
                         }
                     }
-            check(backwards.Count == 0, $"{end} bends forward for aims all round its root{(backwards.Count > 0 ? ": backward at " + string.Join(" ", backwards) : "")}");
-            check(reaches, $"{end} reaches aims all round its root");
+            check(backwards.Count == 0, $"{end} bent {start} bends forward for aims all round its root{(backwards.Count > 0 ? ": backward at " + string.Join(" ", backwards) : "")}");
+            check(reaches, $"{end} bent {start} reaches aims all round its root");
         }
 
         var leg = PinChains.Chain(body, new(PinChains.FootL));
