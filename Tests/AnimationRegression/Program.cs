@@ -45,6 +45,7 @@ Scenarios.Run(() => HeadDragFixture.Run(Check, Reject));
 Scenarios.Run(() => FixLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => SwingLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => SmoothMotionFixture.Run(Check, Reject));
+Scenarios.Run(() => LayerWeightFixture.Run(Check, Reject));
 Scenarios.Run(() => FaceEditingFixture.Run(Check, Reject));
 Scenarios.Run(() => CloseLoopFixture.Run(Check, Reject));
 Scenarios.Run(() => MotionKeyMarkersFixture.Run(Check, Reject));

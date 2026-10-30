@@ -235,6 +235,12 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 }
 
 /// <summary>
+/// A point of a layer's weight over time: at <paramref name="Frame"/> (timeline frames) the layer applies
+/// <paramref name="Value"/> (0 to 1) of its strength, easing on a smoothstep to the next point.
+/// </summary>
+internal sealed record MotionWeight(int Frame, float Value);
+
+/// <summary>
 /// One bone layer of an animation. It changes the motion from <paramref name="Start"/> to
 /// <paramref name="End"/> (timeline frames), easing in over <paramref name="FadeIn"/> frames and
 /// out over <paramref name="FadeOut"/>. <paramref name="Amount"/> is an offset's strength, an
@@ -257,6 +263,8 @@ internal sealed record MotionKey(int Frame, ImmutableDictionary<string, BoneTran
 /// <param name="Swing">For a swing layer, how its bones swing; its amount is the swing's strength. Other kinds have none.</param>
 /// <param name="Window">For a smooth motion layer, the frames each frame is averaged over; its amount is the blend toward
 /// that average. 0 on every other kind, and for journals written before it.</param>
+/// <param name="Weights">Its weight over time, by frame inside the layer (<see cref="MotionEvaluator.WeightAt"/>), times its
+/// fades; empty is full weight, as for journals written before it.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -278,9 +286,11 @@ internal sealed record MotionLayer(
     MotionIdle? Idle = null,
     MotionMarkers? Markers = null,
     MotionSwing? Swing = null,
-    int Window = 0)
+    int Window = 0,
+    ImmutableArray<MotionWeight> Weights = default)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;
     public ImmutableArray<MotionPin> Pins { get; init; } = Pins.IsDefault ? [] : Pins;
+    public ImmutableArray<MotionWeight> Weights { get; init; } = Weights.IsDefault ? [] : Weights;
 }

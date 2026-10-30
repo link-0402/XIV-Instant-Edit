@@ -26,8 +26,11 @@ internal static class MotionEvaluator
     // Sample frames come from float seconds; a layer reaching the clip's end must still cover its last sample.
     internal const float FrameTolerance = 1e-3f;
 
-    /// <summary>Whether <paramref name="layer"/> changes anything when applied.</summary>
-    public static bool Active(MotionLayer layer) => layer.Enabled && layer.Kind switch
+    /// <summary>The most weight points a layer holds.</summary>
+    public const int MaxWeights = 256;
+
+    /// <summary>Whether <paramref name="layer"/> changes anything when applied. Weight points all at 0 leave it out.</summary>
+    public static bool Active(MotionLayer layer) => layer.Enabled && (layer.Weights.IsEmpty || layer.Weights.Any(point => point.Value > 0)) && layer.Kind switch
     {
         MotionLayerKind.Amplitude => Math.Abs(layer.Amount - 1) > 1e-6f &&
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
@@ -53,7 +56,9 @@ internal static class MotionEvaluator
 
     /// <summary>
     /// How much of <paramref name="layer"/> applies at <paramref name="frame"/>, before its amount:
-    /// 0 outside its range, rising over its fade in and falling over its fade out on a smoothstep.
+    /// 0 outside its range, rising over its fade in and falling over its fade out on a smoothstep, times its
+    /// weight points there (<see cref="WeightAt"/>). Every kind takes its strength from this, through
+    /// <see cref="Weight"/> or directly.
     /// Past a layer reaching the end of a motion <paramref name="end"/> frames long (<see cref="ReachesEnd"/>),
     /// its last frame's weight holds.
     /// </summary>
@@ -69,7 +74,49 @@ internal static class MotionEvaluator
             weight = AnimationPoseRules.SmoothStep((frame - layer.Start) / layer.FadeIn);
         if (layer.FadeOut > 0 && frame > layer.End - layer.FadeOut)
             weight = Math.Min(weight, AnimationPoseRules.SmoothStep((layer.End - frame) / layer.FadeOut));
-        return Math.Clamp(weight, 0, 1);
+        weight = Math.Clamp(weight, 0, 1);
+        return layer.Weights.IsEmpty || weight <= 0 ? weight : weight * WeightAt(layer, frame);
+    }
+
+    /// <summary>
+    /// The layer's own weight at <paramref name="frame"/> from its points: 1 without any, the first point's value
+    /// before it and the last's after it, and between two points a smoothstep from one value to the next.
+    /// </summary>
+    public static float WeightAt(MotionLayer layer, float frame)
+    {
+        var points = layer.Weights;
+        if (points.IsEmpty)
+            return 1;
+        if (!(frame > points[0].Frame))
+            return points[0].Value;
+        if (frame >= points[^1].Frame)
+            return points[^1].Value;
+        // points[low].Frame <= frame < points[high].Frame
+        int low = 0, high = points.Length - 1;
+        while (high - low > 1)
+        {
+            var middle = (low + high) >>> 1;
+            if (points[middle].Frame <= frame) low = middle;
+            else high = middle;
+        }
+        var (from, to) = (points[low], points[high]);
+        var t = AnimationPoseRules.SmoothStep((frame - from.Frame) / (to.Frame - from.Frame));
+        return Math.Clamp(from.Value + (to.Value - from.Value) * t, 0, 1);
+    }
+
+    /// <summary>
+    /// <paramref name="points"/> as <paramref name="layer"/> may hold them: inside its frames, by frame, the last given for a
+    /// frame kept, values within 0 to 1 and at most <see cref="MaxWeights"/>. The layer's own points when they already are.
+    /// Edits that change a layer's frames pass its points through this, so a layer never holds points it can't.
+    /// </summary>
+    public static ImmutableArray<MotionWeight> FitWeights(MotionLayer layer, IEnumerable<MotionWeight> points)
+    {
+        var fitted = new SortedDictionary<int, float>();
+        foreach (var point in points)
+            if (point != null && point.Frame >= layer.Start && point.Frame <= layer.End && float.IsFinite(point.Value))
+                fitted[point.Frame] = Math.Clamp(point.Value, 0, 1);
+        ImmutableArray<MotionWeight> kept = [.. fitted.Take(MaxWeights).Select(pair => new MotionWeight(pair.Key, pair.Value))];
+        return kept.SequenceEqual(layer.Weights) ? layer.Weights : kept;
     }
 
     /// <summary>
@@ -84,7 +131,8 @@ internal static class MotionEvaluator
 
     /// <summary>
     /// How strongly an offset or pose layer applies its keys at <paramref name="frame"/>: an offset's strength
-    /// (its amount, up to <see cref="MaxAmount"/>), a pose's blend toward the keyed pose or a pin's pull, through its fades.
+    /// (its amount, up to <see cref="MaxAmount"/>), a pose's blend toward the keyed pose or a pin's pull, through its fades and
+    /// weight points (<see cref="Fade"/>).
     /// </summary>
     public static float Weight(MotionLayer layer, float frame, float end = 0)
     {
@@ -142,6 +190,20 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} has a window out of range.");
         if (layer.Kind != MotionLayerKind.Smooth && layer.Window != 0)
             throw new InvalidDataException($"{name} can't have a window.");
+        if (layer.Weights.Length > MaxWeights)
+            throw new InvalidDataException($"{name} has too many weight points.");
+        // A match or a close loop is anchored to the clip's ends, its stored frames only a length: its points would have no place.
+        if (!layer.Weights.IsEmpty && layer.Fix?.Kind is MotionFixKind.MatchLoop or MotionFixKind.CloseLoop)
+            throw new InvalidDataException($"{name} can't have weight points.");
+        var before = int.MinValue;
+        foreach (var point in layer.Weights)
+        {
+            if (point == null || point.Frame <= before || point.Frame < layer.Start || point.Frame > layer.End)
+                throw new InvalidDataException($"{name} has weight points out of order or outside it.");
+            before = point.Frame;
+            if (!float.IsFinite(point.Value) || point.Value is < 0 or > 1)
+                throw new InvalidDataException($"{name} has a weight out of range.");
+        }
         if (layer.Idle is { } idle)
             MotionIdles.Validate(idle, name);
         if (layer.Fix is { Kind: MotionFixKind.MatchLoop } match)

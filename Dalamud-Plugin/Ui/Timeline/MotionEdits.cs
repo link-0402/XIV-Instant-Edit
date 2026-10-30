@@ -422,8 +422,76 @@ internal static class MotionEdits
         return Same(old, next) ? doc : doc with { Motion = doc.Motion.SetItem(index, next) };
     }
 
+    /// <summary>Whether <paramref name="layer"/> takes weight points: every layer but a match or a close loop, whose stored frames are only a length.</summary>
+    public static bool TakesWeights(MotionLayer layer) => !IsAnchored(layer);
+
+    /// <summary>The index of the layer's weight point at <paramref name="frame"/>, or -1.</summary>
+    public static int WeightIndex(MotionLayer layer, int frame)
+    {
+        for (var index = 0; index < layer.Weights.Length; index++)
+            if (layer.Weights[index].Frame == frame)
+                return index;
+        return -1;
+    }
+
     /// <summary>
-    /// Moves a layer and its keys by <paramref name="delta"/> frames, as far as they all stay on the
+    /// Sets the layer's weight at <paramref name="frame"/> (kept inside the layer) to <paramref name="value"/> (kept within 0
+    /// to 1), adding a point there or changing the one there. Unchanged for a layer that takes none, or a new point past
+    /// <see cref="MotionEvaluator.MaxWeights"/>.
+    /// </summary>
+    public static TimelineDocument SetWeight(TimelineDocument doc, string key, int frame, float value)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || !float.IsFinite(value) || doc.Motion[index] is not { } layer || !TakesWeights(layer))
+            return doc;
+        frame = Math.Clamp(frame, layer.Start, layer.End);
+        var point = new MotionWeight(frame, Math.Clamp(value, 0, 1));
+        var at = WeightIndex(layer, frame);
+        if (at >= 0 && layer.Weights[at] == point || at < 0 && layer.Weights.Length >= MotionEvaluator.MaxWeights)
+            return doc;
+        var weights = at >= 0 ? layer.Weights.SetItem(at, point) : MotionEvaluator.FitWeights(layer, layer.Weights.Add(point));
+        return doc with { Motion = doc.Motion.SetItem(index, layer with { Weights = weights }) };
+    }
+
+    /// <summary>
+    /// Moves the layer's weight point at <paramref name="frame"/> by <paramref name="delta"/> frames, never onto or past its
+    /// neighbours or out of the layer, and sets its value to <paramref name="value"/> when given. <paramref name="landed"/>
+    /// is where it ends up (its frame when nothing moved).
+    /// </summary>
+    public static TimelineDocument MoveWeight(TimelineDocument doc, string key, int frame, int delta, float? value, out int landed)
+    {
+        landed = frame;
+        var index = IndexOf(doc, key);
+        if (index < 0 || WeightIndex(doc.Motion[index], frame) is not (var at and >= 0))
+            return doc;
+        var layer = doc.Motion[index];
+        var points = layer.Weights;
+        var low = at > 0 ? points[at - 1].Frame + 1 : layer.Start;
+        var high = at < points.Length - 1 ? points[at + 1].Frame - 1 : layer.End;
+        landed = Math.Clamp(frame + delta, low, Math.Max(low, high));
+        var moved = new MotionWeight(landed, value is { } set && float.IsFinite(set) ? Math.Clamp(set, 0, 1) : points[at].Value);
+        return moved == points[at] ? doc : doc with { Motion = doc.Motion.SetItem(index, layer with { Weights = points.SetItem(at, moved) }) };
+    }
+
+    /// <summary>Deletes the layer's weight point at <paramref name="frame"/>.</summary>
+    public static TimelineDocument DeleteWeight(TimelineDocument doc, string key, int frame)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || WeightIndex(doc.Motion[index], frame) is not (var at and >= 0))
+            return doc;
+        var layer = doc.Motion[index];
+        return doc with { Motion = doc.Motion.SetItem(index, layer with { Weights = layer.Weights.RemoveAt(at) }) };
+    }
+
+    /// <summary>Deletes every weight point of the layer, so it applies at full weight again.</summary>
+    public static TimelineDocument ClearWeights(TimelineDocument doc, string key)
+    {
+        var index = IndexOf(doc, key);
+        return index < 0 || doc.Motion[index].Weights.IsEmpty ? doc : doc with { Motion = doc.Motion.SetItem(index, doc.Motion[index] with { Weights = [] }) };
+    }
+
+    /// <summary>
+    /// Moves a layer, its keys and its weight points by <paramref name="delta"/> frames, as far as they all stay on the
     /// timeline and the layer's end stays within the clip (or where it already was past it). A match or a
     /// close loop stays where its anchor puts it.
     /// </summary>
@@ -447,6 +515,7 @@ internal static class MotionEdits
         {
             Start = layer.Start + delta, End = layer.End + delta,
             Keys = [.. layer.Keys.Select(item => item with { Frame = item.Frame + delta })],
+            Weights = [.. layer.Weights.Select(point => point with { Frame = point.Frame + delta })],
         };
         return doc with { Motion = doc.Motion.SetItem(index, moved) };
     }
@@ -1234,6 +1303,7 @@ internal static class MotionEdits
     private static int Limit(TimelineDocument doc, MotionLayer layer) =>
         Math.Min(TimelineDocument.MaxFrames, Math.Max(Math.Max(doc.Length, TimelineDocument.MinLength), layer.End));
 
+    /// <summary>The layer kept valid: on the timeline, a frame long or more, fades that fit, an amount in range, a short name, and only the weight points inside it.</summary>
     private static MotionLayer Normalize(MotionLayer layer)
     {
         var start = Math.Clamp(layer.Start, 0, TimelineDocument.MaxFrames - 1);
@@ -1243,20 +1313,23 @@ internal static class MotionEdits
         var fadeOut = Math.Clamp(layer.FadeOut, 0, length - fadeIn);
         var amount = float.IsFinite(layer.Amount) ? Math.Clamp(layer.Amount, 0, MaxAmount(layer.Kind)) : 1;
         var name = layer.Name.Trim();
-        return layer with
+        var normalized = layer with
         {
             Start = start, End = end, FadeIn = fadeIn, FadeOut = fadeOut, Amount = amount,
             Components = layer.Components & PoseComponents.All,
             Name = name.Length > MaxName ? name[..MaxName] : name,
         };
+        // Points a change of start or end leaves outside go with it, in the same undo step.
+        return normalized with { Weights = TakesWeights(normalized) ? MotionEvaluator.FitWeights(normalized, normalized.Weights) : [] };
     }
 
-    /// <summary>Field-by-field equality, keys, bones, pins and the fix's loop pose compared by content.</summary>
+    /// <summary>Field-by-field equality, keys, bones, pins, weight points and the fix's loop pose compared by content.</summary>
     public static bool Same(MotionLayer a, MotionLayer b) =>
         ReferenceEquals(a, b) ||
         a.Key == b.Key && a.Kind == b.Kind && a.Name == b.Name && a.Start == b.Start && a.End == b.End && a.FadeIn == b.FadeIn &&
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
         a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
+        a.Weights.SequenceEqual(b.Weights) &&
         (a.Fix == null ? b.Fix == null
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade && a.Fix.Axes == b.Fix.Axes && a.Fix.Placement == b.Fix.Placement &&
               SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&

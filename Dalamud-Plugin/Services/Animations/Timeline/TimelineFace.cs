@@ -86,10 +86,15 @@ internal sealed record TimelineFace(int Anchor, int SourceFrames, int Frames)
                     keys.Insert(0, held);
             }
             var fadeIn = Math.Clamp(layer.FadeIn - (start - (layer.Start - anchor)), 0, end - start);
-            face.Add(layer with
+            // Weight points move back with the keys; those before the face's first frame become one point there with the weight it had.
+            var weights = layer.Weights.Select(point => point with { Frame = point.Frame - anchor }).Where(point => point.Frame >= 0).ToList();
+            if (layer.Weights.Any(point => point.Frame < anchor) && !weights.Any(point => point.Frame == 0))
+                weights.Insert(0, new MotionWeight(0, MotionEvaluator.WeightAt(layer, anchor)));
+            var moved = layer with
             {
                 Start = start, End = end, FadeIn = fadeIn, FadeOut = Math.Min(layer.FadeOut, end - start - fadeIn), Keys = [.. keys],
-            });
+            };
+            face.Add(moved with { Weights = MotionEvaluator.FitWeights(moved, weights) });
         }
         return face.ToImmutable();
     }

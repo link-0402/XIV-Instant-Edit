@@ -407,7 +407,9 @@ internal static class CutEdits
                 int Shift(int frame, bool end) => frame < y || end && frame == y ? frame : frame < z || end && frame == z ? y : frame - gap;
                 var keys = layer.Keys.Where(k => k.Frame < y || k.Frame >= z).Select(k => k.Frame >= z ? k with { Frame = k.Frame - gap } : k).ToImmutableArray();
                 droppedKeys += layer.Keys.Length - keys.Length;
-                var next = Fit(layer with { Start = Shift(layer.Start, false), End = Shift(layer.End, true), Keys = keys });
+                // Weight points go as keys do: inside the range they go, after it they move back.
+                var weights = layer.Weights.Where(w => w.Frame < y || w.Frame >= z).Select(w => w.Frame >= z ? w with { Frame = w.Frame - gap } : w);
+                var next = Fit(layer with { Start = Shift(layer.Start, false), End = Shift(layer.End, true), Keys = keys }, weights);
                 if (next.End <= next.Start)
                 {
                     layers.RemoveAt(i);
@@ -442,7 +444,7 @@ internal static class CutEdits
                     End = layer.End > at ? layer.End + delta : layer.End,
                     Keys = [.. layer.Keys.Select(k => k.Frame >= at ? k with { Frame = k.Frame + delta } : k)],
                 };
-                layers[i] = next;
+                layers[i] = Fit(next, layer.Weights.Select(w => w.Frame >= at ? w with { Frame = w.Frame + delta } : w));
             }
         }
         removed = new CutRemoval(deletedEvents, droppedKeys);
@@ -505,7 +507,9 @@ internal static class CutEdits
                     keys.Add(moved);
             }
             var layerStart = Inside(layer.Start);
-            var next = Fit(layer with { Start = layerStart, End = Math.Max(Map(layer.End), layerStart + 1), Keys = keys.ToImmutable() });
+            // Weight points scale as keys do; two landing on one frame keep the later one.
+            var next = Fit(layer with { Start = layerStart, End = Math.Max(Map(layer.End), layerStart + 1), Keys = keys.ToImmutable() },
+                layer.Weights.Select(w => w with { Frame = Inside(w.Frame) }));
             layers[i] = next;
         }
         return doc with { Length = length, Events = events.ToImmutable(), Motion = layers.ToImmutable() };
@@ -703,12 +707,14 @@ internal static class CutEdits
     private static MotionJoin? Clamp(MotionJoin? join) =>
         join == null ? null : join with { Frames = Math.Clamp(join.Frames, 0, MotionJoin.MaxFrames) };
 
-    /// <summary>The layer with its fades fitting its new length.</summary>
-    private static MotionLayer Fit(MotionLayer layer)
+    /// <summary>The layer with its fades fitting its new length and <paramref name="weights"/>, its points at their new frames, inside it.</summary>
+    private static MotionLayer Fit(MotionLayer layer, IEnumerable<MotionWeight> weights)
     {
         var span = Math.Max(0, layer.End - layer.Start);
         var fadeIn = Math.Clamp(layer.FadeIn, 0, span);
         var fadeOut = Math.Clamp(layer.FadeOut, 0, span - fadeIn);
-        return fadeIn == layer.FadeIn && fadeOut == layer.FadeOut ? layer : layer with { FadeIn = fadeIn, FadeOut = fadeOut };
+        var fitted = MotionEvaluator.FitWeights(layer, weights);
+        return fadeIn == layer.FadeIn && fadeOut == layer.FadeOut && fitted == layer.Weights ? layer
+            : layer with { FadeIn = fadeIn, FadeOut = fadeOut, Weights = fitted };
     }
 }
