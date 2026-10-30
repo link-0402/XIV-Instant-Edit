@@ -1161,6 +1161,32 @@ face once at its own length.
   loops and reads about 1 minute, saved as three plays (31000, 31600, 32200) ending at 32800. Not checked: watching
   the face return to neutral (about 19 minutes in; run it with Args wait=true).
 
+## Face editing (pending)
+
+An expression's timeline now opens its face as a clip of the face's own PAP: bone layers key face bones, Live shows
+them in the face slot, and Save writes the face's file (and the expression's timeline when its events or the face's
+timing changed). Edit face on a face event opens that face on its own; Back returns. Faces are Still (one shape) or
+Moving (their own length). Offline: the face model, its timing in the timeline, sources, saves, Edit again by binding,
+holds, the window's gates, the carrier and Live's layers are in the regression suite (FaceEditingFixture, TmbFileFixture,
+EditAgainFixture). Every vanilla expression times its face (0 to 1 over 150 frames, time control on).
+
+- [ ] An unedited face bake of Smile (a layer at Amount 0) passes the bake's validation and samples as the original (0.00°).
+- [ ] Live on Smile's face: a jaw key shows on the face only (slot 2), the held-expression refill is paused, Stop
+  brings back the held expression or the neutral face.
+- [ ] Gizmo dots on face bones line up with the face (open check: the face partial's model space against the body's).
+- [ ] A jaw key on Smile saved into a new mod shows in /smile; Undo last save takes it away.
+- [ ] A mod's smile saved in place; Undo last save restores the mod's file.
+- [ ] Smile made Moving (300 frames) and saved: /smile plays the whole face (the face event is retimed 0 to 300).
+- [ ] Keep on that moving face: it loops at 300 frames and ends neutral.
+- [ ] Neutral face on Smile, keyed and saved: the new face shows, additive like the game's.
+- [ ] Edit face from a body timeline's face event; Back returns with the body's unsaved edits.
+- [ ] Two faces saved one after the other into resident face.pap: reopening the first brings its layers back.
+- [ ] A face opened on its own plays through the carrier (facial/pose/f_umm) in Preview, and Live runs over it.
+- [ ] An expression's face PAP is not size-checked against the character before Preview (PlayProblem runs on the
+  .tmb only): try a face whose skeleton has more bones than the character's and note what the game does.
+- [ ] A body timeline holding Smile without time control, after Smile was made moving: note what the held face does
+  once the moving face has run out.
+
 ## Motion editor live acceptance (pending)
 
 Bone layers (offset, amplitude, pose blend) live in the Timeline window's document and

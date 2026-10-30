@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Text.RegularExpressions;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 
 namespace InstantEdit.Ui.Pose;
@@ -22,7 +23,8 @@ internal sealed record PoseGroup(string Name, Func<string, bool> Contains);
 
 /// <summary>
 /// The Bones window's bone map: Brio's posing artwork and bone positions (GPL-3.0, see
-/// THIRD-PARTY-NOTICES.md). Only the body's pictures: a body clip never moves face bones.
+/// THIRD-PARTY-NOTICES.md). The body's pictures for a clip, a head picture for a face (<see cref="FaceSection"/>):
+/// a body clip never moves face bones.
 /// </summary>
 internal static class PoseMap
 {
@@ -141,11 +143,114 @@ internal static class PoseMap
         new("n_sippo_e", new(1727, 1807)),
     ]);
 
+    // The head pictures: Brio's (GraphicalBonePosePositions.json at Etheirys/Brio fd01093), the face from the front with the
+    // teeth and tongue as handles beside it. Each lists the left side and the middle; the right side mirrors across it.
+
+    /// <summary>A Hyur, Elezen, Lalafell, Roegadyn or Au Ra face, with ears.</summary>
+    public static readonly PoseSection HumanHead = new("human-head", "PoseHeadWithEars", new Vector2(917, 776), true,
+    [
+        new("j_mimi_l", new(102, 330)), new("n_ear_a_l", new(102, 390)), new("n_ear_b_l", new(102, 450)),
+        new("j_f_mayu_l", new(250, 160)), new("j_f_mmayu_l", new(326, 175)), new("j_f_miken_01_l", new(380, 197)), new("j_f_miken_02_l", new(407, 211)),
+        new("j_f_mabup_01_l", new(310, 200)), new("j_f_eye_l", new(310, 250)), new("j_f_mabdn_01_l", new(310, 300)),
+        new("j_f_bero_01", new(750, 540), true), new("j_f_bero_02", new(750, 580), true), new("j_f_bero_03", new(750, 620), true),
+        new("j_f_dmemoto_l", new(350, 450)), new("j_f_hoho_l", new(310, 390)), new("j_f_dhoho_l", new(310, 450)), new("j_f_shoho_l", new(310, 510)),
+        new("j_f_hagukiup", new(310, 620), true), new("j_f_hagukidn", new(310, 660), true),
+        new("j_f_uhana", new(458.5f, 294)), new("j_f_hana_l", new(420.5f, 420)),
+        new("j_f_umlip_01_l", new(390, 490)), new("j_f_umlip_02_l", new(390, 520)), new("j_f_ulip_01_l", new(438, 490)), new("j_f_ulip_02_l", new(438, 520)),
+        new("j_f_dlip_01_l", new(435, 610)), new("j_f_dlip_02_l", new(435, 580)), new("j_f_dmlip_01_l", new(390, 610)), new("j_f_dmlip_02_l", new(390, 580)),
+        new("j_f_dslip_l", new(360, 570)), new("j_f_uslip_l", new(360, 540)),
+        new("j_f_ago", new(458.5f, 700)),
+    ]);
+
+    /// <summary>A Miqo'te face, ears on top.</summary>
+    public static readonly PoseSection MiqoteHead = new("miqote-head", "PoseHeadMiqote", new Vector2(1142, 1106), true,
+    [
+        new("j_mimi_l", new(142, 113)), new("n_ear_a_l", new(77, 183)), new("n_ear_b_l", new(77, 263)),
+        new("j_f_mayu_l", new(311, 427)), new("j_f_mmayu_l", new(400, 457)),
+        new("j_f_hagukiup", new(310, 970), true), new("j_f_hagukidn", new(310, 1010), true),
+        new("j_f_miken_01_l", new(467, 482)), new("j_f_miken_02_l", new(509, 501)),
+        new("j_f_mabup_01_l", new(395, 496)), new("j_f_eye_l", new(395, 548)), new("j_f_mabdn_01_l", new(395, 613)),
+        new("j_f_bero_01", new(880, 870), true), new("j_f_bero_02", new(880, 920), true), new("j_f_bero_03", new(880, 970), true),
+        new("j_f_dmemoto_l", new(440, 780)), new("j_f_hoho_l", new(395, 700)), new("j_f_dhoho_l", new(395, 780)), new("j_f_shoho_l", new(395, 860)),
+        new("j_f_uhana", new(571, 617)), new("j_f_hana_l", new(540, 740)),
+        new("j_f_umlip_01_l", new(500, 820)), new("j_f_umlip_02_l", new(500, 860)), new("j_f_ulip_01_l", new(545, 820)), new("j_f_ulip_02_l", new(545, 863)),
+        new("j_f_dlip_01_l", new(545, 963)), new("j_f_dlip_02_l", new(545, 920)), new("j_f_dmlip_01_l", new(500, 963)), new("j_f_dmlip_02_l", new(500, 920)),
+        new("j_f_ago", new(571, 1043)), new("j_f_uslip_l", new(460, 863)), new("j_f_dslip_l", new(460, 893)),
+    ]);
+
+    /// <summary>A Hrothgar face, with its whiskers and outer lips.</summary>
+    public static readonly PoseSection HrothgarHead = new("hrothgar-head", "PoseHeadHroth", new Vector2(1393, 1383), true,
+    [
+        new("n_ear_a_l", new(145, 180)), new("n_ear_b_l", new(145, 280)),
+        new("j_f_mayu_l", new(340, 453)), new("j_f_mmayu_l", new(445, 480)), new("j_f_miken_01_l", new(535, 520)), new("j_f_miken_02_l", new(587, 547)),
+        new("j_f_mabup_01_l", new(469, 543)),
+        new("j_f_hagukiup", new(310, 1230), true), new("j_f_hagukidn", new(310, 1270), true),
+        new("j_f_eye_l", new(469, 620)), new("j_f_mabdn_01_l", new(469, 690)), new("j_f_hige_l", new(450, 910)),
+        new("j_f_bero_01", new(1100, 1130), true), new("j_f_bero_02", new(1100, 1180), true), new("j_f_bero_03", new(1100, 1230), true),
+        new("j_f_dmemoto_l", new(500, 1050)), new("j_f_hoho_l", new(470, 980)), new("j_f_dhoho_l", new(450, 1050)), new("j_f_shoho_l", new(450, 1110)),
+        new("n_f_ulip_l", new(480, 1075)), new("n_f_lip_l", new(480, 1160)),
+        new("j_f_uhana", new(696.5f, 850)), new("j_f_hana_l", new(656.5f, 920)), new("j_f_uago", new(696.5f, 1040)),
+        new("j_f_ulip_01_l", new(670, 1066)), new("j_f_ulip_02_l", new(670, 1116)), new("j_f_umlip_01_l", new(620, 1066)), new("j_f_umlip_02_l", new(620, 1116)),
+        new("j_f_dlip_01_l", new(670, 1261)), new("j_f_dlip_02_l", new(670, 1201)), new("j_f_dmlip_01_l", new(620, 1261)), new("j_f_dmlip_02_l", new(620, 1201)),
+        new("j_f_uslip_l", new(570, 1126)), new("j_f_dslip_l", new(570, 1176)),
+        new("j_f_ago", new(696.5f, 1317)),
+    ]);
+
+    /// <summary>A Viera face; its ears' dots come from the skeleton (<see cref="FaceSection"/>).</summary>
+    public static readonly PoseSection VieraHead = new("viera-head", "PoseHeadVieraFloppy", new Vector2(1054, 1041), true,
+    [
+        new("n_ear_a_l", new(234, 93)), new("n_ear_b_l", new(234, 160)),
+        new("j_f_mayu_l", new(320, 590)), new("j_f_mmayu_l", new(395, 600)), new("j_f_miken_01_l", new(441, 610)), new("j_f_miken_02_l", new(485, 640)),
+        new("j_f_mabup_01_l", new(400, 645)), new("j_f_eye_l", new(400, 683)),
+        new("j_f_hagukiup", new(310, 960), true), new("j_f_hagukidn", new(310, 1000), true),
+        new("j_f_mabdn_01_l", new(400, 727)),
+        new("j_f_bero_01", new(750, 900), true), new("j_f_bero_02", new(750, 930), true), new("j_f_bero_03", new(750, 960), true),
+        new("j_f_dmemoto_l", new(435, 850)), new("j_f_hoho_l", new(400, 800)), new("j_f_dhoho_l", new(400, 850)), new("j_f_shoho_l", new(400, 900)),
+        new("j_f_uhana", new(527, 714)), new("j_f_hana_l", new(500, 827)),
+        new("j_f_ulip_01_l", new(512, 864)), new("j_f_ulip_02_l", new(512, 894)), new("j_f_umlip_01_l", new(472, 864)), new("j_f_umlip_02_l", new(472, 894)),
+        new("j_f_dlip_01_l", new(512, 975)), new("j_f_dlip_02_l", new(512, 945)), new("j_f_dmlip_01_l", new(472, 975)), new("j_f_dmlip_02_l", new(472, 945)),
+        new("j_f_dslip_l", new(442, 925)), new("j_f_uslip_l", new(442, 885)),
+        new("j_f_ago", new(527, 1010)),
+    ]);
+
+    /// <summary>A Viera's ear pairs (j_zera to j_zerd); each ear type's pair sits in the same spots on the picture.</summary>
+    private static readonly ImmutableArray<char> VieraEarTypes = ['a', 'b', 'c', 'd'];
+
+    public static readonly ImmutableArray<PoseSection> FaceSections = [HumanHead, MiqoteHead, HrothgarHead, VieraHead];
+
     public static readonly ImmutableArray<PoseSection> Sections = [Body, Armor, Hands, Toes, Groin, Tail];
 
-    /// <summary>Every bone a picture shows, both sides.</summary>
+    /// <summary>Every bone a body picture shows, both sides.</summary>
     public static readonly ImmutableHashSet<string> Placed =
         Sections.SelectMany(section => Place(section, false)).Select(spot => spot.Bone).ToImmutableHashSet(StringComparer.Ordinal);
+
+    /// <summary>Every bone a face picture shows, both sides, a Viera's ears too: the dots a face session draws.</summary>
+    public static readonly ImmutableHashSet<string> FacePlaced =
+        FaceSections.SelectMany(section => Place(section, false)).Select(spot => spot.Bone)
+            .Concat(VieraEarTypes.SelectMany(type => new[] { $"j_zer{type}_a_l", $"j_zer{type}_b_l", $"j_zer{type}_a_r", $"j_zer{type}_b_r" }))
+            .ToImmutableHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The picture of a face of <paramref name="race"/> (such as "c0801"): Miqo'te, Hrothgar and Viera have their own,
+    /// every other race the human one. A Viera's shows the ear pair its <paramref name="skeleton"/> has.
+    /// </summary>
+    public static PoseSection FaceSection(string race, SkeletonDescription skeleton)
+    {
+        switch (race)
+        {
+            case "c0701" or "c0801":
+                return MiqoteHead;
+            case "c1501" or "c1601":
+                return HrothgarHead;
+            case "c1701" or "c1801":
+                var names = skeleton.Bones.Select(bone => bone.Name).ToHashSet(StringComparer.Ordinal);
+                return VieraEarTypes.FirstOrDefault(type => names.Contains($"j_zer{type}_a_l") && names.Contains($"j_zer{type}_b_l")) is var type and not '\0'
+                    ? VieraHead with { Spots = [.. VieraHead.Spots, new($"j_zer{type}_a_l", new(400, 155)), new($"j_zer{type}_b_l", new(90, 190))] }
+                    : VieraHead;
+            default:
+                return HumanHead;
+        }
+    }
 
     /// <summary>The embedded image of <paramref name="section"/>, as the plugin's manifest names it.</summary>
     public static string Resource(PoseSection section) => $"InstantEdit.Pose.{section.Image}.png";
@@ -238,6 +343,9 @@ internal static class PoseMap
         return placements;
     }
 
+    /// <summary>Where a face's picture goes in an area of <paramref name="area"/> pixels: as large as fits, at the top.</summary>
+    public static List<PosePlacement> FaceLayout(PoseSection face, Vector2 area) => [Fit(face, Vector2.Zero, area)];
+
     private static PosePlacement Fit(PoseSection section, Vector2 at, Vector2 box)
     {
         var scale = Math.Min(box.X / section.Size.X, box.Y / section.Size.Y);
@@ -247,6 +355,20 @@ internal static class PoseMap
     private static readonly Regex FingerName = new(@"^(?:j|iv)_(?:oya|hito|naka|kusu|ko)_[abc]_([lr])$", RegexOptions.CultureInvariant);
     private static readonly Regex ArmName = new(@"^(?:j_sako|n_hkata|j_ude_[ab]|n_hhiji|n_hte|j_te|iv_nitoukin)_([lr])$", RegexOptions.CultureInvariant);
     private static readonly Regex LegName = new(@"^(?:j_asi_[a-e]|iv_asi_(?:oya|hito|naka|kusu|ko)_[ab])_([lr])$", RegexOptions.CultureInvariant);
+
+    private static bool Starts(string bone, params string[] prefixes) => prefixes.Any(prefix => bone.StartsWith(prefix, StringComparison.Ordinal));
+
+    /// <summary>The groups the Select menu offers on a face, each only when the skeleton has one of its bones.</summary>
+    public static readonly ImmutableArray<PoseGroup> FaceGroups =
+    [
+        new("Brows", bone => Starts(bone, "j_f_mayu", "j_f_mmayu", "j_f_miken", "j_f_dmiken")),
+        new("Eyes and lids", bone => Starts(bone, "j_f_eye", "j_f_mab", "j_f_dmab", "j_f_umab", "j_f_irisprm")),
+        new("Mouth and lips", bone => bone.Contains("lip", StringComparison.Ordinal) && Starts(bone, "j_f_", "n_f_")),
+        new("Jaw and teeth", bone => Starts(bone, "j_f_ago", "j_f_dago", "j_f_uago", "j_f_haguki")),
+        new("Tongue", bone => Starts(bone, "j_f_bero")),
+        new("Cheeks", bone => Starts(bone, "j_f_hoho", "j_f_dhoho", "j_f_shoho", "j_f_dmemoto")),
+        new("Nose", bone => Starts(bone, "j_f_hana", "j_f_uhana", "j_f_memoto")),
+    ];
 
     /// <summary>The groups the Select menu offers, each only when the skeleton has one of its bones.</summary>
     public static readonly ImmutableArray<PoseGroup> Groups =

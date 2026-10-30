@@ -22,6 +22,7 @@ internal static class EditAgainFixture
         Rules(check);
         Captures(check);
         Files(check);
+        Faces(check);
         Undos(check);
         Journals(check);
     }
@@ -164,6 +165,40 @@ internal static class EditAgainFixture
         check(AnimationEditService.EditAgainCapture(startup, [Capture("loop only", 7, Clip()), Capture("with start", 7, Clip(), start)]).Id ==
               "with start",
             "a startup's edit opens with a capture that has the same startup");
+    }
+
+    /// <summary>
+    /// A face's layers come back by the face's own binding, not the whole file: two faces saved one after the other into
+    /// the shared resident face.pap each keep theirs. Back, they go into the face's frames on the timeline again.
+    /// </summary>
+    private static void Faces(Action<bool, string> check)
+    {
+        const string path = "chara/human/c0801/animation/f0002/resident/face.pap";
+        var clip = new AnimationClip(path, "cfxf_smile", 2, 1, 0, "chara/test.sklb");
+        var capture = Capture("face", 7, clip);
+        var smile = Journal(capture, afterHash: "after-smile");
+        smile.Request = smile.Request with
+        {
+            Timeline = smile.Request.Timeline! with { EntryIndex = 2, Face = new AnimationFaceEdit(path, 2, "cfxf_smile", 30, 1, 1, "smile-print") },
+        };
+        smile.Files = [smile.Files[0] with { GamePath = path }];
+        var doc = TimelineFace.Open(new TimelineDocument(150, 150, null, [], 1), 30, 1, 150);
+        AnimationTimelineSource Loaded(string hash, string fingerprint) =>
+            new(capture, false, clip, new AnimationResource(path, "face.pap", hash), [1], 2, [], doc, null) { FileFingerprint = fingerprint };
+        check(AnimationEditService.EditAgainFileProblem(smile, Loaded("after-angry", "smile-print")) == null,
+            "a face's layers come back after another face was saved into the same file");
+        check(AnimationEditService.EditAgainFileProblem(smile, Loaded("after-smile", "changed")) != null,
+            "a face changed since doesn't take them back");
+        var again = AnimationEditService.WithSavedEdit(Loaded("after-angry", "smile-print"), smile.Request.Timeline!, [4], "print");
+        check(again.Document!.Motion.Single().Start == smile.Request.Timeline!.Motion.Single().Start + 30 && again.BaseMotion is [4] &&
+              again.Document.Face == new TimelineFace(30, 1, 1), "back, a face's layers sit at its anchor on the timeline again");
+        var expression = Loaded("after-angry", "smile-print") is var face
+            ? new AnimationTimelineSource(capture, false, clip, new AnimationResource("chara/action/facial/pose/smile.tmb", "smile.tmb", "tmb"), [], -1, [],
+                doc, null) { Face = face with { Document = new TimelineDocument(1, 1, null, [], 1) } }
+            : null!;
+        var expressionAgain = AnimationEditService.WithSavedEdit(expression, smile.Request.Timeline!, [4], "print");
+        check(AnimationEditService.EditAgainFileProblem(smile, expression) == null && expressionAgain.Face!.BaseMotion is [4] && expressionAgain.BaseMotion == null,
+            "an expression's face takes its layers back on the face it plays");
     }
 
     private static void Files(Action<bool, string> check)

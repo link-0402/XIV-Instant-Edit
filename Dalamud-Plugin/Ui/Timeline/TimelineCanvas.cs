@@ -69,7 +69,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         current.SnapTolerance = Theme.Scaled(8);
         current.SetWidth(Math.Max(1, area.X - legend));
         // Only a clip the game loops has a seam to blend or fix.
-        current.Loops = session.Source is { } loaded && session.Fresh(loaded).Clip.IsLoop && !current.Document.Expression;
+        current.Loops = session.Source is { } loaded && session.Fresh(loaded).Clip.IsLoop && current.Document.HasClip;
         var clip = TimelineClipBand.Height(current.Document, row);
         ClampScroll(current, row, ruler + clip, area.Y);
         var geometry = new TimelineGeometry(legend, ruler, row, Theme.Scaled(5), Theme.Scaled(9), scrollY, Theme.Scaled(18), clip);
@@ -718,19 +718,23 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         }
         if (menuHit.Part == TimelinePart.MotionLane || menuHit.Part == TimelinePart.Legend && current.Layout.IsMotionRow(menuHit.Row))
         {
-            foreach (var kind in TimelineWindowViews.LayerKinds)
+            foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
             {
                 if (ImGui.MenuItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer", "", false, !readOnly))
                     AddLayer(current, kind);
                 if (ImGui.IsItemHovered())
                     ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
             }
-            var skeleton = session.EditingSkeleton();
-            var feet = TimelineWindowViews.CanPinFeet(skeleton);
-            if (ImGui.MenuItem(TimelineWindowViews.PinFeetName, "", false, !readOnly && feet))
-                current.AddPinFeet(skeleton);
-            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
+            // A face has no feet to pin.
+            if (current.Document.Face == null)
+            {
+                var skeleton = session.EditingSkeleton();
+                var feet = TimelineWindowViews.CanPinFeet(skeleton);
+                if (ImGui.MenuItem(TimelineWindowViews.PinFeetName, "", false, !readOnly && feet))
+                    current.AddPinFeet(skeleton);
+                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
+            }
             session.LoopPose.DrawAddItems(current, readOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
             ImGui.Separator();
             if (ImGui.MenuItem("Copy all layers", "", false, !current.Document.Motion.IsEmpty))

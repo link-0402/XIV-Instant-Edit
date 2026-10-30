@@ -59,6 +59,12 @@ internal static class MotionHold
     }
 
     /// <summary>
+    /// The rest pose of <paramref name="playing"/>'s skeleton, each bone at its reference: a face's neutral face, which
+    /// an additive face stores as no change at all.
+    /// </summary>
+    public static MotionTransform[] Rest(MotionClip playing) => [.. playing.Skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference))];
+
+    /// <summary>
     /// <paramref name="donor"/>'s pose at timeline frame <paramref name="frame"/> on <paramref name="playing"/>'s
     /// skeleton, bone by bone by name, such as the game's idle on a skeleton mod's: a bone the donor's skeleton
     /// lacks keeps <paramref name="playing"/>'s own pose at its first frame.

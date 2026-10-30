@@ -51,7 +51,6 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly PropertiesPanel properties;
     private readonly SoundSaveCheck soundSave;
     private readonly SaveFooter saveFooter;
-    private readonly FacePage facePage;
     private readonly RecentEditsPage recentEdits;
     private readonly TimelineLoader loader;
     private readonly LivePosePanel livePose;
@@ -77,6 +76,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private AnimationEditJournal? pendingAgain;
     // The kept edits the clip being read gets back (Restore).
     private TimelineAutosave? pendingRestore;
+    // The timeline Edit face left (Back returns to it) and its unsaved edits, which come back with it; null for none.
+    private (AnimationCapture Capture, bool Startup)? parkedClip;
+    private TimelineAutosave? parkedEdits;
     private bool closeConfirmed;
     private float footerHeight;
     private float propertiesWidth;
@@ -85,6 +87,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private IReadOnlyDictionary<string, int>? framesKnown;
     private AnimationTimelineSource? framesSource;
     private IReadOnlyDictionary<string, int>? framesMerged;
+    private int? framesFace;
 
     internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
         AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, AnimationRecorder recorder, IDataManager data,
@@ -118,7 +121,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         layerPanel = new LayerPanel(session, decode, posing, boneEditor, poseSources, bonesWindow);
         keys = new ShortcutKeys(keyState, framework);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
-        properties = new PropertiesPanel(session, effectPlace, new PropPlaceEditor(session), effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers);
+        properties = new PropertiesPanel(session, effectPlace, new PropPlaceEditor(session), effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers)
+            { OpenFace = OpenFace };
         soundSave = new SoundSaveCheck(session, soundFiles);
         saveFooter = new SaveFooter(session, timelinePreview, decode, effectLooks, soundFiles, soundSave, texts, () => reader.Busy,
             afterUndo =>
@@ -127,10 +131,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
                 Load(source!.Capture, source.Startup, true, afterUndo: afterUndo);
             },
             EditAgain);
-        facePage = new FacePage(session, saveFooter, timelinePreview);
         recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => reader.Busy, EditAgain);
         loader = new TimelineLoader(session, timelinePreview, Open);
-        sidePanel = new SidePanel(session, properties, facePage, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
+        sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         blenderMotion = new BlenderMotionPanel(session, decode);
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion);
@@ -228,7 +231,53 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         GizmoOperation(layer, frame, skeleton, out var reason) == null ? reason : null;
 
     /// <summary> Unsaved edits of an editable timeline. </summary>
-    private bool HasUnsavedChanges => editor is { Dirty: true } && source?.Document != null;
+    // The edits of the timeline Edit face left count too: opening another clip would lose them.
+    private bool HasUnsavedChanges => editor is { Dirty: true } && source?.Document != null || parkedEdits != null;
+
+    /// <summary>
+    /// Edit face: opens face <paramref name="motion"/> in <paramref name="gamePath"/> on its own, for the open clip's
+    /// character. The open timeline waits with its unsaved edits until Back.
+    /// </summary>
+    internal void OpenFace(string gamePath, string motion)
+    {
+        if (animations is not { } service || source is not { Document: not null } current || editor == null || reader.Busy)
+            return;
+        parkedClip = (current.Capture, current.Startup);
+        parkedEdits = editor.Dirty ? autosaver.Snapshot(editor) : null;
+        timelinePreview.Stop();
+        pending = PendingAction.None;
+        pendingOpen = null;
+        pendingAgain = null;
+        pendingRestore = null;
+        autosaver.Error = null;
+        source = null;
+        session.CatalogKey = null;
+        title = TimelineCatalogBuilder.Readable(motion);
+        saveFooter.ForgetMotion();
+        blenderMotion.Forget();
+        session.LoopPose.Drop();
+        reader.StartFace(service, current.Capture, gamePath, motion, timelinePreview.Stopping ?? Task.CompletedTask);
+    }
+
+    /// <summary>Back from Edit face: the timeline it left, with its unsaved edits.</summary>
+    private void Back()
+    {
+        if (parkedClip is not { } clip)
+            return;
+        var edits = parkedEdits;
+        parkedClip = null;
+        parkedEdits = null;
+        if (edits != null)
+            Restore(edits);
+        else
+            Load(clip.Capture, clip.Startup, false);
+    }
+
+    /// <summary>
+    /// Whether Back can run: not while a read runs, nor while the face that is open (<paramref name="open"/>, null when its
+    /// read failed) has unsaved edits (<paramref name="dirty"/>).
+    /// </summary>
+    internal static bool CanGoBack(AnimationTimelineSource? open, bool dirty, bool busy) => !busy && !(dirty && open?.Document != null);
 
     /// <summary>Opens the window as it is: its clip, or with none the loader.</summary>
     internal void Show()
@@ -408,6 +457,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         autosaver.Error = null;
         if (!keepView)
         {
+            // Another clip: the timeline Edit face left is let go (opening asked first when it had edits).
+            parkedClip = null;
+            parkedEdits = null;
             source = null;
             session.CatalogKey = null;
             title = AnimationPresentation.AnimationName(capture, startup);
@@ -456,7 +508,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             livePose.ForgetNote();
         }
         saveFooter.Loaded(loaded, sameClip, again != null);
-        if (restore != null && (loaded.Document == null || loaded.Resource.Hash != restore.FileHash || loaded.BaseHash != restore.BaseHash))
+        if (restore != null && !TimelineAutosaver.Fits(loaded, restore))
         {
             autosaver.Error = "The animation changed since its edits were kept, so they can't come back onto it.";
             restore = null;
@@ -500,19 +552,20 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
     /// <summary>
     /// Facial motions' own lengths: the catalog's, read from the game's face files, with the face an
-    /// expression plays as the collection resolves it, which a mod may have made a moving one.
-    /// The same instance until either changes, so the layout is rebuilt only then.
+    /// expression plays as the collection resolves it, which a mod may have made a moving one, and a face session's face
+    /// at its edited length. The same instance until any of them changes, so the layout is rebuilt only then.
     /// </summary>
-    private IReadOnlyDictionary<string, int> MotionFrames(AnimationTimelineSource current)
+    private IReadOnlyDictionary<string, int> MotionFrames(AnimationTimelineSource current, TimelineDocument document)
     {
         var known = session.Catalog.Data.MotionFrames;
         if (!current.Standalone)
             return known;
-        if (!ReferenceEquals(known, framesKnown) || !ReferenceEquals(current, framesSource) || framesMerged == null)
+        if (!ReferenceEquals(known, framesKnown) || !ReferenceEquals(current, framesSource) || document.Face?.Frames != framesFace || framesMerged == null)
         {
             framesKnown = known;
             framesSource = current;
-            framesMerged = known.SetItems(current.OwnFrames);
+            framesFace = document.Face?.Frames;
+            framesMerged = known.SetItems(current.EditedFrames(document));
         }
         return framesMerged;
     }
@@ -579,7 +632,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         }
         if (session.CatalogKey != null)
             session.Catalog.Request(session.CatalogKey);
-        editor.MotionFrames = MotionFrames(source);
+        editor.MotionFrames = MotionFrames(source, editor.Document);
+        editor.FaceMotion = source.Face?.Clip.Name;
         editor.ResidentMotions = session.Catalog.Data.ResidentMotions;
         editor.MotionPacks = session.Catalog.Data.MotionPacks;
         editor.BoneOrder = session.EditingSkeleton(source) is { } skeleton ? BoneTree(skeleton).Index : null;
@@ -634,6 +688,12 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error,
                 (reader.ErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + readError);
             ImGui.Spacing();
+            // A face Edit face couldn't open: the timeline it was opened from waits with its edits.
+            if (parkedClip != null)
+            {
+                DrawBack(null);
+                ImGui.Spacing();
+            }
         }
         loader.DrawStatus();
         using var tabs = ImRaii.TabBar("##timeline-start");
@@ -655,10 +715,31 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         }
     }
 
+    /// <summary>Back from Edit face to the timeline it left; <paramref name="open"/> is the face open, null when it couldn't be read.</summary>
+    private void DrawBack(AnimationTimelineSource? open)
+    {
+        if (parkedClip is not { } parked)
+            return;
+        var can = CanGoBack(open, editor is { Dirty: true }, reader.Busy);
+        using (ImRaii.Disabled(!can))
+        {
+            if (ImGui.SmallButton("Back##timeline-face-back"))
+                Back();
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(!can && !reader.Busy ? "Save or undo the face's changes first."
+                : $"Back to {AnimationPresentation.AnimationName(parked.Capture, parked.Startup)}.");
+    }
+
     /// <summary> The clip's name and state, the mod it comes from and its length. </summary>
     private void DrawHeader(AnimationTimelineSource current)
     {
-        Widgets.Icon(current.Standalone ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running, Theme.AnimationKind);
+        if (parkedClip != null)
+        {
+            DrawBack(current);
+            ImGui.SameLine(0, Theme.Gap);
+        }
+        Widgets.Icon(current.Standalone || current.Document?.Face != null ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running, Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, title);
@@ -674,7 +755,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, texts.LengthText);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
+            ImGui.SetTooltip(editor.Document.Face != null ? "The length shown. The face's own length is in the toolbar."
+                : editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
                 : current.Standalone ? "The expression's timeline length." : "The clip's length.");
     }
 

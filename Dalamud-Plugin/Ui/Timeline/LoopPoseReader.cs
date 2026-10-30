@@ -105,10 +105,18 @@ internal sealed class LoopPoseReader(TimelineSession session)
     /// <summary>
     /// The Add menus' fix items after Pin feet, drawn by <paramref name="item"/> (a menu item or a button, given its label and
     /// whether it is enabled): Match startup to loop, offered on a startup with a loop, Close loop, offered on a clip the game
-    /// loops, Smooth jitter, Hand shape and Reset root turn.
+    /// loops, Smooth jitter, Hand shape and Reset root turn. A face takes only Smooth jitter.
     /// </summary>
     public void DrawAddItems(TimelineEditor current, bool readOnly, Func<string, bool, bool> item)
     {
+        if (current.Document.Face != null)
+        {
+            if (item(TimelineWindowViews.SmoothJitterName + "###fix-smooth", !readOnly))
+                current.AddFix(new MotionFix(MotionFixKind.SmoothJitter));
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(TimelineWindowViews.SmoothJitterHint);
+            return;
+        }
         var loaded = session.Source;
         var startup = loaded is { Startup: true } && session.Animations != null;
         if (item((Reading ? "Reading the loop" : TimelineWindowViews.MatchLoopName) + "###fix-match", !readOnly && startup && !Reading) && loaded != null)

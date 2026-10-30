@@ -122,13 +122,22 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
 /// <paramref name="Cuts"/> is how the motion was cut (parts, joins, loop seam), applied before the
 /// layers; null keeps it whole, as in journals written before cuts. With cuts,
 /// <paramref name="DurationSeconds"/> always holds the output length.
+/// <paramref name="Face"/> is the face a face session saved (its layers are <paramref name="Motion"/>, in the face's own
+/// frames); null for every other edit, and in journals written before faces.
 /// </summary>
 internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float? DurationSeconds,
     ImmutableArray<MotionLayer> Motion = default, string? MotionBaseHash = null, MotionCuts? Cuts = null,
-    ImmutableDictionary<string, string>? CutSounds = null)
+    ImmutableDictionary<string, string>? CutSounds = null, AnimationFaceEdit? Face = null)
 {
     public ImmutableArray<MotionLayer> Motion { get; init; } = Motion.IsDefault ? [] : Motion;
 }
+/// <summary>
+/// The face a face session saved: its file, its entry and motion name, where it starts on the timeline and its length
+/// before and after, in frames. <paramref name="AfterFingerprint"/> is the saved face's binding: a file many faces share
+/// (resident face.pap) changes with each of their saves, so Edit again finds the face by it, not by the file's hash.
+/// </summary>
+internal sealed record AnimationFaceEdit(string GamePath, int EntryIndex, string Motion, int Anchor, int SourceFrames, int Frames,
+    string AfterFingerprint);
 /// <summary>
 /// One member of an animation family the player can switch between, such as the
 /// standing idles or the ground-sitting set. Most are numbered files like
@@ -146,10 +155,12 @@ internal sealed record AnimationEditResult(Guid Id, bool Success, string Message
 /// its layers apply to: the edits come back only onto the same ones. The document's sound edits travel in
 /// <paramref name="SoundEdits"/>, since JSON can't key a dictionary by <see cref="TimelineSoundKey"/>.
 /// <paramref name="Format"/> is 0 for edits kept by a build from before <see cref="PlacesFormat"/>.
+/// For an expression's face session <paramref name="BaseHash"/> is the face's base and <paramref name="FaceHash"/> the
+/// face's file; null for every other clip, and in edits kept before faces.
 /// </summary>
 internal sealed record TimelineAutosave(AnimationCapture Capture, bool Startup, string FileHash, string? BaseHash,
     TimelineDocument Document, ImmutableArray<(TimelineSoundKey Key, TimelineSoundEdit Edit)> SoundEdits,
-    ImmutableArray<TimelineImport> Imports, DateTime SavedUtc, int Format = 0)
+    ImmutableArray<TimelineImport> Imports, DateTime SavedUtc, int Format = 0, string? FaceHash = null)
 {
     /// <summary>The format whose prop summons keep their places: one without a place was put back where the game has it.</summary>
     public const int PlacesFormat = 1;

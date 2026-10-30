@@ -12,11 +12,15 @@ namespace InstantEdit.Ui.Timeline;
 /// The clip's motion to Blender and back: Send motion to Blender sends it as the timeline plays it now
 /// (cuts and bone layers applied), and Motion from Blender reads the armature's motion back and puts it
 /// in place of the clip's, as one undo step. A still pose takes the clip's place the same way, to start
-/// it from scratch (Add menu). The line under the toolbar says which motion plays.
+/// it from scratch (Add menu), and so do a face's holds (still or moving) and its neutral face. The line
+/// under the toolbar says which motion plays.
 /// </summary>
 internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode decode)
 {
     private const string Menu = "##timeline-blender-menu";
+
+    /// <summary>What a running read makes: a motion from Blender, a still pose, a face's hold or its neutral face.</summary>
+    private enum Hold : byte { Blender, Still, Face, Neutral }
 
     private AnimationDelivery? delivery;
     private Task<string>? sending;
@@ -27,8 +31,8 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
     private CancellationTokenSource? cancel;
     // Cancel was pressed: the read ends at its next check.
     private bool stopping;
-    // The read is a still pose being held, not a motion from Blender.
-    private bool holding;
+    // What the running read makes.
+    private Hold hold;
     private volatile string progress = string.Empty;
     private string? note;
     private bool noteWarns;
@@ -125,6 +129,8 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
             return "Wait for the timeline to finish.";
         if (loaded.Standalone || current.FixedLength)
             return "An expression has no motion.";
+        if (current.Document.Face != null)
+            return "A face starts from Neutral face.";
         if (reading != null)
             return "Wait for the motion being read.";
         if (session.Rebuild != null)
@@ -148,7 +154,7 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         cancel = new CancellationTokenSource();
         var token = cancel.Token;
         stopping = false;
-        holding = true;
+        hold = Hold.Still;
         readingClip = TimelineSession.ClipKey(loaded);
         note = null;
         progress = "Holding the pose";
@@ -159,9 +165,49 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         }, token);
     }
 
+    /// <summary>Why the face's length or its neutral face can't be set now; null when it can.</summary>
+    public string? FaceUnavailable(TimelineEditor current)
+    {
+        if (session.Animations == null || session.Source is not { } loaded || session.ReadOnly)
+            return "Wait for the timeline to finish.";
+        if (current.Document.Face == null || loaded.MotionTarget.Standalone)
+            return loaded.FaceProblem ?? "This timeline has no face.";
+        if (reading != null)
+            return "Wait for the motion being read.";
+        return decode.DecodedPose(loaded) == null ? "The face is still being read." : null;
+    }
+
+    /// <summary>
+    /// A face's motion held for <paramref name="frames"/> frames (1 makes it still): its first frame, without the layers,
+    /// which stay (see <see cref="TimelineEditor.HoldFace"/>).
+    /// </summary>
+    public void HoldFace(TimelineEditor current, int frames) => StartFace(current, Hold.Face, frames, "Holding the face");
+
+    /// <summary>Starts the face from the neutral face, at its length (see <see cref="TimelineEditor.NeutralFace"/>).</summary>
+    public void NeutralFace(TimelineEditor current) => StartFace(current, Hold.Neutral, current.Document.Face?.Frames ?? 1, "Setting the neutral face");
+
+    private void StartFace(TimelineEditor current, Hold kind, int frames, string text)
+    {
+        var loaded = session.Fresh(session.Source!);
+        if (decode.DecodedPose(loaded) is not { } decoded || session.Animations is not { } service)
+            return;
+        // The face's own motion, its first frame and tracks as decoded (not held for the timeline): the layers stay on top of what it becomes.
+        var output = decoded;
+        cancel = new CancellationTokenSource();
+        var token = cancel.Token;
+        stopping = false;
+        hold = kind;
+        readingClip = TimelineSession.ClipKey(loaded);
+        note = null;
+        progress = text;
+        reading = Task.Run(async () => ((MotionReplacement?)(kind == Hold.Neutral
+            ? await service.NeutralFaceAsync(loaded, output, frames, message => progress = message, token)
+            : await service.HoldStillAsync(loaded, output, 0, frames, message => progress = message, token)), false), token);
+    }
+
     private void Read(TimelineEditor current)
     {
-        holding = false;
+        hold = Hold.Blender;
         var loaded = session.Fresh(session.Source!);
         if (decode.DecodedPose(loaded) is not { } decoded || session.Animations is not { } service)
             return;
@@ -214,15 +260,24 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         if (stopped || read.IsCanceled)
             Message("Reading stopped.", false);
         else if (!read.IsCompletedSuccessfully)
-            Message((holding ? "The pose was not held: " : "The motion was not read: ") + TimelineSession.ErrorText(read.Exception), true);
+            Message((hold switch { Hold.Blender => "The motion was not read: ", Hold.Neutral => "The neutral face was not set: ", _ => "The pose was not held: " }) +
+                    TimelineSession.ErrorText(read.Exception), true);
         else if (session.Source is not { } now || TimelineSession.ClipKey(now) != readingClip)
             Message("The clip changed while reading. Read it again.", true);
         else if (read.Result.Motion is not { } replacement)
             Message(TimelineWindowViews.BlenderUnchangedLine(read.Result.ScaleIgnored), false);
-        else if (session.ReadOnly || !(holding ? current.HoldStill(replacement) : current.ReplaceMotion(replacement)))
-            Message(holding ? "The timeline is busy. Try again." : "The timeline is busy. Read it again.", true);
-        else if (holding)
+        else if (session.ReadOnly || !(hold switch
+                 {
+                     Hold.Still => current.HoldStill(replacement),
+                     Hold.Face => current.HoldFace(replacement),
+                     Hold.Neutral => current.NeutralFace(replacement),
+                     _ => current.ReplaceMotion(replacement),
+                 }))
+            Message(hold == Hold.Blender ? "The timeline is busy. Read it again." : "The timeline is busy. Try again.", true);
+        else if (hold == Hold.Still)
             Message("Holding the pose. Key a pose or pose bones in the new pose layer.", false);
+        else if (hold == Hold.Neutral)
+            Message("Neutral face. Key the new face in the pose layer.", false);
     }
 
     private void Message(string text, bool warns)
@@ -254,6 +309,9 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
             return;
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, TimelineWindowViews.BlenderMotionLine(replacement));
+        // A face's hold goes back with Ctrl+Z.
+        if (current.Document.Face != null)
+            return;
         ImGui.SameLine(0, Theme.Gap);
         using (ImRaii.Disabled(session.ReadOnly))
         {

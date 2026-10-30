@@ -305,15 +305,24 @@ internal static class PoseEdits
         return posed[body] with { Position = place };
     }
 
-    /// <summary>Bones a whole-body pose never keys: the skeleton's root nodes, and the face, which a body clip doesn't move.</summary>
-    public static bool Unposed(string bone) =>
-        bone is "n_root" or "n_throw" or "n_hara_noanim_trans" || bone.StartsWith("j_f_", StringComparison.Ordinal);
+    /// <summary>
+    /// Bones a whole-body pose never keys: the skeleton's root nodes, and the face, which a body clip doesn't move. A
+    /// face's own pose (<paramref name="face"/>, on a face skeleton) keys its face bones.
+    /// </summary>
+    public static bool Unposed(string bone, bool face = false) =>
+        bone is "n_root" or "n_throw" or "n_hara_noanim_trans" || !face && bone.StartsWith("j_f_", StringComparison.Ordinal);
+
+    /// <summary>Whether <paramref name="skeleton"/> is a face's: face bones and no body.</summary>
+    public static bool FaceSkeleton(SkeletonDescription skeleton) =>
+        skeleton.Bones.All(bone => bone.Name != MotionHold.Body) && skeleton.Bones.Any(bone => bone.Name.StartsWith("j_f_", StringComparison.Ordinal));
 
     /// <summary>
     /// The bones a pose keys, of the ones it has (<paramref name="available"/>): the <paramref name="selected"/> ones, or
-    /// with none given the whole body but its root nodes, the face and the groups in <paramref name="leftOut"/>.
+    /// with none given the whole body but its root nodes, the face and the groups in <paramref name="leftOut"/>; on a
+    /// <paramref name="face"/>, the whole face.
     /// </summary>
-    public static List<string> PoseBones(IEnumerable<string> available, IReadOnlyCollection<string>? selected, IEnumerable<PoseGroup> leftOut)
+    public static List<string> PoseBones(IEnumerable<string> available, IReadOnlyCollection<string>? selected, IEnumerable<PoseGroup> leftOut,
+        bool face = false)
     {
         if (selected != null)
         {
@@ -321,7 +330,7 @@ internal static class PoseEdits
             return [.. available.Where(chosen.Contains)];
         }
         var groups = leftOut.ToArray();
-        return [.. available.Where(bone => !Unposed(bone) && !groups.Any(group => group.Contains(bone)))];
+        return [.. available.Where(bone => !Unposed(bone, face) && !groups.Any(group => group.Contains(bone)))];
     }
 
     /// <summary>Keys every target at <paramref name="frame"/> with the value it has there now.</summary>
@@ -499,7 +508,7 @@ internal static class PoseEdits
     /// </summary>
     public static PoseCopy Shown(MotionLayer layer, int frame, SkeletonDescription skeleton, MotionTransform[] through, IReadOnlySet<int>? moving) =>
         new(MotionLayerKind.Pose, [.. skeleton.Bones.Select((bone, at) => (bone.Name, at))
-            .Where(bone => !Unposed(bone.Name) && (moving == null || moving.Contains(bone.at)))
+            .Where(bone => !Unposed(bone.Name, FaceSkeleton(skeleton)) && (moving == null || moving.Contains(bone.at)))
             .Select(bone => new PoseTarget(bone.Name, through[bone.at], Moved(layer, bone.Name, frame)))]);
 
     /// <summary><paramref name="copy"/> as one key for Paste keys (Ctrl+V): each bone's value, its position set where the copy moves it.</summary>

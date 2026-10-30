@@ -106,8 +106,11 @@ internal sealed record TimelineDocument(
     /// <summary>Whether the motion is cut: a part removed or trimmed, or a loop seam blend set.</summary>
     public bool Cut => Cuts is { Whole: false };
 
-    /// <summary>Whether the kept motion plays faster or slower than it was made: <see cref="Length"/> isn't <see cref="KeptFrames"/>.</summary>
-    public bool Stretched => Length != KeptFrames;
+    /// <summary>
+    /// Whether the kept motion plays faster or slower than it was made: <see cref="Length"/> isn't <see cref="KeptFrames"/>.
+    /// Never for a face session, whose canvas is as long as it shows the face: the face's own length is <see cref="Face"/>'s.
+    /// </summary>
+    public bool Stretched => Face == null && Length != KeptFrames;
 
     /// <summary>
     /// For sounds that play across a cut (see <see cref="TimelineSoundCuts"/>), by event key: true cuts the
@@ -162,6 +165,18 @@ internal sealed record TimelineDocument(
     /// motion, so its length can't change, and a kept moving face on it loops (<see cref="Loops"/>).
     /// </summary>
     public bool Expression { get; init; }
+
+    /// <summary>
+    /// The face this document's bone layers edit (a face session: an expression's face, or a face opened on its own);
+    /// null for every other document. See <see cref="TimelineFace"/>.
+    /// </summary>
+    public TimelineFace? Face { get; init; }
+
+    /// <summary>Whether the timeline has a clip row of its own, with cuts, a loop seam and loops: not an expression's timeline or a face.</summary>
+    public bool HasClip => !Expression && Face == null;
+
+    /// <summary>Whether bone layers apply: a clip's motion or a face, not an expression's timeline without its face.</summary>
+    public bool Layered => !Expression || Face != null;
 
     /// <summary>
     /// The length the file's header (TMB TMDH) gave when loaded. Vanilla's matches the motion's, but

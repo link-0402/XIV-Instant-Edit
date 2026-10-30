@@ -65,6 +65,11 @@ projection from `Game/Camera/CameraExtensions.cs`, the bone groups from
 `Resources/Embedded/Language/en.json`. LivePose, which shows the same artwork, is a fork
 of Brio.
 
+The face map's head pictures (`Brio/Resources/Embedded/Images/PoseHeadWithEars.png`, `PoseHeadMiqote.png`,
+`PoseHeadHroth.png` and `PoseHeadVieraFloppy.png`) come from Brio revision `fd01093cae9f7145025d854c1bdd51a68c4d9f0f`
+and ship unmodified in `Dalamud-Plugin/Resources/Pose`; their bone positions (`human_head`, `miqote_head`,
+`hrothgar_head`, `viera_head_base` and the Viera ear variants) come from that revision's `GraphicalBonePosePositions.json`.
+
 The gizmo itself is ImGuizmo through Dalamud's `Dalamud.Bindings.ImGuizmo`, a
 Dalamud-provided dependency. Pose files are read as Anamnesis, Ktisis and Brio write
 them; no code from those tools is included.

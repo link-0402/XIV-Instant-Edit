@@ -181,11 +181,14 @@ internal static class TimelineConvert
     /// with the entry that uses it. The header's length (TMDH) changes only with the
     /// length (see <see cref="TimelineDocument.SavedHeaderLength"/>), so a mod's own otherwise stays.
     /// A kept face has the endless length; a looping one is written as its plays back to back
-    /// (<see cref="Loop"/>), and a loop the edit left alone stays as it was.
+    /// (<see cref="Loop"/>), and a loop the edit left alone stays as it was. A looping face of
+    /// <paramref name="retimed"/> (a face session changed its length) is written again at its length in
+    /// <paramref name="motionFrames"/>, its loop saved before or not.
     /// Returns <paramref name="originalTmb"/> itself when nothing changed, and refuses an output that
     /// does not read back as the edit.
     /// </summary>
-    public static byte[] Apply(byte[] originalTmb, TimelineDocument edited, IReadOnlyDictionary<string, int>? motionFrames = null)
+    public static byte[] Apply(byte[] originalTmb, TimelineDocument edited, IReadOnlyDictionary<string, int>? motionFrames = null,
+        IReadOnlySet<string>? retimed = null)
     {
         // A look lives in a copy of its effect; one still on an event would be lost.
         if (!edited.Events.IsDefault && edited.Events.Any(e => e.Look is { IsEmpty: false }))
@@ -262,9 +265,10 @@ internal static class TimelineConvert
             // Back at the loaded length, what only length scaling moves is where it was loaded.
             if (!scaled && old.Access == TimelineAccess.Locked) target = target with { Start = old.Start, Duration = old.Duration };
             else if (!scaled && old.Access == TimelineAccess.Movable) target = target with { Duration = old.Duration };
-            // A loop the edit changed is written again; one it left alone keeps its copies.
+            // A loop the edit changed is written again; one it left alone keeps its copies, unless its face's length changed.
             var chained = chains.TryGetValue(id, out var copies);
-            var changed = !Same(target with { Conditional = old.Conditional }, old);
+            var retime = TimelineDocument.Loops(target) && retimed?.Contains(target.Path) == true;
+            var changed = !Same(target with { Conditional = old.Conditional }, old) || retime;
             if (chained && changed)
             {
                 foreach (var copy in copies!) file.RemoveEntry(copy);
@@ -273,7 +277,8 @@ internal static class TimelineConvert
             }
             Update(file, id, old, target, scaled);
             expected.Add((target with { Conditional = old.Conditional }, id));
-            if (TimelineDocument.Loops(target) && (!chained || changed)) loops.Add((target, id, PlayOf(id)));
+            // A face of a new length plays whole at it, not over the range it was loaded with.
+            if (TimelineDocument.Loops(target) && (!chained || changed)) loops.Add((target, id, retime ? null : PlayOf(id)));
             else if (TimelineDocument.Kept(target) && changed) keeps.Add(id);
             TimedRange(file, id, old, target, motionFrames, false);
             var entry = file.Find(id)!;
@@ -305,6 +310,29 @@ internal static class TimelineConvert
 
         var output = file.ToArray(out var ids);
         Verify(output, edited, expected, ids);
+        return output;
+    }
+
+    /// <summary>
+    /// An expression's timeline with its face <paramref name="motion"/> edited to last <paramref name="frames"/>: every
+    /// timed face entry playing it (time control on, as every vanilla expression has) plays its whole range over its own
+    /// length when it moves, or the pose range 0 to 1 over the length it had when it is still. A kept face is left to
+    /// Keep, whose loop follows the face's length. Returns <paramref name="tmb"/> itself when nothing changes.
+    /// </summary>
+    public static byte[] RetimeFace(byte[] tmb, string motion, int frames)
+    {
+        var file = TmbFile.Parse(tmb);
+        var moves = frames > TimelineDocument.PoseFrames;
+        foreach (var entry in file.Entries.Where(e => e.Magic == "C010" && e.Text == motion && (e.Int32(20) & 1) == 1 && e.Int32(12) >= 0).ToArray())
+        {
+            var (duration, end) = moves ? (frames, (float)frames) : (entry.Int32(12), 1f);
+            if (entry.Int32(12) != duration) file.SetInt32(entry.Id, 12, duration);
+            if (entry.Single(24) != 0) file.SetSingle(entry.Id, 24, 0);
+            if (entry.Single(28) != end) file.SetSingle(entry.Id, 28, end);
+        }
+        if (!file.Edited) return tmb;
+        var output = file.ToArray(out _);
+        _ = TmbFile.Parse(output);
         return output;
     }
 

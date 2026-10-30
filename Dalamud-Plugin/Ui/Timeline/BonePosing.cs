@@ -631,14 +631,15 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     }
 
     /// <summary>The motion's length in frames when the game loops it, which layers covering it wrap their keys round; else 0.</summary>
-    public static float LoopFrames(AnimationTimelineSource loaded, TimelineDocument doc) => loaded.Clip.IsLoop && !doc.Expression ? MotionEnd(loaded, doc) : 0;
+    public static float LoopFrames(AnimationTimelineSource loaded, TimelineDocument doc) => loaded.Clip.IsLoop && doc.HasClip ? MotionEnd(loaded, doc) : 0;
 
     /// <summary>
     /// The motion's length in frames, as the bake and Live sample it: the clip's own, which the timeline's may
-    /// be a frame off; when cut or stretched, the new one.
+    /// be a frame off; when cut or stretched, the new one. A face's ends where the face does on the timeline.
     /// </summary>
     public static float MotionEnd(AnimationTimelineSource loaded, TimelineDocument doc) =>
-        doc.Stretched || doc.Cut ? doc.Length
+        doc.Face is { } face ? face.End
+        : doc.Stretched || doc.Cut ? doc.Length
         // A motion from Blender has its own length, in whole frames.
         : doc.Replacement is { } replacement ? replacement.Frames
         : loaded.Clip.Duration > 0 ? loaded.Clip.Duration * TimelineDocument.Fps : doc.Length;

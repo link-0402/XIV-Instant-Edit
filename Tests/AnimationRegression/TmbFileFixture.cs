@@ -144,6 +144,87 @@ internal static partial class TmbFileFixture
         check(copies.Length == 1 && TmbFile.Parse(TimelineConvert.Apply(smile, duplicated)).Entries.Count(e => e.Int32(12) == -1) == 2,
             "a kept face can be duplicated");
         Loops(check, reject);
+        FaceRetime(check);
+        Carrier(check, reject);
+    }
+
+    /// <summary>
+    /// A face opened on its own plays through a carrier: a vanilla expression's timeline whose one face entry names the
+    /// face, and whose face pack is the face's library (none for an always-loaded face). Everything else stays.
+    /// </summary>
+    private static void Carrier(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var vanilla = new Tmb().Head(150, "f_umm", 2).Actor(2, 3).Track(3, 4).Face(4, 0, 150, 0x08000001, 1, "cfxf_f_umm").Build();
+        var carried = TmbFile.Parse(FaceCarrier.Build(vanilla, "cfxf_mine", "myfaces"));
+        var face = carried.Entries.Single();
+        var before = TmbFile.Parse(vanilla).Entries.Single();
+        check(face.Text == "cfxf_mine" && carried.FacePack == "myfaces" && face.Time == before.Time && face.Int32(12) == before.Int32(12) &&
+              face.Int32(20) == before.Int32(20) && face.Single(28) == before.Single(28) && carried.Length == 150,
+            "the carrier plays the face from its library, timed as the vanilla expression");
+        check(TmbFile.Parse(FaceCarrier.Build(vanilla, "cfxf_angry", null)).FacePack == null, "an always-loaded face needs no face pack");
+        var two = new Tmb().Head(150, null, 2).Actor(2, 3).Track(3, 4, 5).Face(4, 0, 150, 1, 1, "cfxf_a").Face(5, 10, 150, 1, 1, "cfxf_b").Build();
+        reject(() => FaceCarrier.Build(two, "cfxf_mine", null), "a timeline with two faces is no carrier");
+        check(FaceCarrier.PackOf("chara/human/c0801/animation/f0002/nonresident/myfaces.pap") == "myfaces" &&
+              FaceCarrier.PackOf("chara/human/c0801/animation/f0002/resident/face.pap") == null, "a face's library is its file's");
+    }
+
+    /// <summary>
+    /// A face edited to a new length on an expression's timeline: every vanilla expression times its face (0 to 1 over
+    /// 150 frames, time control on), so a moving face put in its place gets its whole range over its own length; a still
+    /// one keeps the vanilla timing, and a kept face is left to Keep, which loops it at the edited length.
+    /// </summary>
+    private static void FaceRetime(Action<bool, string> check)
+    {
+        var smile = new Tmb().Head(150, "smile", 2).Actor(2, 3).Track(3, 4).Face(4, 0, 150, 0x08000001, 1, "cfxf_smile").Build();
+        var moving = TmbFile.Parse(TimelineConvert.RetimeFace(smile, "cfxf_smile", 300)).Entries.Single();
+        check(moving.Int32(12) == 300 && moving.Single(24) == 0 && moving.Single(28) == 300 && (moving.Int32(20) & 1) == 1,
+            "a moving face replacing a still one plays its whole length with time control");
+        check(ReferenceEquals(TimelineConvert.RetimeFace(smile, "cfxf_smile", 1), smile), "a still face keeps the vanilla timing");
+        check(ReferenceEquals(TimelineConvert.RetimeFace(smile, "cfxf_angry", 300), smile), "another face's entries are left alone");
+        var doc = TimelineConvert.Read(TmbFile.Parse(smile), 150) with { Expression = true };
+        var kept = TimelineConvert.Apply(smile, TimelineEdits.Keep(doc, "t4", true));
+        check(ReferenceEquals(TimelineConvert.RetimeFace(kept, "cfxf_smile", 300), kept), "a kept face is left to Keep");
+        var edited = new Dictionary<string, int> { ["cfxf_smile"] = 400 };
+        var looping = TimelineConvert.Apply(smile, TimelineEdits.Keep(doc, "t4", true, edited), edited);
+        var plays = TmbFile.Parse(looping).Entries.Where(e => e.Magic == "C010").Select(e => (int)e.Time).Order().Take(3).ToArray();
+        check(plays.SequenceEqual([0, 400, 800]), "a kept face edited to move loops at its edited length");
+        FaceLengths(check, smile, doc, looping);
+    }
+
+    /// <summary>
+    /// A face session's save of the expression's own timeline: the header as loaded, a loop already saved and a mod's
+    /// moving face looped at the face's edited length, and a kept face that starts or stops moving looping or holding.
+    /// </summary>
+    private static void FaceLengths(Action<bool, string> check, byte[] smile, TimelineDocument doc, byte[] looping)
+    {
+        static int[] Plays(byte[] tmb) => [.. TmbFile.Parse(tmb).Entries.Where(e => e.Magic == "C010").Select(e => (int)e.Time).Order().Take(3)];
+        var moving = TimelineFace.WithFrames(TimelineFace.Open(doc, 0, 1, 150), 300, 150);
+        var written = TmbFile.Parse(AnimationEditService.ExpressionTimeline(smile, moving, null, "cfxf_smile"));
+        check(written.Length == 150 && written.Entries.Single().Int32(12) == 300, "a face made to move keeps the expression's own length");
+
+        var reread = TimelineConvert.Read(TmbFile.Parse(looping), 150) with { Expression = true };
+        var longer = TimelineFace.WithFrames(TimelineFace.Open(reread, 0, 400, 150), 500, 150);
+        var rechained = AnimationEditService.ExpressionTimeline(looping, longer, null, "cfxf_smile");
+        check(Plays(rechained).SequenceEqual([0, 500, 1000]) &&
+              TmbFile.Parse(rechained).Entries.Where(e => e.Magic == "C010").All(e => e.Int32(12) == 500),
+            "a saved loop given a longer face loops at the new length");
+
+        var mod = new Tmb().Head(600, "smile", 2).Actor(2, 3).Track(3, 4).Face(4, 0, 600, 0x08000001, 600, "cfxf_smile").Build();
+        var modDoc = TimelineConvert.Read(TmbFile.Parse(mod), 600) with { Expression = true };
+        var kept = TimelineEdits.Keep(modDoc, "t4", true, new Dictionary<string, int> { ["cfxf_smile"] = 600 });
+        var shorter = TimelineFace.WithFrames(TimelineFace.Open(kept, 0, 600, 600), 400, 600);
+        check(Plays(AnimationEditService.ExpressionTimeline(mod, shorter, null, "cfxf_smile")).SequenceEqual([0, 400, 800]),
+            "a mod's moving face kept and made shorter loops at its new length");
+
+        var still = new TimelineEditor(TimelineFace.Open(TimelineEdits.Keep(doc, "t4", true), 0, 1, 150))
+        {
+            MotionFrames = new Dictionary<string, int> { ["cfxf_smile"] = 1 }, FaceMotion = "cfxf_smile",
+        };
+        check(still.HoldFace(new MotionReplacement([1], "p", "h", 400, AnimationEditService.StillPoseFrame(0), "", null)) &&
+              still.Document.Events.Single(e => e.Key == "t4").Loop, "a kept face made to move loops");
+        check(still.HoldFace(new MotionReplacement([1], "p", "h", 1, AnimationEditService.StillPoseFrame(0), "", null)) &&
+              still.Document.Events.Single(e => e.Key == "t4") is { Loop: false } held && TimelineDocument.Kept(held),
+            "a kept face made still again is held, not looped");
     }
 
     /// <summary>

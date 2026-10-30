@@ -21,7 +21,7 @@ internal sealed class KeyMarkers(TimelineSession session, MotionDecode decode)
     public (MotionMarkerSet? Current, MotionMarkerSet? Shown) For(TimelineEditor current, AnimationTimelineSource source)
     {
         var doc = current.Document;
-        if (doc.Expression || source.Standalone || session.Animations == null || decode.DecodedPose(source) is not { } decoded)
+        if (!doc.HasClip || source.Standalone || session.Animations == null || decode.DecodedPose(source) is not { } decoded)
             return (null, null);
         var detail = MotionEdits.MotionKeysLayer(doc)?.Markers?.Detail ?? MarkerDetail.Normal;
         // A field drag holds history open without a pointer gesture; both edit the document every frame.

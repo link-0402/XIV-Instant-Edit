@@ -57,6 +57,30 @@ internal sealed class TimelineReader(TimelineSession session) : IDisposable
         }, token);
     }
 
+    /// <summary>
+    /// Reads face <paramref name="motion"/> in <paramref name="gamePath"/> to edit on its own (Edit face), for
+    /// <paramref name="owner"/>'s character and collection, once <paramref name="ending"/> is done. A read still running stops.
+    /// </summary>
+    public void StartFace(AnimationEditService service, AnimationCapture owner, string gamePath, string motion, Task ending)
+    {
+        cancel?.Cancel();
+        cancel?.Dispose();
+        cancel = new CancellationTokenSource();
+        var token = cancel.Token;
+        Reading = (owner, false);
+        again = null;
+        afterUndo = false;
+        keepsView = false;
+        Error = null;
+        var preview = session.Preview;
+        task = Task.Run(async () =>
+        {
+            await ending;
+            await preview.StopAsync();
+            return await service.LoadFaceAsync(owner, gamePath, motion, token);
+        }, token);
+    }
+
     /// <summary>Every frame: the clip once it is read, with how it was asked for; null until then, and when it failed.</summary>
     public (AnimationTimelineSource Loaded, bool KeepView, AnimationEditJournal? Again, bool AfterUndo)? Poll()
     {

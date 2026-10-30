@@ -23,7 +23,7 @@ internal static class CutEdits
     /// <summary>Cuts the part under output frame <paramref name="frame"/> in two there. The new join gets the default blend.</summary>
     public static TimelineDocument CutAt(TimelineDocument doc, int frame)
     {
-        if (doc.Expression || doc.Length <= 0)
+        if (!doc.HasClip || doc.Length <= 0)
             return doc;
         var cuts = CutsOf(doc);
         var at = CutFrame(doc, cuts, frame);
@@ -54,7 +54,7 @@ internal static class CutEdits
     public static TimelineDocument RemoveRange(TimelineDocument doc, int from, int to, out CutRemoval removed)
     {
         removed = default;
-        if (doc.Expression || doc.Length <= 0)
+        if (!doc.HasClip || doc.Length <= 0)
             return doc;
         var cuts = CutsOf(doc);
         from = Math.Clamp(from, 0, doc.Length);
@@ -74,7 +74,7 @@ internal static class CutEdits
             (from, to) = (to, from);
         from = Math.Clamp(from, 0, doc.Length);
         to = Math.Clamp(to, 0, doc.Length);
-        if (doc.Expression || to - from < TimelineDocument.MinLength || from == 0 && to == doc.Length)
+        if (!doc.HasClip || to - from < TimelineDocument.MinLength || from == 0 && to == doc.Length)
             return doc;
         // The end goes first, so the start's frames are still where the caller counted them.
         var next = doc;
@@ -101,7 +101,7 @@ internal static class CutEdits
     {
         removed = default;
         var cuts = CutsOf(doc);
-        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length)
+        if (!doc.HasClip || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length)
             return doc;
         var start = Start(cuts, part);
         return Remove(doc, cuts, start, start + cuts.Parts[part].Frames, out removed);
@@ -116,7 +116,7 @@ internal static class CutEdits
     public static TimelineDocument SetBlend(TimelineDocument doc, int part, bool blend)
     {
         var cuts = CutsOf(doc);
-        if (doc.Expression || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend == blend || blend && !CanBlend(cuts, part))
+        if (!doc.HasClip || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend == blend || blend && !CanBlend(cuts, part))
             return doc;
         if (!blend)
         {
@@ -152,7 +152,7 @@ internal static class CutEdits
     {
         removed = default;
         var cuts = CutsOf(doc);
-        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || !cuts.Parts[part].Blend)
+        if (!doc.HasClip || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || !cuts.Parts[part].Blend)
             return doc;
         var target = Math.Max(1, (int)Math.Round(ToSource(cuts, part, doc.Length, frames), MidpointRounding.AwayFromZero));
         return Resize(doc, cuts, part, false, target - cuts.Parts[part].Frames, out removed);
@@ -186,7 +186,7 @@ internal static class CutEdits
     {
         removed = default;
         var cuts = CutsOf(doc);
-        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend)
+        if (!doc.HasClip || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend)
             return doc;
         var p = cuts.Parts[part];
         double from = cuts.PartStart(part, doc.Length), to = cuts.PartEnd(part, doc.Length);
@@ -219,7 +219,7 @@ internal static class CutEdits
     {
         removed = default;
         var cuts = CutsOf(doc);
-        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend || cuts.Parts[part].Stretch == 1)
+        if (!doc.HasClip || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || cuts.Parts[part].Blend || cuts.Parts[part].Stretch == 1)
             return doc;
         var normal = cuts with { Parts = cuts.Parts.SetItem(part, cuts.Parts[part] with { Stretch = 1 }) };
         var length = Math.Clamp((int)Math.Round(doc.Length * normal.Span / cuts.Span, MidpointRounding.AwayFromZero),
@@ -265,7 +265,7 @@ internal static class CutEdits
     {
         removed = default;
         var cuts = CutsOf(doc);
-        if (doc.Expression || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || delta == 0)
+        if (!doc.HasClip || doc.Length <= 0 || part < 0 || part >= cuts.Parts.Length || delta == 0)
             return doc;
         var frames = (int)Math.Round(ToSource(cuts, part, doc.Length, delta), MidpointRounding.AwayFromZero);
         var p = cuts.Parts[part];
@@ -317,7 +317,7 @@ internal static class CutEdits
     public static TimelineDocument SetJoin(TimelineDocument doc, int join, MotionJoin value)
     {
         var cuts = CutsOf(doc);
-        if (doc.Expression || join < 0 || join >= cuts.Joins.Length)
+        if (!doc.HasClip || join < 0 || join >= cuts.Joins.Length)
             return doc;
         var clamped = Clamp(value)!;
         return clamped == cuts.Joins[join] ? doc : With(doc, cuts with { Joins = cuts.Joins.SetItem(join, clamped) });
@@ -327,7 +327,7 @@ internal static class CutEdits
     public static TimelineDocument SetSeam(TimelineDocument doc, MotionJoin? seam)
     {
         var cuts = CutsOf(doc);
-        if (doc.Expression)
+        if (!doc.HasClip)
             return doc;
         seam = Clamp(seam);
         return seam == cuts.Seam ? doc : With(doc, cuts with { Seam = seam });
@@ -341,7 +341,7 @@ internal static class CutEdits
     public static TimelineDocument SetEase(TimelineDocument doc, int frames, bool? atEnd = null)
     {
         var cuts = CutsOf(doc);
-        if (doc.Expression)
+        if (!doc.HasClip)
             return doc;
         frames = Math.Clamp(frames, 0, MotionJoin.MaxFrames);
         var end = atEnd ?? cuts.EaseEnd;
@@ -357,7 +357,7 @@ internal static class CutEdits
     {
         removed = default;
         var length = doc.Length + delta;
-        if (delta == 0 || doc.Expression || length < TimelineDocument.MinLength || length > TimelineDocument.MaxLength)
+        if (delta == 0 || !doc.HasClip || length < TimelineDocument.MinLength || length > TimelineDocument.MaxLength)
             return doc;
         var events = (doc.Events.IsDefault ? [] : doc.Events).ToBuilder();
         var layers = doc.Motion.ToBuilder();
@@ -461,7 +461,7 @@ internal static class CutEdits
         merged = 0;
         var length = doc.Length + delta;
         var span = to - from;
-        if (delta == 0 || span <= 0 || doc.Expression || length < TimelineDocument.MinLength || length > TimelineDocument.MaxLength)
+        if (delta == 0 || span <= 0 || !doc.HasClip || length < TimelineDocument.MinLength || length > TimelineDocument.MaxLength)
             return doc;
         int Map(int frame) =>
             frame < from ? frame

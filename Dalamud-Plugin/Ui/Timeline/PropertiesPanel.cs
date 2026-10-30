@@ -298,6 +298,33 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
             ImGui.TextColored(Theme.Hint, "None");
         else
             Widgets.PathText(texts.LabelOf(current.Document, ev), ev.Path);
+        if (ev.Magic == "C010" && ev.Path.StartsWith("cfxf_", StringComparison.Ordinal))
+            DrawEditFace(current, ev);
+    }
+
+    /// <summary>Opens a face event's face on its own (Edit face), which Back returns from; set by the window.</summary>
+    public Action<string, string>? OpenFace { get; set; }
+
+    /// <summary>Edit face: the face a face event plays, opened on its own for your character's race and face.</summary>
+    private void DrawEditFace(TimelineEditor current, TimelineEvent ev)
+    {
+        // An expression's own face is the one already open.
+        if (session.Source is { Standalone: true } open && open.Clip.Name == ev.Path)
+            return;
+        var path = session.CatalogKey is { } key ? TimelineFace.FacePath(key, ev.Path, current.Document.FacePack,
+            current.ResidentMotions ?? (IReadOnlySet<string>)new HashSet<string>()) : null;
+        var reason = OpenFace == null || session.Animations == null ? "Face editing is unavailable."
+            : session.ReadOnly ? "Wait for the timeline to finish."
+            : session.CatalogKey == null ? "Your character's face isn't known yet."
+            : path == null ? "This face isn't in your character's files."
+            : null;
+        using (ImRaii.Disabled(reason != null))
+        {
+            if (ImGui.SmallButton("Edit face") && path != null)
+                OpenFace!(path, ev.Path);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(reason ?? "Edit this face's bones on its own. Back returns here.");
     }
 
     /// <summary>

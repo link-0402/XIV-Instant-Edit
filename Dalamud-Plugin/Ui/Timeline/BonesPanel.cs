@@ -59,9 +59,9 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 "Open or load an animation in the Timeline window. This window poses its bones.");
             return;
         }
-        if (loaded.Standalone)
+        if (loaded.MotionTarget.Standalone)
         {
-            Widgets.EmptyState(FontAwesomeIcon.Smile, "An expression", "An expression's face takes no bone layers.");
+            Widgets.EmptyState(FontAwesomeIcon.Smile, "An expression", loaded.FaceProblem ?? "This expression's face can't be edited.");
             return;
         }
         var fresh = session.Fresh(loaded);
@@ -265,7 +265,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             }
             ImGui.Separator();
         }
-        foreach (var group in PoseMap.Groups)
+        foreach (var group in session.Editor?.Document.Face != null ? PoseMap.FaceGroups : PoseMap.Groups)
         {
             string[] members = [.. bones.Where(group.Contains)];
             if (members.Length > 0 && ImGui.MenuItem(group.Name))
@@ -298,10 +298,12 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private void DrawBoneMap(SkeletonDescription skeleton, MotionLayer? layer, int frame, AnimationTimelineSource fresh, Vector2 size)
     {
         var clip = fresh.Clip;
+        // A face shows its race's head picture, every dot on it.
+        var face = session.Editor?.Document.Face != null;
         var (index, _) = posing.BoneTree(skeleton);
         var animated = posing.AnimatedBones(clip);
-        var widerBones = WiderBones(skeleton, clip);
-        var used = posing.MapBones(fresh, skeleton);
+        var widerBones = face ? new Dictionary<string, string>() : WiderBones(skeleton, clip);
+        var used = face ? null : posing.MapBones(fresh, skeleton);
         var layerBones = posing.BonesOf(layer, skeleton);
         // A selected bone and one the layer changes keep their dot, so an edit never loses it.
         bool Kept(string bone) => posing.Selection.Contains(bone) ||
@@ -315,8 +317,14 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         var clicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
         var drawList = ImGui.GetWindowDrawList();
 
-        var (armor, toes, groin, tail) = PoseMap.Extras(Shown);
-        var placements = PoseMap.Layout(size, Theme.Gap, armor, toes, groin, tail);
+        List<PosePlacement> placements;
+        if (face)
+            placements = PoseMap.FaceLayout(PoseMap.FaceSection(clip.GamePath.Split('/') is [_, _, var race, ..] ? race : "", skeleton), size);
+        else
+        {
+            var (armor, toes, groin, tail) = PoseMap.Extras(Shown);
+            placements = PoseMap.Layout(size, Theme.Gap, armor, toes, groin, tail);
+        }
         var dots = new List<(string Bone, Vector2 At, int Section, bool Handle)>();
         var greyed = new List<(string Bone, Vector2 At)>();
         for (var p = 0; p < placements.Count; p++)
@@ -540,7 +548,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             ImGui.Spacing();
             using (ImRaii.Disabled(readOnly))
             {
-                foreach (var kind in TimelineWindowViews.LayerKinds)
+                foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
                 {
                     if (ImGui.Button($"{MotionEdits.KindName(kind)} layer"))
                         current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));

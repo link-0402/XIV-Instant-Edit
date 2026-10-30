@@ -107,8 +107,8 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
         blocked = null;
         if (session.Source is not { Document: not null } loaded || session.Editor is not { } current)
             blocked = "Open an animation in the Timeline window.";
-        else if (loaded.Standalone)
-            blocked = "An expression's face takes no pose.";
+        else if (loaded.Standalone || current.Document.Face != null)
+            blocked = "A face takes no body pose.";
         else if (session.EditingSkeleton(loaded) is not { } skeleton)
             blocked = "Choose the skeleton this animation was made for under Source first.";
         else if (current.SelectedLayerValue is not { Kind: MotionLayerKind.Pose } layer)

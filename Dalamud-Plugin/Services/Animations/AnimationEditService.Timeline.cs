@@ -76,6 +76,29 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
 
     private readonly ImmutableArray<AtchManipulation> modAttachOverrides = [];
 
+    /// <summary>
+    /// The face an expression's timeline plays, loaded as a clip of its own PAP: what bone layers, Live and the face
+    /// save work on. Null for every other source, and for an expression whose face can't be read (<see cref="FaceProblem"/>).
+    /// </summary>
+    public AnimationTimelineSource? Face { get; init; }
+
+    /// <summary>Why an expression's face can't be edited (its file, its motion or its skeleton); null when it can, and for other sources.</summary>
+    public string? FaceProblem { get; init; }
+
+    /// <summary>The source bone layers apply to: <see cref="Face"/>, else this.</summary>
+    public AnimationTimelineSource MotionTarget => Face ?? this;
+
+    /// <summary>This source with <paramref name="change"/> made to <see cref="MotionTarget"/>: an expression's face, else itself.</summary>
+    public AnimationTimelineSource WithMotionTarget(Func<AnimationTimelineSource, AnimationTimelineSource> change) =>
+        Face is { } face ? this with { Face = change(face) } : change(this);
+
+    /// <summary>
+    /// <see cref="OwnFrames"/> as <paramref name="document"/> has them: the face a face session edits at its edited length,
+    /// so Keep and its loops follow it.
+    /// </summary>
+    public ImmutableDictionary<string, int> EditedFrames(TimelineDocument? document) =>
+        document?.Face is { } face && Standalone && Clip.Name.Length > 0 ? OwnFrames.SetItem(Clip.Name, face.Frames) : OwnFrames;
+
     /// <summary>The PAP whose motion the layers apply to: <see cref="BaseMotion"/>, else the file's own.</summary>
     public byte[] MotionSource => BaseMotion ?? Pap;
 
@@ -89,10 +112,13 @@ internal sealed record AnimationTimelineSource(AnimationCapture Capture, bool St
 
     /// <summary>
     /// This source with <paramref name="replacement"/>, a motion from Blender, as the motion it edits: everything
-    /// that reads the base motion (decode, Live, preview, save) then reads it. This source itself without one.
+    /// that reads the base motion (decode, Live, preview, save) then reads it. This source itself without one. An
+    /// expression's goes onto its <see cref="Face"/>.
     /// </summary>
     public AnimationTimelineSource WithReplacement(MotionReplacement? replacement) =>
-        replacement == null ? this : this with { BaseMotion = replacement.Pap, BaseFingerprint = replacement.Fingerprint, BaseHash = replacement.Hash };
+        replacement == null ? this
+        : Face is { } face ? this with { Face = face.WithReplacement(replacement) }
+        : this with { BaseMotion = replacement.Pap, BaseFingerprint = replacement.Fingerprint, BaseHash = replacement.Hash };
 }
 
 /// <summary>
@@ -105,6 +131,9 @@ internal sealed record AnimationTimelineBuild(string GamePath, byte[] Bytes, str
     public ImmutableArray<AtchManipulation> Manipulations { get => manipulations; init => manipulations = value.IsDefault ? [] : value; }
 
     private readonly ImmutableArray<AtchManipulation> manipulations = [];
+
+    /// <summary>Files written beside the edited one, by game path: an expression's face PAP. Empty for every other build.</summary>
+    public ImmutableDictionary<string, byte[]> Also { get; init; } = ImmutableDictionary<string, byte[]>.Empty;
 }
 
 internal sealed partial class AnimationEditService
@@ -141,6 +170,9 @@ internal sealed partial class AnimationEditService
             return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, null, error.Message) { FileModel = fileModel, HoldsOthers = holdsOthers };
         }
         (document, var overrides) = WithModPlaces(document, resource);
+        // A face opened on its own (Edit face) is held as long as an expression, or plays its own length.
+        if (IsFaceCapture(capture))
+            document = TimelineFace.Open(document, 0, TimelineDocument.MotionFrames(clip.Duration) ?? 1, TimelineDocument.ExpressionLength);
         return new AnimationTimelineSource(capture, startup, clip, resource, bytes, entry, tmb, document, null,
             await EffectsAsync(capture.CollectionId, document, token))
         {
@@ -221,7 +253,7 @@ internal sealed partial class AnimationEditService
     /// </summary>
     internal static AnimationEditJournal? SavedLayersJournal(IEnumerable<AnimationEditJournal> recovery, AnimationTimelineSource current)
     {
-        if (current.Document == null || current.Standalone)
+        if (current.Document == null || current.MotionTarget.Standalone)
             return null;
         foreach (var journal in recovery)
             if (journal.Request.Capture.CollectionId == current.Capture.CollectionId && journal.Request.Timeline?.Startup == current.Startup &&
@@ -268,24 +300,32 @@ internal sealed partial class AnimationEditService
     /// <summary>
     /// Reads an expression's timeline (chara/action/facial/pose/smile.tmb), a TMB file of its own.
     /// It has no motion to measure, so its length is its header's, or for an endless header (-1, as
-    /// permanent-expression mods write) the vanilla expression length.
+    /// permanent-expression mods write) the vanilla expression length. The face it plays is read too, as a
+    /// clip of its own PAP (<see cref="AnimationTimelineSource.Face"/>), anchored at its first face event; a face
+    /// that can't be read leaves the timeline as it was, with <see cref="AnimationTimelineSource.FaceProblem"/> saying why.
     /// </summary>
     private async Task<AnimationTimelineSource> LoadExpressionTimelineAsync(AnimationCapture capture, AnimationClip clip, string gamePath,
         CancellationToken token)
     {
         var (resource, bytes) = await resources.ReadAsync(capture.CollectionId, gamePath, token);
         TimelineDocument document;
+        int header;
         try
         {
             var file = TmbFile.Parse(bytes);
-            document = TimelineConvert.Read(file, TimelineDocument.ExpressionFrames(file.Length)) with { Expression = true };
+            header = file.Length;
+            document = TimelineConvert.Read(file, TimelineDocument.ExpressionFrames(header)) with { Expression = true };
         }
         catch (InvalidDataException error)
         {
             return new AnimationTimelineSource(capture, false, clip, resource, [], -1, bytes, null, error.Message);
         }
+        var (face, faceProblem) = await ExpressionFaceAsync(capture, token);
+        if (face != null)
+            document = TimelineFace.Open(document, FaceAnchor(document, clip.Name), TimelineDocument.MotionFrames(face.Clip.Duration) ?? 1,
+                TimelineDocument.ExpressionFrames(header));
         return new AnimationTimelineSource(capture, false, clip, resource, [], -1, bytes, document, null,
-            await EffectsAsync(capture.CollectionId, document, token));
+            await EffectsAsync(capture.CollectionId, document, token)) { Face = face, FaceProblem = faceProblem };
     }
 
     /// <summary>
@@ -387,6 +427,7 @@ internal sealed partial class AnimationEditService
     /// </summary>
     public async Task<MotionClip> DecodeMotionAsync(AnimationTimelineSource source, Action<string> status, CancellationToken token)
     {
+        source = source.MotionTarget;
         if (source.Standalone) throw new InvalidOperationException("An expression's face can't take bone layers yet.");
         var clip = source.Clip;
         if (clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
@@ -411,6 +452,7 @@ internal sealed partial class AnimationEditService
     public async Task<MotionReplacement?> ReplaceMotionAsync(AnimationTimelineSource source, MotionClip playing, AnimationRead read,
         TimelineDocument document, Action<string> status, CancellationToken token)
     {
+        source = source.MotionTarget;
         if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
         // shortcut: the bake writes on the clip's own skeleton, not the rebuild's; teach ReplaceAsync the target to lift this.
         if (source.Rebuild != null) throw new InvalidOperationException("A motion from Blender can't go onto a rebuilt or repaired clip yet. Choose Keep its own first.");
@@ -431,13 +473,35 @@ internal sealed partial class AnimationEditService
     public async Task<MotionReplacement> HoldStillAsync(AnimationTimelineSource source, MotionClip playing, int frame, int frames,
         Action<string> status, CancellationToken token)
     {
+        // A still face is one frame long; every other motion at least two.
+        var face = source.Document?.Face != null;
+        source = source.MotionTarget;
         if (source.Standalone) throw new InvalidOperationException("An expression's face has no motion to replace.");
         if (source.Rebuild != null) throw new InvalidOperationException("A still pose can't go onto a rebuilt or repaired clip yet. Choose Keep its own first.");
         if (source.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
             throw new InvalidOperationException(source.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for first.");
         status("Holding the pose");
         var motion = await Task.Run(() => MotionHold.Still(playing, frame, frames), token);
-        return await ReplaceMotionAsync(source, selected, motion, StillPoseFrame(frame), "", null, status, token);
+        return await ReplaceMotionAsync(source, selected, motion, StillPoseFrame(frame), "", null, status, token, face ? 1 : TimelineDocument.MinLength);
+    }
+
+    /// <summary>What a neutral face's <see cref="MotionReplacement.Action"/> says.</summary>
+    public const string NeutralFaceAction = "neutral face";
+
+    /// <summary>
+    /// Starts a face from the neutral face: <paramref name="playing"/>'s skeleton at rest held for <paramref name="frames"/>
+    /// frames, as the face's motion, keeping its tracks and additive mode (see <see cref="MotionHold.Rest"/>).
+    /// </summary>
+    public async Task<MotionReplacement> NeutralFaceAsync(AnimationTimelineSource source, MotionClip playing, int frames,
+        Action<string> status, CancellationToken token)
+    {
+        if (source.Document?.Face == null) throw new InvalidOperationException("Only a face can start from the neutral face.");
+        source = source.MotionTarget;
+        if (source.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
+            throw new InvalidOperationException(source.Clip.Resolution?.Reason ?? "Choose the skeleton this face was made for first.");
+        status("Setting the neutral face");
+        var motion = await Task.Run(() => MotionHold.Still(playing, MotionHold.Rest(playing), 0, frames), token);
+        return await ReplaceMotionAsync(source, selected, motion, NeutralFaceAction, "", null, status, token, 1);
     }
 
     /// <summary>What a still pose's <see cref="MotionReplacement.Action"/> says: the frame it was held from.</summary>
@@ -445,13 +509,15 @@ internal sealed partial class AnimationEditService
 
     /// <summary>
     /// Bakes <paramref name="motion"/> into the clip's PAP in place of its own motion; the replacement the
-    /// document then holds. <paramref name="report"/> is what Blender changed, null for a still pose.
+    /// document then holds. <paramref name="report"/> is what Blender changed, null for a still pose. <paramref name="minFrames"/>
+    /// is the shortest motion taken: 1 for a still face.
     /// </summary>
     private async Task<MotionReplacement> ReplaceMotionAsync(AnimationTimelineSource source, SkeletonCandidate selected, MotionClip motion,
-        string action, string armature, BlenderMotionReport? report, Action<string> status, CancellationToken token)
+        string action, string armature, BlenderMotionReport? report, Action<string> status, CancellationToken token,
+        int minFrames = TimelineDocument.MinLength)
     {
         var clip = source.Clip;
-        if (TimelineDocument.MotionFrames(motion.Duration) is not { } frames || frames < TimelineDocument.MinLength || frames > TimelineDocument.MaxLength)
+        if (TimelineDocument.MotionFrames(motion.Duration) is not { } frames || frames < minFrames || frames > TimelineDocument.MaxLength)
             throw new InvalidDataException(report == null ? "The pose is held for too long or too short." : "The motion from Blender is too long or too short.");
         var skeleton = (await resources.ReadSkeletonAsync(source.Capture.CollectionId, selected.Source, token)).Bytes;
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit motion", Guid.NewGuid().ToString("N"));
@@ -480,7 +546,16 @@ internal sealed partial class AnimationEditService
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit timeline preview", request.Id.ToString("N"));
         try
         {
-            var built = await BuildTimelineAsync(request, source, source.Standalone ? source.Tmb : source.Pap, document, motionFrames, work, token);
+            var built = await BuildTimelineAsync(request, source, source.Standalone ? source.Tmb : source.Pap, document, motionFrames, work, token,
+                facePap: source.Face?.Pap);
+            // A face opened on its own plays through the carrier expression, in the preview's mod beside it.
+            if (document.Face != null && !source.Standalone)
+                built = built with
+                {
+                    Also = built.Also.SetItem(FaceCarrier.GamePath, FaceCarrier.Build(
+                        data.GetFile(FaceCarrier.GamePath)?.Data ?? throw new InvalidDataException("The game's carrier expression could not be read."),
+                        source.Clip.Name, FaceCarrier.PackOf(source.Clip.GamePath))),
+                };
             Status = "Showing the preview";
             Status = await show(built, token);
         }
@@ -530,18 +605,22 @@ internal sealed partial class AnimationEditService
             CheckBones(request, source);
             await CheckActorAsync(capture, false);
             // The file must still be the one the editor loaded, or the edit would drop newer work.
-            await resources.CheckAsync(capture.CollectionId, [source.Resource], token);
-            // The file the timeline lives in: the clip's PAP, or an expression's own TMB.
+            await resources.CheckAsync(capture.CollectionId, [source.Resource, .. source.Face is { } played ? [played.Resource] : Array.Empty<AnimationResource>()], token);
+            // The file the timeline lives in: the clip's PAP, or an expression's own TMB; and the face an expression plays.
             var edited = source.Resource.GamePath;
+            var faceFile = source.Face?.Resource.GamePath;
             // A new mod gets the loop's startup from the same mod too, or the startup's loop, unchanged.
             // Where it comes from is read now: the collection may have changed since the capture.
             var candidate = AnimationBakeRules.CompanionCandidate(capture, source.Startup, source.Resource, destination);
             var companion = candidate == null ? null
                 : AnimationBakeRules.CompanionFrom(candidate, (await resources.ReadAsync(capture.CollectionId, candidate, token)).Resource, source.Resource);
             var manifest = await resources.ManifestAsync(capture,
-                [edited, .. companion == null ? Array.Empty<string>() : [companion], .. replaced?.Keys ?? []], destination, token);
+                [edited, .. faceFile == null ? Array.Empty<string>() : [faceFile], .. companion == null ? Array.Empty<string>() : [companion],
+                 .. replaced?.Keys ?? []], destination, token);
             if (manifest.Resources.First(r => string.Equals(r.GamePath, edited, StringComparison.OrdinalIgnoreCase)).Hash != source.Resource.Hash)
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
+            if (faceFile != null && manifest.Resources.First(r => string.Equals(r.GamePath, faceFile, StringComparison.OrdinalIgnoreCase)).Hash != source.Face!.Resource.Hash)
+                throw new IOException("The face's file changed while saving. Open the timeline again.");
             // A sound copy made from bytes the collection no longer gives would drop the newer sound.
             foreach (var (path, hash) in copied ?? ImmutableDictionary<string, string>.Empty)
             {
@@ -549,21 +628,31 @@ internal sealed partial class AnimationEditService
                 TimelineSoundUsage.CheckCopied(path, hash, now.Hash);
             }
             var built = await BuildTimelineAsync(request, source, manifest.Files[edited], document, motionFrames,
-                journals.DirectoryFor(request.Id), token, placeProps: true);
+                journals.DirectoryFor(request.Id), token, placeProps: true, facePap: faceFile == null ? null : manifest.Files[faceFile]);
+            // An expression's timeline nothing changed is left as it is when only its face is saved.
+            var timelineChanged = !built.Bytes.AsSpan().SequenceEqual(manifest.Files[edited]);
+            if (destination == AnimationDestination.InPlace && FaceChanged(document) && FaceInPlaceProblem(source, timelineChanged) is { } inPlace)
+                throw new InvalidDataException(inPlace);
             // Warned of, not refused: the saved mod may be meant for characters with a bigger skeleton.
             var tooSmall = !source.Standalone && await framework.RunOnFrameworkThread(() =>
                 PlayProblem(capture.ActorIndex, source.Clip.Partial, built.Bytes, built.BindingFingerprint)) == SkeletonTooSmall;
             var (files, reused, owners, copies, kept) = await AddedFilesAsync(capture, destination, source.Resource, added, beside, rebuild, aliases, token);
-            var outputs = AnimationBakeRules.WithCompanion(ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes),
-                manifest, source.Resource, companion);
+            var written = built.Also.IsEmpty || timelineChanged ? ImmutableDictionary<string, byte[]>.Empty.Add(built.GamePath, built.Bytes)
+                : ImmutableDictionary<string, byte[]>.Empty;
+            var outputs = AnimationBakeRules.WithCompanion(written.SetItems(built.Also), manifest, source.Resource, companion);
             // The mod's own sounds the edit changes are written over like the animation, at a fresh path.
             if (replaced is { Count: > 0 })
                 outputs = TimelineSoundUsage.ReplacedOutputs(outputs, manifest.Resources, source.Resource, replaced);
             // The motion the layers were baked onto goes with the journal, so the edit can be opened again.
-            var motionBase = MotionBase(source, document, manifest.Files[edited], request.RepairTarget)
+            var motionFile = manifest.Files[source.MotionTarget.Resource.GamePath];
+            var motionBase = MotionBase(source, document, motionFile, request.RepairTarget)
                              ?? await RebuiltMotionBaseAsync(request, source, document, manifest.Files[edited], token);
-            var journaled = motionBase == null ? request
-                : request with { Timeline = request.Timeline! with { MotionBaseHash = AnimationPap.Hash(motionBase) } };
+            var timelineEdit = request.Timeline!;
+            if (timelineEdit.Face is { } savedFace)
+                timelineEdit = timelineEdit with { Face = savedFace with { AfterFingerprint = built.BindingFingerprint } };
+            if (motionBase != null)
+                timelineEdit = timelineEdit with { MotionBaseHash = AnimationPap.Hash(motionBase) };
+            var journaled = request with { Timeline = timelineEdit };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
                 files.Count > 0 ? (edited, files, owners, copies, kept) : null,
                 built.Manipulations.IsEmpty ? null : (built.GamePath, built.Manipulations));
@@ -599,7 +688,8 @@ internal sealed partial class AnimationEditService
             }
             journal.State = "Completed";
             journal.Message = tooSmall ? SavedSkeletonTooSmall
-                : AnimationBakeRules.NewMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
+                : FaceChanged(document) ? source.Face != null && timelineChanged ? "Expression saved." : "Face saved."
+                : document.Face == null && AnimationBakeRules.NewMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
             journals.Save(journal); Status = journal.Message;
         }, request.Id, source.Clip);
         return request.Id;
@@ -609,10 +699,14 @@ internal sealed partial class AnimationEditService
     /// The request saving <paramref name="document"/> makes. <paramref name="cutSounds"/> are the copies its
     /// sounds were cut into with the motion and what each was cut from, which Edit again plays again.
     /// The source's <see cref="AnimationTimelineSource.Rebuild"/>, when set, is the repair instead of <paramref name="repair"/>.
+    /// A face session's request carries what its face is baked with (<see cref="TimelineFace.BakeDocument"/>): its layers in
+    /// the face's own frames and the face's length, never the canvas's.
     /// </summary>
     internal static AnimationBakeRequest TimelineRequest(AnimationTimelineSource source, TimelineDocument document,
         AnimationDestination destination, string modName, SkeletonStandard? repair = null, IReadOnlyDictionary<string, string>? cutSounds = null)
-        => new(Guid.NewGuid(), source.Capture, destination, modName, false, AnimationOperation.EditTimeline,
+        => document.Face is { } face && source.MotionTarget is { Standalone: false } target
+            ? FaceRequest(source, target, document, face, destination, modName)
+            : new(Guid.NewGuid(), source.Capture, destination, modName, false, AnimationOperation.EditTimeline,
             ExcludedBones: source.Standalone ? [] : document.ExcludedBones,
             RepairTarget: source.Standalone ? null : source.Rebuild?.Target.Standard ?? repair,
             Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),
@@ -635,9 +729,9 @@ internal sealed partial class AnimationEditService
     {
         if (request.ExcludedBones.IsEmpty && request.RepairTarget == null)
             return;
-        if (source.Standalone)
+        if (source.MotionTarget.Standalone)
             throw new InvalidOperationException("An expression's face keeps every bone.");
-        var clip = source.Clip;
+        var clip = source.MotionTarget.Clip;
         if (AnimationBones.Problem(clip, request.ExcludedBones) is { } exclusion)
             throw new InvalidDataException(exclusion);
         if (request.RepairTarget is { } target && AnimationBones.Standard(clip, target, request.RepairModel) == null)
@@ -665,8 +759,11 @@ internal sealed partial class AnimationEditService
     /// the save bakes none of them, or leaves out bones or repairs too, which bakes them in for good.
     /// </summary>
     internal static byte[]? MotionBase(AnimationTimelineSource source, TimelineDocument document, byte[] file, SkeletonStandard? repair = null) =>
-        source.Standalone || !(document.MotionChanged || document.Cut || document.Stretched) || AnimationBakeRules.BakesLayersIn(document, repair)
-            ? null : source.BaseMotion ?? file;
+        document.Face is { } face
+            ? source.MotionTarget.Standalone || !(document.MotionChanged || face.LengthChanged) || AnimationBakeRules.BakesLayersIn(document, repair)
+                ? null : source.MotionTarget.BaseMotion ?? file
+            : source.Standalone || !(document.MotionChanged || document.Cut || document.Stretched) || AnimationBakeRules.BakesLayersIn(document, repair)
+                ? null : source.BaseMotion ?? file;
 
     /// <summary>
     /// For a save that rebuilds the clip for another race (<see cref="AnimationBakeRules.RebuildKeepsEdits"/>): the motion
@@ -742,7 +839,12 @@ internal sealed partial class AnimationEditService
     /// back: its file must still be the one that edit saved. Null when it can.
     /// </summary>
     internal static string? EditAgainFileProblem(AnimationEditJournal journal, AnimationTimelineSource loaded) =>
-        journal.Request.Timeline is not { } edit || loaded.Standalone || loaded.EntryIndex != edit.EntryIndex ||
+        journal.Request.Timeline is { Face: { } face }
+            // A file many faces share changes with each of their saves: the face is found by its own binding.
+            ? loaded.MotionTarget is { Standalone: false } target && target.Resource.GamePath == face.GamePath && target.EntryIndex == face.EntryIndex &&
+              face.AfterFingerprint.Length > 0 && target.FileFingerprint == face.AfterFingerprint
+                ? null : "The face was changed after this edit."
+        : journal.Request.Timeline is not { } edit || loaded.Standalone || loaded.EntryIndex != edit.EntryIndex ||
         !journal.Files.Any(f => f.AddedFor == null && f.GamePath == loaded.Resource.GamePath && f.AfterHash == loaded.Resource.Hash)
             ? "The animation was changed after this edit."
             : null;
@@ -755,7 +857,9 @@ internal sealed partial class AnimationEditService
     /// </summary>
     internal static AnimationTimelineSource WithSavedEdit(AnimationTimelineSource loaded, AnimationTimelineEdit edit, byte[] motion,
         string fingerprint) =>
-        loaded.Document is not { } document ? loaded : loaded with
+        loaded.Document is not { } document ? loaded
+        : edit.Face is { } face ? WithSavedFace(loaded, document, edit, face, motion, fingerprint)
+        : loaded with
         {
             Document = TimelineSoundEdits.Uncut(document with { Motion = edit.Motion, Cuts = edit.Cuts }, edit.CutSounds),
             BaseMotion = motion,
@@ -772,17 +876,38 @@ internal sealed partial class AnimationEditService
     /// </summary>
     private async Task<AnimationTimelineBuild> BuildTimelineAsync(AnimationBakeRequest request, AnimationTimelineSource source,
         byte[] pap, TimelineDocument document, IReadOnlyDictionary<string, int>? motionFrames, string workDirectory, CancellationToken token,
-        bool placeProps = false)
+        bool placeProps = false, byte[]? facePap = null)
     {
         if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
         var clip = source.Clip;
+        // A face opened on its own is its own clip: only the face is written.
+        if (document.Face != null && !source.Standalone)
+            return await BuildFaceAsync(request, source, pap, document, workDirectory, token);
         // Only places changed since the file was loaded are written: the others are the mod's overrides already.
         var manipulations = placeProps && document.Events.Concat(source.Document.Events).Any(e => e.Place != null)
             ? TimelinePropPlaces.Manipulations(document, PropRaces(source.Resource.GamePath, catalog.PapTable, request.RepairModel), AtchTableOf, PropTypes,
                 loaded: source.Document, modOverrides: source.ModAttachOverrides)
             : [];
         document = TimelinePropPlaces.ApplyStates(document, source.Document);
-        var timeline = TimelineConvert.Apply(source.Tmb, document, motionFrames);
+        // An expression's face session: its kept face loops at the face's edited length, its header stays as loaded.
+        var timeline = source.Standalone && document.Face != null && source.Face is { } played
+            ? ExpressionTimeline(source.Tmb, document, motionFrames, played.Clip.Name)
+            : TimelineConvert.Apply(source.Tmb, document, motionFrames);
+        if (source.Standalone && document.Face != null && source.Face is { } faceSource)
+        {
+            // An expression's timeline and the face it plays: the face's file goes beside it when the face changed.
+            if (!pap.AsSpan().SequenceEqual(source.Tmb)) throw new IOException("The timeline file changed while saving. Open the timeline again.");
+            _ = TmbFile.Parse(timeline);
+            var expression = new AnimationTimelineBuild(source.Resource.GamePath, timeline, clip.BindingFingerprint) { Manipulations = manipulations };
+            if (!FaceChanged(document))
+                return expression;
+            var faceBuild = await BuildFaceAsync(request, faceSource, facePap ?? faceSource.Pap, document, workDirectory, token);
+            return expression with
+            {
+                BindingFingerprint = faceBuild.BindingFingerprint,
+                Also = ImmutableDictionary<string, byte[]>.Empty.Add(faceBuild.GamePath, faceBuild.Bytes),
+            };
+        }
         if (source.Standalone)
         {
             // An expression's timeline is the whole file; the face it plays stays as it is.

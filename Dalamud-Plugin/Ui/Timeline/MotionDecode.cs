@@ -21,6 +21,8 @@ internal sealed class MotionDecode(TimelineSession session)
     private string? failedKey;
     // The decoded motion as the document last cut or stretched it (see OutputMotion).
     private (MotionClip Decoded, MotionCuts? Cuts, int Length, MotionClip Output)? outputMotion;
+    // A face's output motion held until its face event (see OutputMotion), for the output it was made from.
+    private (MotionClip Output, int Anchor, MotionClip Delayed)? delayedMotion;
 
     /// <summary>The decoded motion; null until read.</summary>
     public MotionClip? Decoded { get; private set; }
@@ -40,10 +42,16 @@ internal sealed class MotionDecode(TimelineSession session)
     /// <summary>A read is running.</summary>
     public bool Reading => task != null;
 
-    /// <summary>Identifies a decode: the clip, its file version, the skeleton it is read on, then the motion layers apply to and the rebuild's skeleton.</summary>
-    public static string KeyOf(AnimationTimelineSource loaded) =>
-        $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{loaded.Clip.BindingFingerprint}|{loaded.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|" +
-        $"{loaded.BaseHash}~{loaded.Rebuild?.Target.Skeleton.Fingerprint}";
+    /// <summary>
+    /// Identifies a decode: the clip, its file version, the skeleton it is read on, then the motion layers apply to and the
+    /// rebuild's skeleton. An expression's are its face's (<see cref="AnimationTimelineSource.MotionTarget"/>).
+    /// </summary>
+    public static string KeyOf(AnimationTimelineSource loaded)
+    {
+        var motion = loaded.MotionTarget;
+        return $"{TimelineSession.ClipKey(loaded)}|{motion.Resource.Hash}|{motion.Clip.BindingFingerprint}|{motion.Clip.Resolution?.Selected?.Skeleton.Fingerprint}|" +
+               $"{motion.BaseHash}~{loaded.Rebuild?.Target.Skeleton.Fingerprint}";
+    }
 
     /// <summary>
     /// A <see cref="KeyOf"/> without its last part, the motion layers apply to and the rebuild's skeleton: the same clip
@@ -128,11 +136,32 @@ internal sealed class MotionDecode(TimelineSession session)
 
     /// <summary>
     /// <paramref name="clip"/> as the document's cuts and length play it, as Live and a save cut it before the
-    /// bone layers; the clip itself when neither changes it. During a drag the last cut stands until it ends.
+    /// bone layers; the clip itself when neither changes it. During a drag the last cut stands until it ends. A face
+    /// plays at its own length, not the canvas's, held at its first frame until its face event (<see cref="TimelineFace.Delayed"/>).
     /// </summary>
     public MotionClip OutputMotion(TimelineEditor current, MotionClip clip)
     {
-        var doc = current.Document;
+        var face = current.Document.Face;
+        var output = Stretched(current, clip, face != null ? current.Document with { Face = null, Length = face.Frames, SourceLength = face.SourceFrames }
+            : current.Document);
+        if (face is not { Anchor: > 0 })
+            return output;
+        if (delayedMotion is { } cached && ReferenceEquals(cached.Output, output) && cached.Anchor == face.Anchor)
+            return cached.Delayed;
+        try
+        {
+            var delayed = TimelineFace.Delayed(output, face.Anchor);
+            delayedMotion = (output, face.Anchor, delayed);
+            return delayed;
+        }
+        catch (InvalidDataException)
+        {
+            return output;
+        }
+    }
+
+    private MotionClip Stretched(TimelineEditor current, MotionClip clip, TimelineDocument doc)
+    {
         if (!doc.Cut && !doc.Stretched)
             return clip;
         if (outputMotion is { } cached && ReferenceEquals(cached.Decoded, clip) &&

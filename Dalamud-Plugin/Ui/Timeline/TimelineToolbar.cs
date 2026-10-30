@@ -2,6 +2,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
@@ -52,21 +53,88 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##timeline-fit", FontAwesomeIcon.Expand, "Show the whole timeline (F)"))
             current.Fit();
-        // An expression's face takes no bone layers, so it has no bones to pose.
-        if (!current.Document.Expression)
+        // An expression's own timeline takes no bone layers, so it has no bones to pose; its face does.
+        if (current.Document.Layered)
         {
             ImGui.SameLine(0, Theme.Scaled(2));
             if (TimelineUi.Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
                     ? "Close the Bones window."
+                    : current.Document.Face != null ? "Open the Bones window: pick face bones and pose them in the selected bone layer."
                     : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
                 TimelineUi.Toggle(bonesWindow);
-            ImGui.SameLine(0, Theme.Scaled(2));
-            blenderMotion.DrawButton(current);
+            if (current.Document.Face == null)
+            {
+                ImGui.SameLine(0, Theme.Scaled(2));
+                blenderMotion.DrawButton(current);
+            }
         }
         ImGui.SameLine(0, Theme.Scaled(2));
         loader.DrawButton();
 
         ImGui.SameLine(0, Theme.Scaled(12));
+        if (current.Document.Face is { } face)
+            DrawFaceLength(current, face, readOnly);
+        else
+            DrawLength(current, readOnly);
+
+        ImGui.SameLine(0, Theme.Scaled(16));
+        if (current.Playhead != readoutFrame)
+        {
+            readoutFrame = current.Playhead;
+            readout = "Playhead " + TimelineWindowViews.FrameText(readoutFrame);
+        }
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Label, readout);
+        ImGui.SameLine(0, Theme.Gap);
+        Widgets.HelpTip(ControlsHelp);
+    }
+
+    /// <summary>
+    /// A face's own length: Still (one shape, held) or Moving, then its length in seconds. Turning Moving on or off holds the
+    /// face's first frame; a moving face's seconds change its length.
+    /// </summary>
+    private void DrawFaceLength(TimelineEditor current, TimelineFace face, bool readOnly)
+    {
+        var unavailable = blenderMotion.FaceUnavailable(current);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Face");
+        ImGui.SameLine(0, Theme.Gap);
+        var moves = !face.Still;
+        using (ImRaii.Disabled(readOnly || unavailable != null))
+        {
+            if (ImGui.Checkbox("Moves##timeline-face-moves", ref moves))
+                blenderMotion.HoldFace(current, moves ? DefaultMovingFrames : 1);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(unavailable ?? (face.Still ? "Still holds one shape. Tick to make the face move over a length." : "Untick to make the face one shape again."));
+        if (face.Still)
+            return;
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(72));
+        var seconds = lengthActive ? lengthEdit : face.Frames / (float)TimelineDocument.Fps;
+        using (ImRaii.Disabled(readOnly))
+        {
+            if (ImGui.InputFloat("##timeline-face-length", ref seconds, 0, 0, "%.2f"))
+                lengthEdit = seconds;
+            if (ImGui.IsItemActivated())
+                lengthEdit = seconds;
+            lengthActive = ImGui.IsItemActive();
+            if (ImGui.IsItemDeactivatedAfterEdit() && float.IsFinite(lengthEdit))
+                current.SetFaceLength(TimelineWindowViews.Frames(lengthEdit));
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("The face's length. Press Enter to apply it.");
+        ImGui.SameLine(0, Theme.Scaled(3));
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "s");
+    }
+
+    /// <summary>How long a still face becomes when it starts moving, in frames: 3 seconds.</summary>
+    private const int DefaultMovingFrames = 3 * TimelineDocument.Fps;
+
+    /// <summary>The clip's length in seconds, which stretches the motion; an expression's timeline keeps its own.</summary>
+    private void DrawLength(TimelineEditor current, bool readOnly)
+    {
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Length");
         ImGui.SameLine(0, Theme.Gap);
@@ -90,17 +158,6 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         ImGui.SameLine(0, Theme.Scaled(3));
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "s");
-
-        ImGui.SameLine(0, Theme.Scaled(16));
-        if (current.Playhead != readoutFrame)
-        {
-            readoutFrame = current.Playhead;
-            readout = "Playhead " + TimelineWindowViews.FrameText(readoutFrame);
-        }
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, readout);
-        ImGui.SameLine(0, Theme.Gap);
-        Widgets.HelpTip(ControlsHelp);
     }
 
     private void DrawAddMenu(TimelineEditor current)
@@ -108,10 +165,17 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         using var popup = ImRaii.Popup(AddMenu);
         if (!popup.Success)
             return;
-        foreach (var kind in TimelineWindowViews.AddKinds)
-            if (ImGui.MenuItem(TimelineWindowViews.AddKindName(kind)))
-                pickers.Request(kind, current.Playhead, null);
-        // An expression's face takes no bone layers.
+        // A face opened on its own plays no events of its own; an expression's timeline does.
+        if (current.Document.HasClip || current.Document.Expression)
+            foreach (var kind in TimelineWindowViews.AddKinds)
+                if (ImGui.MenuItem(TimelineWindowViews.AddKindName(kind)))
+                    pickers.Request(kind, current.Playhead, null);
+        if (current.Document.Face is { } face)
+        {
+            DrawFaceAddItems(current, face);
+            return;
+        }
+        // An expression's own timeline takes no bone layers.
         if (current.Document.Expression)
             return;
         ImGui.Separator();
@@ -146,6 +210,30 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             return;
         ImGui.Separator();
         livePose.DrawItems();
+    }
+
+    /// <summary>A face's part of the Add menu: the layers a face takes over the face, Smooth jitter and Neutral face.</summary>
+    private void DrawFaceAddItems(TimelineEditor current, TimelineFace face)
+    {
+        ImGui.Separator();
+        var end = face.Anchor + Math.Max(TimelineDocument.MinLength, face.Frames);
+        foreach (var kind in TimelineWindowViews.FaceLayerKinds)
+        {
+            if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer"))
+                current.AddLayer(kind, face.Anchor, end);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind) + " Covers the whole face.");
+        }
+        if (ImGui.MenuItem("Smooth jitter", "", false, !session.ReadOnly))
+            current.AddFix(new MotionFix(MotionFixKind.SmoothJitter));
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(TimelineWindowViews.SmoothJitterHint);
+        ImGui.Separator();
+        var unavailable = blenderMotion.FaceUnavailable(current);
+        if (ImGui.MenuItem("Neutral face", "", false, unavailable == null))
+            blenderMotion.NeutralFace(current);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(unavailable ?? "Start from the face at rest, and add a pose layer to key the new face.");
     }
 
     /// <summary>

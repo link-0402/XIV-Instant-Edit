@@ -90,6 +90,9 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         DrawBlendOver(current, layer);
                         DrawPlace(current, layer, readOnly);
                     }
+                    else if (current.Document.Face is { Still: true })
+                        // A still face is one shape: its layers have no span or fades, only how much they change it.
+                        Widgets.MutedWrapped("A still face is one shape: keys go on its first frame.");
                     else
                     {
                         FrameField(current, layer, "Starts", "##layer-start", layer.Start, start => layer with { Start = start });

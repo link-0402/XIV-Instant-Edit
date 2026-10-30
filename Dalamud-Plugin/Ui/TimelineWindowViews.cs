@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using InstantEdit.Models;
@@ -37,6 +37,12 @@ internal static partial class TimelineWindowViews
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
         [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
             MotionLayerKind.Smooth, MotionLayerKind.Pin];
+
+    /// <summary>The bone layer items a face's Add menu has: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
+    public static readonly ImmutableArray<MotionLayerKind> FaceLayerKinds = [.. LayerKinds.Where(kind => TimelineFace.Allows(kind, null))];
+
+    /// <summary>The bone layer items the Add menus offer for <paramref name="doc"/>: a face's, or every kind.</summary>
+    public static ImmutableArray<MotionLayerKind> AddLayerKinds(TimelineDocument doc) => doc.Face != null ? FaceLayerKinds : LayerKinds;
 
     /// <summary>The Add menus' item after the layer kinds: a pin layer that plants both feet.</summary>
     public const string PinFeetName = "Pin feet";
@@ -148,6 +154,8 @@ internal static partial class TimelineWindowViews
     /// </summary>
     public static string BlenderMotionLine(MotionReplacement replacement)
     {
+        if (replacement.Action == AnimationEditService.NeutralFaceAction)
+            return "Neutral face: the face at rest.";
         if (replacement.Report is not { } report)
             return $"Still pose: {replacement.Action} held for {replacement.Frames} frames.";
         var line = $"Motion from Blender: \"{replacement.Action}\" on \"{replacement.Armature}\", {report.FromBlender} bones, {replacement.Frames} frames.";

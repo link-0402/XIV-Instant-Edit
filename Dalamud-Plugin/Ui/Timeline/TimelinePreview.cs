@@ -263,7 +263,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                         : "Show your bone layers on the GPose character as you edit them. Nothing is saved."),
                     liveWanted || liveBlocked == null))
             {
-                if (!liveWanted)
+                if (!liveWanted && Carried(session.Fresh(loaded)) && OnBuiltPreview() == null)
+                    // A face opened on its own plays only through the carrier: Live starts over its preview.
+                    StartPreview(current, loaded, null, live: true);
+                else if (!liveWanted)
                     StartLive(loaded);
                 else if (livePreview != null)
                     // Back to the preview Live ran over, as built.
@@ -310,10 +313,11 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// Builds the edited clip in the service, writes it with the imports it uses into a temporary
     /// mod on the GPose actor's collection, then plays the clip's timeline on that actor.
     /// </summary>
-    private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
+    private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair, bool live = false)
     {
         // The preview plays the built file through a temporary mod; Live's swapped motion must go first, and comes back over the build.
-        var relive = liveWanted;
+        // With live (a face opened on its own) Live starts over it once it plays.
+        var relive = liveWanted || live;
         StopLive();
         ushort? actor;
         try { actor = session.Playback.ActorIndex(); }
@@ -393,7 +397,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             var props = await Task.Run(() => TimelineWindowViews.PropAdded(shown, game), token);
             if (props.Error != null)
                 throw new InvalidDataException(props.Error);
-            var baseFiles = added.SetItems(PropCopies.Flatten(new PropCopy(props.Files, props.Aliases, []))).SetItem(built.GamePath, built.Bytes);
+            // An expression's face and a carried face's carrier go with the built file.
+            var baseFiles = added.SetItems(PropCopies.Flatten(new PropCopy(props.Files, props.Aliases, []))).SetItem(built.GamePath, built.Bytes)
+                .SetItems(built.Also);
             await session.Preview.ShowAsync(index, baseFiles.SetItems(lookFiles).SetItems(soundRedirects), manipulations, token);
             if (generation != previewGeneration)
             {
@@ -415,11 +421,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 shownLooks = looks;
                 shownSounds = soundRedirects;
                 previewFingerprint = built.BindingFingerprint;
-                previewTimeline = clip.Timeline;
-                previewFace = target.Standalone;
+                // A face opened on its own has no expression of its own: the carrier plays it.
+                previewTimeline = Carried(target) ? FaceCarrier.TimelineId(session.Data) ?? 0 : clip.Timeline;
+                previewFace = target.Standalone || shown.Face != null;
                 previewLoop = clip.IsLoop;
                 repeatArmed = false;
-                if (!session.Playback.Play(clip.Timeline, built.BindingFingerprint, index, previewFace))
+                if (!session.Playback.Play(previewTimeline, built.BindingFingerprint, index, previewFace))
                     return false;
                 if (Math.Abs(speed - 1) > .001f)
                     session.Playback.SetSpeed(speed);
@@ -645,8 +652,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     {
         if (session.MotionDisplay == null)
             return "Live edits are unavailable.";
-        if (loaded.Standalone)
-            return "An expression's face can't take bone layers yet.";
+        if (loaded.MotionTarget.Standalone)
+            return loaded.FaceProblem ?? "This expression's face can't be edited.";
         if (!available)
             return reason;
         if (session.ReadOnly)
@@ -656,8 +663,20 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         return null;
     }
 
-    /// <summary>The length Live plays the motion at: the document's when cut or stretched, else 0 for the clip's own.</summary>
-    private static int LiveLength(TimelineDocument doc) => doc.Cut || doc.Stretched ? doc.Length : 0;
+    /// <summary>
+    /// The length Live plays the motion at: the document's when cut or stretched, else 0 for the clip's own. A face plays
+    /// its own length once it changed.
+    /// </summary>
+    internal static int LiveLength(TimelineDocument doc) =>
+        doc.Face is { } face ? face.LengthChanged || doc.Replacement != null ? face.Frames : 0
+        : doc.Cut || doc.Stretched ? doc.Length : 0;
+
+    /// <summary>The layers Live shows: a face's in the face's own frames, a clip's as they are.</summary>
+    internal static ImmutableArray<MotionLayer> LiveLayers(TimelineDocument doc) =>
+        doc.Face is { } face ? TimelineFace.ToFace(doc.Motion, face.Anchor) : doc.Motion;
+
+    /// <summary>Whether <paramref name="loaded"/> is a face opened on its own, which plays through the carrier (<see cref="FaceCarrier"/>).</summary>
+    private static bool Carried(AnimationTimelineSource loaded) => !loaded.Standalone && loaded.Document?.Face != null;
 
     /// <summary>The skeleton choice a preview of <paramref name="source"/> builds with: the rebuild's race and standard, and the repair.</summary>
     private static (string? Model, SkeletonStandard? Standard, SkeletonStandard? Repair) SkeletonChoice(AnimationTimelineSource source, SkeletonStandard? repair) =>
@@ -681,9 +700,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     /// <summary>The preview built and playing now, which Live can run over; null when there is none.</summary>
     private BuiltPreview? OnBuiltPreview() =>
-        !liveWanted && !previewJob && !previewFace && previewFingerprint is { } fingerprint && session.Preview.Active && previewBaseFiles != null &&
-        previewActor is { } actor && previewDocument is { } doc
-            ? new BuiltPreview(fingerprint, previewTimeline, actor, doc.Cut || doc.Stretched ? doc.Length / (float)TimelineDocument.Fps : null)
+        // An expression's own timeline has no motion to run over; a face's preview has its face.
+        !liveWanted && !previewJob && (!previewFace || previewDocument?.Face != null) && previewFingerprint is { } fingerprint && session.Preview.Active &&
+        previewBaseFiles != null && previewActor is { } actor && previewDocument is { } doc
+            ? new BuiltPreview(fingerprint, previewTimeline, actor, LiveLength(doc) is > 0 and var frames ? frames / (float)TimelineDocument.Fps : null)
             : null;
 
     private void StartLive(AnimationTimelineSource loaded)
@@ -812,17 +832,19 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                     return;
                 }
                 var clip = fresh.Clip;
-                if (!session.Playback.Play(clip.Timeline, clip.BindingFingerprint, actor))
+                // A face plays in the face slot and leaves the body as it is.
+                var face = current.Document.Face != null;
+                if (!session.Playback.Play(clip.Timeline, fresh.MotionTarget.Clip.BindingFingerprint, actor, face))
                 {
                     var error = session.Playback.Error;
                     StopLive();
                     liveError = error;
                     return;
                 }
-                previewFingerprint = clip.BindingFingerprint;
+                previewFingerprint = fresh.MotionTarget.Clip.BindingFingerprint;
                 previewTimeline = clip.Timeline;
                 previewActor = actor;
-                previewFace = false;
+                previewFace = face;
                 previewDocument = null;
                 previewSkeleton = null;
                 lastSeekFrame = -1;
@@ -834,7 +856,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             if (!ReferenceEquals(decoded, liveDecoded))
             {
                 // The display keeps the motion it started on: it starts again on the new one, the clip playing on.
-                if ((livePreview?.Fingerprint ?? fresh.Clip.BindingFingerprint) != previewFingerprint || previewActor is not { } shown)
+                if ((livePreview?.Fingerprint ?? fresh.MotionTarget.Clip.BindingFingerprint) != previewFingerprint || previewActor is not { } shown)
                 {
                     StopLive();
                     liveError = "The clip changed. Turn Live on again.";
@@ -843,7 +865,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                     StartDisplay(current, fresh, decoded, shown);
                 return;
             }
-            session.MotionDisplay.Show(current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document));
+            session.MotionDisplay.Show(LiveLayers(current.Document), current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document));
         }
         catch (InvalidOperationException e)
         {
@@ -857,14 +879,16 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     {
         // Over a built preview the game plays the built file, on the skeleton the motion was decoded for, with nothing to
         // convert. That file holds the layers as they were built, so a copy always shows: the motion with the layers as they are now.
+        // An expression's motion is its face's.
+        var motion = fresh.MotionTarget;
         if (livePreview is { } built
-                ? session.MotionDisplay!.Start(actor, built.Fingerprint, [], decoded, current.Document.Motion, current.Document.ExcludedBones,
+                ? session.MotionDisplay!.Start(actor, built.Fingerprint, [], decoded, LiveLayers(current.Document), current.Document.ExcludedBones,
                     current.Document.Cuts, LiveLength(current.Document), built.Duration, baseDiffers: true)
                 // After a save the game plays either file until it reloads the clip: the one saved or the one before.
-                : session.MotionDisplay!.Start(actor, fresh.Clip.BindingFingerprint, [fresh.FileFingerprint, fresh.BaseFingerprint ?? string.Empty],
-                decoded, current.Document.Motion, current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
+                : session.MotionDisplay!.Start(actor, motion.Clip.BindingFingerprint, [motion.FileFingerprint, motion.BaseFingerprint ?? string.Empty],
+                decoded, LiveLayers(current.Document), current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
                 // Edited again, the game plays the saved file, as long as the edit made it.
-                fresh.BaseMotion != null ? fresh.Clip.Duration : null,
+                motion.BaseMotion != null ? motion.Clip.Duration : null,
                 // The game plays the clip's own file; a motion from Blender or a rebuild shows only in a copy.
                 baseDiffers: current.Document.Replacement != null || fresh.Rebuild != null,
                 // A repair's copy goes onto the character's own skeleton by name, so bones the clip's skeleton lacks show too;

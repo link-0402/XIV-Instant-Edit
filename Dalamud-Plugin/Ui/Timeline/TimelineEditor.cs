@@ -148,7 +148,7 @@ internal sealed class TimelineEditor
     /// The length can't change: an expression's timeline has no motion of its own to resample. The
     /// length handle then only scrubs, and <see cref="SetLength"/> does nothing.
     /// </summary>
-    public bool FixedLength => Document.Expression;
+    public bool FixedLength => Document.Expression && Document.Face == null;
 
     public float MinPixelsPerFrame { get; set; } = DefaultMinPixelsPerFrame;
     public float MaxPixelsPerFrame { get; set; } = DefaultMaxPixelsPerFrame;
@@ -206,6 +206,9 @@ internal sealed class TimelineEditor
     /// library (see <see cref="TimelineEdits.FromPack"/>). Null while unknown, when every face counts.
     /// </summary>
     public IReadOnlySet<string>? ResidentMotions { get; set; }
+
+    /// <summary>The face an expression's face session edits, by motion name (its face events' path); null for every other timeline.</summary>
+    public string? FaceMotion { get; set; }
 
     /// <summary>
     /// Every expression library each face and lip motion is in, by motion name, so a face from another
@@ -528,7 +531,7 @@ internal sealed class TimelineEditor
                 ClearSelection();
                 break;
             case TimelinePart.ClipPart or TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.Join or TimelinePart.JoinEdge or
-                TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge when !doc.Expression:
+                TimelinePart.Seam or TimelinePart.SeamEdge or TimelinePart.EaseEdge when doc.HasClip:
                 PressClip(hit, doc, shift);
                 break;
         }
@@ -1021,11 +1024,43 @@ internal sealed class TimelineEditor
     }
 
     /// <summary>Sets the length as one undo step, scaling the events when <see cref="ScaleEvents"/> is on.</summary>
-    public bool SetLength(int frames) => !FixedLength && Commit(TimelineEdits.SetLength(Document, frames, ScaleEvents, loaded));
+    public bool SetLength(int frames) => !FixedLength && Document.Face == null && Commit(TimelineEdits.SetLength(Document, frames, ScaleEvents, loaded));
 
     /// <summary>Puts a motion from Blender in place of the clip's, as one undo step (see <see cref="TimelineEdits.ReplaceMotion"/>).</summary>
     public bool ReplaceMotion(MotionReplacement replacement) =>
-        !FixedLength && Commit(TimelineEdits.ReplaceMotion(Document, replacement, ScaleEvents, loaded));
+        !FixedLength && Document.Face == null && Commit(TimelineEdits.ReplaceMotion(Document, replacement, ScaleEvents, loaded));
+
+    /// <summary>A moving face's new length, as one undo step; a still face gets one only through a hold (<see cref="HoldFace"/>).</summary>
+    public bool SetFaceLength(int frames) =>
+        Document.Face is { Still: false } && frames > TimelineDocument.PoseFrames &&
+        Commit(MotionEdits.FaceLength(Document, frames, MotionFrames, FaceMotion));
+
+    /// <summary>
+    /// A face's motion held as <paramref name="held"/> (its first frame, still or for a moving face's length), as one undo
+    /// step: the face takes its length and keeps its layers.
+    /// </summary>
+    public bool HoldFace(MotionReplacement held) =>
+        Document.Face != null && Commit(MotionEdits.FaceLength(Document with { Replacement = held }, held.Frames, MotionFrames, FaceMotion));
+
+    /// <summary>
+    /// Starts a face from the neutral face (<paramref name="neutral"/>), as one undo step: the rest face becomes its
+    /// motion and a pose layer over the face, selected, takes the keys that build the new face.
+    /// </summary>
+    public bool NeutralFace(MotionReplacement neutral)
+    {
+        if (Document.Face is not { } face)
+            return false;
+        LastError = null;
+        var held = MotionEdits.FaceLength(Document with { Replacement = neutral, Motion = [] }, neutral.Frames, MotionFrames, FaceMotion);
+        var next = MotionEdits.Add(held, MotionLayerKind.Pose, face.Anchor, face.Anchor + Math.Max(TimelineDocument.MinLength, held.Face!.Frames),
+            out var key, out var error);
+        LastError = error;
+        if (!Commit(error == null ? next : held))
+            return false;
+        if (error == null)
+            SelectLayer(key);
+        return true;
+    }
 
     /// <summary>
     /// Starts the clip from a still pose, as one undo step: the pose becomes its motion and a pose layer over
@@ -1033,7 +1068,7 @@ internal sealed class TimelineEditor
     /// </summary>
     public bool HoldStill(MotionReplacement still)
     {
-        if (FixedLength)
+        if (FixedLength || Document.Face != null)
             return false;
         LastError = null;
         var held = TimelineEdits.ReplaceMotion(Document, still, ScaleEvents, loaded);
@@ -1047,7 +1082,7 @@ internal sealed class TimelineEditor
     }
 
     /// <summary>Goes back to the clip's own motion, as one undo step.</summary>
-    public bool DropReplacement() => !FixedLength && Commit(TimelineEdits.DropReplacement(Document, ScaleEvents, loaded));
+    public bool DropReplacement() => !FixedLength && Document.Face == null && Commit(TimelineEdits.DropReplacement(Document, ScaleEvents, loaded));
 
     // Cuts.
 

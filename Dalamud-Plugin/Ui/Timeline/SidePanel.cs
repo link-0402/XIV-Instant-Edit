@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -9,11 +10,11 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The side panel beside the lanes: Properties, Source (where the clip comes from and the skeleton it
-/// was made for), Bones (the bones it animates, ticked off to leave them out of the save and shown live)
-/// or an expression's Face, Edits (every saved edit with Undo) and Record (a live recording for Blender).
+/// was made for), Bones (the bones it or its face animates, ticked off to leave them out of the save and
+/// shown live), Edits (every saved edit with Undo) and Record (a live recording for Blender).
 /// </summary>
 /// <param name="open">Opens the timeline of a capture's clip, or of its startup.</param>
-internal sealed class SidePanel(TimelineSession session, PropertiesPanel properties, FacePage facePage, RecentEditsPage recentEdits,
+internal sealed class SidePanel(TimelineSession session, PropertiesPanel properties, RecentEditsPage recentEdits,
     EffectLookEditor effectLooks, SoundInspector soundInspector, BonePosing posing, TimelinePreview timelinePreview, Action<AnimationCapture, bool> open)
 {
     private enum SidePage : byte { Properties, Source, Bones, Edits, Record }
@@ -64,10 +65,11 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
             return;
         SideTab(SidePage.Properties, "Properties", "The selected event or bone layer.", () => properties.Draw(current));
         SideTab(SidePage.Source, "Source", "Where the animation comes from, and the skeleton it was made for.", () => DrawClipSource(loaded));
-        if (!loaded.Standalone)
-            SideTab(SidePage.Bones, "Bones", "The bones it animates. Untick one to leave it out of the save.", () => DrawAnimatedBones(current, loaded));
+        if (!loaded.MotionTarget.Standalone)
+            SideTab(SidePage.Bones, "Bones", current.Document.Face != null ? "The face's bones. Untick one to leave it out of the save."
+                : "The bones it animates. Untick one to leave it out of the save.", () => DrawAnimatedBones(current, loaded));
         else
-            SideTab(SidePage.Bones, "Face", "The face's bones, saved into the face's own file.", () => facePage.Draw(loaded));
+            SideTab(SidePage.Bones, "Face", "Why this expression's face can't be edited.", () => DrawFaceProblem(loaded));
         DrawEditsTab();
         if (drawRecorder != null)
             SideTab(SidePage.Record, "Record", "Record a character's live pose for Blender.", drawRecorder);
@@ -253,6 +255,10 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
     /// out of the save, for example to give hair, cloth or tail bones back to physics, and shows at once
     /// while Live is on. Each change is one undo step.
     /// </summary>
+    /// <summary>An expression whose face can't be read: why, in place of its bones.</summary>
+    private static void DrawFaceProblem(AnimationTimelineSource loaded) =>
+        Widgets.HintWrapped(loaded.FaceProblem ?? "This expression's face can't be edited.");
+
     private void DrawAnimatedBones(TimelineEditor current, AnimationTimelineSource loaded)
     {
         var clip = session.Fresh(loaded).Clip;
@@ -265,13 +271,23 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
         var doc = current.Document;
         var excluded = doc.ExcludedBones;
         var readOnly = session.ReadOnly;
-        Widgets.HintWrapped("Untick a bone to stop the animation moving it, such as hair or a tail for physics.");
+        var face = doc.Face != null;
+        Widgets.HintWrapped(face ? "Untick a bone to leave it out of the face." : "Untick a bone to stop the animation moving it, such as hair or a tail for physics.");
         if (!timelinePreview.LiveWanted)
         {
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, "Turn on Live to see it in GPose.");
         }
         ImGui.Spacing();
+        if (!face)
+            DrawKeepOnly(current, clip, readOnly);
+        DrawBoneTicks(current, clip, bones, excluded, readOnly);
+    }
+
+    /// <summary>The Keep only row: one button per standard skeleton, unticking the bones outside it. Body clips only.</summary>
+    private void DrawKeepOnly(TimelineEditor current, AnimationClip clip, bool readOnly)
+    {
+        var doc = current.Document;
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Keep only");
         foreach (var standard in Enum.GetValues<SkeletonStandard>())
@@ -288,7 +304,12 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
                     ? "The game's own skeleton for this model was not found."
                     : $"Keep {PresetGroups(standard)}; untick the other {others.Length}.");
         }
+    }
 
+    /// <summary>The filter, Tick all and Untick all, the count kept and a tick per bone.</summary>
+    private void DrawBoneTicks(TimelineEditor current, AnimationClip clip, ImmutableArray<string> bones, ImmutableArray<string> excluded, bool readOnly)
+    {
+        var doc = current.Document;
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##animated-bone-filter", "Filter bones", ref animatedBoneFilter, 128);
         var filter = animatedBoneFilter.Trim();

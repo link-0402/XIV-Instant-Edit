@@ -156,7 +156,9 @@ internal sealed class TimelineLayout
         }
         var motionFirst = next;
         var motion = ImmutableArray.CreateBuilder<TimelineMotionRow>();
-        var layerRows = new int[doc.Expression ? 0 : doc.Motion.Length];
+        // An expression's own timeline has no motion; a face session's layers are the face's.
+        var layered = doc.Layered;
+        var layerRows = new int[layered ? doc.Motion.Length : 0];
         for (var index = 0; index < layerRows.Length; index++)
         {
             var layer = doc.Motion[index];
@@ -173,7 +175,7 @@ internal sealed class TimelineLayout
                     motion.Add(new TimelineMotionRow(index, bone));
             }
         }
-        if (!doc.Expression && motion.Count == 0)
+        if (layered && motion.Count == 0)
             motion.Add(new TimelineMotionRow(-1));
         return new TimelineLayout(doc, lanes.ToImmutable(), next + motion.Count, rows, ends, shown, indexByKey, motionFirst,
             motion.ToImmutable(), layerRows);

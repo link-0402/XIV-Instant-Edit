@@ -107,6 +107,12 @@ internal static class MotionEdits
             error = $"An animation can have at most {MotionEvaluator.MaxLayers} bone layers.";
             return doc;
         }
+        // A face takes only the layers that don't rely on body bones; a fix is checked by its kind (AddFix).
+        if (doc.Face != null && kind != MotionLayerKind.Fix && !TimelineFace.Allows(kind, null))
+        {
+            error = $"A face takes no {KindName(kind).ToLowerInvariant()} layer.";
+            return doc;
+        }
         start = Math.Clamp(start, 0, TimelineDocument.MaxFrames - 1);
         end = Math.Clamp(end, start + 1, TimelineDocument.MaxFrames);
         var keys = doc.Motion.Select(layer => layer.Key).ToHashSet(StringComparer.Ordinal);
@@ -185,10 +191,10 @@ internal static class MotionEdits
             key = existing.Key;
             return doc;
         }
-        if (doc.Expression)
+        if (doc.Expression || doc.Face != null)
         {
             key = string.Empty;
-            error = "An expression's timeline has no motion keys.";
+            error = doc.Face != null ? "A face has no motion keys." : "An expression's timeline has no motion keys.";
             return doc;
         }
         var added = Add(doc, MotionLayerKind.Offset, 0, Math.Max(TimelineDocument.MinLength, doc.Length), out key, out error);
@@ -224,6 +230,12 @@ internal static class MotionEdits
     /// </summary>
     public static TimelineDocument AddFix(TimelineDocument doc, MotionFix fix, out string key, out string? error)
     {
+        if (doc.Face != null && !TimelineFace.Allows(MotionLayerKind.Fix, fix.Kind))
+        {
+            key = string.Empty;
+            error = "A face takes only the Smooth jitter fix.";
+            return doc;
+        }
         var length = Math.Max(TimelineDocument.MinLength, doc.Length);
         var match = fix.Kind == MotionFixKind.MatchLoop;
         var close = fix.Kind == MotionFixKind.CloseLoop;
@@ -699,6 +711,7 @@ internal static class MotionEdits
     /// </summary>
     public static TimelineDocument PasteKeys(TimelineDocument doc, string key, int frame, KeyCopy copy, out ImmutableArray<KeyPick> pasted)
     {
+        frame = KeyFrame(doc, frame);
         pasted = [];
         if (Find(doc, key) is not { } layer || layer.Kind != copy.Kind)
             return doc;
@@ -807,6 +820,37 @@ internal static class MotionEdits
         return doc with { Motion = doc.Motion.SetItem(index, layer with { Keys = layer.Keys.RemoveAt(at) }) };
     }
 
+    /// <summary>The frame a key set at <paramref name="frame"/> goes on: a still face is one shape, so its keys go on its first frame.</summary>
+    internal static int KeyFrame(TimelineDocument doc, int frame) => doc.Face is { Still: true } face ? face.Anchor : frame;
+
+    /// <summary>
+    /// <paramref name="doc"/>'s face lasting <paramref name="frames"/> frames (see <see cref="TimelineFace.WithFrames"/>). Bone
+    /// layers that lasted to the face's end last to its new one, keys where they were, as a clip's length change keeps them;
+    /// a kept face event playing it (<paramref name="motion"/>) loops or holds as its new length decides
+    /// (<see cref="TimelineEdits.Keep"/>, with <paramref name="motionFrames"/> for the other faces).
+    /// </summary>
+    internal static TimelineDocument FaceLength(TimelineDocument doc, int frames, IReadOnlyDictionary<string, int>? motionFrames, string? motion)
+    {
+        var next = TimelineFace.WithFrames(doc, frames, TimelineFace.BaseLength(doc));
+        if (ReferenceEquals(next, doc) || doc.Face is not { } face || next.Face is not { } now)
+            return next;
+        static int EndOf(TimelineFace f) => f.Anchor + Math.Max(TimelineDocument.MinLength, f.Frames);
+        var (oldEnd, end) = (EndOf(face), EndOf(now));
+        foreach (var layer in doc.Motion)
+            if (layer.End != end && layer.Start < end && !IsAnchored(layer) && MotionEvaluator.ReachesEnd(layer, oldEnd))
+            {
+                var span = end - layer.Start;
+                var fadeIn = Math.Min(layer.FadeIn, span);
+                next = Replace(next, layer with { End = end, FadeIn = fadeIn, FadeOut = Math.Min(layer.FadeOut, span - fadeIn) });
+            }
+        if (motion == null || next.Events.IsDefault)
+            return next;
+        var lengths = new Dictionary<string, int>(motionFrames ?? ImmutableDictionary<string, int>.Empty) { [motion] = now.Frames };
+        foreach (var ev in next.Events.Where(e => e.Path == motion && TimelineDocument.Kept(e)).ToArray())
+            next = TimelineEdits.Keep(next, ev.Key, true, lengths);
+        return next;
+    }
+
     /// <summary>
     /// Sets <paramref name="bone"/>'s value in the layer's key at <paramref name="frame"/>, adding the key
     /// when there is none. Null <paramref name="value"/> takes the bone out of that key, and an empty key
@@ -814,6 +858,7 @@ internal static class MotionEdits
     /// </summary>
     public static TimelineDocument SetKey(TimelineDocument doc, string key, int frame, string bone, BoneTransform? value, bool? moved = null)
     {
+        frame = KeyFrame(doc, frame);
         var index = IndexOf(doc, key);
         // Symmetry, fix, idle-motion, swing and smooth motion layers never hold keys; a pin layer keys only its keyed pins.
         if (index < 0 || string.IsNullOrEmpty(bone) ||
@@ -977,7 +1022,8 @@ internal static class MotionEdits
     /// <summary>
     /// Adds copies of <paramref name="layers"/>, copied from a clip <paramref name="sourceLength"/> frames long,
     /// after the others with new keys. A layer that covered that whole clip covers this one; the rest keep
-    /// their frames, cut to this clip's length. Unchanged with an error when they would pass the layer limit.
+    /// their frames, cut to this clip's length. Unchanged with an error when they would pass the layer limit. A face
+    /// takes only the kinds it can bake (<see cref="TimelineFace.Allows"/>); the others are left out.
     /// </summary>
     public static TimelineDocument Paste(TimelineDocument doc, IReadOnlyList<MotionLayer> layers, int sourceLength, out ImmutableArray<string> created, out string? error)
     {
@@ -985,6 +1031,15 @@ internal static class MotionEdits
         error = null;
         if (layers.Count == 0)
             return doc;
+        if (doc.Face != null)
+        {
+            layers = [.. layers.Where(layer => TimelineFace.Allows(layer.Kind, layer.Fix?.Kind))];
+            if (layers.Count == 0)
+            {
+                error = "A face takes none of these layers.";
+                return doc;
+            }
+        }
         if (doc.Motion.Length + layers.Count > MotionEvaluator.MaxLayers)
         {
             error = $"An animation can have at most {MotionEvaluator.MaxLayers} bone layers.";

@@ -302,15 +302,16 @@ internal sealed unsafe class AnimationPlayback : IDisposable
 
     /// <summary>
     /// Reads the body skeleton of the GPose character at <paramref name="index"/> as the game shows it this
-    /// frame into <paramref name="pose"/>, for the bones the Bones window draws on it. False outside GPose,
-    /// for characters of the world and when the character is not drawn.
+    /// frame into <paramref name="pose"/>, for the bones the Bones window draws on it; with <paramref name="allPartials"/> its
+    /// other skeletons' too (the face's, for a face). False outside GPose, for characters of the world and when the
+    /// character is not drawn.
     /// </summary>
-    public bool ReadPose(ushort index, ActorPose pose)
+    public bool ReadPose(ushort index, ActorPose pose, bool allPartials = false)
     {
         RequireFrameworkThread();
         if (!_clientState.IsGPosing || index < FirstGPoseIndex || _objects[index] is not ICharacter { Address: not 0 } actor)
             return false;
-        return pose.Read(actor.Address);
+        return pose.Read(actor.Address, allPartials);
     }
 
     /// <summary>

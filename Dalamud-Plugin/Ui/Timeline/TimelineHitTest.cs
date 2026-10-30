@@ -153,7 +153,7 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         if (y < Ruler)
             return new TimelineHit(TimelinePart.Ruler, frame);
         if (y < Header)
-            return doc.Expression ? TimelineHit.None(frame) : HitClip(doc, view, x, frame, loops);
+            return !doc.HasClip ? TimelineHit.None(frame) : HitClip(doc, view, x, frame, loops);
         if (row < 0)
             return TimelineHit.None(frame);
         if (layout.BoneAt(row) is { } boneRow)

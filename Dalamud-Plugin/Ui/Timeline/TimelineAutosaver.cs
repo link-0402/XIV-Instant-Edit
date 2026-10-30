@@ -105,13 +105,21 @@ internal sealed class TimelineAutosaver(TimelineSession session, Action<Timeline
     private bool Unkept(TimelineEditor? editor) =>
         editor is { Dirty: true } && session.Source is { Document: not null } && !session.ReadOnly && !ReferenceEquals(editor.Document, kept);
 
-    private TimelineAutosave Snapshot(TimelineEditor editor)
-    {
-        var source = session.Source!;
-        var doc = editor.Document;
-        return new TimelineAutosave(source.Capture, source.Startup, source.Resource.Hash, source.BaseHash, doc,
-            [.. doc.SoundEdits.Select(p => (p.Key, p.Value))], [.. session.Imports.Values], DateTime.UtcNow, TimelineAutosave.PlacesFormat);
-    }
+    /// <summary>The open clip's edits as kept edits: also what Edit face parks its timeline's edits as until Back.</summary>
+    internal TimelineAutosave Snapshot(TimelineEditor editor) => Snapshot(session.Source!, editor.Document, session.Imports.Values);
+
+    /// <summary>
+    /// <paramref name="source"/>'s edits <paramref name="doc"/> as kept edits, with the hashes they come back onto only: an
+    /// expression's face session names its face's file and base too.
+    /// </summary>
+    internal static TimelineAutosave Snapshot(AnimationTimelineSource source, TimelineDocument doc, IEnumerable<TimelineImport> imports) =>
+        new(source.Capture, source.Startup, source.Resource.Hash, source.MotionTarget.BaseHash, doc,
+            [.. doc.SoundEdits.Select(p => (p.Key, p.Value))], [.. imports], DateTime.UtcNow, TimelineAutosave.PlacesFormat, source.Face?.Resource.Hash);
+
+    /// <summary>Whether <paramref name="kept"/> edits can come back onto <paramref name="loaded"/>: the same files and the same base.</summary>
+    internal static bool Fits(AnimationTimelineSource loaded, TimelineAutosave kept) =>
+        loaded.Document != null && loaded.Resource.Hash == kept.FileHash && loaded.MotionTarget.BaseHash == kept.BaseHash &&
+        (kept.FaceHash == null || loaded.Face?.Resource.Hash == kept.FaceHash);
 
     private TimelineAutosave? Read(AnimationJournalStore store)
     {

@@ -179,11 +179,19 @@ internal sealed class TimelineSession
         return Animations.Observer.LatestResolution(clip) ?? clip.Resolution;
     }
 
-    /// <summary><paramref name="current"/> with its clip matched to <paramref name="resolution"/>, in its capture too.</summary>
+    /// <summary>
+    /// <paramref name="current"/> with its clip matched to <paramref name="resolution"/>, in its capture too, and in the face
+    /// an expression plays: that face is the expression's clip.
+    /// </summary>
     private static AnimationTimelineSource WithResolution(AnimationTimelineSource current, SkeletonResolution? resolution)
     {
         var clip = current.Clip with { Resolution = resolution };
-        return current with { Clip = clip, Capture = current.Startup ? current.Capture with { Startup = clip } : current.Capture with { Clip = clip } };
+        var face = current.Face is { } played ? played with { Clip = played.Clip with { Resolution = resolution },
+            Capture = played.Capture with { Clip = played.Capture.Clip with { Resolution = resolution } } } : null;
+        return current with
+        {
+            Clip = clip, Capture = current.Startup ? current.Capture with { Startup = clip } : current.Capture with { Clip = clip }, Face = face,
+        };
     }
 
     /// <summary> A key for "the same clip", which survives a reload after a save. </summary>

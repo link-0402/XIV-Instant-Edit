@@ -61,9 +61,9 @@ public sealed partial class TimelineWindow
 
     internal BonesOverlay Overlay => overlayWindow;
 
-    /// <summary>Whether the bones show on the character now: the Bones window is open on a body clip, in GPose.</summary>
+    /// <summary>Whether the bones show on the character now: the Bones window is open on a clip or a face, in GPose.</summary>
     internal bool OverlayWanted => showOnCharacter != BoneOverlayMode.Off && IsOpen && bonesWindow.IsOpen && animations != null &&
-                                   source is { Document: not null, Standalone: false } && editor != null && OverlayActor() != null;
+                                   source is { Document: not null } open && !open.MotionTarget.Standalone && editor != null && OverlayActor() != null;
 
     /// <summary>A gizmo drag is running: the overlay takes the mouse.</summary>
     internal bool OverlayDragging => gizmoEditor != null;
@@ -91,13 +91,15 @@ public sealed partial class TimelineWindow
     {
         var overGizmo = gizmoOver;
         gizmoOver = false;
-        if (animations == null || source is not { Document: not null, Standalone: false } loaded || editor is not { } current)
+        if (animations == null || source is not { Document: not null } loaded || loaded.MotionTarget.Standalone || editor is not { } current)
         {
             EndGizmo(true);
             return;
         }
         var clip = Fresh(loaded).Clip;
-        if (session.EditingSkeleton(loaded) is not { } skeleton || OverlayActor() is not { } actor || !ReadActorPose(actor) ||
+        // A face's bones live on the face's own part of the skeleton.
+        var face = current.Document.Face != null;
+        if (session.EditingSkeleton(loaded) is not { } skeleton || OverlayActor() is not { } actor || !ReadActorPose(actor, face) ||
             GameCamera.Read() is not { } camera)
         {
             EndGizmo(true);
@@ -119,12 +121,13 @@ public sealed partial class TimelineWindow
             dotAt = new Vector2[count];
             dotShown = new bool[count];
         }
-        // The map's bones as the map shows them: the ones the character uses or the clip moves.
-        var used = posing.MapBones(loaded, skeleton);
+        // The map's bones as the map shows them: the ones the character uses or the clip moves. A face's picture shows them all.
+        var used = face ? null : posing.MapBones(loaded, skeleton);
+        var placed = face ? PoseMap.FacePlaced : PoseMap.Placed;
         for (var b = 0; b < count; b++)
         {
             var name = skeleton.Bones[b].Name;
-            dotShown[b] = BoneOverlayModes.Dot(showOnCharacter, selection.Contains(name), PoseMap.Placed.Contains(name) && PoseMap.Shows(name, used, false),
+            dotShown[b] = BoneOverlayModes.Dot(showOnCharacter, selection.Contains(name), placed.Contains(name) && PoseMap.Shows(name, used, false),
                               showOnCharacter == BoneOverlayMode.All && layer != null &&
                               (layerBones?.Pinned.Contains(name) == true || PoseEdits.Changes(layer, name, layerBones?.Changed))) &&
                           actorPose.Index.TryGetValue(name, out var at) &&
@@ -486,9 +489,10 @@ public sealed partial class TimelineWindow
             EndGizmo(true);
     }
 
-    private bool ReadActorPose(ushort actor)
+    /// <summary>Reads the character's pose for the overlay; with <paramref name="allPartials"/> (a face) its face's bones too.</summary>
+    private bool ReadActorPose(ushort actor, bool allPartials = false)
     {
-        try { return playback.ReadPose(actor, actorPose); }
+        try { return playback.ReadPose(actor, actorPose, allPartials); }
         catch (InvalidOperationException) { return false; }
     }
 }

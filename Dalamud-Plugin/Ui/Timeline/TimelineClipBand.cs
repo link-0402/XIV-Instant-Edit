@@ -42,7 +42,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     private (float Top, float Bottom) tickBand;
 
     /// <summary>The clip band's height for <paramref name="doc"/>: none on an expression's timeline, which is never cut.</summary>
-    public static float Height(TimelineDocument doc, float row) => doc.Expression ? 0 : row * 1.5f;
+    public static float Height(TimelineDocument doc, float row) => !doc.HasClip ? 0 : row * 1.5f;
 
     public void Draw(ImDrawListPtr drawList, TimelineEditor current, TimelineGeometry geometry, Vector2 min, Vector2 max,
         float trackLeft, TimelineHit hit)
@@ -182,7 +182,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     /// </summary>
     public IReadOnlyList<PoseMatch>? Matches(TimelineEditor current)
     {
-        if (current.Playing || session.PlayheadFollows || current.Gesture != TimelineGesture.None || current.Document.Expression ||
+        if (current.Playing || session.PlayheadFollows || current.Gesture != TimelineGesture.None || !current.Document.HasClip ||
             session.Source is not { Standalone: false } loaded || decode.DecodedPose(loaded) is not { } decoded)
             return null;
         var motion = decode.OutputMotion(current, decoded);
@@ -241,7 +241,7 @@ internal sealed class TimelineClipBand(TimelineSession session, MotionDecode dec
     private void DrawKeyPoses(ImDrawListPtr drawList, TimelineEditor current, Vector2 max, float trackLeft, float bottom, float line)
     {
         tickBand = (bottom - Theme.Scaled(7), bottom);
-        if (current.Document.Expression || current.ShownMarkers is not { } markers)
+        if (!current.Document.HasClip || current.ShownMarkers is not { } markers)
             return;
         var reach = Theme.Scaled(4);
         foreach (var pose in markers.Poses)

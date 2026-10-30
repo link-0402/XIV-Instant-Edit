@@ -83,7 +83,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             rebuildAutomatic = false;
             rebuildFailed = null;
         }
-        if (editAgain && loaded.BaseMotion != null)
+        if (editAgain && loaded.MotionTarget.BaseMotion != null)
         {
             // Saving again writes over the edit's file; the new save's journal keeps it for Undo.
             destination = canReplace ? AnimationDestination.InPlace : AnimationDestination.NewMod;
@@ -94,8 +94,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// <summary> Edit again, or an undo back to a layered edit: the saved layers apply to the motion from before their edit while this clip stays open. </summary>
     public void KeepBaseOf(AnimationTimelineSource loaded)
     {
-        if (loaded.BaseMotion is { } kept && loaded.BaseHash is { } keptHash)
-            motionBase = (TimelineSession.ClipKey(loaded), kept, loaded.BaseFingerprint ?? string.Empty, keptHash);
+        if (loaded.MotionTarget is { BaseMotion: { } kept, BaseHash: { } keptHash } motion)
+            motionBase = (TimelineSession.ClipKey(loaded), kept, motion.BaseFingerprint ?? string.Empty, keptHash);
     }
 
     /// <summary> Another clip, or this one opened afresh: its own file is the motion to edit. </summary>
@@ -137,8 +137,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             if (AnimationBakeRules.CompanionClip(loaded.Capture, loaded.Startup, loaded.Resource, destination) != null)
                 Widgets.HintWrapped(AnimationBakeRules.CompanionNote(loaded.Startup));
         }
-        // An expression's face keeps its own skeleton and every bone.
-        if (!loaded.Standalone)
+        // An expression's own timeline and a face keep their own skeleton: no repair or rebuild.
+        if (!loaded.Standalone && doc.Face == null)
         {
             DrawRepairChoice(loaded);
             // A rebuild for another race keeps the edits open (AnimationBakeRules.RebuildKeepsEdits): only a repair bakes them in.
@@ -147,11 +147,13 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         }
 
         texts.Refresh(doc);
-        var repair = loaded.Standalone ? null : RepairTarget;
-        var problem = TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
-                          destination == AnimationDestination.InPlace, canReplace, doc.LengthChanged, clip.Resolution,
+        var repair = loaded.Standalone || doc.Face != null ? null : RepairTarget;
+        var inPlace = destination == AnimationDestination.InPlace;
+        var faceInPlace = inPlace ? FaceInPlaceProblem(loaded, doc) : null;
+        var problem = faceInPlace ?? TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
+                          inPlace, canReplace || AnimationEditService.FaceChanged(doc), doc.LengthChanged, clip.Resolution,
                           AnimationBakeRules.ChangesMotion(doc, repair))
-                      ?? (loaded.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, session.EditingSkeleton(loaded), repair, session.Rebuild?.Model));
+                      ?? (loaded.MotionTarget.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, session.EditingSkeleton(loaded), repair, session.Rebuild?.Model));
         if (problem != null)
             Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
         else if (saveError != null)
@@ -175,7 +177,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         soundSave.Draw(current, () => StartSave(current, loaded), error => saveError = error);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(missing ?? (destination == AnimationDestination.NewMod
-                ? "Save the timeline into a new mod."
+                ? doc.Face != null ? "Save the face into a new mod." : "Save the timeline into a new mod."
+                : doc.Face != null ? "Save the face into the mod it comes from. Undo last save puts it back."
                 : "Save the timeline into the mod it comes from. Undo last save puts it back."));
         ImGui.SameLine(0, Theme.Scaled(16));
         DrawUndoLastSave(current);
@@ -202,6 +205,15 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             ImGui.TextColored(Theme.Success, saveMessage);
         }
     }
+
+    /// <summary>
+    /// Why a face's save can't go in place: the face's file, and an expression's timeline when its events changed too, must
+    /// come from a mod (see <see cref="AnimationEditService.FaceInPlaceProblem"/>). Null when it can, and when no face is written.
+    /// </summary>
+    private string? FaceInPlaceProblem(AnimationTimelineSource loaded, TimelineDocument doc) =>
+        AnimationEditService.FaceChanged(doc)
+            ? AnimationEditService.FaceInPlaceProblem(session.Fresh(loaded), loaded.Standalone && loaded.Document is { } opened && doc.Events != opened.Events)
+            : null;
 
     /// <summary> Why Save is unavailable now, shown on the button; null when it can run. </summary>
     private string? SaveMissing(TimelineEditor current, string? problem)
@@ -240,7 +252,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var target = session.Fresh(loaded);
         var place = destination;
         var name = modName.Trim();
-        var repair = target.Standalone ? null : RepairTarget;
+        var repair = target.Standalone || document.Face != null ? null : RepairTarget;
         // Effect looks are saved as copies of their effects, packaged like imports. Sound changes and
         // pins go into copies too, or over the mod's own sound files where BeginSave allowed it.
         TimelineDocument saved;
@@ -432,17 +444,15 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (!AnimationBakeRules.KeepsLayersOverSave(document, repair) || document.Replacement != null && document.Motion.IsEmpty)
         {
             // An undo of a bake onto an earlier edit's base reads that edit back, so its layers come back with these.
-            bakedOnBase = loaded.BaseMotion != null && document.Replacement == null;
+            bakedOnBase = loaded.MotionTarget.BaseMotion != null && document.Replacement == null;
             motionBase = null;
             motionCarry = null;
             return;
         }
-        if (document.Motion.IsEmpty && loaded.BaseMotion == null)
+        if (document.Motion.IsEmpty && loaded.MotionTarget.BaseMotion == null)
             return;
         if (motionBase?.Clip != clip)
-            motionBase = loaded.BaseMotion is { } kept
-                ? (clip, kept, loaded.BaseFingerprint ?? string.Empty, loaded.BaseHash ?? AnimationPap.Hash(kept))
-                : (clip, loaded.Pap, loaded.FileFingerprint, loaded.Resource.Hash);
+            motionBase = KeptMotion(loaded);
         motionCarry = (clip, document.Motion, document.NextMotionKey, false);
     }
 
@@ -451,11 +461,31 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     {
         if (motionBase is not { } kept || kept.Clip != TimelineSession.ClipKey(loaded) || loaded.Document == null)
             return loaded;
-        // Back to the base, as after undoing the first save, the file's own motion is the base again.
-        return kept.Hash == loaded.Resource.Hash
-            ? loaded with { BaseMotion = null, BaseFingerprint = null, BaseHash = null }
-            : loaded with { BaseMotion = kept.Bytes, BaseFingerprint = kept.Fingerprint, BaseHash = kept.Hash };
+        return WithKeptMotion(loaded, kept);
     }
+
+    /// <summary>
+    /// The motion <paramref name="loaded"/>'s layers apply to, kept over a save: its base, else its file as read. An
+    /// expression's are its face's (<see cref="AnimationTimelineSource.MotionTarget"/>).
+    /// </summary>
+    internal static (string Clip, byte[] Bytes, string Fingerprint, string Hash) KeptMotion(AnimationTimelineSource loaded)
+    {
+        var clip = TimelineSession.ClipKey(loaded);
+        var motion = loaded.MotionTarget;
+        return motion.BaseMotion is { } kept
+            ? (clip, kept, motion.BaseFingerprint ?? string.Empty, motion.BaseHash ?? AnimationPap.Hash(kept))
+            : (clip, motion.Pap, motion.FileFingerprint, motion.Resource.Hash);
+    }
+
+    /// <summary>
+    /// <paramref name="loaded"/>, read again after a save, with <paramref name="kept"/> (<see cref="KeptMotion"/>) as the base its
+    /// layers apply to; back at that motion, as after undoing the first save, the file's own motion is the base again.
+    /// An expression's base goes onto its face.
+    /// </summary>
+    internal static AnimationTimelineSource WithKeptMotion(AnimationTimelineSource loaded, (string Clip, byte[] Bytes, string Fingerprint, string Hash) kept) =>
+        kept.Hash == loaded.MotionTarget.Resource.Hash
+            ? loaded.WithMotionTarget(motion => motion with { BaseMotion = null, BaseFingerprint = null, BaseHash = null })
+            : loaded.WithMotionTarget(motion => motion with { BaseMotion = kept.Bytes, BaseFingerprint = kept.Fingerprint, BaseHash = kept.Hash });
 
     /// <summary> The read document with the layers carried over a save or an undo, once; null when none are carried. </summary>
     public (TimelineDocument Document, bool Unsaved)? TakeCarriedLayers(AnimationTimelineSource loaded)
@@ -473,7 +503,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// </summary>
     private AnimationEditJournal? SavedLayers(AnimationTimelineSource current)
     {
-        if (session.Animations is not { } service || current.BaseMotion != null)
+        if (session.Animations is not { } service || current.MotionTarget.BaseMotion != null)
             return null;
         return AnimationEditService.SavedLayersJournal(service.Recovery, current);
     }
