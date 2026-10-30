@@ -4,6 +4,7 @@ using Dalamud.Bindings.ImGui;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Pose;
 
@@ -48,9 +49,64 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     private (TimelineDocument Doc, string Layer, int Frame, MotionClip Clip, BoneFrames Frames)? boneFrames;
     // The onion skins' poses in model space, apart from motionPose so the gizmo's pose at the playhead stays cached.
     private readonly List<(TimelineDocument Doc, MotionClip Clip, int Frame, MotionTransform[] Model)> ghostPoses = [];
+    // What the character's models have weight on, read again as they change.
+    private readonly WornBones worn = new(session.Data, session.Log);
+    // The bones the clip and its layers move, for the moved bones, the document and the skeleton they were found from.
+    private (IReadOnlySet<string> Moved, TimelineDocument? Doc, SkeletonDescription Skeleton, IReadOnlySet<string> Bones)? movingBones;
+    // The map's bones, for the worn and moving bones they were joined from.
+    private (IReadOnlySet<string> Worn, IReadOnlySet<string> Moving, IReadOnlySet<string> Bones)? mapBones;
 
     /// <summary>The Bones window's onion skins switch: the overlay also shows the pose at the selected layer's keys either side of the playhead.</summary>
     public bool Ghosts { get; set; }
+
+    /// <summary>The Bones window's filter switch: while it is off, the map and the bones on the character show only <see cref="MapBones"/>.</summary>
+    public bool EveryBone { get; set; }
+
+    /// <summary>
+    /// The bones the map and the bones on the character show, besides the selected ones and the ones the selected layer changes:
+    /// the ones a model the character draws has weight on, the ones the clip takes off their rest pose (its tracks while it is
+    /// read) and the ones a layer that is on moves. Null shows every bone: with <see cref="EveryBone"/> on, and while what the
+    /// character wears or the clip moves is unknown.
+    /// </summary>
+    public IReadOnlySet<string>? MapBones(AnimationTimelineSource loaded, SkeletonDescription skeleton)
+    {
+        if (EveryBone || worn.Current(session.Playback) is not { } wears || Moving(loaded, skeleton) is not { } moving)
+            return null;
+        if (mapBones is { } cached && ReferenceEquals(cached.Worn, wears) && ReferenceEquals(cached.Moving, moving))
+            return cached.Bones;
+        var bones = new HashSet<string>(wears, StringComparer.Ordinal);
+        bones.UnionWith(moving);
+        mapBones = (wears, moving, bones);
+        return bones;
+    }
+
+    /// <summary>
+    /// The bones the clip takes off their rest pose, its tracks while it is read, with every bone a layer that is on moves;
+    /// null while the clip's tracks are unknown. Kept while the decode, the document and the skeleton stay.
+    /// </summary>
+    private IReadOnlySet<string>? Moving(AnimationTimelineSource loaded, SkeletonDescription skeleton)
+    {
+        var fresh = session.Fresh(loaded);
+        var moved = (decode.DecodedPose(fresh) != null ? decode.Moved : null) ?? AnimatedBones(fresh.Clip);
+        if (moved == null)
+            return null;
+        var doc = session.Editor?.Document;
+        // Through a drag or a field edit the last bones stand, so a gizmo drag doesn't work them out again every frame.
+        if (movingBones is { } cached && ReferenceEquals(cached.Moved, moved) && ReferenceEquals(cached.Skeleton, skeleton) &&
+            (ReferenceEquals(cached.Doc, doc) || session.Editor is { History.InGesture: true }))
+            return cached.Bones;
+        var bones = new HashSet<string>(moved, StringComparer.Ordinal);
+        if (doc?.Motion is { IsDefaultOrEmpty: false } layers)
+        {
+            var index = BoneTree(skeleton).Index;
+            // Animated wants tracks: the root, which the map never shows, stands in for a clip that moves nothing.
+            short[] tracks = [.. moved.Where(index.ContainsKey).Select(bone => (short)index[bone]).DefaultIfEmpty((short)0)];
+            if (MotionSymmetry.Animated(skeleton, tracks, layers, layers.Length) is { } animated)
+                bones.UnionWith(animated.Select(bone => skeleton.Bones[bone].Name));
+        }
+        movingBones = (moved, doc, skeleton, bones);
+        return bones;
+    }
 
     /// <summary>The selected bones, the primary one first.</summary>
     public PoseSelection Selection => selection;

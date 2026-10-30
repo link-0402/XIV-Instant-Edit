@@ -14,7 +14,7 @@ namespace InstantEdit.Ui.Timeline;
 /// </summary>
 internal sealed class MotionDecode(TimelineSession session)
 {
-    private Task<MotionClip>? task;
+    private Task<(MotionClip Clip, HashSet<string> Moved)>? task;
     private CancellationTokenSource? cancel;
     private volatile string status = "Reading the motion";
     // Why the last read of this version of the clip failed; it is not read again until Live asks or the clip changes.
@@ -24,6 +24,9 @@ internal sealed class MotionDecode(TimelineSession session)
 
     /// <summary>The decoded motion; null until read.</summary>
     public MotionClip? Decoded { get; private set; }
+
+    /// <summary>The bones the decoded motion takes off their rest pose (<see cref="AnimationBones.Moved"/>); null until read.</summary>
+    public IReadOnlySet<string>? Moved { get; private set; }
 
     /// <summary>The <see cref="KeyOf"/> of the motion decoded or being decoded.</summary>
     public string? DecodedKey { get; private set; }
@@ -65,7 +68,11 @@ internal sealed class MotionDecode(TimelineSession session)
         status = "Reading the motion";
         cancel = new CancellationTokenSource();
         var token = cancel.Token;
-        task = Task.Run(() => service.DecodeMotionAsync(loaded, message => status = message, token), token);
+        task = Task.Run(async () =>
+        {
+            var clip = await service.DecodeMotionAsync(loaded, message => status = message, token).ConfigureAwait(false);
+            return (clip, AnimationBones.Moved(clip));
+        }, token);
     }
 
     /// <summary>Lets a clip whose last read failed be read again.</summary>
@@ -91,7 +98,7 @@ internal sealed class MotionDecode(TimelineSession session)
             DecodedKey = null;
             return true;
         }
-        Decoded = done.Result;
+        (Decoded, Moved) = done.Result;
         return false;
     }
 
@@ -103,6 +110,7 @@ internal sealed class MotionDecode(TimelineSession session)
         cancel = null;
         task = null;
         Decoded = null;
+        Moved = null;
         DecodedKey = null;
         failedKey = null;
         Error = null;

@@ -2486,3 +2486,39 @@ are the look and Live. Code: Services/Animations/Motion/MotionSwing.cs, MotionSm
   At Strength 0% it plays as before.
 - [ ] 6 Save both layers and play the saved animation: it matches Live. Edit again brings both layers back with their
   settings.
+
+## Bones in use on the map (pending)
+
+The Bones window's map shows only the bones a model the character draws has weight on (gear other gear hides and
+parts hidden by attributes left out), the bones the clip takes off their rest pose and the bones a layer that is on
+moves, plus the selected ones, the ones the selected layer changes and the body's handle. The filter button beside
+swap sides shows every bone again; the crosshairs' all-bones mode shows the same dots as the map. Bones without a
+spot on the pictures stay in All bones. The maths is covered offline (BoneMapFixture). Code:
+Services/Previews/ModelBones.cs, Services/Animations/Preview/WornBones.cs, AnimationBones.Moved,
+BonePosing.MapBones, PoseMap.Shows/Extras.
+
+- [x] 1 Measure first (XIV Bridge): on a few vanilla emotes, how many tracked bones `AnimationBones.Moved` leaves out,
+  and how far the furthest of them is from rest, to confirm the tolerance sits well above what compression leaves.
+  Also list the bones the user's outfit has weight on (skirt, YAS fingers).
+  (XIV Bridge, 2026-10-30, GPose loader, Miqo'te female: vanilla bow, cheer, think and six modded emotes, 97-104 tracked
+  bones each.) Held bones sit under 0.0016 mm and 0.004 % off rest, but vanilla clips hold j_mune_l/r 0.14-0.17 deg
+  off it; the smallest real moves were 0.75 deg (j_asi_e_l, a pose mod) and 1.46 mm (n_buki_r). The rotation line went
+  from 0.25 to 0.5 deg; 0.5 mm and 0.5 % stay. Vanilla emotes move the skirt bones (cheer 3.96 deg at least), so those
+  show without a skirt; the weapon bones and j_buki_sebo are only held. Untracked bones are exactly at rest.
+  Partly checked (XIV Bridge, 2026-10-30, outside GPose, on the live build's ModelMeshReader): the player's 12 drawn models
+  all read (V6, mod files and game files), 147 bones with weight, and every bone a model lists has weight. Of the map's
+  bones 70 are used; unused are the skirt, armor and weapon bones, the IVCS toes (heels cover the feet), the IVCS third
+  finger joints (the glove model has none) and n_sippo_e. A seam-connector body model's attributes leave 3 of its 20
+  bones drawn. The clip side still needs a clip opened in the Timeline (GPose loader).
+- [ ] 2 Wear a skirt and open an emote: the armor picture shows with the skirt dots. Take the skirt off (Glamourer,
+  temporary): within a second the skirt dots go, and the armor picture too when none of its bones are used.
+- [ ] 3 Bones the clip only holds at rest and nothing wears have no dot (skirt bones on a vanilla emote without a skirt);
+  bones it moves do, worn or not.
+- [ ] 4 Select a skirt bone, then take the skirt off: the selected bone keeps its dot. Key a bone in an offset layer:
+  its dot shows while the layer is selected and after, as the layer moves it.
+- [ ] 5 Click the filter button: every bone shows, as before. Crosshairs on all bones in GPose: the character shows
+  the same dots as the map, with the filter and without.
+- [ ] 6 A body mod with IVCS toes on a vanilla clip: the toes show greyed, with their hint; without the toes in the
+  body mod they don't show.
+- [ ] 7 Changing gear with the Bones window open, and a long gizmo drag on a layer with a symmetry and a pin layer, make
+  no hitch in dalamud.log.

@@ -202,6 +202,24 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     private (nint Skeleton, nint Bones, string[] Names)? _boneNames;
 
     /// <summary>
+    /// The models of the character bones are edited for (the GPose actor, else your own character), each with its slot and
+    /// whether other gear hides it; weapons are left out. Null when neither is drawn.
+    /// </summary>
+    public IReadOnlyList<Painter.PainterLiveModel>? ActorModels()
+    {
+        RequireFrameworkThread();
+        var actor = (IGameObject?)GPoseActor() ?? _objects.LocalPlayer;
+        if (actor is not { Address: not 0 } || actor is not ICharacter)
+            return null;
+        var drawn = ((Character*)actor.Address)->GetCharacterBase();
+        if (drawn == null)
+            return null;
+        var models = new List<Painter.PainterLiveModel>();
+        Painter.PainterLiveReader.AddModels(drawn, models, own: true);
+        return models;
+    }
+
+    /// <summary>
     /// The body skeleton of the GPose character at <paramref name="index"/>, with its rest pose: Live hands a repaired clip's copy
     /// back to it by bone name. Read again only when the skeleton changes; null outside GPose, when it isn't drawn or can't be read.
     /// </summary>

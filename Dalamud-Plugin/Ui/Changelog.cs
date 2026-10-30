@@ -79,6 +79,7 @@ internal static class ChangelogCatalog
             Entry("The Bones window's crosshairs switch shows no bones, the selected ones, or all of them on your character.", 1),
             Entry("Onion skins beside it show faint bones for the pose at the layer's keys before and after the playhead.", 1),
             Entry("Pick bones on a body map or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),
+            Entry("The body map shows only the bones your character uses or the animation moves, like skirt bones while you wear a skirt. The filter button shows them all.", 1),
             Entry("Copy pose takes the selected bones at the playhead. Paste it at another frame or in another animation, or paste it mirrored onto the other side.", 1),
             Entry("Pick several keys with Ctrl+click, Shift+click or a box on a layer's rows, then drag, nudge, delete, copy or paste them together. Spread over plays them faster or slower.", 1),
             Entry("Key a whole pose from a .pose file (Anamnesis, Ktisis or Brio), your posed character or a frame of another animation.", 1),

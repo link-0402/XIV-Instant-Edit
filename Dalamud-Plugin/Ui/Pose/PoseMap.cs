@@ -177,6 +177,28 @@ internal static class PoseMap
         }
     }
 
+    /// <summary>The bones a picture shows as a handle, which always keep their dot.</summary>
+    public static readonly ImmutableHashSet<string> Handles =
+        Sections.SelectMany(section => section.Spots).Where(spot => spot.Handle).Select(spot => spot.Bone).ToImmutableHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="bone"/>'s dot shows: every dot with no <paramref name="used"/> bones, else a used one, a
+    /// <paramref name="kept"/> one (selected, or changed by the selected layer) and a handle.
+    /// </summary>
+    public static bool Shows(string bone, IReadOnlySet<string>? used, bool kept) =>
+        used == null || kept || used.Contains(bone) || Handles.Contains(bone);
+
+    /// <summary>
+    /// Which pictures besides the body and the hands <see cref="Layout"/> places: each one with a dot that
+    /// <paramref name="shown"/> keeps, on either side. The toes count only for their IVCS bones, as the foot is on the body.
+    /// </summary>
+    public static (bool Armor, bool Toes, bool Groin, bool Tail) Extras(Func<string, bool> shown)
+    {
+        bool Any(PoseSection section, Func<string, bool> counts) =>
+            Place(section, false).Any(spot => !spot.Handle && counts(spot.Bone) && shown(spot.Bone));
+        return (Any(Armor, _ => true), Any(Toes, bone => bone.StartsWith("iv_", StringComparison.Ordinal)), Any(Groin, _ => true), Any(Tail, _ => true));
+    }
+
     /// <summary>
     /// Where each picture goes in an area of <paramref name="area"/> pixels, in columns like Brio's: the
     /// body, the armor picture when the skeleton has its bones, then the hands with the toes, the groin

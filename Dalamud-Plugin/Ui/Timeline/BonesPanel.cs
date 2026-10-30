@@ -25,6 +25,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private enum BonesPage : byte { Map, List }
 
     private const string BonesHelp =
+        "The map shows the bones your character uses or the animation moves. The filter button shows them all.\n" +
         "Click a dot to select a bone. Ctrl+click adds or removes one.\n" +
         "Shift+click selects a bone and every bone below it.\n" +
         "Changes go to the bone layer selected in the timeline, at the playhead.\n" +
@@ -91,7 +92,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             if (pages.Success)
             {
                 if (bonesPage == BonesPage.Map)
-                    DrawBoneMap(skeleton, layer, current.Playhead, fresh.Clip, ImGui.GetContentRegionAvail());
+                    DrawBoneMap(skeleton, layer, current.Playhead, fresh, ImGui.GetContentRegionAvail());
                 else
                     DrawBoneList(skeleton, layer, current.Playhead, fresh.Clip);
             }
@@ -212,6 +213,11 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                     : "The left side's bones show on the left, as in a mirror. Click to show them as seen from the front."))
                 swapSides = !swapSides;
             ImGui.SameLine(0, Theme.Scaled(2));
+            if (TimelineUi.Toggle("##bones-in-use", FontAwesomeIcon.Filter, !posing.EveryBone, posing.EveryBone
+                    ? "Every bone shows. Click to show only the bones your character uses or the animation moves."
+                    : "Only the bones your character uses or the animation moves show. Click to show every bone."))
+                posing.EveryBone = !posing.EveryBone;
+            ImGui.SameLine(0, Theme.Scaled(2));
         }
         var shown = overlay.OnCharacter;
         if (TimelineUi.Toggle("##bones-overlay", shown == BoneOverlayMode.Selected ? FontAwesomeIcon.DotCircle : FontAwesomeIcon.Crosshairs,
@@ -285,14 +291,22 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     /// Brio's bone map: the body, its armor and its hands with toes and tail, each bone a dot over the
     /// artwork joined to the nearest dot above it. The bones below the primary one, which move with it,
     /// have their lines lit. Bones only a bigger standard skeleton has show greyed out, their hover naming
-    /// the skeleton choice that adds them. A click on empty space clears the selection.
+    /// the skeleton choice that adds them. Only the bones the character uses or the clip moves show (see
+    /// <see cref="BonePosing.MapBones"/>), and the selected ones and the ones the layer changes, unless the
+    /// filter is off. A click on empty space clears the selection.
     /// </summary>
-    private void DrawBoneMap(SkeletonDescription skeleton, MotionLayer? layer, int frame, AnimationClip clip, Vector2 size)
+    private void DrawBoneMap(SkeletonDescription skeleton, MotionLayer? layer, int frame, AnimationTimelineSource fresh, Vector2 size)
     {
+        var clip = fresh.Clip;
         var (index, _) = posing.BoneTree(skeleton);
         var animated = posing.AnimatedBones(clip);
         var widerBones = WiderBones(skeleton, clip);
-        bool Shown(string bone) => index.ContainsKey(bone) || widerBones.ContainsKey(bone);
+        var used = posing.MapBones(fresh, skeleton);
+        var layerBones = posing.BonesOf(layer, skeleton);
+        // A selected bone and one the layer changes keep their dot, so an edit never loses it.
+        bool Kept(string bone) => posing.Selection.Contains(bone) ||
+                                  layer != null && (layerBones?.Pinned.Contains(bone) == true || PoseEdits.Changes(layer, bone, layerBones?.Changed));
+        bool Shown(string bone) => (index.ContainsKey(bone) || widerBones.ContainsKey(bone)) && PoseMap.Shows(bone, used, Kept(bone));
         live = LiveFor(clip);
         var origin = ImGui.GetCursorScreenPos();
         size = Vector2.Max(size, new Vector2(1));
@@ -301,11 +315,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         var clicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
         var drawList = ImGui.GetWindowDrawList();
 
-        var placements = PoseMap.Layout(size, Theme.Gap,
-            PoseMap.Armor.Spots.Any(spot => Shown(spot.Bone)),
-            PoseMap.Toes.Spots.Any(spot => spot.Bone.StartsWith("iv_", StringComparison.Ordinal) && Shown(spot.Bone)),
-            PoseMap.Groin.Spots.Any(spot => Shown(spot.Bone)),
-            PoseMap.Tail.Spots.Any(spot => Shown(spot.Bone)));
+        var (armor, toes, groin, tail) = PoseMap.Extras(Shown);
+        var placements = PoseMap.Layout(size, Theme.Gap, armor, toes, groin, tail);
         var dots = new List<(string Bone, Vector2 At, int Section, bool Handle)>();
         var greyed = new List<(string Bone, Vector2 At)>();
         for (var p = 0; p < placements.Count; p++)
@@ -315,10 +326,14 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             var image = textures.GetFromManifestResource(typeof(TimelineWindow).Assembly, PoseMap.Resource(placement.Section)).GetWrapOrEmpty();
             drawList.AddImage(image.Handle, min, min + placement.Section.Size * placement.Scale);
             foreach (var spot in PoseMap.Place(placement.Section, swapSides))
+            {
+                if (!Shown(spot.Bone))
+                    continue;
                 if (Has(index, spot.Bone))
                     dots.Add((spot.Bone, min + spot.Position * placement.Scale, p, spot.Handle));
-                else if (!spot.Handle && widerBones.ContainsKey(spot.Bone))
+                else if (!spot.Handle)
                     greyed.Add((spot.Bone, min + spot.Position * placement.Scale));
+            }
         }
 
         var mouse = ImGui.GetMousePos();
@@ -394,7 +409,6 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 drawList.AddCircle(dot.At, radius + Theme.Scaled(1), ImGui.GetColorU32(Theme.Muted), 0, Theme.Scaled(1.5f));
         }
 
-        var layerBones = posing.BonesOf(layer, skeleton);
         foreach (var dot in dots)
         {
             var state = BonePosing.StateOf(dot.Bone, layer, frame, animated, layerBones);

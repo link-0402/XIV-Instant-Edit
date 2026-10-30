@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using FFXIVClientStructs.Havok.Common.Base.Math.QsTransform;
 using InstantEdit.Models;
 using InstantEdit.Studio.Models;
@@ -15,6 +16,38 @@ internal sealed record RepairPlan(StandardSkeleton Target, ImmutableArray<string
 /// </summary>
 internal static class AnimationBones
 {
+    // How far off its rest pose a bone must be somewhere in a clip to count as moved. Measured 2026-10-30 on nine c0801 emotes:
+    // vanilla clips hold the chest bones up to 0.17 deg off rest and others under 0.002 mm and 0.004 %; the smallest real moves
+    // were 0.75 deg and 1.46 mm.
+    private const float MovedDegrees = .5f, MovedDistance = .0005f, MovedScale = .005f;
+
+    /// <summary>
+    /// The bones <paramref name="clip"/> takes off their rest pose somewhere: turned, moved or scaled. A track that only holds
+    /// its bone at rest doesn't count, as vanilla clips hold many of the body's bones.
+    /// </summary>
+    public static HashSet<string> Moved(Motion.MotionClip clip)
+    {
+        var cosine = MathF.Cos(MovedDegrees * MathF.PI / 360);
+        var moved = new HashSet<string>(StringComparer.Ordinal);
+        for (var b = 0; b < clip.Bones; b++)
+        {
+            var rest = clip.Skeleton.Bones[b].Reference;
+            for (var s = 0; s < clip.Samples; s++)
+            {
+                var at = clip.Get(s, b);
+                if (MathF.Abs(Quaternion.Dot(Quaternion.Normalize(at.Rotation), Quaternion.Normalize(rest.Rotation))) < cosine ||
+                    Vector3.DistanceSquared(at.Position, rest.Position) > MovedDistance * MovedDistance ||
+                    MathF.Abs(at.Scale.X - rest.Scale.X) > MovedScale || MathF.Abs(at.Scale.Y - rest.Scale.Y) > MovedScale ||
+                    MathF.Abs(at.Scale.Z - rest.Scale.Z) > MovedScale)
+                {
+                    moved.Add(clip.Skeleton.Bones[b].Name);
+                    break;
+                }
+            }
+        }
+        return moved;
+    }
+
     /// <summary>The bones a clip's transform tracks drive, in skeleton order.</summary>
     public static ImmutableArray<string> Animated(AnimationClip clip)
     {

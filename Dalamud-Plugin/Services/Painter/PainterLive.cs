@@ -96,7 +96,8 @@ internal sealed class PainterLiveReader(IFramework framework, IObjectTable objec
         return new PainterLiveCharacter(models, colors) { Race = race };
     }
 
-    private static unsafe void AddModels(CharacterBase* character, List<PainterLiveModel> models, bool own)
+    /// <summary> Adds a character base's loaded models; <paramref name="own"/> for the character's own, with their slots and whether other gear hides them. </summary>
+    internal static unsafe void AddModels(CharacterBase* character, List<PainterLiveModel> models, bool own)
     {
         if (character->Models == null)
             return;

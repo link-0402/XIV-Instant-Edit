@@ -119,10 +119,12 @@ public sealed partial class TimelineWindow
             dotAt = new Vector2[count];
             dotShown = new bool[count];
         }
+        // The map's bones as the map shows them: the ones the character uses or the clip moves.
+        var used = posing.MapBones(loaded, skeleton);
         for (var b = 0; b < count; b++)
         {
             var name = skeleton.Bones[b].Name;
-            dotShown[b] = BoneOverlayModes.Dot(showOnCharacter, selection.Contains(name), PoseMap.Placed.Contains(name),
+            dotShown[b] = BoneOverlayModes.Dot(showOnCharacter, selection.Contains(name), PoseMap.Placed.Contains(name) && PoseMap.Shows(name, used, false),
                               showOnCharacter == BoneOverlayMode.All && layer != null &&
                               (layerBones?.Pinned.Contains(name) == true || PoseEdits.Changes(layer, name, layerBones?.Changed))) &&
                           actorPose.Index.TryGetValue(name, out var at) &&
