@@ -1902,10 +1902,14 @@ internal sealed class TimelineEditor
         gestureBone = SelectedKey != null ? SelectedBone : picks[0].Bone;
         playheadAtPress = playhead;
         pressFrame = float.NaN;
+        scaleTried = 100;
         BeginEdit(TimelineGesture.ScaleKeys, [], [], []);
         LastNotice = ScaleNotice(100);
         return true;
     }
+
+    // The percent the running scale drag last worked out, so a mouse that stays put builds nothing.
+    private int scaleTried;
 
     private static string ScaleNotice(int percent) => $"Scale {percent.ToString(CultureInfo.InvariantCulture)}%";
 
@@ -1917,6 +1921,9 @@ internal sealed class TimelineEditor
         if (float.IsNaN(pressFrame))
             pressFrame = frameAtMouse;
         var percent = KeyTiming.DragPercent(playheadAtPress, pressFrame, frameAtMouse, View.Scale);
+        if (percent == scaleTried)
+            return;
+        scaleTried = percent;
         LastNotice = ScaleNotice(percent);
         var next = MotionEdits.ScaleKeysAbout(start, key, gesturePicks, playheadAtPress, percent, out var landed, out var error);
         LastError = error;

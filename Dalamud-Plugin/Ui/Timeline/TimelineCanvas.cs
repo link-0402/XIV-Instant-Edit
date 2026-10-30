@@ -111,7 +111,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         {
             if (keys.Pressed(ImGuiKey.Escape, VirtualKey.ESCAPE) || ImGui.IsMouseClicked(ImGuiMouseButton.Right))
                 current.Cancel();
-            else if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || keys.Pressed(ImGuiKey.Enter, VirtualKey.RETURN) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter))
+            else if (ImGui.IsMouseClicked(ImGuiMouseButton.Left) || ImGui.IsKeyPressed(ImGuiKey.Enter) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter))
                 current.Release();
             else
                 current.Drag(current.View.FrameAt(trackX));
@@ -853,7 +853,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         if (!menu.Success)
             return;
         ImGui.SetNextItemWidth(Theme.Scaled(90));
-        var entered = ImGui.InputInt("%##scale-timing", ref scalePercent, 0, 0, flags: ImGuiInputTextFlags.EnterReturnsTrue);
+        ImGui.InputInt("%##scale-timing", ref scalePercent, 0, 0);
+        var entered = ImGui.IsItemDeactivatedAfterEdit() && (ImGui.IsKeyPressed(ImGuiKey.Enter) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter));
         var percent = Math.Clamp(scalePercent, KeyTiming.MinPercent, KeyTiming.MaxPercent);
         if (ImGui.MenuItem($"Scale to {percent}%") || entered)
         {
