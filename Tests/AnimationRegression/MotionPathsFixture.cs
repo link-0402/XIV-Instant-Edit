@@ -50,6 +50,7 @@ internal static class MotionPathsFixture
         check(MotionPaths.KeyFrames(layer, Twin, 0).SetEquals([20, 40]), "another bone has its own key frames");
         check(MotionPaths.KeyFrames(layer, Hand, 120).SetEquals([5, 20, 0]), "a key on a loop's last frame shows on its first");
         check(MotionPaths.KeyFrames(null, Hand, 0).Count == 0, "without a selected layer no frame is a key frame");
+        check(MotionPaths.KeyFrames(layer with { Kind = MotionLayerKind.Amplitude }, Hand, 0).Count == 0, "a layer kind without keyed bones marks no frame");
     }
 
     private static MotionKey Key(int frame, params (string Bone, BoneTransform Value)[] bones) =>
