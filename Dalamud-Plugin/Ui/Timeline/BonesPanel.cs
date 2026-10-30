@@ -603,7 +603,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Label, MotionEdits.KindName(layer.Kind));
         ImGui.Spacing();
-        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth)
+        if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, false);
         else if (layer.Kind == MotionLayerKind.Symmetry)
         {

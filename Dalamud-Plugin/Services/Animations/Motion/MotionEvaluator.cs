@@ -48,6 +48,9 @@ internal static class MotionEvaluator
                                  ((swing.Tilt > 0 || swing.Twist > 0) && layer.Components.HasFlag(PoseComponents.Rotation) ||
                                   swing.Slide > 0 && layer.Components.HasFlag(PoseComponents.Position)),
         MotionLayerKind.Smooth => layer.Amount > 0 && (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
+        MotionLayerKind.Noise => layer.Amount > 0 && layer.Noise is { } noise && !layer.Bones.IsEmpty &&
+                                 ((noise.Tilt > 0 || noise.Twist > 0) && layer.Components.HasFlag(PoseComponents.Rotation) ||
+                                  noise.Slide > 0 && layer.Components.HasFlag(PoseComponents.Position)),
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -165,8 +168,8 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} lists a bone twice or a bone without a name.");
         if (layer.Keys.Length > MaxKeys)
             throw new InvalidDataException($"{name} has too many keys.");
-        if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth &&
-            !layer.Keys.IsEmpty)
+        if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
+                MotionLayerKind.Noise && !layer.Keys.IsEmpty)
             throw new InvalidDataException($"{name} can't have keys.");
         if (layer.Kind != MotionLayerKind.Pin && !layer.Pins.IsEmpty)
             throw new InvalidDataException($"{name} can't have pins.");
@@ -186,6 +189,12 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} can't have a swing.");
         if (layer.Swing is { } swing)
             MotionSwings.Validate(swing, name);
+        if (layer.Kind == MotionLayerKind.Noise && layer.Noise == null)
+            throw new InvalidDataException($"{name} has no noise.");
+        if (layer.Kind != MotionLayerKind.Noise && layer.Noise != null)
+            throw new InvalidDataException($"{name} can't have a noise.");
+        if (layer.Noise is { } noise)
+            MotionNoises.Validate(noise, name);
         if (layer.Kind == MotionLayerKind.Smooth && layer.Window is < MotionSmoothing.MinWindow or > MotionSmoothing.MaxWindow)
             throw new InvalidDataException($"{name} has a window out of range.");
         if (layer.Kind != MotionLayerKind.Smooth && layer.Window != 0)
@@ -339,6 +348,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Swing:
                     MotionSwings.Apply(clip, layer, index, loop, end, token);
+                    break;
+                case MotionLayerKind.Noise:
+                    MotionNoises.Apply(clip, layer, index, loop, end, token);
                     break;
                 case MotionLayerKind.Smooth:
                     MotionSmoothing.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
@@ -622,7 +634,7 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape, root reset, idle and swing layers applied at <paramref name="frame"/>, in order, the way
+    /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape, root reset, idle, swing and noise layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
     /// around its average over their section, which one pose does not have, and so are smooth motions, which average the frames
     /// round it, and a hand shape keeping finger motion; planted pins
@@ -660,6 +672,11 @@ internal static class MotionEvaluator
             if (layer.Kind == MotionLayerKind.Swing)
             {
                 MotionSwings.ApplyAt(skeleton, pose, layer, MotionSwings.Plan(skeleton, layer, index), frame, loop, Weight(layer, frame, end), end);
+                continue;
+            }
+            if (layer.Kind == MotionLayerKind.Noise)
+            {
+                MotionNoises.ApplyAt(skeleton, pose, layer, MotionNoises.Plan(skeleton, layer, index), frame, loop, Weight(layer, frame, end), end);
                 continue;
             }
             if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth)

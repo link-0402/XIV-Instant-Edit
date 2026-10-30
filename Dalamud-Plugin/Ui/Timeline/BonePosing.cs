@@ -274,7 +274,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         if (layer != null)
         {
             if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                    MotionLayerKind.Smooth) && PoseEdits.Keyed(layer, bone, frame))
+                    MotionLayerKind.Smooth or MotionLayerKind.Noise) && PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
             if (layerBones?.Pinned.Contains(bone) == true)
                 return BoneState.Pinned;
@@ -297,6 +297,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             MotionLayerKind.Idle => "This layer adds idle motion.",
             MotionLayerKind.Swing => "This layer swings its bones.",
             MotionLayerKind.Smooth => "This layer smooths its bones.",
+            MotionLayerKind.Noise => "This layer wobbles its bones.",
             _ => "This layer changes it.",
         },
         BoneState.Animated => "The clip moves it.",

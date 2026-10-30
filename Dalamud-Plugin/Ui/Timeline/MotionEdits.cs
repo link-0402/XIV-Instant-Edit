@@ -86,6 +86,7 @@ internal static class MotionEdits
         MotionLayerKind.Idle => "Idle motion",
         MotionLayerKind.Swing => "Swing",
         MotionLayerKind.Smooth => "Smooth motion",
+        MotionLayerKind.Noise => "Noise",
         _ => "Pose",
     };
 
@@ -96,7 +97,7 @@ internal static class MotionEdits
     /// Adds a layer of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/> after
     /// the others, so it applies last, named "Offset 2" and so on, with no fades, so a loop
     /// stays seamless. An amplitude starts at 150%, every other kind at full strength; a swing starts with the
-    /// default swing and a smooth motion with the default window.
+    /// default swing, a smooth motion with the default window and a noise with the default noise.
     /// </summary>
     public static TimelineDocument Add(TimelineDocument doc, MotionLayerKind kind, int start, int end, out string key, out string? error)
     {
@@ -131,7 +132,8 @@ internal static class MotionEdits
             },
             MotionInterpolation.Smooth,
             Swing: kind == MotionLayerKind.Swing ? new MotionSwing() : null,
-            Window: kind == MotionLayerKind.Smooth ? MotionSmoothing.DefaultWindow : 0);
+            Window: kind == MotionLayerKind.Smooth ? MotionSmoothing.DefaultWindow : 0,
+            Noise: kind == MotionLayerKind.Noise ? new MotionNoise() : null);
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
     }
 
@@ -1056,9 +1058,10 @@ internal static class MotionEdits
     {
         frame = KeyFrame(doc, frame);
         var index = IndexOf(doc, key);
-        // Symmetry, fix, idle-motion, swing and smooth motion layers never hold keys; a pin layer keys only its keyed pins.
+        // Symmetry, fix, idle-motion, swing, smooth motion and noise layers never hold keys; a pin layer keys only its keyed pins.
         if (index < 0 || string.IsNullOrEmpty(bone) ||
-            doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth ||
+            doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
+                MotionLayerKind.Noise ||
             doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted))
             return doc;
         frame = Math.Clamp(frame, 0, TimelineDocument.MaxFrames);
@@ -1333,7 +1336,7 @@ internal static class MotionEdits
         (a.Fix == null ? b.Fix == null
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade && a.Fix.Axes == b.Fix.Axes && a.Fix.Placement == b.Fix.Placement &&
               SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&
-        SameIdle(a.Idle, b.Idle) && Equals(a.Markers, b.Markers) && Equals(a.Swing, b.Swing) && a.Window == b.Window &&
+        SameIdle(a.Idle, b.Idle) && Equals(a.Markers, b.Markers) && Equals(a.Swing, b.Swing) && a.Window == b.Window && Equals(a.Noise, b.Noise) &&
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));

@@ -388,7 +388,7 @@ internal static class FaceEditingFixture
         var moving = new TimelineFace(30, 600, 600);
         check(!moving.Still && moving.End == 630 && moving.FaceFrame(330) == 300 && moving.FaceFrame(10) == 0 && moving.ShownLength(150) == 630,
             "a moving face plays from its anchor and the canvas covers all of it");
-        check(TimelineFace.Allows(MotionLayerKind.Pose, null) && TimelineFace.Allows(MotionLayerKind.Swing, null) &&
+        check(TimelineFace.Allows(MotionLayerKind.Pose, null) && TimelineFace.Allows(MotionLayerKind.Swing, null) && TimelineFace.Allows(MotionLayerKind.Noise, null) &&
               TimelineFace.Allows(MotionLayerKind.Fix, MotionFixKind.SmoothJitter) && !TimelineFace.Allows(MotionLayerKind.Pin, null) &&
               !TimelineFace.Allows(MotionLayerKind.Idle, null) && !TimelineFace.Allows(MotionLayerKind.Fix, MotionFixKind.HandShape),
             "a face offers only layers that don't rely on body bones");

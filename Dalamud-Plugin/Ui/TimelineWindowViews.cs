@@ -36,7 +36,7 @@ internal static partial class TimelineWindowViews
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
         [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
-            MotionLayerKind.Smooth, MotionLayerKind.Pin];
+            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Pin];
 
     /// <summary>The bone layer items a face's Add menu has: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
     public static readonly ImmutableArray<MotionLayerKind> FaceLayerKinds = [.. LayerKinds.Where(kind => TimelineFace.Allows(kind, null))];
@@ -204,6 +204,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Idle => Theme.Success,
         MotionLayerKind.Swing => Theme.NormalTexture,
         MotionLayerKind.Smooth => Theme.BaseTexture,
+        MotionLayerKind.Noise => Theme.IndexTexture,
         _ => Theme.Important,
     };
 
@@ -218,6 +219,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Idle => "Add breathing and a weight shift taken from another animation, such as an idle.",
         MotionLayerKind.Swing => "Swing bones back and forth over the layer.",
         MotionLayerKind.Smooth => "Even out sudden moves.",
+        MotionLayerKind.Noise => "Random wobble on bones.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -287,8 +289,8 @@ internal static partial class TimelineWindowViews
                 moved.UnionWith(MotionIdles.Moved(layer));
                 continue;
             }
-            // A swing gives its bones motion, a smooth motion only reshapes what is there.
-            if (layer.Kind == MotionLayerKind.Swing)
+            // A swing or a noise gives its bones motion, a smooth motion only reshapes what is there.
+            if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise)
             {
                 moved.UnionWith(layer.Bones);
                 continue;
@@ -331,13 +333,13 @@ internal static partial class TimelineWindowViews
             return hand.Side switch { MotionHandSide.Left => "Left hand", MotionHandSide.Right => "Right hand", _ => "Both hands" };
         if (layer.Fix is { Kind: MotionFixKind.ResetRoot, Axes: var axes })
             return axes == MotionAxes.None ? "Root · no axes" : "Root · " + string.Join(", ", ResetAxes.Where(a => axes.HasFlag(a.Axis)).Select(a => a.Label));
-        var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth;
+        var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise;
         var bones = limited
             ? layer.Bones.Length
             : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct(StringComparer.Ordinal).Count();
-        // A swing without bones swings nothing; the other limited kinds then change every bone.
+        // A swing or a noise without bones moves nothing; the other limited kinds then change every bone.
         if (limited)
-            return bones == 0 ? layer.Kind == MotionLayerKind.Swing ? "No bones" : "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
+            return bones == 0 ? layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise ? "No bones" : "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
         var keys = layer.Keys.Length;
         return (keys == 1 ? "1 key" : $"{Whole(keys)} keys") + " · " + (bones == 1 ? "1 bone" : $"{Whole(bones)} bones");
     }
@@ -656,7 +658,7 @@ internal static partial class TimelineWindowViews
                     MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, editing),
                     MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot =>
                         editing?.Bones.Where(bone => bone.Parent < 0).Select(bone => bone.Name) ?? Enumerable.Empty<string>(),
-                    MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth => layer.Bones.AsEnumerable(),
+                    MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
                     MotionLayerKind.Pin => PinnedBones(layer, editing),
                     MotionLayerKind.Idle => MotionIdles.Moved(layer),
@@ -1016,8 +1018,8 @@ internal static partial class TimelineWindowViews
 
     /// <summary>
     /// Whether <paramref name="document"/>'s layers may move a bone other than n_hara, which Live on a rebuilt clip can't
-    /// show: the game takes those lengths from the character. Offset and pose layers count by their keys, a swing when it
-    /// slides; any other layer that changes positions counts.
+    /// show: the game takes those lengths from the character. Offset and pose layers count by their keys, a swing or a noise
+    /// when it slides; any other layer that changes positions counts.
     /// </summary>
     public static bool LiveRebuiltPositions(TimelineDocument document) =>
         document.Motion.Any(layer => MotionEvaluator.Active(layer) && layer.Components.HasFlag(PoseComponents.Position) && layer.Kind switch
@@ -1025,6 +1027,7 @@ internal static partial class TimelineWindowViews
             MotionLayerKind.Offset => layer.Keys.Any(key => key.Bones.Any(bone => bone.Key != "n_hara" && bone.Value.Position != Vector3.Zero)),
             MotionLayerKind.Pose => layer.Keys.Any(key => key.Moved.Any(bone => bone != "n_hara")),
             MotionLayerKind.Swing => layer.Swing is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
+            MotionLayerKind.Noise => layer.Noise is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
             _ => true,
         });
 

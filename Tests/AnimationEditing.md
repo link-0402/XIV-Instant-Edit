@@ -2703,3 +2703,16 @@ positions over the frames around the playhead. The frames and the cache are cove
 - [ ] 6 Scrub a long dance with Range 60 and 8 bones: no hitch in dalamud.log.
 - [ ] 7 Turn the crosshairs Off: no paths. Close and reopen the Bones window: the switch and the range keep their state
   until the plugin reloads.
+
+## Noise layer (pending)
+
+The wobble's maths is covered offline (NoiseLayerFixture); these checks are the panel and Live.
+
+- [ ] 1 Add a Noise layer over a looping idle, add the tail bones: Live shows the tail wobbling at random, and the loop's
+  seam doesn't jump.
+- [ ] 2 Raise Tilt, Twist and Slide: the wobble grows; untick Turn or Move and that part stops. Slide moves only the top
+  tail bone.
+- [ ] 3 Drag Speed from 0.1 to 10: the wobble goes from slow drifts to a tremble. New picks another seed and another
+  wobble; Ctrl+Z puts the old one back.
+- [ ] 4 A noise over part of a clip starts and ends at rest. The Bones window shows the same pose as Live.
+- [ ] 5 Save and reopen with Edit again: the wobble is the same. Dragging its sliders makes no hitch in dalamud.log.

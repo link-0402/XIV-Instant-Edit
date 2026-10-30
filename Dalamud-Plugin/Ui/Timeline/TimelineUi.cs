@@ -21,7 +21,7 @@ internal static class TimelineUi
     public static readonly FontAwesomeIcon[] LayerIcons =
     [
         FontAwesomeIcon.Bone, FontAwesomeIcon.WaveSquare, FontAwesomeIcon.StreetView, FontAwesomeIcon.ArrowsAltH, FontAwesomeIcon.Thumbtack, FontAwesomeIcon.Wrench,
-        FontAwesomeIcon.Wind, FontAwesomeIcon.Sync, FontAwesomeIcon.Feather,
+        FontAwesomeIcon.Wind, FontAwesomeIcon.Sync, FontAwesomeIcon.Feather, FontAwesomeIcon.Random,
     ];
 
     public static FontAwesomeIcon LaneIcon(TimelineLane lane) => LaneIcons[Math.Min((int)lane, LaneIcons.Length - 1)];

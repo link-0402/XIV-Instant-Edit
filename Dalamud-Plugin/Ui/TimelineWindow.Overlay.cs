@@ -508,7 +508,7 @@ public sealed partial class TimelineWindow
     {
         reason = null;
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                MotionLayerKind.Smooth || ReadOnly)
+                MotionLayerKind.Smooth or MotionLayerKind.Noise || ReadOnly)
             return null;
         if (frame < layer.Start || frame > layer.End)
         {

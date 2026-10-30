@@ -529,8 +529,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         ImGui.TextColored(Theme.Muted, "Bones");
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        // A swing with none listed swings nothing; the other limited kinds then change every bone.
-        var swing = layer.Kind == MotionLayerKind.Swing;
+        // A swing or a noise with none listed moves nothing; the other limited kinds then change every bone.
+        var swing = layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise;
         ImGui.TextUnformatted(layer.Bones.IsEmpty ? swing ? "None" : "Every bone" : layer.Bones.Length == 1 ? "1 bone" : $"{layer.Bones.Length} bones");
         foreach (var bone in layer.Bones)
         {
@@ -558,6 +558,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             {
                 MotionLayerKind.Fix => "Add the selected bones to the ones this layer fixes. With none listed, it fixes every bone.",
                 MotionLayerKind.Swing => "Add the selected bones to the ones this layer swings.",
+                MotionLayerKind.Noise => "Add the selected bones to the ones this layer wobbles.",
                 MotionLayerKind.Smooth => "Add the selected bones to the ones this layer smooths. With none listed, it smooths every bone.",
                 _ => "Add the selected bones to the ones this layer scales. With none listed, it scales every bone.",
             });

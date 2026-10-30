@@ -115,8 +115,10 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         SwingFields.Draw(current, layer);
                     else if (layer.Kind == MotionLayerKind.Smooth)
                         SwingFields.DrawWindow(current, layer);
+                    else if (layer.Kind == MotionLayerKind.Noise)
+                        SwingFields.DrawNoise(current, layer);
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                        MotionLayerKind.Smooth))
+                        MotionLayerKind.Smooth or MotionLayerKind.Noise))
                         DrawInterpolation(current, layer);
                 }
             }
@@ -154,7 +156,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             Widgets.MutedWrapped("Changes the root bone only, so the whole body turns with it.");
         else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
-        else if (layer.Kind == MotionLayerKind.Swing)
+        else if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise)
         {
             boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
             SwingFields.DrawNotes(layer);
@@ -523,7 +525,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         var smooth = layer.Fix?.Kind == MotionFixKind.SmoothJitter;
         TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch
         {
-            MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth => "Strength",
+            MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise => "Strength",
             MotionLayerKind.Amplitude => "Movement",
             MotionLayerKind.Pin => "Pull",
             _ => "Blend",
@@ -545,6 +547,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 MotionLayerKind.Fix => "How far the end goes to the loop's first frame. Ctrl+click to type.",
                 MotionLayerKind.Idle => "How much of the borrowed motion applies, over the shares below. Ctrl+click to type.",
                 MotionLayerKind.Swing => "How much of the swing applies. Ctrl+click to type.",
+                MotionLayerKind.Noise => "How much of the wobble applies. Ctrl+click to type.",
                 MotionLayerKind.Smooth => "How far the bones go to the smoothed motion. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
@@ -588,7 +591,8 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     private static void DrawComponents(TimelineEditor current, MotionLayer layer)
     {
         TimelineUi.Fact("Changes");
-        PoseComponents[] parts = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth
+        PoseComponents[] parts = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
+                MotionLayerKind.Noise
             ? [PoseComponents.Rotation, PoseComponents.Position]
             : [PoseComponents.Rotation, PoseComponents.Position, PoseComponents.Scale];
         var first = true;

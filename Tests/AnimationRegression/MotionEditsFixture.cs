@@ -294,7 +294,7 @@ internal static class MotionEditsFixture
               MotionEdits.Find(smooth, smoothKey) is { Name: "Smooth motion 1", Amount: 1, Window: MotionSmoothing.DefaultWindow, Swing: null },
             "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
         check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
-                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Pin]) &&
+                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Pin]) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
               TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&
@@ -310,6 +310,19 @@ internal static class MotionEditsFixture
         check(ReferenceEquals(MotionEdits.SetKey(swing, swingKey, 10, "j_kosi", rest), swing) &&
               ReferenceEquals(MotionEdits.SetKey(smooth, smoothKey, 10, "j_kosi", rest), smooth),
             "swing and smooth motion layers take no keys");
+        var noise = MotionEdits.Add(Empty(), MotionLayerKind.Noise, 0, 100, out var noiseKey, out _);
+        var noisy = MotionEdits.Find(noise, noiseKey)!;
+        check(noisy is { Name: "Noise 1", Amount: 1, Components: PoseComponents.Rotation | PoseComponents.Position, Window: 0, Swing: null } &&
+              noisy.Noise == new MotionNoise() && MotionEdits.MaxAmount(MotionLayerKind.Noise) == MotionEvaluator.MaxAmount,
+            "a noise starts with the default noise at full strength, up to 400%");
+        check(TimelineWindowViews.LayerKindHint(MotionLayerKind.Noise) == "Random wobble on bones." &&
+              TimelineUi.LayerIcon(MotionLayerKind.Noise) != TimelineUi.LayerIcon(MotionLayerKind.Smooth) &&
+              TimelineUi.LayerIcons.Distinct().Count() == TimelineUi.LayerIcons.Length && TimelineUi.LayerIcons.Length == Enum.GetValues<MotionLayerKind>().Length &&
+              Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.Noise).All(kind => TimelineWindowViews.LayerColour(kind) != TimelineWindowViews.LayerColour(MotionLayerKind.Noise)),
+            "the Add menu offers Noise after Smooth motion, with its own hint, icon and colour");
+        check(TimelineWindowViews.LayerContent(noisy) == "No bones" && TimelineWindowViews.LayerContent(noisy with { Bones = ["j_kosi"] }) == "1 bone" &&
+              !TimelineLayout.Unfolds(noisy) && ReferenceEquals(MotionEdits.SetKey(noise, noiseKey, 10, "j_kosi", rest), noise),
+            "a noise without bones says so, has no bone rows and takes no keys");
         var full = Empty() with { Motion = [.. Enumerable.Range(0, MotionEvaluator.MaxLayers).Select(i => layer with { Key = "m" + i })] };
         var refused = MotionEdits.Add(full, MotionLayerKind.Offset, 0, 10, out _, out var tooMany);
         check(ReferenceEquals(refused, full) && tooMany != null, "a layer past the most an animation may have is refused with a reason");

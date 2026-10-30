@@ -221,6 +221,8 @@ internal static class PoseEditorFixture
         var smooth = swing with { Kind = MotionLayerKind.Smooth, Swing = null, Window = 10 };
         check(PoseEdits.Changes(swing, Twin) && !PoseEdits.Changes(swing, Hand) && PoseEdits.Changes(smooth, Twin) && !PoseEdits.Changes(smooth, Hand),
             "a swing or a smooth motion changes the bones it is limited to");
+        var noise = swing with { Kind = MotionLayerKind.Noise, Swing = null, Noise = new MotionNoise() };
+        check(PoseEdits.Changes(noise, Twin) && !PoseEdits.Changes(noise, Hand), "a noise changes the bones it is limited to");
     }
 
     /// <summary>Two bones' frames, the rotations from character space to the spaces their values turn in, pointing different ways.</summary>

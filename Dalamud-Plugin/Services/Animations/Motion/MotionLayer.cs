@@ -25,6 +25,8 @@ internal enum MotionLayerKind : byte
     Swing,
     /// <summary>Evens out sudden moves: each frame goes toward the average of the frames round it over <see cref="MotionLayer.Window"/>.</summary>
     Smooth,
+    /// <summary>Wobbles bones at random, smoothly (<see cref="MotionNoise"/>).</summary>
+    Noise,
 }
 
 /// <summary>What a fix layer repairs. Saved as numbers.</summary>
@@ -265,6 +267,7 @@ internal sealed record MotionWeight(int Frame, float Value);
 /// that average. 0 on every other kind, and for journals written before it.</param>
 /// <param name="Weights">Its weight over time, by frame inside the layer (<see cref="MotionEvaluator.WeightAt"/>), times its
 /// fades; empty is full weight, as for journals written before it.</param>
+/// <param name="Noise">For a noise layer, how its bones wobble; its amount is the wobble's strength. Other kinds have none.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -287,7 +290,8 @@ internal sealed record MotionLayer(
     MotionMarkers? Markers = null,
     MotionSwing? Swing = null,
     int Window = 0,
-    ImmutableArray<MotionWeight> Weights = default)
+    ImmutableArray<MotionWeight> Weights = default,
+    MotionNoise? Noise = null)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;
