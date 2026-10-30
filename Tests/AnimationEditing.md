@@ -2673,3 +2673,17 @@ BonePosing.MapBones, PoseMap.Shows/Extras.
 - [ ] 4 Reverse timing on three keys with different eases: the motion plays backwards between the first and last key, each
   key keeping its ease.
 - [ ] 5 S in the Timeline doesn't walk the character back, and outside the Timeline S walks as usual.
+
+## Layer weight (pending)
+
+The maths and edits are covered offline (LayerWeightFixture); these checks are the canvas and Live.
+
+- [ ] 1 Key an offset layer, tick Weight in the layer panel: its row shows a line at the top. Click low in the middle of
+  the bar: a point lands there, the line dips, and Live shows the offset weaker around it. Undo takes the point out.
+- [ ] 2 Drag a point up, down and sideways: it follows, stops before its neighbours, snaps to keys and the playhead, and
+  moves freely with Alt. Hover it: "Frame N, 60 %". Right-click it: it goes.
+- [ ] 3 While Weight is on, the row's keys and fade handles don't take clicks; the panel's Starts and Ends still work and
+  drop points left outside. Untick Weight: the line stays faint and the keys work again. Clear weight empties it.
+- [ ] 4 An amplitude layer with a point at 0 over its first half changes nothing there in Live and the save.
+- [ ] 5 Move the layer and duplicate it: the points go with it. Save and reopen with Edit again: the points are back.
+- [ ] 6 Dragging points on a long clip makes no hitch in dalamud.log.

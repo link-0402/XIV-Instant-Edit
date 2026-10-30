@@ -186,6 +186,11 @@ internal static class TimelinePainter
                     TimelineWindowViews.LayerLabel(layer));
                 drawList.PopClipRect();
             }
+            // The weight line over the bar, full while its weight is edited (its keys then pause and fade), faint otherwise.
+            var weighing = current.WeightLayer == layer.Key && MotionEdits.TakesWeights(layer);
+            if (weighing || !layer.Weights.IsEmpty)
+                DrawWeight(drawList, layer, geometry, view, layout.LayerRow(index), min.Y, trackLeft, max.X, weighing, hit, alpha);
+            var keyAlpha = weighing ? alpha * .35f : alpha;
             var middle = (y0 + y1) / 2;
             var half = Math.Min((y1 - y0) / 2, Theme.Scaled(5));
             foreach (var key in layer.Keys)
@@ -201,10 +206,10 @@ internal static class TimelinePainter
                 // A key outside the layer still shapes the curve but never applies on its own.
                 var inside = key.Frame >= layer.Start && key.Frame <= layer.End;
                 var hotKey = hot && hit.Part == TimelinePart.LayerKey && hit.KeyFrame == key.Frame;
-                DrawKeyMark(drawList, shape, x, middle, half, TimelineUi.U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * alpha)));
+                DrawKeyMark(drawList, shape, x, middle, half, TimelineUi.U32(Theme.WithAlpha(Theme.Text, (inside ? hotKey ? 1 : .88f : .4f) * keyAlpha)));
             }
-            // A match or a close loop has no fades to drag: its blend is its own.
-            if ((selected || hot) && !MotionEdits.IsAnchored(layer))
+            // A match or a close loop has no fades to drag: its blend is its own. Nor has a row editing its weight.
+            if ((selected || hot) && !MotionEdits.IsAnchored(layer) && !weighing)
             {
                 var radius = Theme.Scaled(3);
                 drawList.AddCircleFilled(new Vector2(fadeInX, y0), radius,
@@ -249,6 +254,47 @@ internal static class TimelinePainter
         drawList.AddRect(new Vector2(x0, y0), new Vector2(x1, y1), TimelineUi.U32(Theme.WithAlpha(colour, .9f * alpha)), rounding, ImDrawFlags.None, line);
         if (current.SelectedLayer == layer.Key)
             drawList.AddRect(new Vector2(x0 - 1, y0 - 1), new Vector2(x1 + 1, y1 + 1), TimelineUi.U32(Theme.Accent), rounding, ImDrawFlags.None, Theme.Scaled(2));
+    }
+
+    /// <summary>
+    /// A layer's weight over its bar on <paramref name="row"/>: a line from 0 at the row's bottom to 100% at its top, sampled
+    /// every two pixels in view, and while it is edited a diamond per point, the one under the pointer lit.
+    /// </summary>
+    private static void DrawWeight(ImDrawListPtr drawList, MotionLayer layer, TimelineGeometry geometry, TimelineView view, int row, float minY,
+        float trackLeft, float maxX, bool editing, TimelineHit hit, float alpha)
+    {
+        var from = Math.Max(trackLeft + view.X(layer.Start), trackLeft);
+        var to = Math.Min(trackLeft + view.X(layer.End), maxX);
+        if (to <= from)
+            return;
+        var colour = TimelineUi.U32(Theme.WithAlpha(editing ? Theme.Accent : Theme.Text, (editing ? .95f : .35f) * alpha));
+        var thickness = editing ? Theme.Scaled(1.5f) : Math.Max(1, MathF.Floor(Theme.Scale));
+        var step = Math.Max(1, Theme.Scaled(2));
+        Vector2? previous = null;
+        for (var x = from; ; x += step)
+        {
+            var at = Math.Min(x, to);
+            var point = new Vector2(at, minY + geometry.WeightY(row, MotionEvaluator.WeightAt(layer, view.FrameAt(at - trackLeft))));
+            if (previous is { } last)
+                drawList.AddLine(last, point, colour, thickness);
+            previous = point;
+            if (at >= to)
+                break;
+        }
+        if (!editing)
+            return;
+        var half = Math.Min(geometry.Marker / 2, geometry.Row / 4);
+        foreach (var weight in layer.Weights)
+        {
+            var x = trackLeft + view.X(weight.Frame);
+            if (x < trackLeft - half || x > maxX + half)
+                continue;
+            var y = minY + geometry.WeightY(row, weight.Value);
+            var hot = hit.Part == TimelinePart.WeightPoint && hit.Layer == layer.Key && hit.KeyFrame == weight.Frame;
+            if (hot)
+                DrawKeyMark(drawList, KeyShape.Diamond, x, y, half + Theme.Scaled(1.5f), TimelineUi.U32(Theme.Accent));
+            DrawKeyMark(drawList, KeyShape.Diamond, x, y, half, TimelineUi.U32(Theme.WithAlpha(Theme.Text, alpha)));
+        }
     }
 
     private enum KeyShape : byte { Diamond, Circle, Square }

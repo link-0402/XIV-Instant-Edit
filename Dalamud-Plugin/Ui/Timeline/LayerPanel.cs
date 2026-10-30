@@ -101,6 +101,9 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         FrameField(current, layer, "Fade out", "##layer-fade-out", layer.FadeOut, fade => layer with { FadeOut = fade });
                     }
                     DrawAmount(current, layer);
+                    // A match or a close loop is anchored to the clip's ends, and a still face has no span to weigh over.
+                    if (MotionEdits.TakesWeights(layer) && current.Document.Face is not { Still: true })
+                        DrawWeight(current, layer);
                     // A hand shape turns finger bones only, a root reset the root; a pin holds a spot and a turn, whatever parts are set.
                     if (hand != null)
                         hands.DrawFields(current, layer, hand);
@@ -380,6 +383,24 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(tooltip);
+    }
+
+    /// <summary>
+    /// The layer's weight over time: a tick that edits it on the layer's row in the timeline (a view setting), and Clear
+    /// weight, which deletes every point as one undo step.
+    /// </summary>
+    private static void DrawWeight(TimelineEditor current, MotionLayer layer)
+    {
+        TimelineUi.Fact("Weight");
+        var on = current.WeightLayer == layer.Key;
+        if (ImGui.Checkbox("##layer-weight", ref on))
+            current.SetWeightEditing(layer.Key, on);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Edit this layer's weight on its row.");
+        ImGui.SameLine(0, Theme.Scaled(10));
+        using (ImRaii.Disabled(layer.Weights.IsEmpty))
+            if (ImGui.Button("Clear weight"))
+                current.Commit(MotionEdits.ClearWeights(current.Document, layer.Key));
     }
 
     /// <summary> A frame number field with its time beside it. </summary>

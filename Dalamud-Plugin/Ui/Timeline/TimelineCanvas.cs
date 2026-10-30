@@ -84,7 +84,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         var local = io.MousePos - origin;
         var hit = hovered || active ? current.HitTest(geometry, local) : TimelineHit.None();
 
-        HandlePointer(current, hit, local.X - legend, hovered, active, activated, readOnly, row);
+        // A weight point's drag reads the pointer's height on its own layer's row, wherever the pointer is.
+        var weight = current.WeightRow is { } weightRow ? geometry.WeightValue(weightRow, local.Y) : float.NaN;
+        HandlePointer(current, hit, local.X - legend, weight, hovered, active, activated, readOnly, row);
         // The input above may have changed the document, the view or the scroll.
         clip = TimelineClipBand.Height(current.Document, row);
         ClampScroll(current, row, ruler + clip, area.Y);
@@ -101,8 +103,11 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     private void ClampScroll(TimelineEditor current, float row, float ruler, float height) =>
         scrollY = Math.Clamp(scrollY, 0, Math.Max(0, current.Layout.RowCount * row - Math.Max(0, height - ruler)));
 
-    /// <summary> Mouse input: presses, drags and releases to the editor; pan, zoom and the context menu here. </summary>
-    private void HandlePointer(TimelineEditor current, TimelineHit hit, float trackX, bool hovered, bool active, bool activated,
+    /// <summary>
+    /// Mouse input: presses, drags and releases to the editor; pan, zoom and the context menu here. A right-click on a weight
+    /// point deletes it.
+    /// </summary>
+    private void HandlePointer(TimelineEditor current, TimelineHit hit, float trackX, float weight, bool hovered, bool active, bool activated,
         bool readOnly, float row)
     {
         var io = ImGui.GetIO();
@@ -133,7 +138,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             else if (!ImGui.IsMouseDown(ImGuiMouseButton.Left))
                 current.Release();
             else if (current.Gesture == TimelineGesture.Scrub || ImGui.IsMouseDragging(ImGuiMouseButton.Left, Theme.Scaled(3)))
-                current.Drag(current.View.FrameAt(trackX), io.KeyAlt, hit.Row);
+                current.Drag(current.View.FrameAt(trackX), io.KeyAlt, hit.Row, weight);
         }
 
         if (active && ImGui.IsMouseDown(ImGuiMouseButton.Middle))
@@ -163,6 +168,12 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             rightPressed = false;
             // A click, not a drag: the delta stays zero below the drag threshold.
             if (hovered && current.Gesture == TimelineGesture.None && ImGui.GetMouseDragDelta(ImGuiMouseButton.Right) == Vector2.Zero &&
+                hit.Part == TimelinePart.WeightPoint)
+            {
+                if (!readOnly)
+                    current.DeleteWeight(hit);
+            }
+            else if (hovered && current.Gesture == TimelineGesture.None && ImGui.GetMouseDragDelta(ImGuiMouseButton.Right) == Vector2.Zero &&
                 clipBand.MarkAt(io.MousePos) is { } match)
             {
                 menuMatch = (match, current.Playhead);
@@ -558,6 +569,23 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     {
         if (!hovering || current.Gesture != TimelineGesture.None)
             return;
+        if (hit.Part == TimelinePart.WeightPoint && MotionEdits.Find(current.Document, hit.Layer) is { } weighted &&
+            MotionEdits.WeightIndex(weighted, hit.KeyFrame) is var point and >= 0)
+        {
+            if (!Widgets.HoverDelay($"weight:{weighted.Key}:{hit.KeyFrame}"))
+                return;
+            using var tooltip = ImRaii.Tooltip();
+            ImGui.TextUnformatted(TimelineWindowViews.WeightText(weighted.Weights[point]));
+            if (!readOnly)
+                ImGui.TextColored(Theme.Hint, "Drag to move it. Right-click to delete it.");
+            return;
+        }
+        if (hit.Part == TimelinePart.WeightLane)
+        {
+            if (!readOnly && Widgets.HoverDelay("weight-lane:" + hit.Layer))
+                ImGui.SetTooltip("Click to add a weight point.");
+            return;
+        }
         if (hit.OnLayer && MotionEdits.Find(current.Document, hit.Layer) is { } layer)
         {
             if (!Widgets.HoverDelay($"layer:{layer.Key}:{hit.Part}:{hit.KeyFrame}:{hit.Bone}"))

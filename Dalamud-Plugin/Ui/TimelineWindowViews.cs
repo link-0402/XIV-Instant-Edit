@@ -236,6 +236,10 @@ internal static partial class TimelineWindowViews
     public static string AmountText(MotionLayer layer) =>
         Math.Round(layer.Amount * 100, MidpointRounding.AwayFromZero).ToString(CultureInfo.InvariantCulture) + "%";
 
+    /// <summary>A weight point as its tooltip shows it: "Frame 12, 60 %".</summary>
+    public static string WeightText(MotionWeight point) =>
+        $"Frame {point.Frame.ToString(CultureInfo.InvariantCulture)}, {Math.Round(point.Value * 100, MidpointRounding.AwayFromZero).ToString(CultureInfo.InvariantCulture)} %";
+
     /// <summary>A layer's bar label: its name, its amount when it isn't full strength, "off" when turned off.</summary>
     public static string LayerLabel(MotionLayer layer) =>
         !layer.Enabled ? layer.Name + " · off"

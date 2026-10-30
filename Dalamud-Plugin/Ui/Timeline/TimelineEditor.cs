@@ -66,6 +66,8 @@ internal enum TimelineGesture : byte
     Stretch,
     /// <summary>Scales the picked keys' timing about the playhead as the mouse moves, without a button held (S).</summary>
     ScaleKeys,
+    /// <summary>Moves one weight point of a bone layer, its frame and value, or the one a press on its row just added.</summary>
+    WeightPoint,
 }
 
 /// <summary>
@@ -279,6 +281,24 @@ internal sealed class TimelineEditor
     /// <summary>Whether the layer with <paramref name="key"/> shows a row per bone under it.</summary>
     public bool IsUnfolded(string key) => !folded.Contains(key) && MotionEdits.Find(Document, key) != null;
 
+    /// <summary>
+    /// The layer whose row edits its weight: a click adds a point, a drag moves one, and its keys pause. One layer at a
+    /// time; null for none. A view setting, never an undo step.
+    /// </summary>
+    public string? WeightLayer { get; private set; }
+
+    /// <summary>Turns editing the weight of the layer <paramref name="key"/> on its row on or off; on moves it off any other layer.</summary>
+    public void SetWeightEditing(string key, bool on)
+    {
+        if (on && MotionEdits.Find(Document, key) is { } layer && MotionEdits.TakesWeights(layer))
+            WeightLayer = key;
+        else if (!on && WeightLayer == key)
+            WeightLayer = null;
+    }
+
+    /// <summary>The row of <see cref="WeightLayer"/>, whose height a weight drag reads; null when none is edited.</summary>
+    public int? WeightRow => MotionEdits.IndexOf(Document, WeightLayer) is var index and >= 0 ? Layout.LayerRow(index) : null;
+
     /// <summary>Shows every layer's bone rows again, for another clip whose layers only share the keys.</summary>
     public void UnfoldAll()
     {
@@ -424,7 +444,7 @@ internal sealed class TimelineEditor
 
     public bool CanPaste => !clipboard.IsEmpty;
 
-    public TimelineHit HitTest(TimelineGeometry geometry, Vector2 point) => geometry.HitTest(Document, Layout, View, point, Loops, ShownMarkers);
+    public TimelineHit HitTest(TimelineGeometry geometry, Vector2 point) => geometry.HitTest(Document, Layout, View, point, Loops, ShownMarkers, WeightLayer);
 
     // Pointer gestures.
 
@@ -527,6 +547,9 @@ internal sealed class TimelineEditor
                 break;
             case TimelinePart.LayerUnfold when hit.Layer is { } folding && MotionEdits.Find(doc, folding) != null:
                 SetUnfolded(folding, !IsUnfolded(folding));
+                break;
+            case TimelinePart.WeightPoint or TimelinePart.WeightLane when hit.Layer is { } weighted && MotionEdits.Find(doc, weighted) is { } layer:
+                PressWeight(hit, weighted, layer, doc, alt);
                 break;
             case TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or TimelinePart.LayerFadeIn or
                 TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey when hit.Layer is { } key && MotionEdits.Find(doc, key) is { } layer:
@@ -727,10 +750,47 @@ internal sealed class TimelineEditor
     }
 
     /// <summary>
-    /// The mouse moved to <paramref name="frameAtMouse"/> while held. Edits are computed from the
-    /// document at the press plus a whole-frame offset, so a long drag never drifts.
+    /// A press on the row of the layer whose weight is edited: on a point the drag that follows moves it; elsewhere on the
+    /// bar it adds a point at the pressed frame (snapped as keys snap, Alt free) and height, and the drag moves that one, the
+    /// add and the move one undo step. The layer becomes the selection.
     /// </summary>
-    public void Drag(float frameAtMouse, bool alt = false, int row = -1)
+    private void PressWeight(TimelineHit hit, string key, MotionLayer layer, TimelineDocument doc, bool alt)
+    {
+        if (SelectedLayer != key)
+            SelectLayer(key);
+        var snap = TimelineSnap.Targets(doc, playhead, motion: true);
+        gestureLayer = key;
+        if (hit.Part == TimelinePart.WeightPoint && MotionEdits.WeightIndex(layer, hit.KeyFrame) >= 0)
+        {
+            gestureKeyFrame = hit.KeyFrame;
+            BeginEdit(TimelineGesture.WeightPoint, [], [hit.KeyFrame], snap);
+            return;
+        }
+        var frame = Math.Clamp(TimelineSnap.Snap(hit.Frame, snap, SnapTolerance, View.Scale, Snap && !alt, out _), layer.Start, layer.End);
+        var added = MotionEdits.SetWeight(doc, key, frame, hit.Weight);
+        // Refused: the layer holds as many points as it may.
+        if (ReferenceEquals(added, doc) && MotionEdits.WeightIndex(layer, frame) < 0)
+        {
+            LastError = $"A layer can have at most {MotionEvaluator.MaxWeights} weight points.";
+            gesture = TimelineGesture.Select;
+            return;
+        }
+        gestureKeyFrame = frame;
+        BeginEdit(TimelineGesture.WeightPoint, [], [frame], snap);
+        origin = added;
+        History.Preview(added);
+    }
+
+    /// <summary>Deletes the weight point under <paramref name="hit"/> as one undo step; false when there is none.</summary>
+    public bool DeleteWeight(TimelineHit hit) =>
+        hit.Part == TimelinePart.WeightPoint && hit.Layer is { } key && Commit(MotionEdits.DeleteWeight(Document, key, hit.KeyFrame));
+
+    /// <summary>
+    /// The mouse moved to <paramref name="frameAtMouse"/> while held. Edits are computed from the
+    /// document at the press plus a whole-frame offset, so a long drag never drifts. A weight point's drag
+    /// also takes <paramref name="weight"/>, the weight at the pointer's height on its layer's row.
+    /// </summary>
+    public void Drag(float frameAtMouse, bool alt = false, int row = -1, float weight = float.NaN)
     {
         if (gesture is TimelineGesture.None or TimelineGesture.Select || !float.IsFinite(frameAtMouse))
             return;
@@ -781,6 +841,9 @@ internal sealed class TimelineEditor
                 TimelineGesture.LayerFadeIn or TimelineGesture.LayerFadeOut or TimelineGesture.LayerKey or TimelineGesture.BoneKey or TimelineGesture.LayerKeys
                 when gestureLayer is { } layerKey:
                 (next, landed) = DragLayer(start, layerKey, delta);
+                break;
+            case TimelineGesture.WeightPoint when gestureLayer is { } weightKey:
+                next = MotionEdits.MoveWeight(start, weightKey, gestureKeyFrame, delta, float.IsFinite(weight) ? weight : null, out landed);
                 break;
             case TimelineGesture.TrimLeft or TimelineGesture.TrimRight:
                 next = CutEdits.TrimPart(start, gesturePart, gesture == TimelineGesture.TrimLeft, delta, out var trimmed);
@@ -2247,6 +2310,8 @@ internal sealed class TimelineEditor
         }
         if (folded.RemoveWhere(key => MotionEdits.Find(doc, key) == null) > 0)
             layoutStamp++;
+        if (WeightLayer != null && MotionEdits.Find(doc, WeightLayer) == null)
+            WeightLayer = null;
         if (selected.Count > 0)
         {
             var keys = Events(doc).Select(ev => ev.Key).ToHashSet(StringComparer.Ordinal);

@@ -55,6 +55,10 @@ internal enum TimelinePart : byte
     EaseEdge,
     /// <summary>One of the motion's own markers on a Motion keys bone row.</summary>
     BoneMarker,
+    /// <summary>A weight point on the row of the layer whose weight is being edited.</summary>
+    WeightPoint,
+    /// <summary>The bar of the layer whose weight is being edited, where a click adds a weight point.</summary>
+    WeightLane,
 }
 
 /// <param name="Frame">The fractional frame under the pointer; the editor rounds it.</param>
@@ -62,16 +66,18 @@ internal enum TimelinePart : byte
 /// <param name="Key">The event under the pointer for Body, LeftEdge and RightEdge.</param>
 /// <param name="Row">The row under the pointer, -1 outside the rows.</param>
 /// <param name="Layer">The bone layer of the row under the pointer, also on the legend and on its bone rows.</param>
-/// <param name="KeyFrame">The frame of the layer's key under the pointer for LayerKey and BoneKey, else -1.</param>
+/// <param name="KeyFrame">The frame of the layer's key under the pointer for LayerKey and BoneKey, or of its weight point for WeightPoint, else -1.</param>
 /// <param name="Bone">The bone of a bone row under the pointer, also on the legend.</param>
 /// <param name="Cut">On the clip band, the part (ClipPart, ClipLeft, ClipRight) or join (Join, JoinEdge) under the pointer, else -1.</param>
+/// <param name="Weight">For WeightPoint and WeightLane, the weight at the pointer's height (0 to 1), else -1.</param>
 internal readonly record struct TimelineHit(TimelinePart Part, float Frame, TimelineLane? Lane = null, string? Key = null, int Row = -1,
-    string? Layer = null, int KeyFrame = -1, string? Bone = null, int Cut = -1)
+    string? Layer = null, int KeyFrame = -1, string? Bone = null, int Cut = -1, float Weight = -1)
 {
     public static TimelineHit None(float frame = 0) => new(TimelinePart.None, frame);
     public bool OnEvent => Key != null && Part is TimelinePart.Body or TimelinePart.LeftEdge or TimelinePart.RightEdge;
     public bool OnLayer => Layer != null && Part is TimelinePart.LayerBody or TimelinePart.LayerLeft or TimelinePart.LayerRight or
-        TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey;
+        TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey or TimelinePart.WeightPoint or
+        TimelinePart.WeightLane;
     /// <summary>On a key, a whole one on its layer's bar or one bone's on its row.</summary>
     public bool OnKey => Layer != null && KeyFrame >= 0 && Part is TimelinePart.LayerKey or TimelinePart.BoneKey;
 }
@@ -117,6 +123,20 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
     /// <summary>The top of a row in canvas pixels.</summary>
     public float RowTop(int row) => TimelineLayout.RowTop(row, Row, Header, ScrollY);
 
+    // A weight line keeps half a marker clear of the row's edges, so a point at 0 or 100% is grabbed whole.
+    private float WeightInset => Math.Min(Marker / 2, Row / 4);
+
+    /// <summary>Where a layer's weight <paramref name="value"/> is drawn on its row, in canvas pixels: 100% at the top, 0 at the bottom.</summary>
+    public float WeightY(int row, float value) => RowTop(row) + WeightInset + (1 - Math.Clamp(value, 0, 1)) * (Row - 2 * WeightInset);
+
+    /// <summary>The weight at height <paramref name="y"/> (canvas pixels) on a layer's row, within 0 to 1, in whole percent.</summary>
+    public float WeightValue(int row, float y)
+    {
+        var span = Math.Max(1, Row - 2 * WeightInset);
+        var value = Math.Clamp(1 - (y - RowTop(row) - WeightInset) / span, 0, 1);
+        return float.IsFinite(value) ? MathF.Round(value * 100) / 100 : 1;
+    }
+
     /// <summary>
     /// What is at <paramref name="point"/>. Order: the length handle; then the events of the row, where
     /// one whose own frames lie under the pointer wins at once, from the last drawn to the first, its
@@ -124,10 +144,11 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
     /// width, an edge's tolerance) the nearest event wins, so stacked markers all stay grabbable; then
     /// the ruler; then the clip band (see <see cref="HitClip"/>), where the seam is only hit on a clip
     /// that <paramref name="loops"/>; then empty lane space. On the Motion keys layer's bone rows a key out of reach
-    /// leaves the nearest of the motion's own <paramref name="markers"/> within reach.
+    /// leaves the nearest of the motion's own <paramref name="markers"/> within reach. The row of <paramref name="weightLayer"/>,
+    /// the layer whose weight is being edited, takes its weight points and the weight line instead (see <see cref="HitWeight"/>).
     /// </summary>
     public TimelineHit HitTest(TimelineDocument doc, TimelineLayout layout, TimelineView view, Vector2 point, bool loops = false,
-        MotionMarkerSet? markers = null)
+        MotionMarkerSet? markers = null, string? weightLayer = null)
     {
         var x = point.X - Legend;
         var y = point.Y;
@@ -161,7 +182,9 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         if (layout.IsMotionRow(row))
             return layerIndex < 0
                 ? new TimelineHit(TimelinePart.MotionLane, frame, null, null, row)
-                : HitLayer(MotionEdits.Shown(doc.Motion[layerIndex], doc.Length), view, x, y - RowTop(row), frame, row);
+                : weightLayer != null && doc.Motion[layerIndex] is { } weighted && weighted.Key == weightLayer && MotionEdits.TakesWeights(weighted)
+                    ? HitWeight(weighted, view, x, y, frame, row)
+                    : HitLayer(MotionEdits.Shown(doc.Motion[layerIndex], doc.Length), view, x, y - RowTop(row), frame, row);
 
         var events = doc.Events.IsDefault ? [] : doc.Events;
         TimelineHit? nearest = null;
@@ -230,6 +253,39 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
             return new TimelineHit(TimelinePart.LayerRight, frame, null, null, row, layer.Key);
         return x >= left && x <= right
             ? new TimelineHit(TimelinePart.LayerBody, frame, null, null, row, layer.Key)
+            : new TimelineHit(TimelinePart.MotionLane, frame, null, null, row, layer.Key);
+    }
+
+    /// <summary>
+    /// The row of the layer whose weight is being edited, at <paramref name="x"/> and <paramref name="y"/> (canvas pixels): the
+    /// nearest weight point within a marker's reach, then the ends' grab zones outside the bar, then the bar itself, where a
+    /// click adds a point; its keys and fades pause. Each carries the weight at the pointer's height.
+    /// </summary>
+    private TimelineHit HitWeight(MotionLayer layer, TimelineView view, float x, float y, float frame, int row)
+    {
+        var value = WeightValue(row, y);
+        var reach = Marker / 2 + 1;
+        TimelineHit? nearest = null;
+        var best = float.MaxValue;
+        foreach (var point in layer.Weights)
+        {
+            var distance = MathF.Abs(x - view.X(point.Frame));
+            if (distance <= reach && distance < best && MathF.Abs(y - WeightY(row, point.Value)) <= reach)
+            {
+                best = distance;
+                nearest = new TimelineHit(TimelinePart.WeightPoint, frame, null, null, row, layer.Key, point.Frame, Weight: value);
+            }
+        }
+        if (nearest is { } found)
+            return found;
+        var left = view.X(layer.Start);
+        var right = Math.Max(view.X(layer.End), left + 1);
+        if (x >= left - Edge && x < left)
+            return new TimelineHit(TimelinePart.LayerLeft, frame, null, null, row, layer.Key);
+        if (x > right && x <= right + Edge)
+            return new TimelineHit(TimelinePart.LayerRight, frame, null, null, row, layer.Key);
+        return x >= left && x <= right
+            ? new TimelineHit(TimelinePart.WeightLane, frame, null, null, row, layer.Key, Weight: value)
             : new TimelineHit(TimelinePart.MotionLane, frame, null, null, row, layer.Key);
     }
 

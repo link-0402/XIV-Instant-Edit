@@ -5,6 +5,7 @@ using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
@@ -23,6 +24,50 @@ internal static class LayerWeightFixture
         Apply(check);
         Edits(check);
         Cuts(check);
+        Canvas(check);
+    }
+
+    private static void Canvas(Action<bool, string> check)
+    {
+        var geometry = new TimelineGeometry(Legend: 100, Ruler: 24, Row: 20, Edge: 5, Marker: 9);
+        var editor = new TimelineEditor(Doc(Offset() with { Start = 10, End = 50, Weights = [new(10, 0), new(50, 1)] }));
+        editor.SetWidth(440);
+        var row = editor.Layout.LayerRow(0);
+        Vector2 At(float frame, float weight) => new(100 + editor.View.X(frame), geometry.WeightY(row, weight));
+        TimelineHit Hit(float frame, float weight) => editor.HitTest(geometry, At(frame, weight));
+
+        check(Hit(30, .5f) is { Part: TimelinePart.LayerBody } && editor.WeightRow == null, "with its weight not edited a layer's bar moves it");
+        editor.SetWeightEditing("m1", true);
+        check(editor.WeightLayer == "m1" && editor.WeightRow == row && Hit(30, .25f) is { Part: TimelinePart.WeightLane, Layer: "m1", Weight: .25f },
+            "while its weight is edited the bar takes the weight at the pointer's height");
+        check(Hit(50, 1) is { Part: TimelinePart.WeightPoint, KeyFrame: 50 } && Hit(10, 0) is { Part: TimelinePart.WeightPoint, KeyFrame: 10 } &&
+              editor.HitTest(geometry, At(10, 1) - new Vector2(4, 0)) is { Part: TimelinePart.LayerLeft },
+            "a point's diamond grabs the point, and just outside the bar its end still resizes it");
+        check(geometry.WeightY(row, 1) < geometry.WeightY(row, 0) && geometry.WeightValue(row, geometry.WeightY(row, .6f)) == .6f,
+            "the line runs from 0 at the row's bottom to 100% at its top");
+
+        var steps = editor.History.UndoCount;
+        editor.Press(Hit(30, .25f));
+        check(editor.Document.Motion[0].Weights.Contains(new MotionWeight(30, .25f)), "a press on the bar adds a point there at once");
+        editor.Drag(34, weight: .5f);
+        editor.Release();
+        check(editor.Document.Motion[0].Weights.SequenceEqual([new(10, 0), new(34, .5f), new(50, 1)]) && editor.History.UndoCount == steps + 1,
+            "the drag after it moves the new point, the add and the move one undo step");
+        editor.Undo();
+        check(editor.Document.Motion[0].Weights.SequenceEqual([new(10, 0), new(50, 1)]), "undo takes the added point out");
+        editor.Redo();
+
+        editor.Press(Hit(50, 1));
+        editor.Drag(20, weight: .8f);
+        editor.Release();
+        check(editor.Document.Motion[0].Weights.SequenceEqual([new(10, 0), new(34, .5f), new(35, .8f)]),
+            "dragging a point moves it as far as its neighbour and sets its height");
+        check(editor.DeleteWeight(Hit(35, .8f)) && editor.Document.Motion[0].Weights.SequenceEqual([new(10, 0), new(34, .5f)]),
+            "a right-click on a point deletes it");
+        check(TimelineWindowViews.WeightText(new MotionWeight(12, .6f)) == "Frame 12, 60 %", "a point's tooltip says its frame and weight");
+
+        editor.Commit(MotionEdits.Remove(editor.Document, "m1"));
+        check(editor.WeightLayer == null, "deleting the layer stops editing its weight");
     }
 
     private static void Curve(Action<bool, string> check)
