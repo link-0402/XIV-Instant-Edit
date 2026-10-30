@@ -356,15 +356,9 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
             if (posing.WholePose(wait.Loaded, wait.Doc, wait.Frame) is { } pose)
             {
                 saveWaiting = null;
-                byte[] bytes;
-                try { bytes = PoseFiles.Write(pose.Skeleton.Bones.Select((bone, i) => (bone.Name, pose.Model[i]))); }
-                catch (InvalidDataException e)
-                {
-                    Note($"{wait.Name}: {e.Message}", true);
-                    return;
-                }
                 var path = wait.Path;
-                saveWriting = (wait.Name, Task.Run(() => PoseFiles.Save(path, bytes)));
+                saveWriting = (wait.Name, Task.Run(() =>
+                    PoseFiles.Save(path, PoseFiles.Write(pose.Skeleton.Bones.Select((bone, i) => (bone.Name, pose.Model[i]))))));
             }
             else if (decode.FailedFor(wait.Loaded))
             {
@@ -762,8 +756,6 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
 
         if (folder != null)
             DrawSave();
-        else
-            focusSave = false;
 
         if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.FolderPlus, "Add folder", null, null, null, null))
             AddFolder();

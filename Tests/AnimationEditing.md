@@ -2642,7 +2642,8 @@ BonePosing.MapBones, PoseMap.Shows/Extras.
 ## Save pose (pending)
 
 - [ ] 1 Open a body emote, key a pose layer, open a pose folder in the pose browser and save the playhead's pose: its tile
-  shows with the folder's picture. Click it on another frame: the same pose keys.
+  shows with the folder's picture. Click it on another frame: the same pose keys. With a fix layer on, the saved pose is
+  the Bones window's (amplitude, fix and planted pin layers left out), not Live's.
 - [ ] 2 Load the saved file in Brio and in Ktisis (and Anamnesis if installed) on the GPose character: the body takes the pose.
 - [ ] 3 Save under a name that is there: Replace it? shows; No keeps the file, Yes replaces it. A name with ? is refused.
 - [ ] 4 Bones window, Save pose: the pose browser opens at its last folder with the name focused; with no folder yet it
