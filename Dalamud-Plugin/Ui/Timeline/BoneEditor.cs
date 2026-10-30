@@ -25,6 +25,9 @@ internal interface IBonesOverlay
     /// <summary>Whether the gizmo turns, moves or drags the bones, for a layer that can.</summary>
     GizmoMode Gizmo { get; set; }
 
+    /// <summary>How far a Drag on a hand or a foot turns the elbow or knee about the line to the aim, in degrees; not saved.</summary>
+    float DragBend { get; set; }
+
     /// <summary>What to do so the gizmo can pose the character with <paramref name="layer"/> at <paramref name="frame"/>; null when nothing the user does helps.</summary>
     string? GizmoWaits(MotionLayer layer, int frame, SkeletonDescription skeleton);
 }
@@ -739,6 +742,20 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             Widgets.HintWrapped(TimelineWindowViews.HipDragHint(skeleton, posing.Selection.Bones));
         else if (drag && TimelineWindowViews.HeadDrag(layer, posing.Selection.Primary, skeleton))
             Widgets.HintWrapped(TimelineWindowViews.HeadDragHint(skeleton, posing.Selection.Bones));
+        // A hand's or a foot's drag can turn the elbow or knee about the line to the aim; the drag keys the turned pose.
+        if (drag && posing.Selection.Primary is { } end &&
+            PinChains.Chain(skeleton, posing.BoneTree(skeleton).Index, new MotionPin(end)).Shape == PinChainShape.Limb)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, "Bend");
+            ImGui.SameLine(0, Theme.Gap);
+            var bend = overlay.DragBend;
+            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(120), ImGui.GetContentRegionAvail().X));
+            if (ImGui.SliderFloat("##drag-bend", ref bend, -180, 180, "%.0f°", ImGuiSliderFlags.AlwaysClamp))
+                overlay.DragBend = Math.Clamp(bend, -180, 180);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Turns the knee or elbow around the line to the aim as you drag. Ctrl+click to type.");
+        }
     }
 
     /// <summary>The rotation of the game camera's view, for the ball; null without a camera.</summary>

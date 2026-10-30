@@ -2732,3 +2732,20 @@ The wobble's maths is covered offline (NoiseLayerFixture); these checks are the 
   amplitude layer the strip says This layer has no keys to show.
 - [ ] 5 Click or drag on the graph: the playhead follows. Dragging a key on the canvas meanwhile holds the after curve
   until the drop. No hitch in dalamud.log while the strip is open during playback.
+
+## IK limits and Bend (pending)
+
+Knees and elbows bend only forward, at most 150 degrees, wherever a pin or a drag bends a limb; a Bend angle turns a
+limb about the line from its upper bone to the hand or foot. The solver is covered offline in PinLayerFixture (Limits).
+The offline skeleton's rest knees and elbows are bent; item 1 checks that the game's rest pose bends them forward too.
+
+- [ ] 1 An offset layer, select the left foot, Gizmo: Drag. Raise the foot to the side, above the hip, then in front
+  and behind: the knee always bends forward, never backwards. The same for a hand reached behind the back: the elbow
+  never bends backwards.
+- [ ] 2 Drag the foot up toward the hip: the knee folds to about 150 degrees and the foot stops short, without a snap.
+- [ ] 3 With the foot selected and Drag chosen, set Bend to 90 and drag: the knee points to the side and the layer keys
+  that pose. Bend back to 0: the next drag bends the knee forward again. The Bend field shows only for hands and feet.
+- [ ] 4 A pin layer with a keyed hand pin: the pin's Bend row turns the elbow on Live; one slider drag is one undo step.
+  The row shows only for hand and foot pins.
+- [ ] 5 Hip drag on the seated pose and a head drag: the knees and elbows still bend forward, as before.
+- [ ] 6 Save (replace) and Edit again: the pin's Bend is back and the clip plays the same.

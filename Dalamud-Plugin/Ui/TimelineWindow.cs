@@ -235,6 +235,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     bool IBonesOverlay.Shown => OverlayWanted;
     BoneOverlayMode IBonesOverlay.OnCharacter { get => showOnCharacter; set => showOnCharacter = value; }
     GizmoMode IBonesOverlay.Gizmo { get => gizmoMode; set => gizmoMode = value; }
+    float IBonesOverlay.DragBend { get => dragBend; set => dragBend = value; }
     string? IBonesOverlay.GizmoWaits(MotionLayer layer, int frame, SkeletonDescription skeleton) =>
         GizmoOperation(layer, frame, skeleton, out var reason) == null ? reason : null;
 

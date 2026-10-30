@@ -44,6 +44,8 @@ public sealed partial class TimelineWindow
     private MotionTransform[]? dragFrom;
     // The limb a Drag bends, found once per drag.
     private (PinChain Chain, Vector3 RestNormal)? dragLimb;
+    // How far a Drag on a hand or a foot turns the elbow or knee about the line to the aim, in degrees: the Bones window's Bend field.
+    private float dragBend;
     // What a Drag on the hips or the head holds where it is, found once per drag.
     private ImmutableArray<HipAnchor>? dragAnchors;
     // The back a Drag on the head leans, found once per drag, and the hips' move the drag's last frame keyed.
@@ -477,7 +479,7 @@ public sealed partial class TimelineWindow
                     {
                         dragLimb ??= PoseEdits.Limb(skeleton, bone);
                         current.Change(current.WithReach(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
-                            from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb)));
+                            from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb, dragBend)));
                     }
                 }
             }

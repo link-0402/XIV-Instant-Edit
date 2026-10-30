@@ -301,7 +301,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         }
     }
 
-    /// <summary> One pin's settings, as fact rows: Holds, Attached to, Bends up to, When, and Sensitivity when planted. </summary>
+    /// <summary> One pin's settings, as fact rows: Holds, Attached to, Bends up to, Bend for a hand or a foot, When, and Sensitivity when planted. </summary>
     private static void DrawPinSettings(TimelineEditor current, MotionLayer layer, MotionPin pin, SkeletonDescription skeleton, Dictionary<string, int> index,
         PinChain? chain)
     {
@@ -338,6 +338,23 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             pin.Top is { } highest ? AnimationPresentation.BoneName(highest) : fallback,
             () => [.. offerDefault ? new[] { ((string?)null, fallback) } : Array.Empty<(string?, string)>(), .. choices.Select(name => ((string?)name, AnimationPresentation.BoneName(name)))],
             pin.Top, highest => pin with { Top = highest }, true);
+
+        // A limb's knee or elbow bends where the solver picks; Bend turns it about the line to the held spot. One undo step per drag.
+        if (chain is { Shape: PinChainShape.Limb })
+        {
+            TimelineUi.Fact("Bend");
+            var bend = pin.Bend;
+            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(140), ImGui.GetContentRegionAvail().X));
+            var changed = ImGui.SliderFloat("##pin-bend", ref bend, -180, 180, "%.0f°", ImGuiSliderFlags.AlwaysClamp);
+            if (ImGui.IsItemActivated())
+                current.BeginFieldEdit();
+            if (changed)
+                current.Change(MotionEdits.SetPin(current.Document, layer.Key, pin with { Bend = Math.Clamp(bend, -180, 180) }));
+            if (ImGui.IsItemDeactivated())
+                current.EndFieldEdit();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Turns the knee or elbow around the line to the held spot. Ctrl+click to type.");
+        }
 
         PinChoice(current, layer, "When", "##pin-when", "At keys holds the spots you key, such as a hand on a knee. When planted holds the bone wherever the motion rests it, such as feet on the floor.",
             pin.Planted ? "When planted" : "At keys", () => [(false, "At keys"), (true, "When planted")], pin.Planted,
