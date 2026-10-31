@@ -148,11 +148,14 @@ internal static class LayerStrip
 
         if (active)
         {
-            var frame = Math.Clamp((int)MathF.Round((ImGui.GetMousePos().X - left) / span * length), 0, length);
+            var mouse = ImGui.GetMousePos().X;
+            var frame = Math.Clamp((int)MathF.Round((mouse - left) / span * length), 0, length);
             if (activated)
             {
-                var reach = (int)MathF.Ceiling(Theme.Scaled(5) * length / span);
-                if (layer != null && KeyNear(layer, frame, reach) is { } key)
+                // KeyNear picks the nearest key in frames; it counts only when it is within 5 px of the click.
+                var near = Theme.Scaled(5);
+                var reach = (int)MathF.Ceiling(near * length / span);
+                if (layer != null && KeyNear(layer, frame, reach) is { } key && MathF.Abs(X(key) - mouse) <= near)
                     GoToKey(current, layer, key, pause);
                 else
                 {
