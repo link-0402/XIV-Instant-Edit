@@ -2829,3 +2829,7 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 27 Save, Undo last save and the save running keep their reasons as tooltips, on a face session and a timeline
   that is read-only too. The spinner, status and Cancel follow Undo last save while it runs.
 - [ ] 28 Saving in place a sound other animations use still asks Everywhere or Only here.
+- [ ] 29 On a clip borrowed from another race whose motion can't be read on the rebuild, the status line warns "Can't
+  rebuild for" the race and Skeleton shows Keep its own. A clip that can't be rebuilt says why there as a note.
+- [ ] 30 Repair onto a skeleton that lacks bones the animation moves: the warning line reads like "Repair onto IVCS leaves
+  out 3 bones." and Skeleton's tooltip lists them.

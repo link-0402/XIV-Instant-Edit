@@ -147,7 +147,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var (warning, colour) = problem != null ? (problem, Theme.Warning)
             : saveError != null ? (saveError, Theme.Error)
             : saveMessage == AnimationEditService.SavedSkeletonTooSmall ? (saveMessage, Theme.Warning)
-            : (texts.PastEndWarning ?? texts.LayerBonesWarning, Theme.Warning);
+            : (texts.PastEndWarning ?? texts.LayerBonesWarning ?? LeftOutWarning(clip, doc, repair), Theme.Warning);
         if (warning != null)
         {
             using var wrap = ImRaii.TextWrapPos(0f);
@@ -254,6 +254,18 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             ImGui.SetTooltip(AnimationBakeRules.CompanionClip(loaded.Capture, loaded.Startup, loaded.Resource, destination) != null
                 ? "Save into a new mod, or into the mod it comes from.\n" + AnimationBakeRules.CompanionNote(loaded.Startup)
                 : "Save into a new mod, or into the mod it comes from.");
+    }
+
+    /// <summary>
+    /// The warning line's last entry: how many bones the animation moves that the repair or rebuild onto
+    /// <paramref name="repair"/> leaves out of the save. Null without one, or when it keeps them all.
+    /// </summary>
+    private string? LeftOutWarning(AnimationClip clip, TimelineDocument doc, SkeletonStandard? repair)
+    {
+        if (repair is not { } standard || AnimationBones.Plan(clip, standard, doc.ExcludedBones, session.Rebuild?.Model) is not { Dropped.IsEmpty: false } plan)
+            return null;
+        var name = session.Rebuild?.Model is { } model ? AnimationBones.RebuildName(model, standard) : "Repair onto " + AnimationBones.StandardName(standard);
+        return plan.Dropped.Length == 1 ? $"{name} leaves out 1 bone." : $"{name} leaves out {plan.Dropped.Length} bones.";
     }
 
     /// <summary>The choices of Save to, in its order.</summary>
@@ -565,16 +577,28 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     }
 
     /// <summary>
-    /// The status line's offer to bring back the layers the open clip was saved with, which new layers would otherwise go
-    /// on top of.
+    /// The status line's notes from the save row: a rebuild picked for you that went back to Keep its own, or why the clip
+    /// can't be rebuilt for the character's race; and the offer to bring back the layers the open clip was saved with,
+    /// which new layers would otherwise go on top of.
     /// </summary>
     public IEnumerable<StatusNote> Notes()
     {
-        if (session.Source is not { } current || SavedLayers(current) is not { } saved)
+        if (session.Source is not { } current)
             return [];
-        return [new StatusNote("saved-layers", StatusKind.Notice, "Saved with edits you can open again.", "Edit again", () => editAgain(saved, current.Capture),
-            ButtonTooltip: "Bring back the bone layers, cuts and length it was saved with, to change them.\nOtherwise they stay baked in, and new edits go on top.",
-            ButtonEnabled: !session.ReadOnly)];
+        var notes = new List<StatusNote>();
+        // Only body clips have the skeleton choice (see Draw).
+        if (!current.Standalone && current.Document != null && session.Editor is { Document.Face: null } editor && session.Rebuild?.Model == null)
+        {
+            if (session.Rebuild == null && rebuildFailed != null)
+                notes.Add(new StatusNote("rebuild-failed", StatusKind.Warning, rebuildFailed));
+            else if (AnimationBones.RebuildNote(session.Fresh(current).Clip, current.FileModel, editor.Document.ExcludedBones, false, current.HoldsOthers) is { } cannot)
+                notes.Add(new StatusNote("rebuild-note", StatusKind.Notice, cannot));
+        }
+        if (SavedLayers(current) is { } saved)
+            notes.Add(new StatusNote("saved-layers", StatusKind.Notice, "Saved with edits you can open again.", "Edit again", () => editAgain(saved, current.Capture),
+                ButtonTooltip: "Bring back the bone layers, cuts and length it was saved with, to change them.\nOtherwise they stay baked in, and new edits go on top.",
+                ButtonEnabled: !session.ReadOnly));
+        return notes;
     }
 
     /// <summary> Reverts this window's last save through its journal, then reads the timeline again. </summary>
