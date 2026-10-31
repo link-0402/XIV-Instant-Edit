@@ -104,18 +104,7 @@ internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
         livePoseNoteWarns = warns;
     }
 
-    /// <summary>The note a layer from a file leaves.</summary>
-    public void DrawNote()
-    {
-        if (livePoseNote is not { } note)
-            return;
-        if (Widgets.GhostIconButton("##livepose-note-dismiss", Dalamud.Interface.FontAwesomeIcon.Times, "Dismiss"))
-        {
-            livePoseNote = null;
-            return;
-        }
-        ImGui.SameLine(0, Theme.Gap);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(livePoseNoteWarns ? Theme.Warning : Theme.Success, note);
-    }
+    /// <summary>The status line's note a layer from a file leaves.</summary>
+    public IEnumerable<StatusNote> Notes() =>
+        livePoseNote is { } note ? [new StatusNote("livepose", livePoseNoteWarns ? StatusKind.Warning : StatusKind.Notice, note)] : [];
 }

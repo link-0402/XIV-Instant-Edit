@@ -38,6 +38,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly SoundInspector soundInspector;
     private readonly TimelinePreview timelinePreview;
     private readonly PlayBar playBar;
+    // The one line of notes under the bars.
+    private readonly StatusLine statusLine = new();
     private readonly BonePosing posing;
     private readonly BoneEditor boneEditor;
     private readonly PoseSourcePanel poseSources;
@@ -658,7 +660,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         CheckGizmo();
         toolbar.Draw(editor);
         timelinePreview.DrawBar(playBar, editor, source, saveFooter.RepairTarget);
-        toolbar.DrawMessages(editor);
+        statusLine.Draw("##timeline", toolbar.Notes(editor).Concat(timelinePreview.Notes(editor, source, saveFooter.RepairTarget)));
 
         var avail = ImGui.GetContentRegionAvail();
         if (footerHeight <= 0)

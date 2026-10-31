@@ -32,6 +32,8 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     // The check that the clicked row's animation fits the actor's skeleton, before it plays.
     private (AnimationLibraryItem Item, ushort Actor, Task<string?> Problem)? loaderChecking;
     private string? loaderMessage;
+    // The line DrawStatus draws where the window has no status line of its own.
+    private readonly StatusLine statusLine = new();
 
     /// <summary> Stops waiting for what the loader played, and drops its message, when the window closes. </summary>
     public void Reset()
@@ -296,32 +298,26 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
         open(chosen, chosen.Clip.Timeline != waiting.Item.Timeline);
     }
 
-    /// <summary>The loader's line while it waits, or why it couldn't play.</summary>
-    public void DrawStatus()
+    /// <summary>
+    /// The loader's own line, for the start page and a timeline that can't be edited; an open clip shows <see cref="Notes"/>
+    /// in the window's status line instead.
+    /// </summary>
+    public void DrawStatus() => statusLine.Draw("##loader", Notes());
+
+    /// <summary>The status line's note while the loader waits, with Cancel, or why it couldn't play.</summary>
+    public IEnumerable<StatusNote> Notes()
     {
         if (loaderWaiting is { } waiting)
         {
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
             var slow = DateTime.UtcNow - waiting.Since > LoaderPatience;
-            ImGui.TextColored(slow ? Theme.Warning : Theme.Muted, slow
+            return [new StatusNote("loader", StatusKind.Working, slow
                 ? $"{waiting.Item.Name} doesn't seem to play. It may need a weapon, a mount or another race."
-                : $"Waiting for {waiting.Item.Name} to play");
-            ImGui.SameLine(0, Theme.Gap);
-            if (ImGui.SmallButton("Cancel##loader"))
+                : $"Waiting for {waiting.Item.Name} to play", "Cancel", () =>
             {
                 loaderWaiting = null;
                 loaderChecking = null;
-            }
+            })];
         }
-        else if (loaderMessage is { } message)
-        {
-            if (Widgets.GhostIconButton("##loader-message-dismiss", FontAwesomeIcon.Times, "Dismiss"))
-                loaderMessage = null;
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Warning, message);
-        }
+        return loaderMessage is { } message ? [new StatusNote("loader", StatusKind.Error, message)] : [];
     }
 }

@@ -101,26 +101,16 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         pendingLengths.Clear();
     }
 
-    /// <summary> One line for an import running or done; the done ones can be dismissed. </summary>
-    public void DrawImportStatus()
+    /// <summary> The status line's note for an import running, failed or done. </summary>
+    public IEnumerable<StatusNote> Notes()
     {
         if (importTask != null && importing is { } work)
-        {
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, $"Importing {work.Name}");
-        }
-        else if (importError != null)
-        {
-            if (TimelineUi.Note("##import-error-dismiss", Theme.Warning, importError))
-                importError = null;
-        }
-        else if (importMessage != null)
-        {
-            if (TimelineUi.Note("##import-message-dismiss", Theme.Success, importMessage))
-                importMessage = null;
-        }
+            return [new StatusNote("import", StatusKind.Working, $"Importing {work.Name}")];
+        if (importError != null)
+            return [new StatusNote("import", StatusKind.Error, importError)];
+        if (importMessage != null)
+            return [new StatusNote("import", StatusKind.Notice, importMessage)];
+        return [];
     }
 
     /// <summary>

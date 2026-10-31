@@ -7,7 +7,7 @@ using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
 
-/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, then short messages. </summary>
+/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, and the status line's notes. </summary>
 internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
     TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, CurveView curves)
 {
@@ -236,53 +236,50 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
     }
 
     /// <summary>
-    /// One line each for an import running or done, an edit the editor refused or noted, a header length the motion
-    /// disagrees with and a pose that plays its events once.
+    /// The status line's notes from the editor and the panels: an edit the editor refused or noted, a header length the
+    /// motion disagrees with, a pose that plays its events once, an import, the loader, effects that stop, Blender, saved
+    /// layers and the .livepose note. Each kind keeps the order the status line shows it in.
     /// </summary>
-    public void DrawMessages(TimelineEditor current)
+    public IEnumerable<StatusNote> Notes(TimelineEditor current)
     {
-        if (texts.HeaderNote != null)
-            TimelineUi.Note(null, Theme.Muted, texts.HeaderNote);
-        if (texts.PoseLoopNote != null)
-            TimelineUi.Note(null, Theme.Muted, texts.PoseLoopNote);
-        pickers.DrawImportStatus();
+        var notes = new List<StatusNote>();
         if (current.LastError is { } error)
-            TimelineUi.Note(null, Theme.Warning, error);
+            notes.Add(new StatusNote("edit-error", StatusKind.Error, error));
         if (current.LastNotice is { } notice)
-            TimelineUi.Note(null, Theme.Muted, notice);
+            notes.Add(new StatusNote("edit-notice", StatusKind.Notice, notice));
         if (current.LastRemoval is { } removal && TimelineWindowViews.RemovalStatus(removal) is { } removed)
-            TimelineUi.Note(null, Theme.Muted, removed);
-        loader.DrawStatus();
-        livePose.DrawNote();
-        DrawEffectProblems(current);
-        blenderMotion.DrawStatus(current);
-        saveFooter.DrawSavedLayers();
+            notes.Add(new StatusNote("removal", StatusKind.Notice, removed));
+        if (texts.HeaderNote != null)
+            notes.Add(new StatusNote("header", StatusKind.Notice, texts.HeaderNote));
+        if (texts.PoseLoopNote != null)
+            notes.Add(new StatusNote("pose-loop", StatusKind.Notice, texts.PoseLoopNote));
+        notes.AddRange(pickers.Notes());
+        notes.AddRange(loader.Notes());
+        if (EffectProblems(current) is { } effects)
+            notes.Add(effects);
+        notes.AddRange(blenderMotion.Notes(current));
+        notes.AddRange(saveFooter.Notes());
+        notes.AddRange(livePose.Notes());
+        return notes;
     }
 
-    /// <summary> Effects that stop although the animation goes on, and the button that keeps them going. </summary>
-    private void DrawEffectProblems(TimelineEditor current)
+    /// <summary> Effects that stop although the animation goes on, with the button that keeps them going; null when none do. </summary>
+    private StatusNote? EffectProblems(TimelineEditor current)
     {
         if (texts.EffectWarning is not { } warning || texts.EffectProblems.IsEmpty)
-            return;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Warning, "⚠ " + warning);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(string.Join("\n", texts.EffectProblems.Select(p => p.Text)));
-        ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(session.ReadOnly))
-        {
-            if (ImGui.SmallButton(texts.EffectEvents == 1 ? "Keep it looping" : "Keep them looping"))
+            return null;
+        return new StatusNote("effects", StatusKind.Warning, "⚠ " + warning, texts.EffectEvents == 1 ? "Keep it looping" : "Keep them looping", () =>
             {
                 // The copies are packaged like imports; the edit's own undo puts the original effects back.
                 foreach (var copy in texts.EffectCopies)
                     session.Imports[copy.GamePath] = copy;
                 current.Commit(TimelineEffectCheck.Fix(current.Document, texts.EffectProblems));
-            }
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(texts.EffectCopies.IsEmpty
+            },
+            string.Join("\n", texts.EffectProblems.Select(p => p.Text)),
+            texts.EffectCopies.IsEmpty
                 ? "Sets Loop/wait to -1, which loops an effect until the animation ends. Save to keep the change."
                 : "Sets Loop/wait to -1 and uses copies of the effects that keep going: no kill of their own, sounds that loop. " +
-                  "Save to keep the change.");
+                  "Save to keep the change.",
+            !session.ReadOnly);
     }
 }

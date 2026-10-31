@@ -163,15 +163,11 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     }
 
     /// <summary>
-    /// The preview bar: <paramref name="bar"/> first, then Follow, the status and the hints. <paramref name="repair"/> is the
-    /// standard skeleton a preview repairs the clip onto, as a save would.
+    /// The preview bar: <paramref name="bar"/> first, then Follow. <paramref name="repair"/> is the standard skeleton a
+    /// preview repairs the clip onto, as a save would.
     /// </summary>
     public void DrawBar(PlayBar bar, TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
     {
-        var service = session.Animations!;
-        var available = PlaybackAvailable(out var reason);
-        var shown = previewFingerprint != null;
-        var active = session.Playback.Active;
         bar.Draw(current, loaded, repair, "##timeline-play");
 
         ImGui.SameLine(0, Theme.Scaled(12));
@@ -180,64 +176,55 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             Follow = follow;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Outside the preview, move the playhead with this clip while your character plays it.");
+    }
 
-        // A status only follows on this line when there is one, so nothing else lands beside the bar.
+    /// <summary>
+    /// The status line's notes for the preview and Live: work running, else an error, else the playback status or why
+    /// playback is unavailable; then bones Live can't show, the rebuilt-positions note, the shared collection and what the
+    /// preview still needs. <paramref name="repair"/> is the standard skeleton a preview repairs the clip onto.
+    /// </summary>
+    internal IEnumerable<StatusNote> Notes(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
+    {
+        var notes = new List<StatusNote>();
+        var available = PlaybackAvailable(out var reason);
+        var shown = previewFingerprint != null;
+        var active = session.Playback.Active;
+
+        // One of these at a time, as on the preview bar before: an error waits for the work, a status for the error.
         if (previewJob)
-        {
-            ImGui.SameLine(0, Theme.Scaled(12));
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, service.Status);
-        }
+            notes.Add(new StatusNote("preview-work", StatusKind.Working, session.Animations!.Status));
         else if (liveWanted && (decode.Reading || session.MotionDisplay?.Building == true && !Dragging || liveDrawWait != null))
-        {
-            ImGui.SameLine(0, Theme.Scaled(12));
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, decode.Reading ? decode.Status : liveDrawWait != null ? "Waiting for your character" : "Applying the bone layers");
-        }
+            notes.Add(new StatusNote("live-work", StatusKind.Working,
+                decode.Reading ? decode.Status : liveDrawWait != null ? "Waiting for your character" : "Applying the bone layers"));
         else if (FirstText(liveError, liveWanted ? session.MotionDisplay?.Error : null, previewError, session.Preview.Error, session.Playback.Error) is { } error)
-        {
-            ImGui.SameLine(0, Theme.Scaled(12));
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Warning, error);
-        }
+            notes.Add(new StatusNote("preview-error", StatusKind.Error, error));
         else if (FirstText(active ? session.Playback.Status : null, session.Preview.Active ? session.Preview.Status : null, available ? null : reason) is { } status)
-        {
-            ImGui.SameLine(0, Theme.Scaled(12));
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, status);
-        }
+            notes.Add(new StatusNote("playback", StatusKind.Notice, status));
 
         var needed = PreviewNeeded(current, loaded, repair);
         if (liveWanted)
         {
             if (session.MotionDisplay?.Unshown is > 0 and var unshown)
-                ImGui.TextColored(Theme.Warning, TimelineWindowViews.LiveUnshown(unshown));
-            if (livePreview != null)
-            {
-                ImGui.TextColored(Theme.Hint, needed ?? TimelineWindowViews.LiveOnPreviewHint);
-                return;
-            }
-            if (session.Fresh(loaded).Rebuild is { Model: not null } && TimelineWindowViews.LiveRebuiltPositions(current.Document))
-                ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveRebuiltPositionsNote);
-            ImGui.TextColored(Theme.Hint, TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched));
-            return;
+                notes.Add(new StatusNote("live-unshown", StatusKind.Warning, TimelineWindowViews.LiveUnshown(unshown)));
+            if (livePreview == null && session.Fresh(loaded).Rebuild is { Model: not null } && TimelineWindowViews.LiveRebuiltPositions(current.Document))
+                notes.Add(new StatusNote("rebuilt-positions", StatusKind.Notice, TimelineWindowViews.LiveRebuiltPositionsNote));
+            // Live without a preview shows the bone layers itself, so nothing waits (PreviewNeeded is null then).
+            if (livePreview != null && needed != null)
+                notes.Add(new StatusNote("preview-needs", StatusKind.Notice, needed));
+            return notes;
         }
-        if (!shown && !session.Preview.Active)
+        if (shown || session.Preview.Active)
         {
-            if (needed != null)
-                ImGui.TextColored(Theme.Hint, needed);
-            return;
+            if (session.Preview.CollectionShared)
+                notes.Add(new StatusNote("collection-shared", StatusKind.Warning, "⚠ Others using this collection see the preview too."));
         }
-        if (session.Preview.CollectionShared)
-            ImGui.TextColored(Theme.Warning, "⚠ Others using this collection see the preview too.");
-        ImGui.TextColored(Theme.Hint, needed
-            ?? (!shownLooks.IsEmpty ? "Changing an effect look redraws your character."
-            : "Sounds and effects play only while the preview plays."));
+        if (needed != null)
+            notes.Add(new StatusNote("preview-needs", StatusKind.Notice, needed));
+        return notes;
     }
+
+    /// <summary> The fixed hints the Preview button's tooltip adds to what it does. </summary>
+    internal const string PreviewHints = "Sounds and effects play only while the preview plays.\nChanging an effect look redraws your character.";
 
     /// <summary> The Live toggle, icon and label, filled while on: in the play bar and in the Bones window. </summary>
     public void DrawLiveToggle(TimelineEditor current, AnimationTimelineSource loaded, string id)
@@ -251,11 +238,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                    .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), liveWanted))
             clicked = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Bolt, "Live", null, null, null, null);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(liveWanted
+            ImGui.SetTooltip((liveWanted
                 ? "Live is on: your bone layers show on the GPose character as you edit. Click to turn it off."
                 : liveBlocked ?? (OnBuiltPreview() != null
                     ? "Show your bone layers over the preview as you edit them. Nothing is saved."
-                    : "Show your bone layers on the GPose character as you edit them. Nothing is saved."));
+                    : "Show your bone layers on the GPose character as you edit them. Nothing is saved.")) + "\n" +
+                (livePreview != null ? TimelineWindowViews.LiveOnPreviewHint : TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched)));
         if (!clicked || !enabled)
             return;
         if (!liveWanted && Carried(session.Fresh(loaded)) && OnBuiltPreview() == null)

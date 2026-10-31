@@ -286,39 +286,26 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         noteWarns = warns;
     }
 
-    /// <summary>The line under the toolbar: a send or read running, how the last one went, and which motion plays.</summary>
-    public void DrawStatus(TimelineEditor current)
+    /// <summary>
+    /// Every frame, polls a send or read running, then gives the status line's notes: that send or read, how the last one
+    /// went, and which motion plays.
+    /// </summary>
+    public IEnumerable<StatusNote> Notes(TimelineEditor current)
     {
         Poll(current);
+        var notes = new List<StatusNote>(2);
         if (sending != null || reading != null)
-        {
-            Widgets.Spinner();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, stopping ? "Stopping" : progress);
-            if (reading != null && !stopping)
-            {
-                ImGui.SameLine(0, Theme.Gap);
-                if (ImGui.SmallButton("Cancel##timeline-blender-cancel"))
-                    Stop();
-            }
-        }
-        else if (note is { } text && TimelineUi.Note("##timeline-blender-note", noteWarns ? Theme.Warning : Theme.Muted, text))
-            note = null;
-        if (current.Document.Replacement is not { } replacement)
-            return;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, TimelineWindowViews.BlenderMotionLine(replacement));
-        // A face's hold goes back with Ctrl+Z.
-        if (current.Document.Face != null)
-            return;
-        ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(session.ReadOnly))
-        {
-            if (ImGui.SmallButton("Use the clip's motion"))
-                current.DropReplacement();
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Go back to the animation's own motion. Ctrl+Z works too.");
+            notes.Add(reading != null && !stopping
+                ? new StatusNote("blender", StatusKind.Working, progress, "Cancel", Stop)
+                : new StatusNote("blender", StatusKind.Working, stopping ? "Stopping" : progress));
+        else if (note is { } text)
+            notes.Add(new StatusNote("blender", noteWarns ? StatusKind.Warning : StatusKind.Notice, text));
+        if (current.Document.Replacement is { } replacement)
+            // A face's hold goes back with Ctrl+Z.
+            notes.Add(current.Document.Face != null
+                ? new StatusNote("blender-motion", StatusKind.Notice, TimelineWindowViews.BlenderMotionLine(replacement))
+                : new StatusNote("blender-motion", StatusKind.Notice, TimelineWindowViews.BlenderMotionLine(replacement), "Use the clip's motion",
+                    () => current.DropReplacement(), ButtonTooltip: "Go back to the animation's own motion. Ctrl+Z works too.", ButtonEnabled: !session.ReadOnly));
+        return notes;
     }
 }

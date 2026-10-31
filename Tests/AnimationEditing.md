@@ -2777,3 +2777,15 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 8 Key a bone in the Bones window, then click Undo there: the edit is undone and the Timeline's lanes follow.
   Redo puts it back.
 - [ ] 9 The Bones header's own Live and Play buttons are gone. The key arrows, layer name, frame and help stay.
+
+## UI redesign stage 2 (pending)
+
+- [ ] 1 With nothing to say, the status line takes no height: the lanes start right under the play bar.
+- [ ] 2 Outside GPose, "Enter GPose to play the preview." shows in the status line, not on the play bar.
+- [ ] 3 With an effect that stops after its first loop, its warning shows there with Keep it looping (Keep them
+  looping for several). The button works and is greyed out while a save runs.
+- [ ] 4 With more than one note, "+N notes" opens a list of all of them, each with its colour and button.
+- [ ] 5 Dismiss a note: it stays hidden while its text is the same and comes back when its text changes.
+- [ ] 6 The Preview tooltip holds "Sounds and effects play only while the preview plays." and "Changing an effect
+  look redraws your character."
+- [ ] 7 The Live tooltip holds the Live hint, and over a preview "Live shows your bone layers over the preview."

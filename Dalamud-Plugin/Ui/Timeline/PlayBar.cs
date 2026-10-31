@@ -37,7 +37,8 @@ internal sealed class PlayBar(TimelineSession session, TimelinePreview preview)
                 preview.StartPreview(current, loaded, repair);
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(blocked ?? "Build the edited clip, redraw your GPose character with it and play it. Nothing is saved.");
+            ImGui.SetTooltip((blocked ?? "Build the edited clip, redraw your GPose character with it and play it. Nothing is saved.") + "\n" +
+                             TimelinePreview.PreviewHints);
 
         ImGui.SameLine(0, Theme.Scaled(2));
         preview.DrawLiveToggle(current, loaded, id + "-live");

@@ -508,21 +508,17 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         return AnimationEditService.SavedLayersJournal(service.Recovery, current);
     }
 
-    /// <summary> Offers to bring back the layers the open clip was saved with, which new layers would otherwise go on top of. </summary>
-    public void DrawSavedLayers()
+    /// <summary>
+    /// The status line's offer to bring back the layers the open clip was saved with, which new layers would otherwise go
+    /// on top of.
+    /// </summary>
+    public IEnumerable<StatusNote> Notes()
     {
         if (session.Source is not { } current || SavedLayers(current) is not { } saved)
-            return;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "Saved with edits you can open again.");
-        ImGui.SameLine(0, Theme.Gap);
-        using (ImRaii.Disabled(session.ReadOnly))
-        {
-            if (ImGui.SmallButton("Edit again"))
-                editAgain(saved, current.Capture);
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Bring back the bone layers, cuts and length it was saved with, to change them.\nOtherwise they stay baked in, and new edits go on top.");
+            return [];
+        return [new StatusNote("saved-layers", StatusKind.Notice, "Saved with edits you can open again.", "Edit again", () => editAgain(saved, current.Capture),
+            ButtonTooltip: "Bring back the bone layers, cuts and length it was saved with, to change them.\nOtherwise they stay baked in, and new edits go on top.",
+            ButtonEnabled: !session.ReadOnly)];
     }
 
     /// <summary> Reverts this window's last save through its journal, then reads the timeline again. </summary>

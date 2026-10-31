@@ -20,9 +20,11 @@ internal enum StatusKind : byte
 
 /// <summary>
 /// One note for the status line. <paramref name="Key"/> names its source, so dismissing it hides that source until its
-/// <paramref name="Text"/> changes; <paramref name="Button"/> with <paramref name="Act"/> draws a small button beside it.
+/// <paramref name="Text"/> changes; <paramref name="Button"/> with <paramref name="Act"/> draws a small button beside it,
+/// greyed out unless <paramref name="ButtonEnabled"/>, with <paramref name="ButtonTooltip"/> on hover.
 /// </summary>
-internal sealed record StatusNote(string Key, StatusKind Kind, string Text, string? Button = null, Action? Act = null, string? Tooltip = null);
+internal sealed record StatusNote(string Key, StatusKind Kind, string Text, string? Button = null, Action? Act = null, string? Tooltip = null,
+    string? ButtonTooltip = null, bool ButtonEnabled = true);
 
 /// <summary>
 /// The one line under a window's action bar: the first note shows, and "+N notes" opens a popup with all of them.
@@ -117,8 +119,13 @@ internal sealed class StatusLine
         if (note.Button is not null)
         {
             ImGui.SameLine();
-            if (ImGui.SmallButton(note.Button))
-                note.Act?.Invoke();
+            using (ImRaii.Disabled(!note.ButtonEnabled))
+            {
+                if (ImGui.SmallButton(note.Button) && note.ButtonEnabled)
+                    note.Act?.Invoke();
+            }
+            if (note.ButtonTooltip is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(note.ButtonTooltip);
         }
         if (note.Kind == StatusKind.Working)
             return;
