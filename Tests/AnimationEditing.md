@@ -2981,3 +2981,5 @@ only).
 - [ ] 8 The Partners page: right-click a row (its name or links) for Edit and Delete; Edit opens the editor with the
   preset's values; the name box takes 21 characters; delete a linked design in Glamourer and the row marks it
   (missing) within 5 seconds.
+- [ ] 9 In Penumbra, give "Aria Rose" its own Individual assignment to None; Spawn the preset (its collection applies
+  while spawned), then Despawn: the Individual entry for "Aria Rose" is None again, not removed.
