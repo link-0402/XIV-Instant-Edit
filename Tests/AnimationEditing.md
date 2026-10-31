@@ -2908,3 +2908,21 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 17 For each kind, the Bones window still poses it: offset and pose bones with the ball, pose sources on a pose
   layer, the bone list for amplitude, fix, idle, swing, smooth and noise, the head chain ticks for Look at, the symmetry
   bones and Pin here. The summary line follows each change.
+
+## UI redesign stage 5 (pending)
+
+- [ ] 1 The Bones window's title reads "Bones · " and the clip's name, and "Bones" with no clip open. Click Start in the
+  Timeline: the title keeps the clip's name and posing still works.
+- [ ] 2 The Bones window's top line holds Undo, Redo and the play bar; the line below holds the layer strip: the layer's
+  icon, the dropdown, the previous-key arrow, the strip and the next-key arrow. There are no step buttons, layer name,
+  frame or help on the top line; the help is at the end of the tools row.
+- [ ] 3 Select a bone layer in the Timeline: the strip shows that layer, its span across the clip, its keys as diamonds
+  and the playhead. Choose another layer in the dropdown: the Timeline selects it and its side panel shows its settings.
+- [ ] 4 A clip with no bone layer: the dropdown reads "No bone layer" and is greyed out. With no layer selected the strip
+  shows the playhead only, and the arrows are greyed out with "Select a bone layer first."
+- [ ] 5 The arrows go to the layer's previous and next key and select it; past the first or last key they are greyed out.
+  The playhead moves in both windows, and a playing preview pauses.
+- [ ] 6 Click or drag on the strip: the playhead follows in both windows. A click on a key's diamond goes to that key and
+  selects it in the Timeline, the diamond in the accent colour.
+- [ ] 7 At the window's 620 px minimum, Undo, Redo and the whole play bar show, and the strip ends with its next-key
+  arrow inside the window.

@@ -12,6 +12,8 @@ namespace InstantEdit.Ui;
 internal sealed class BonesWindow : Window
 {
     private readonly TimelineWindow timeline;
+    // The clip the title names, so the title is built again only when it changes.
+    private string? titled;
 
     internal BonesWindow(TimelineWindow timeline)
         : base("Bones###XIVInstantEditBones")
@@ -28,6 +30,16 @@ internal sealed class BonesWindow : Window
         Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
         AllowPinning = true;
         RespectCloseHotkey = true;
+    }
+
+    /// <summary> Before the window begins: the title names the open clip, "Bones · Sit idle 3", or reads "Bones" with none. </summary>
+    public override void PreDraw()
+    {
+        var clip = timeline.ClipTitle;
+        if (clip == titled)
+            return;
+        titled = clip;
+        WindowName = clip == null ? "Bones###XIVInstantEditBones" : $"Bones · {clip}###XIVInstantEditBones";
     }
 
     public override void Draw() => timeline.DrawBones();

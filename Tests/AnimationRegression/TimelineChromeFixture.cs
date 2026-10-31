@@ -10,7 +10,7 @@ using InstantEdit.Ui.Timeline;
 /// <summary>
 /// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
 /// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu and the side panel show,
-/// the clip view's Bones kept line and the layer settings' summary line.
+/// the clip view's Bones kept line, the layer settings' summary line and the Bones window's layer strip.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -26,6 +26,22 @@ internal static class TimelineChromeFixture
         SideViews(check);
         Kept(check);
         Summary(check);
+        Strip(check);
+    }
+
+    /// <summary> The Bones window's layer strip: its arrows step between keys, and a click near a key picks it. </summary>
+    private static void Strip(Action<bool, string> check)
+    {
+        var layer = Offset() with
+        {
+            Keys = [.. new[] { 10, 20, 40 }.Select(frame =>
+                new MotionKey(frame, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_kosi", new(Vector3.Zero, Quaternion.Identity, Vector3.One))))],
+        };
+        check(LayerStrip.Previous(layer, 20) == 10 && LayerStrip.Next(layer, 20) == 40, "Strip: steps around a key");
+        check(LayerStrip.Previous(layer, 10) == null && LayerStrip.Next(layer, 40) == null, "Strip: nothing past the ends");
+        check(LayerStrip.KeyNear(layer, 22, 3) == 20, "Strip: a click near a key picks it");
+        check(LayerStrip.KeyNear(layer, 30, 3) == null, "Strip: a click between keys picks none");
+        check(LayerStrip.KeyNear(layer, 15, 5) == 10, "Strip: a tie picks the earlier key");
     }
 
     /// <summary> The layer settings' line on a layer's bones, by kind; one bone or pin reads singular. </summary>

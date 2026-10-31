@@ -220,6 +220,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
     internal BonesWindow Bones => bonesWindow;
 
+    /// <summary>The open clip's title, for the Bones window's title; null with no editable clip open.</summary>
+    internal string? ClipTitle => source?.Document != null && editor != null ? title : null;
+
     internal PoseBrowserWindow Poses => poseBrowserWindow;
 
     /// <summary>The Bones window's whole content; called from its draw.</summary>

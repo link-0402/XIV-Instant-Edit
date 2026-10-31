@@ -36,6 +36,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         "In GPose the bones show on the character too. Click a dot there to select it.\n" +
         "With Live on and paused, drag the gizmo on the character to turn or move the bones.";
 
+    // Made once: the layer strip calls it whenever it moves the playhead.
+    private readonly Action pauseForStep = timelinePreview.PauseForStep;
     private BonesPage bonesPage = BonesPage.Map;
     private bool swapSides;
     private string boneSearch = string.Empty;
@@ -81,7 +83,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         }
         posing.KeepSelection(skeleton);
         var layer = current.SelectedLayerValue;
-        DrawBonesHeader(current, loaded, layer);
+        DrawBonesHeader(current, loaded);
         DrawBonesTools(skeleton, layer);
 
         var avail = ImGui.GetContentRegionAvail();
@@ -133,61 +135,16 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             Widgets.HintWrapped(choiceError);
     }
 
-    /// <summary> Undo and redo, the shared play bar, the layer's previous and next key, the layer and the playhead. </summary>
-    private void DrawBonesHeader(TimelineEditor current, AnimationTimelineSource loaded, MotionLayer? layer)
+    /// <summary> Undo and redo with the shared play bar, then the layer strip on a line of its own. </summary>
+    private void DrawBonesHeader(TimelineEditor current, AnimationTimelineSource loaded)
     {
         TimelineUi.DrawUndoRedo("##bones", current, session.ReadOnly);
         ImGui.SameLine(0, Theme.Scaled(12));
         playBar.Draw(current, loaded, repair(), "##bones-play");
-        ImGui.SameLine(0, Theme.Scaled(12));
-        var frame = current.Playhead;
-        int? previous = null, next = null;
-        if (layer != null)
-            foreach (var key in layer.Keys)
-            {
-                if (key.Frame < frame)
-                    previous = key.Frame;
-                else if (key.Frame > frame && next == null)
-                    next = key.Frame;
-            }
-        if (Widgets.IconButton("##bones-previous-key", FontAwesomeIcon.StepBackward, "Go to the layer's previous key", previous != null) && previous is { } back)
-        {
-            current.Playhead = back;
-            current.SelectLayer(layer!.Key, back);
-        }
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (Widgets.IconButton("##bones-next-key", FontAwesomeIcon.StepForward, "Go to the layer's next key", next != null) && next is { } ahead)
-        {
-            current.Playhead = ahead;
-            current.SelectLayer(layer!.Key, ahead);
-        }
-        ImGui.SameLine(0, Theme.Scaled(12));
-        if (layer != null)
-        {
-            Widgets.Icon(TimelineUi.LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Label, layer.Name);
-            if (!layer.Enabled)
-            {
-                ImGui.SameLine(0, Theme.Gap);
-                ImGui.AlignTextToFramePadding();
-                ImGui.TextColored(Theme.Muted, "(off)");
-            }
-        }
-        else
-        {
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, "No bone layer selected");
-        }
-        ImGui.SameLine(0, Theme.Gap);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "· " + TimelineWindowViews.FrameText(frame));
-        ImGui.SameLine(0, Theme.Gap);
-        Widgets.HelpTip(BonesHelp);
+        LayerStrip.Draw(current, "##bones-strip", pauseForStep);
     }
 
-    /// <summary> Map or list, the selection's groups, swapping sides and the selection's size. </summary>
+    /// <summary> Map or list, the selection's groups, swapping sides, the selection's size, Save pose and the help. </summary>
     private void DrawBonesTools(SkeletonDescription skeleton, MotionLayer? layer)
     {
         if (Widgets.TabButton(FontAwesomeIcon.Child, "Map", bonesPage == BonesPage.Map))
@@ -275,6 +232,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(face ? "A face can't be saved as a pose." : "Save the pose at the playhead as a .pose file, in the pose browser.");
+        ImGui.SameLine(0, Theme.Gap);
+        Widgets.HelpTip(BonesHelp);
     }
 
     private void DrawGroupMenu(SkeletonDescription skeleton, MotionLayer? layer)
