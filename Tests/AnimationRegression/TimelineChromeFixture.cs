@@ -38,5 +38,9 @@ internal static class TimelineChromeFixture
         var hiddenPaste = line.Visible([paste]).IsEmpty;
         line.Visible([]);
         check(hiddenPaste && line.Visible([paste]).Length == 1, "A dismissal ends when the note goes away, so the same text shows again");
+
+        check(StatusLine.TextRoom(760, 300, 200) == 300, "A first note that fits keeps all its text");
+        check(StatusLine.TextRoom(760, 700, 200) == 560, "A long first note is cut to the room its buttons and +N notes leave");
+        check(StatusLine.TextRoom(150, 700, 200) == 0, "A first note never gets less than no room");
     }
 }
