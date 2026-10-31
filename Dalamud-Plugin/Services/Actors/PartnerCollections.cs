@@ -6,7 +6,7 @@ namespace InstantEdit.Services.Actors;
 
 /// <summary>
 /// A partner's Penumbra calls. Nothing throws: without Penumbra each call answers as if nothing is there (NotLoaded for
-/// <see cref="Assign"/>), and any other error is logged. Call on the framework thread.
+/// <see cref="Assign"/>, an unknown parent for <see cref="ParentOf"/>), and any other error is logged. Call on the framework thread.
 /// </summary>
 internal sealed class PartnerCollections(PenumbraIpc ipc, Func<bool> available) : IPartnerCollections
 {
@@ -46,7 +46,7 @@ internal sealed class PartnerCollections(PenumbraIpc ipc, Func<bool> available) 
     public int ParentOf(int objectIndex)
     {
         if (!Available)
-            return -1;
+            return int.MinValue;
         try
         {
             return ipc.CutsceneParentOnFramework(objectIndex);
@@ -69,7 +69,8 @@ internal sealed class PartnerCollections(PenumbraIpc ipc, Func<bool> available) 
             return null;
         try
         {
-            return ipc.TemporaryModCollectionOnFramework(objectIndex) is { } current ? new CollectionAssignment(current.IndividualSet, current.Id) : null;
+            var (valid, individual, (id, _)) = ipc.GetCollectionForObject.Invoke(objectIndex);
+            return ToAssignment(valid, individual, id);
         }
         catch (IpcNotReadyError)
         {
@@ -101,6 +102,9 @@ internal sealed class PartnerCollections(PenumbraIpc ipc, Func<bool> available) 
             return new LinkOutcome(LinkStatus.Failed, -1);
         }
     }
+
+    /// <summary>An object's assignment from Penumbra's answer; an empty Guid is the None collection, kept so it can be put back.</summary>
+    internal static CollectionAssignment? ToAssignment(bool valid, bool individual, Guid id) => valid ? new CollectionAssignment(individual, id) : null;
 
     /// <summary>What Penumbra's answer to an assignment means for the link.</summary>
     internal static LinkOutcome Outcome(PenumbraApiEc code) => code switch

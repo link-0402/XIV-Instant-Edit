@@ -21,6 +21,10 @@ internal static class PartnerFixture
               PartnerCollections.Outcome(PenumbraApiEc.CollectionMissing) == missing &&
               PartnerCollections.Outcome(PenumbraApiEc.InvalidIdentifier) == new LinkOutcome(LinkStatus.Failed, (int)PenumbraApiEc.InvalidIdentifier),
             "partner links: Penumbra's success and nothing changed apply, a missing collection is missing, anything else fails with its code");
+        var users = Guid.NewGuid();
+        check(PartnerCollections.ToAssignment(true, true, Guid.Empty) == new CollectionAssignment(true, Guid.Empty) &&
+              PartnerCollections.ToAssignment(false, true, users) == null && PartnerCollections.ToAssignment(true, false, users) == new CollectionAssignment(false, users),
+            "partner links: Penumbra's None (an empty Guid) is an individual assignment, an invalid object has none, and an inherited one isn't individual");
         check(GlamourerIpc.Outcome(0) == applied && GlamourerIpc.Outcome(1) == applied && GlamourerIpc.Outcome(4) == missing &&
               GlamourerIpc.Outcome(6) == new LinkOutcome(LinkStatus.Failed, 6),
             "partner links: Glamourer's success and nothing done apply, a missing design is missing, anything else fails with its code");
@@ -151,6 +155,64 @@ internal static class PartnerFixture
         Despawn_ReleaseThrows_StillDeletes(check);
         Update_ApplyThrows_OthersGoOn(check);
         Dispose_Throws_StillUnsubscribes(check);
+        Despawn_RestoresNone(check);
+        Spawn_NameAlreadySpawned(check);
+        Despawn_RestoreFails_Warns(check);
+        Spawn_NoCollectionLink(check);
+    }
+
+    private static void Despawn_RestoresNone(Check check)
+    {
+        var rig = new Rig();
+        rig.Collections.Assignment = new CollectionAssignment(true, Guid.Empty);
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var ownedWhileSpawned = rig.Store.OwnsAssignment("Aria Rose");
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["remove T", "release 202", $"assign 202 {Guid.Empty} false false", "delete 202"]) && !ownedWhileSpawned &&
+              !rig.Store.OwnsAssignment("Aria Rose"),
+            "partner despawn: the user's None assignment is put back and never recorded as ours", rig.Log);
+    }
+
+    private static void Spawn_NameAlreadySpawned(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        var saved = rig.Store.Save(preset, null, out _);
+        rig.SpawnReady(preset);
+        var renamed = rig.Store.Save(preset with { Name = "Aria Lee" }, null, out _);
+        var second = Aria();
+        var savedSecond = rig.Store.Save(second, null, out _);
+        var refused = rig.Service.Spawn(second);
+        check(saved && renamed && savedSecond && refused == PartnerNames.Taken && rig.Calls.Count(call => call.StartsWith("spawn ")) == 1 &&
+              rig.Service.Find(second.Id) == null && rig.Service.Find(preset.Id)?.Name == "Aria Rose",
+            "partner spawn: a name a spawned partner still has is taken, even after its preset was renamed", rig.Log);
+    }
+
+    private static void Despawn_RestoreFails_Warns(Check check)
+    {
+        var rig = new Rig();
+        rig.Collections.Assignment = new CollectionAssignment(true, UsersId);
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Collections.AssignOutcome = new LinkOutcome(LinkStatus.Failed, 7);
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["remove T", "release 202", "assign 202 X false false", "delete 202"]) && rig.Warnings.Count == 1 &&
+              rig.Warnings[0].Contains("Aria Rose") && rig.Warnings[0].Contains("Failed") && rig.Service.Find(preset.Id) == null,
+            "partner despawn: a restore Penumbra refuses is warned once and the actor is still deleted", rig.Log + " / " + string.Join('|', rig.Warnings));
+    }
+
+    private static void Spawn_NoCollectionLink(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria() with { Collection = null };
+        var refused = rig.SpawnReady(preset);
+        var view = rig.Service.Find(preset.Id);
+        check(refused == null && rig.Calls.SequenceEqual(["spawn Aria Rose", "parent 202", "ready 202", "draw 202", "look 202 D", "profile 202 P"]) &&
+              view is { Stage: PartnerStage.Ready } && view.Problems.IsEmpty && !rig.Store.OwnsAssignment("Aria Rose"),
+            "partner spawn: a preset without a collection checks the parent but never reads or sets an assignment", rig.Log);
     }
 
     private static void GPoseEnd_LostActor_TakesLostPath(Check check)

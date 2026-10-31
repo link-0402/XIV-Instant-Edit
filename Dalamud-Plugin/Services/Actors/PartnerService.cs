@@ -53,7 +53,7 @@ internal sealed class PartnerService : IDisposable
         public void Problem(string text) => View = View with { Problems = View.Problems.Add(text) };
     }
 
-    /// <param name="warn">Gets each exception a game or plugin call threw, which the service caught.</param>
+    /// <param name="warn">Gets each exception a game or plugin call threw, which the service caught, and each restore Penumbra refused.</param>
     public PartnerService(PartnerPresetStore store, IPartnerActors actors, IPartnerCollections collections, IPartnerLooks looks, IPartnerProfiles profiles,
         Func<TimeSpan>? clock = null, Action<string>? warn = null)
     {
@@ -89,6 +89,9 @@ internal sealed class PartnerService : IDisposable
         if (PartnerNames.Problem(preset.Name, [], preset.Id, actors.PlayerName) is { } refused)
             return refused;
         var name = preset.Name.Trim();
+        // A preset renamed while spawned leaves its old name on the partner.
+        if (partners.Any(partner => string.Equals(partner.Name, name, StringComparison.OrdinalIgnoreCase)))
+            return PartnerNames.Taken;
         var (made, problem) = actors.Spawn(name);
         if (made is not { } actor)
             return problem ?? "Spawning failed: create";
@@ -255,7 +258,11 @@ internal sealed class PartnerService : IDisposable
             Guarded(partner, "the collection restore", () =>
             {
                 if (partner.Previous is { } previous)
-                    collections.Assign(index, previous, false, false);
+                {
+                    var restored = collections.Assign(index, previous, false, false);
+                    if (restored.Status != LinkStatus.Applied)
+                        warn?.Invoke($"Partner {partner.Name}: the collection restore answered {restored.Status} {restored.Code}; the assignment stays as it is.");
+                }
                 else if (collections.Assign(index, null, false, true).Status == LinkStatus.Applied)
                     store.SetOwnsAssignment(partner.Name, false);
             });
