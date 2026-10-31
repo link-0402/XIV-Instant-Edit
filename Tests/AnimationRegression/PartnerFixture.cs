@@ -1,6 +1,8 @@
+using InstantEdit.Services;
 using InstantEdit.Services.Actors;
+using Penumbra.Api.Enums;
 
-/// <summary>Partners: the player-name rule, a preset's name problems, the preset store and the spawn and despawn sequence.</summary>
+/// <summary>Partners: the player-name rule, a preset's name problems, the preset store, the spawn and despawn sequence and the plugin codes.</summary>
 internal static class PartnerFixture
 {
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
@@ -9,6 +11,22 @@ internal static class PartnerFixture
         Problems(check);
         Store(check);
         Service(check);
+        Outcomes(check);
+    }
+
+    private static void Outcomes(Action<bool, string> check)
+    {
+        LinkOutcome applied = new(LinkStatus.Applied), missing = new(LinkStatus.Missing);
+        check(PartnerCollections.Outcome(PenumbraApiEc.Success) == applied && PartnerCollections.Outcome(PenumbraApiEc.NothingChanged) == applied &&
+              PartnerCollections.Outcome(PenumbraApiEc.CollectionMissing) == missing &&
+              PartnerCollections.Outcome(PenumbraApiEc.InvalidIdentifier) == new LinkOutcome(LinkStatus.Failed, (int)PenumbraApiEc.InvalidIdentifier),
+            "partner links: Penumbra's success and nothing changed apply, a missing collection is missing, anything else fails with its code");
+        check(GlamourerIpc.Outcome(0) == applied && GlamourerIpc.Outcome(1) == applied && GlamourerIpc.Outcome(4) == missing &&
+              GlamourerIpc.Outcome(6) == new LinkOutcome(LinkStatus.Failed, 6),
+            "partner links: Glamourer's success and nothing done apply, a missing design is missing, anything else fails with its code");
+        check(CustomizePlusProfiles.Outcome(0) == applied && CustomizePlusProfiles.Outcome(3) == missing &&
+              CustomizePlusProfiles.Outcome(255) == new LinkOutcome(LinkStatus.Failed, 255),
+            "partner links: Customize+'s success applies, a missing profile is missing, anything else fails with its code");
     }
 
     private static void Names(Action<bool, string> check)

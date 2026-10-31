@@ -482,6 +482,25 @@ internal sealed class PenumbraIpc : IDisposable
     internal Task<TemporaryModCollection?> TemporaryModCollectionAsync(int objectIndex)
         => _framework.RunOnFrameworkThread(() => TemporaryModCollectionOnFramework(objectIndex));
 
+    private GetCutsceneParentIndex? _getCutsceneParentIndex;
+
+    private SetCollectionForObject? _setCollectionForObject;
+
+    /// <summary> The log the Penumbra callers outside this class warn to. </summary>
+    internal IPluginLog Log => _log;
+
+    /// <summary> The index of the object Penumbra takes this object's identity from, or -1 for none. </summary>
+    internal int CutsceneParentOnFramework(int objectIndex)
+        => (_getCutsceneParentIndex ??= new GetCutsceneParentIndex(_pi)).Invoke(objectIndex);
+
+    /// <summary> Sets the object's individual collection, or removes it when <paramref name="collection"/> is null. Saved by Penumbra. </summary>
+    internal PenumbraApiEc SetCollectionForObjectOnFramework(int objectIndex, Guid? collection, bool allowCreate, bool allowDelete)
+        => (_setCollectionForObject ??= new SetCollectionForObject(_pi)).Invoke(objectIndex, collection, allowCreate, allowDelete).Item1;
+
+    /// <summary> Every collection, by Id, with its name. </summary>
+    internal IReadOnlyDictionary<Guid, string> CollectionsOnFramework()
+        => (_getCollections ??= new GetCollections(_pi)).Invoke();
+
     /// <summary>
     /// Registers, or with the same tag and priority updates in place, a temporary mod in one
     /// collection. Rooted values are file redirects; <paramref name="manipulations"/> are meta manipulations in
