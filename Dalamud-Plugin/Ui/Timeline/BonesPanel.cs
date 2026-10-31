@@ -26,7 +26,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private enum BonesPage : byte { Map, List }
 
     private const string BonesHelp =
-        "The map shows the bones your character uses or the animation moves. The filter button shows them all.\n" +
+        "The map shows the bones your character uses or the animation moves. View > Every bone shows them all.\n" +
         "Click a dot to select a bone. Ctrl+click adds or removes one.\n" +
         "Shift+click selects a bone and every bone below it.\n" +
         "Changes go to the bone layer selected in the timeline, at the playhead.\n" +
@@ -40,6 +40,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private readonly Action pauseForStep = timelinePreview.PauseForStep;
     private BonesPage bonesPage = BonesPage.Map;
     private bool swapSides;
+    // Save pose and the help tip's width, measured on the last draw, to right-align them on the tools row.
+    private float saveWidth;
     private string boneSearch = string.Empty;
     // The character's bone names by index, read once per draw of the map or list (see LiveFor).
     private string[]? live;
@@ -144,7 +146,10 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         LayerStrip.Draw(current, "##bones-strip", pauseForStep);
     }
 
-    /// <summary> Map or list, the selection's groups, swapping sides, the selection's size, Save pose and the help. </summary>
+    /// <summary>
+    /// Map or list, the selection's groups, the View menu, Clear and the selection, then Save pose and the help on
+    /// the right. A short row cuts the selection's text off, so Save pose always shows.
+    /// </summary>
     private void DrawBonesTools(SkeletonDescription skeleton, MotionLayer? layer)
     {
         if (Widgets.TabButton(FontAwesomeIcon.Child, "Map", bonesPage == BonesPage.Map))
@@ -159,71 +164,22 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             ImGui.SetTooltip("Select a group of bones. Hold Ctrl to add them to the selection.");
         DrawGroupMenu(skeleton, layer);
         ImGui.SameLine(0, Theme.Scaled(2));
-        if (bonesPage == BonesPage.Map)
-        {
-            if (TimelineUi.Toggle("##bones-swap", FontAwesomeIcon.ExchangeAlt, swapSides, swapSides
-                    ? "The left side's bones show on the right, as seen from the front. Click to show them as in a mirror."
-                    : "The left side's bones show on the left, as in a mirror. Click to show them as seen from the front."))
-                swapSides = !swapSides;
-            ImGui.SameLine(0, Theme.Scaled(2));
-            if (TimelineUi.Toggle("##bones-in-use", FontAwesomeIcon.Filter, !posing.EveryBone, posing.EveryBone
-                    ? "Every bone shows. Click to show only the bones your character uses or the animation moves."
-                    : "Only the bones your character uses or the animation moves show. Click to show every bone."))
-                posing.EveryBone = !posing.EveryBone;
-            ImGui.SameLine(0, Theme.Scaled(2));
-        }
-        var shown = overlay.OnCharacter;
-        if (TimelineUi.Toggle("##bones-overlay", shown == BoneOverlayMode.Selected ? FontAwesomeIcon.DotCircle : FontAwesomeIcon.Crosshairs,
-                shown != BoneOverlayMode.Off, shown switch
-                {
-                    BoneOverlayMode.All => "In GPose all bones show on the character, to select them there and pose them with the gizmo. Click to hide them.",
-                    BoneOverlayMode.Selected => "In GPose only the selected bones show on the character, with the gizmo. Click to show all bones.",
-                    _ => "Show the selected bones on the character in GPose, to pose them with the gizmo. Click again for all bones.",
-                }))
-            overlay.OnCharacter = BoneOverlayModes.Next(shown);
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (TimelineUi.Toggle("##bones-ghosts", FontAwesomeIcon.Clone, posing.Ghosts, (posing.Ghosts
-                ? "Onion skins: faint bones show the pose at the layer's key before the playhead (blue) and after it (orange). Click to hide them."
-                : "Show onion skins: faint bones for the pose at the layer's key before and after the playhead.") +
-                "\nThey leave out amplitude and fix layers and planted pins."))
-            posing.Ghosts = !posing.Ghosts;
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (TimelineUi.Toggle("##bones-paths", FontAwesomeIcon.Route, posing.Paths, (posing.Paths
-                ? "Paths: lines show where the selected bones go over the frames around the playhead, blue before and orange after. Click to hide them."
-                : "Show paths: lines for where the selected bones go over the frames around the playhead.") +
-                "\nThey leave out amplitude and fix layers and planted pins."))
-        {
-            posing.Paths = !posing.Paths;
-            if (!posing.Paths)
-                posing.HidePaths();
-        }
-        if (posing.Paths)
-        {
-            ImGui.SameLine(0, Theme.Scaled(2));
-            var range = posing.PathRange;
-            ImGui.SetNextItemWidth(Theme.Scaled(36));
-            if (ImGui.DragInt("##bones-path-range", ref range, .2f, MotionPaths.MinRange, MotionPaths.MaxRange, "%d"))
-                posing.PathRange = range;
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Frames before and after the playhead the paths show.");
-        }
+        if (ImGui.Button("View"))
+            ImGui.OpenPopup("##bones-view");
+        DrawViewMenu();
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##bones-clear", FontAwesomeIcon.Times, "Clear the selection", posing.Selection.Count > 0))
             posing.Selection.Clear();
+
         ImGui.SameLine(0, Theme.Gap);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, posing.Selection.Count switch
-        {
-            0 => "Nothing selected",
-            1 => AnimationPresentation.BoneName(posing.Selection.Primary!),
-            _ => $"{posing.Selection.Count} bones selected",
-        });
-        if (posing.Paths && posing.Selection.Count > MotionPaths.MaxBones)
-        {
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.TextColored(Theme.Muted, $"(paths for the first {MotionPaths.MaxBones})");
-        }
-        ImGui.SameLine(0, Theme.Scaled(12));
+        var start = ImGui.GetCursorPosX();
+        // Before the first draw has measured them, about Save pose and the help tip's width.
+        var right = Math.Max(start, ImGui.GetContentRegionMax().X - (saveWidth > 0 ? saveWidth : Theme.Scaled(120)));
+        var room = right - Theme.Scaled(12) - start;
+        if (room > 0)
+            DrawSelectionText(room);
+        ImGui.SameLine(right);
+        var saveStart = ImGui.GetCursorScreenPos().X;
         var face = session.Editor?.Document.Face != null;
         using (ImRaii.Disabled(face))
         {
@@ -234,6 +190,131 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             ImGui.SetTooltip(face ? "A face can't be saved as a pose." : "Save the pose at the playhead as a .pose file, in the pose browser.");
         ImGui.SameLine(0, Theme.Gap);
         Widgets.HelpTip(BonesHelp);
+        saveWidth = ImGui.GetItemRectMax().X - saveStart;
+    }
+
+    /// <summary>
+    /// The selection's bone name or size, with the paths note when Paths draws fewer bones than are selected, cut off
+    /// at <paramref name="room"/>. Hovering a cut-off text shows all of it.
+    /// </summary>
+    private void DrawSelectionText(float room)
+    {
+        var text = posing.Selection.Count switch
+        {
+            0 => "Nothing selected",
+            1 => AnimationPresentation.BoneName(posing.Selection.Primary!),
+            _ => $"{posing.Selection.Count} bones selected",
+        };
+        if (posing.Paths && posing.Selection.Count > MotionPaths.MaxBones)
+            text += $"  (paths for the first {MotionPaths.MaxBones})";
+        ImGui.AlignTextToFramePadding();
+        var at = ImGui.GetCursorScreenPos();
+        ImGui.PushClipRect(at, at + new Vector2(room, ImGui.GetFrameHeight()), true);
+        ImGui.TextColored(Theme.Muted, text);
+        if (ImGui.CalcTextSize(text).X > room && ImGui.IsItemHovered())
+            ImGui.SetTooltip(text);
+        ImGui.PopClipRect();
+    }
+
+    /// <summary>
+    /// The View menu: whether the bones show on the character (off, the selected ones or all), Every bone and Mirror
+    /// view for the map, Onion skins and Paths with its frames. Ticking an item leaves the menu open.
+    /// </summary>
+    private void DrawViewMenu()
+    {
+        using var popup = ImRaii.Popup("##bones-view");
+        if (!popup.Success)
+            return;
+        // Several switches change in one go: no item closes the menu.
+        ImGuiP.PushItemFlag(ImGuiItemFlags.SelectableDontClosePopup, true);
+        try
+        {
+            ImGui.TextColored(Theme.Muted, "On character");
+            DrawOnCharacterItem("Off", BoneOverlayMode.Off, "No bones show on the character.");
+            DrawOnCharacterItem("Selected", BoneOverlayMode.Selected,
+                "In GPose only the selected bones show on the character, with the gizmo.");
+            DrawOnCharacterItem("All", BoneOverlayMode.All,
+                "In GPose all bones show on the character, to select them there and pose them with the gizmo.");
+            ImGui.Separator();
+            if (bonesPage == BonesPage.Map)
+            {
+                if (ImGui.MenuItem("Every bone", "", posing.EveryBone))
+                    posing.EveryBone = !posing.EveryBone;
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(posing.EveryBone
+                        ? "Every bone shows. Click to show only the bones your character uses or the animation moves."
+                        : "Only the bones your character uses or the animation moves show. Click to show every bone.");
+                if (ImGui.MenuItem("Mirror view", "", !swapSides))
+                    swapSides = !swapSides;
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(swapSides
+                        ? "The left side's bones show on the right, as seen from the front. Click to show them as in a mirror."
+                        : "The left side's bones show on the left, as in a mirror. Click to show them as seen from the front.");
+                ImGui.Separator();
+            }
+            if (ImGui.MenuItem("Onion skins", "", posing.Ghosts))
+                posing.Ghosts = !posing.Ghosts;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip((posing.Ghosts
+                    ? "Onion skins: faint bones show the pose at the layer's key before the playhead (blue) and after it (orange). Click to hide them."
+                    : "Show onion skins: faint bones for the pose at the layer's key before and after the playhead.") +
+                    "\nThey leave out amplitude and fix layers and planted pins.");
+            DrawPathsItem();
+        }
+        finally
+        {
+            ImGuiP.PopItemFlag();
+        }
+    }
+
+    /// <summary> One of On character's choices, ticked while it is the one in use. </summary>
+    private void DrawOnCharacterItem(string label, BoneOverlayMode mode, string tooltip)
+    {
+        if (ImGui.MenuItem(label, "", overlay.OnCharacter == mode))
+            overlay.OnCharacter = mode;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
+    }
+
+    /// <summary>
+    /// The Paths item, with its frames field on the same line while Paths is on. The field is drawn before the item,
+    /// so it keeps the mouse from the item under it, and letting go of a drag over the label leaves Paths on.
+    /// </summary>
+    private void DrawPathsItem()
+    {
+        var row = ImGui.GetCursorPos();
+        var letGo = false;
+        if (posing.Paths)
+        {
+            var style = ImGui.GetStyle();
+            ImGui.SetCursorPos(row + new Vector2(ImGui.CalcTextSize("Paths").X + style.ItemSpacing.X, 0));
+            var range = posing.PathRange;
+            ImGui.SetNextItemWidth(Theme.Scaled(36));
+            // As tall as the item's line.
+            using (ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new Vector2(style.FramePadding.X, 0)))
+            {
+                if (ImGui.DragInt("##bones-path-range", ref range, .2f, MotionPaths.MinRange, MotionPaths.MaxRange, "%d"))
+                    posing.PathRange = range;
+            }
+            letGo = ImGui.IsItemDeactivated();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Frames before and after the playhead the paths show.");
+            // Room for the item's tick right of the field.
+            ImGui.SameLine(0, 0);
+            ImGui.Dummy(new Vector2(ImGui.GetFontSize() * 1.2f + style.ItemSpacing.X, ImGui.GetFontSize()));
+            ImGui.SetCursorPos(row);
+        }
+        if (ImGui.MenuItem("Paths", "", posing.Paths) && !letGo)
+        {
+            posing.Paths = !posing.Paths;
+            if (!posing.Paths)
+                posing.HidePaths();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip((posing.Paths
+                ? "Paths: lines show where the selected bones go over the frames around the playhead, blue before and orange after. Click to hide them."
+                : "Show paths: lines for where the selected bones go over the frames around the playhead.") +
+                "\nThey leave out amplitude and fix layers and planted pins.");
     }
 
     private void DrawGroupMenu(SkeletonDescription skeleton, MotionLayer? layer)
@@ -282,7 +363,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     /// have their lines lit. Bones only a bigger standard skeleton has show greyed out, their hover naming
     /// the skeleton choice that adds them. Only the bones the character uses or the clip moves show (see
     /// <see cref="BonePosing.MapBones"/>), and the selected ones and the ones the layer changes, unless the
-    /// filter is off. A click on empty space clears the selection.
+    /// View menu's Every bone is on. A click on empty space clears the selection.
     /// </summary>
     private void DrawBoneMap(SkeletonDescription skeleton, MotionLayer? layer, int frame, AnimationTimelineSource fresh, Vector2 size)
     {

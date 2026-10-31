@@ -2926,3 +2926,18 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   selects it in the Timeline, the diamond in the accent colour.
 - [ ] 7 At the window's 620 px minimum, Undo, Redo and the whole play bar show, and the strip ends with its next-key
   arrow inside the window.
+- [ ] 8 The tools row reads Map, All bones, Select, View, Clear, the selection, then Save pose on the right and the help
+  tip after it. At the 620 px minimum all of them show; with a long bone name or "(paths for the first 8)" the selection
+  text is cut off before Save pose, and hovering it shows the whole text. There are no swap, filter, on-character, onion
+  skin or path icon buttons any more.
+- [ ] 9 View opens a menu: an "On character" line with Off, Selected and All (one ticked at a time), then Every bone and
+  Mirror view, then Onion skins and Paths. Ticking several items in a row keeps the menu open. On All bones, Every bone
+  and Mirror view are not in the menu.
+- [ ] 10 Each View item does what its old button did, with its old tooltip: On character shows no bones, the selected ones
+  or all of them in GPose; Every bone shows every bone on the map; Mirror view ticked shows the left side on the left,
+  unticked as seen from the front; Onion skins and Paths draw on the character.
+- [ ] 11 With Paths on, its frames field sits on the Paths line, right of the label and left of the tick. Dragging it
+  changes the frames (with today's limits) and letting go anywhere on the line leaves Paths on; a click on the label
+  switches Paths off and the field goes.
+- [ ] 12 Save pose is greyed out for a face, with "A face can't be saved as a pose." on hover. The help's first line ends
+  "View > Every bone shows them all."
