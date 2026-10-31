@@ -229,11 +229,14 @@ internal static class LayerWeightFixture
         var inserted = CutEdits.Ripple(doc, 50, 10, out _);
         check(inserted.Motion[0] is { End: 100 } && inserted.Motion[0].Weights.Select(point => point.Frame).SequenceEqual([20, 45, 70, 100]),
             "inserting frames moves the points after them");
+        var atEnd = CutEdits.Ripple(doc, 90, 10, out _);
+        check(atEnd.Motion[0] is { End: 90 } && atEnd.Motion[0].Weights.Select(point => point.Frame).SequenceEqual([20, 45, 60, 90]),
+            "inserting frames at a layer's last frame keeps its point there, with its end");
         var split = CutEdits.CutAt(doc, 50);
         var stretched = CutEdits.StretchPart(split, 0, 50, out _);
         check(stretched.Motion[0].Weights.Select(point => point.Frame).SequenceEqual([40, 90, 110, 140]) && stretched.Motion[0] is { Start: 40, End: 140 },
             "a part played slower spreads its points with its keys");
-        foreach (var layer in new[] { cut, inserted, stretched }.SelectMany(d => d.Motion))
+        foreach (var layer in new[] { cut, inserted, atEnd, stretched }.SelectMany(d => d.Motion))
             MotionEvaluator.Validate(layer);
     }
 

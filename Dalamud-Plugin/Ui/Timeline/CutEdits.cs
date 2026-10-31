@@ -444,7 +444,8 @@ internal static class CutEdits
                     End = layer.End > at ? layer.End + delta : layer.End,
                     Keys = [.. layer.Keys.Select(k => k.Frame >= at ? k with { Frame = k.Frame + delta } : k)],
                 };
-                layers[i] = Fit(next, layer.Weights.Select(w => w.Frame >= at ? w with { Frame = w.Frame + delta } : w));
+                // A point on the layer's last frame stays with its end, which moves only when the layer goes on past the insert.
+                layers[i] = Fit(next, layer.Weights.Select(w => w.Frame > at || w.Frame == at && layer.End > at ? w with { Frame = w.Frame + delta } : w));
             }
         }
         removed = new CutRemoval(deletedEvents, droppedKeys);

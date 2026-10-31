@@ -86,6 +86,8 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
         trial.Forget();
         picked = null;
         note = null;
+        // A save still waiting for the clip's motion goes with it; one being written finishes.
+        saveWaiting = null;
     }
 
     public void Draw()
@@ -351,6 +353,12 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
     /// <summary>Writes the pose once the motion it is made of is read, then reads the folder again so its tile shows.</summary>
     private void PollSave()
     {
+        // Another clip opened before the motion was read: waiting would read the old clip's motion against the new one's.
+        if (saveWaiting is { } gone && (session.Source is not { } open || TimelineSession.ClipKey(open) != TimelineSession.ClipKey(gone.Loaded)))
+        {
+            saveWaiting = null;
+            Note($"{gone.Name} wasn't saved: another animation opened first.", true);
+        }
         if (saveWaiting is { } wait)
         {
             if (posing.WholePose(wait.Loaded, wait.Doc, wait.Frame) is { } pose)

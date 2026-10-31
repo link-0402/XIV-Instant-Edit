@@ -102,11 +102,14 @@ internal static class MotionPathsFixture
         // A frame that failed stops the document's frames, not the next document's.
         object failing = new();
         cache.Show(failing, clip, state, frames, at);
-        cache.Fail();
+        cache.Fail(failing, clip);
         cache.Show(failing, clip, state, frames, at);
         check(!cache.TryNext(out _), "a document whose frame failed evaluates nothing more");
-        cache.Show(new object(), clip, state, frames, at);
+        object next = new();
+        cache.Show(next, clip, state, frames, at);
         check(cache.TryNext(out _), "the next document is evaluated again");
+        cache.Fail(failing, clip);
+        check(cache.TryNext(out _), "a failure that comes in late for the document before leaves the next one going");
 
         // Nothing is wanted once the paths are hidden.
         cache.Hide();

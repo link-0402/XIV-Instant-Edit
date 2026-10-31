@@ -553,7 +553,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         foreach (var cached in ghostPoses)
             if (ReferenceEquals(cached.Doc, doc) && ReferenceEquals(cached.Clip, clip) && cached.Frame == frame)
                 return cached.Model;
-        var model = MotionEvaluator.ModelSpace(clip.Skeleton, Layered(clip, loaded, doc, frame));
+        var model = MotionEvaluator.ModelSpace(clip.Skeleton, Layered(clip, doc, frame, LoopFrames(loaded, doc), MotionEnd(loaded, doc)));
         if (ghostPoses.Count >= 3)
             ghostPoses.RemoveAt(0);
         ghostPoses.Add((doc, clip, frame, model));
@@ -586,25 +586,15 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     // The paths' worker: evaluates their missing frames until none are left. Pure motion maths, no game state.
     private void FillPaths()
     {
+        MotionPathCache.Job job = default;
         try
         {
-            while (paths.TryNext(out var job))
+            while (paths.TryNext(out job))
             {
                 var doc = (TimelineDocument)job.Doc;
                 var clip = (MotionClip)job.Clip;
                 var (loop, end) = ((float, float))job.State!;
-                var own = clip.Pose(job.Frame);
-                MotionTransform[] local;
-                try
-                {
-                    local = MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, job.Frame, loop, end, clip.SourceTracks);
-                }
-                catch (InvalidDataException)
-                {
-                    // A layer names a bone this skeleton lacks: the clip's own pose still shows.
-                    local = own;
-                }
-                var model = MotionEvaluator.ModelSpace(clip.Skeleton, local);
+                var model = MotionEvaluator.ModelSpace(clip.Skeleton, Layered(clip, doc, job.Frame, loop, end));
                 var positions = new Vector3[model.Length];
                 for (var b = 0; b < model.Length; b++)
                     positions[b] = model[b].Position;
@@ -614,17 +604,17 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         catch (Exception e)
         {
             // Stops for this document rather than evaluate the same frame again every draw.
-            paths.Fail();
+            paths.Fail(job.Doc, job.Clip);
             session.Log.Warning(e, "Motion paths could not be worked out.");
         }
     }
 
     /// <summary>
-    /// Every bone of the clip's skeleton at <paramref name="frame"/> as the Bones window shows it, in model space, for
-    /// Save pose; null while the motion is read, which this starts.
+    /// Every bone of the clip's skeleton at <paramref name="frame"/> with every layer baked in, as Live and the save show it
+    /// (<see cref="LayeredLocal"/>), in model space, for Save pose; null while the motion is read, which this starts.
     /// </summary>
     public (SkeletonDescription Skeleton, MotionTransform[] Model)? WholePose(AnimationTimelineSource loaded, TimelineDocument doc, int frame) =>
-        OutputClip(loaded) is { } clip && GhostPose(loaded, doc, frame) is { } model ? (clip.Skeleton, model) : null;
+        OutputClip(loaded) is { } clip && LayeredLocal(loaded, doc, frame) is { } local ? (clip.Skeleton, MotionEvaluator.ModelSpace(clip.Skeleton, local)) : null;
 
     /// <summary>
     /// The local pose at <paramref name="frame"/> with every layer of <paramref name="doc"/> baked in, as Live and the save
@@ -645,12 +635,13 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         }
     }
 
-    private MotionTransform[] Layered(MotionClip clip, AnimationTimelineSource loaded, TimelineDocument doc, int frame)
+    // The pose at a frame as the onion skins and the paths show it: pure, so the paths' worker uses it too.
+    private static MotionTransform[] Layered(MotionClip clip, TimelineDocument doc, int frame, float loop, float end)
     {
         var own = clip.Pose(frame);
         try
         {
-            return MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, frame, LoopFrames(loaded, doc), MotionEnd(loaded, doc), clip.SourceTracks);
+            return MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, frame, loop, end, clip.SourceTracks);
         }
         catch (InvalidDataException)
         {

@@ -126,11 +126,15 @@ internal sealed class MotionPathCache
         }
     }
 
-    /// <summary>Evaluates nothing more for the current document and clip: a frame of it failed.</summary>
-    public void Fail()
+    /// <summary>
+    /// Evaluates nothing more for <paramref name="document"/> on <paramref name="motion"/>, a frame of which failed; a
+    /// failure of a document the draw has moved on from changes nothing.
+    /// </summary>
+    public void Fail(object document, object motion)
     {
         lock (gate)
-            failed = true;
+            if (ReferenceEquals(doc, document) && ReferenceEquals(clip, motion))
+                failed = true;
     }
 
     /// <summary>Wants no frames: the paths are hidden.</summary>

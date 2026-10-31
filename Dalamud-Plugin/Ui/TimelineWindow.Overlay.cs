@@ -659,6 +659,9 @@ public sealed partial class TimelineWindow
         gizmoEditor = null;
         if (ReferenceEquals(began, editor))
             began.EndFieldEdit();
+        // A limb drag's Bend shaped the pose it keyed; kept, the next drag would turn that pose by as much again.
+        if (dragLimb != null)
+            dragBend = 0;
         if (!abandoned)
             return;
         gizmoHeld = null;
