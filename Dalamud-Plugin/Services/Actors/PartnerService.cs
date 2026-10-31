@@ -15,13 +15,15 @@ internal sealed record PartnerView(Guid PresetId, string Name, ushort ObjectInde
 
 /// <summary>
 /// Spawns partners from presets and despawns them, a few steps each frame on the framework thread. Each spawn records what
-/// it changed (the collection assignment, the look, the temporary profile) and the despawn undoes only that.
+/// it changed (the collection assignment, the look, the temporary profile) the moment it applies, and the despawn undoes
+/// only that.
 /// </summary>
 internal sealed class PartnerService : IDisposable
 {
     public const string NotInGPose = "Enter GPose to spawn a partner.";
     public const string TreatedAsYou = "Penumbra would treat it as you";
     public const string DrawnLate = "Drawn late";
+    public const string LinksFailed = "Spawning failed: links";
 
     private static readonly TimeSpan DrawWait = TimeSpan.FromSeconds(1);
 
@@ -32,6 +34,7 @@ internal sealed class PartnerService : IDisposable
     private readonly IPartnerLooks looks;
     private readonly IPartnerProfiles profiles;
     private readonly Func<TimeSpan> clock;
+    private readonly Action<string>? warn;
     private readonly List<Partner> partners = [];
 
     /// <summary>A spawned partner: the preset as it was at spawn and what the spawn changed.</summary>
@@ -50,8 +53,9 @@ internal sealed class PartnerService : IDisposable
         public void Problem(string text) => View = View with { Problems = View.Problems.Add(text) };
     }
 
+    /// <param name="warn">Gets each exception a game or plugin call threw, which the service caught.</param>
     public PartnerService(PartnerPresetStore store, IPartnerActors actors, IPartnerCollections collections, IPartnerLooks looks, IPartnerProfiles profiles,
-        Func<TimeSpan>? clock = null)
+        Func<TimeSpan>? clock = null, Action<string>? warn = null)
     {
         this.store = store;
         this.actors = actors;
@@ -59,6 +63,7 @@ internal sealed class PartnerService : IDisposable
         this.looks = looks;
         this.profiles = profiles;
         this.clock = clock ?? (() => TimeSpan.FromMilliseconds(Environment.TickCount64));
+        this.warn = warn;
         actors.Updated += Update;
     }
 
@@ -73,7 +78,7 @@ internal sealed class PartnerService : IDisposable
 
     /// <summary>
     /// Makes the preset's actor and sets its collection; the next frames draw it and apply the look and profile. Why it
-    /// was refused, or null (also when it is already spawned).
+    /// was refused, or null (also when it is already spawned). A call that throws deletes the actor again and rethrows.
     /// </summary>
     public string? Spawn(PartnerPreset preset)
     {
@@ -88,17 +93,21 @@ internal sealed class PartnerService : IDisposable
         if (made is not { } actor)
             return problem ?? "Spawning failed: create";
 
+        // Tracked at once, so whatever throws below finds it and its recorded changes to undo.
         var partner = new Partner(preset, name, actor, clock());
-        if (!collections.Available)
+        partners.Add(partner);
+        try
         {
-            if (preset.Collection is { } missing)
-                partner.Problem(ProblemText("Collection", "Penumbra", missing, new LinkOutcome(LinkStatus.NotLoaded)));
-        }
-        else
-        {
+            if (!collections.Available)
+            {
+                if (preset.Collection is { } missing)
+                    partner.Problem(ProblemText("Collection", "Penumbra", missing, new LinkOutcome(LinkStatus.NotLoaded)));
+                return null;
+            }
             var parent = collections.ParentOf(actor.ObjectIndex);
             if (parent != actor.ObjectIndex && parent != -1)
             {
+                partners.Remove(partner);
                 actors.Delete(actor);
                 return TreatedAsYou;
             }
@@ -118,9 +127,14 @@ internal sealed class PartnerService : IDisposable
                 else
                     partner.Problem(ProblemText("Collection", "Penumbra", link, outcome));
             }
+            return null;
         }
-        partners.Add(partner);
-        return null;
+        catch (Exception e)
+        {
+            Warn(partner, "the spawn", e);
+            Undo(partner);
+            throw;
+        }
     }
 
     /// <summary>Undoes what the spawn changed, in reverse, and deletes the actor.</summary>
@@ -143,7 +157,10 @@ internal sealed class PartnerService : IDisposable
             Undo(partners[^1]);
     }
 
-    /// <summary>Each frame: despawns everything once GPose ends, drops lost actors and moves each partner a step on.</summary>
+    /// <summary>
+    /// Each frame: despawns everything once GPose ends, drops lost actors and moves each partner a step on. A partner
+    /// whose step throws is marked Ready with <see cref="LinksFailed"/> and not tried again; the others go on.
+    /// </summary>
     public void Update()
     {
         if (!actors.InGPose)
@@ -154,24 +171,32 @@ internal sealed class PartnerService : IDisposable
         for (var i = partners.Count - 1; i >= 0; i--)
         {
             var partner = partners[i];
-            if (!actors.Exists(partner.Actor))
+            try { Step(partner); }
+            catch (Exception e)
             {
-                // Gone by itself: only the profile can go without the object; the assignment stays recorded as ours.
-                partners.RemoveAt(i);
-                if (partner.View.TemporaryProfile is { } lost)
-                    profiles.Remove(lost);
-                continue;
+                Warn(partner, "a frame step", e);
+                partner.Problem(LinksFailed);
+                partner.View = partner.View with { Stage = PartnerStage.Ready };
             }
-            if (partner.View.Stage == PartnerStage.Waiting && (actors.ReadyToDraw(partner.Actor) || TimedOut(partner)))
-            {
-                actors.Draw(partner.Actor);
-                partner.Since = clock();
-                partner.View = partner.View with { Stage = PartnerStage.Drawn };
-            }
-            // Glamourer can't find an actor without its draw object, so the links wait for it.
-            if (partner.View.Stage == PartnerStage.Drawn && (actors.IsDrawn(partner.Actor) || TimedOut(partner)))
-                ApplyLinks(partner);
         }
+    }
+
+    private void Step(Partner partner)
+    {
+        if (!actors.Exists(partner.Actor))
+        {
+            Lose(partner);
+            return;
+        }
+        if (partner.View.Stage == PartnerStage.Waiting && (actors.ReadyToDraw(partner.Actor) || TimedOut(partner)))
+        {
+            actors.Draw(partner.Actor);
+            partner.Since = clock();
+            partner.View = partner.View with { Stage = PartnerStage.Drawn };
+        }
+        // Glamourer can't find an actor without its draw object, so the links wait for it.
+        if (partner.View.Stage == PartnerStage.Drawn && (actors.IsDrawn(partner.Actor) || TimedOut(partner)))
+            ApplyLinks(partner);
     }
 
     /// <summary>Whether a second passed since the partner's last step; the first time, notes it was drawn late.</summary>
@@ -198,34 +223,60 @@ internal sealed class PartnerService : IDisposable
             else
                 partner.Problem(ProblemText("Design", "Glamourer", design, outcome));
         }
-        Guid? temporary = null;
         if (partner.Preset.Profile is { } profile)
         {
-            (var outcome, temporary) = profiles.Apply(index, profile.Id);
+            var (outcome, temporary) = profiles.Apply(index, profile.Id);
+            partner.View = partner.View with { TemporaryProfile = temporary };
             if (outcome.Status != LinkStatus.Applied)
                 partner.Problem(ProblemText("Profile", "Customize+", profile, outcome));
         }
-        partner.View = partner.View with { Stage = PartnerStage.Ready, TemporaryProfile = temporary };
+        partner.View = partner.View with { Stage = PartnerStage.Ready };
     }
 
-    /// <summary>Stops tracking the partner first, so nothing the calls set off sees it, then undoes what its spawn recorded.</summary>
+    /// <summary>
+    /// Stops tracking the partner first, so nothing the calls set off sees it, then undoes what its spawn recorded. Each
+    /// step that throws is reported and the next runs, so the actor is always deleted. An actor already gone takes the
+    /// lost path instead: its index may hold another object now.
+    /// </summary>
     private void Undo(Partner partner)
     {
         partners.Remove(partner);
+        if (!actors.Exists(partner.Actor))
+        {
+            Lose(partner);
+            return;
+        }
         var index = partner.Actor.ObjectIndex;
         if (partner.View.TemporaryProfile is { } temporary)
-            profiles.Remove(temporary);
+            Guarded(partner, "the profile removal", () => profiles.Remove(temporary));
         if (partner.Looked)
-            looks.Release(index);
+            Guarded(partner, "the look release", () => looks.Release(index));
         if (partner.Assigned)
-        {
-            if (partner.Previous is { } previous)
-                collections.Assign(index, previous, false, false);
-            else if (collections.Assign(index, null, false, true).Status == LinkStatus.Applied)
-                store.SetOwnsAssignment(partner.Name, false);
-        }
+            Guarded(partner, "the collection restore", () =>
+            {
+                if (partner.Previous is { } previous)
+                    collections.Assign(index, previous, false, false);
+                else if (collections.Assign(index, null, false, true).Status == LinkStatus.Applied)
+                    store.SetOwnsAssignment(partner.Name, false);
+            });
         actors.Delete(partner.Actor);
     }
+
+    /// <summary>An actor gone by itself: only the profile can go without the object, and the assignment stays recorded as ours.</summary>
+    private void Lose(Partner partner)
+    {
+        partners.Remove(partner);
+        if (partner.View.TemporaryProfile is { } temporary)
+            Guarded(partner, "the profile removal", () => profiles.Remove(temporary));
+    }
+
+    private void Guarded(Partner partner, string step, Action action)
+    {
+        try { action(); }
+        catch (Exception e) { Warn(partner, step, e); }
+    }
+
+    private void Warn(Partner partner, string step, Exception e) => warn?.Invoke($"Partner {partner.Name}: {step} failed: {e.GetType().Name}: {e.Message}");
 
     private Partner? Tracked(Guid presetId)
     {
@@ -243,10 +294,10 @@ internal sealed class PartnerService : IDisposable
         _ => $"{plugin} error {outcome.Code}",
     };
 
-    /// <summary>Despawns every partner on the framework thread and stops the frame updates.</summary>
+    /// <summary>Despawns every partner on the framework thread and stops the frame updates, even when a despawn throws.</summary>
     public void Dispose()
     {
-        actors.OnFramework(DespawnAll);
-        actors.Updated -= Update;
+        try { actors.OnFramework(DespawnAll); }
+        finally { actors.Updated -= Update; }
     }
 }

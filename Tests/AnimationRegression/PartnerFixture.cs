@@ -127,6 +127,92 @@ internal static class PartnerFixture
         Despawn_PenumbraGone_KeepsLeftover(check);
         Delete_DespawnsFirst(check);
         Dispose_DespawnsOnFramework(check);
+        GPoseEnd_LostActor_TakesLostPath(check);
+        Spawn_AssignThrows_DeletesActor(check);
+        Despawn_ReleaseThrows_StillDeletes(check);
+        Update_ApplyThrows_OthersGoOn(check);
+        Dispose_Throws_StillUnsubscribes(check);
+    }
+
+    private static void GPoseEnd_LostActor_TakesLostPath(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Actors.Lost = true;
+        rig.Actors.InGPose = false;
+        var before = rig.Calls.Count;
+        rig.Actors.Tick();
+        check(rig.Since(before).SequenceEqual(["remove T"]) && rig.Store.OwnsAssignment("Aria Rose") && rig.Service.Find(preset.Id) == null,
+            "partner despawn: an actor already gone when GPose ends only has its profile removed; its index is never touched", rig.Log);
+    }
+
+    private static void Spawn_AssignThrows_DeletesActor(Check check)
+    {
+        var rig = new Rig();
+        rig.Collections.ThrowOnAssign = true;
+        var preset = Aria();
+        var threw = false;
+        try { rig.Service.Spawn(preset); }
+        catch (InvalidOperationException) { threw = true; }
+        rig.Actors.Tick();
+        check(threw && rig.Calls.SequenceEqual(["spawn Aria Rose", "parent 202", "current 202", "assign 202 C true true", "delete 202"]) &&
+              rig.Service.Find(preset.Id) == null && !rig.Store.OwnsAssignment("Aria Rose") && rig.Warnings.Count == 1,
+            "partner spawn: a call that throws during the spawn deletes the actor, tracks nothing, warns and rethrows", rig.Log + " / " + string.Join('|', rig.Warnings));
+    }
+
+    private static void Despawn_ReleaseThrows_StillDeletes(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Looks.ThrowOnRelease = true;
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["remove T", "release 202", "assign 202 null false true", "delete 202"]) && !rig.Store.OwnsAssignment("Aria Rose") &&
+              rig.Service.Find(preset.Id) == null && rig.Warnings.Count == 1 && rig.Warnings[0].Contains("InvalidOperationException") && rig.Warnings[0].Contains("release"),
+            "partner despawn: a step that throws is warned once and the later steps and the delete still run", rig.Log + " / " + string.Join('|', rig.Warnings));
+    }
+
+    private static void Update_ApplyThrows_OthersGoOn(Check check)
+    {
+        var rig = new Rig();
+        var aria = Aria();
+        var mira = Aria() with { Name = "Mira Vale" };
+        rig.Service.Spawn(aria);
+        rig.Service.Spawn(mira);
+        // Mira, the last spawned, is stepped first each frame, so a throw there would starve Aria without the isolation.
+        rig.Looks.ThrowOnApply = 203;
+        rig.Actors.Tick();
+        rig.Actors.Tick();
+        var looksAfterTwo = rig.Calls.Count(call => call == "look 203 D");
+        rig.Actors.Tick();
+        var failed = rig.Service.Find(mira.Id);
+        var other = rig.Service.Find(aria.Id);
+        check(failed is { Stage: PartnerStage.Ready } && failed.Problems.SequenceEqual([PartnerService.LinksFailed]) &&
+              other is { Stage: PartnerStage.Ready, TemporaryProfile: not null } && other.Problems.IsEmpty &&
+              looksAfterTwo == 1 && rig.Calls.Count(call => call == "look 203 D") == 1 && !rig.Calls.Contains("profile 203 P") && rig.Warnings.Count == 1,
+            "partner frame: a partner whose link call throws is Ready with Spawning failed: links, never retried, and the other still gets ready",
+            rig.Log + " / " + string.Join('|', rig.Warnings));
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(mira.Id);
+        check(rig.Since(before).SequenceEqual(["assign 203 null false true", "delete 203"]),
+            "partner despawn: a look that threw is not released", rig.Log);
+    }
+
+    private static void Dispose_Throws_StillUnsubscribes(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Actors.Deleting = () => throw new InvalidOperationException("delete");
+        var threw = false;
+        try { rig.Service.Dispose(); }
+        catch (InvalidOperationException) { threw = true; }
+        var before = rig.Calls.Count;
+        rig.Actors.Tick();
+        check(threw && !rig.Actors.Subscribed && rig.Calls.Count == before,
+            "partner dispose: a despawn that throws still drops the frame callback, so later frames do nothing", rig.Log);
     }
 
     private static void Spawn_RefusedOutsideGPose(Check check)
@@ -392,6 +478,7 @@ internal static class PartnerFixture
     private sealed class Rig
     {
         public readonly List<string> Calls = [];
+        public readonly List<string> Warnings = [];
         public readonly PartnerPresetStore Store = new(null);
         public readonly FakeActors Actors;
         public readonly FakeCollections Collections;
@@ -406,7 +493,7 @@ internal static class PartnerFixture
             Collections = new FakeCollections(Calls);
             Looks = new FakeLooks(Calls);
             Profiles = new FakeProfiles(Calls);
-            Service = new PartnerService(Store, Actors, Collections, Looks, Profiles, () => Now);
+            Service = new PartnerService(Store, Actors, Collections, Looks, Profiles, () => Now, Warnings.Add);
         }
 
         /// <summary>Spawns, then runs the two frames that draw it and apply its links.</summary>
@@ -489,6 +576,7 @@ internal static class PartnerFixture
         public int? Parent;
         public CollectionAssignment? Assignment;
         public LinkOutcome AssignOutcome = new(LinkStatus.Applied);
+        public bool ThrowOnAssign;
 
         public IReadOnlyList<PartnerLink> List() => [];
 
@@ -507,7 +595,7 @@ internal static class PartnerFixture
         public LinkOutcome Assign(int objectIndex, Guid? collection, bool allowCreate, bool allowDelete)
         {
             calls.Add($"assign {objectIndex} {Label(collection)} {Flag(allowCreate)} {Flag(allowDelete)}");
-            return AssignOutcome;
+            return ThrowOnAssign ? throw new InvalidOperationException("assign") : AssignOutcome;
         }
     }
 
@@ -515,16 +603,23 @@ internal static class PartnerFixture
     {
         public bool Available => true;
         public LinkOutcome Outcome = new(LinkStatus.Applied);
+        public int? ThrowOnApply;
+        public bool ThrowOnRelease;
 
         public IReadOnlyList<PartnerLink> List() => [];
 
         public LinkOutcome Apply(int objectIndex, Guid design)
         {
             calls.Add($"look {objectIndex} {Label(design)}");
-            return Outcome;
+            return objectIndex == ThrowOnApply ? throw new InvalidOperationException("look") : Outcome;
         }
 
-        public void Release(int objectIndex) => calls.Add($"release {objectIndex}");
+        public void Release(int objectIndex)
+        {
+            calls.Add($"release {objectIndex}");
+            if (ThrowOnRelease)
+                throw new InvalidOperationException("release");
+        }
     }
 
     /// <summary>Hands out the temporary profile T when the apply succeeds.</summary>
