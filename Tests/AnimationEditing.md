@@ -2866,3 +2866,20 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   and the recorder.
 - [ ] 17 Close the Timeline: the listener stops, unless Quick Actions' Send character card waits for an animation.
   With that card waiting (main window on Quick Actions), it still hears the animation you play.
+
+## UI redesign stage 4 (pending)
+
+- [ ] 1 Open a body clip, click Source: Source, then Length with its seconds and Scale events with length, then
+  Bones kept reading like "37 of 40 kept · highest index 103" with Edit. The tick and the View menu's stay the same.
+- [ ] 2 Type a new length and press Enter: the motion stretches and the header's length turns amber.
+- [ ] 3 Edit opens the bones-kept page: Clip (back arrow), the hint, Keep only, the filter and the ticks. Untick a
+  bone, go back with Clip: the line counts one fewer. Open another clip: the clip view shows, the filter is empty.
+- [ ] 4 An expression's own timeline: Source shows Timeline and Timeline from when it has them, the length is greyed
+  out with "An expression's timeline keeps its length.", and Bones kept's Edit opens the face's bones, without Keep only.
+- [ ] 5 An expression whose face can't be read: Bones kept says why, with no Edit.
+- [ ] 6 Edit face: Face shows Moves and, while it moves, its seconds. Tick and untick Moves, then change the seconds:
+  each works as before. The header's length tooltip says the face's own length is in the clip view.
+- [ ] 7 While a save runs, and on a timeline that is read-only, the length, Moves, the seconds, Open startup, Made for
+  and the ticks are greyed out with today's tooltips.
+- [ ] 8 The action bar reads Undo, Redo, Add, the play bar and Bones, with no length or Face. At 760 px Bones stays on
+  the bar's right while there is room, and moves to a line of its own only when there isn't.

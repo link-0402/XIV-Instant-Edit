@@ -146,10 +146,11 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             EditAgain);
         recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => reader.Busy, EditAgain);
         loader = new TimelineLoader(session, timelinePreview, Open);
-        sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
+        blenderMotion = new BlenderMotionPanel(session, decode);
+        sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector,
+            new ClipView(session, posing, timelinePreview, blenderMotion, Open));
         startPage = new StartPage(session, loader, recentEdits, () => sidePanel.Recorder);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
-        blenderMotion = new BlenderMotionPanel(session, decode);
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar);
         menus = new TimelineMenus(session, canvas, toolbar, blenderMotion, curveView, bonesWindow, timelinePreview, ShowStart, Reload, Open);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, playBar, () => saveFooter.RepairTarget,
@@ -871,7 +872,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, texts.LengthText);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(editor.Document.Face != null ? "The length shown. The face's own length is in the toolbar."
+            ImGui.SetTooltip(editor.Document.Face != null ? "The length shown. The face's own length is in the clip view."
                 : editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
                 : current.Standalone ? "The expression's timeline length." : "The clip's length.");
     }

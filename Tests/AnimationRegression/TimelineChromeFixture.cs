@@ -9,7 +9,8 @@ using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
-/// label, the Animations button's tooltip, the start page's entries and which selection the Edit menu shows.
+/// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu shows and the clip view's
+/// Bones kept line.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -22,6 +23,15 @@ internal static class TimelineChromeFixture
         Unfinished(check);
         StartEntries(check);
         Selection(check);
+        Kept(check);
+    }
+
+    /// <summary> The clip view's Bones kept line: all or some kept, then the highest index when one is known. </summary>
+    private static void Kept(Action<bool, string> check)
+    {
+        check(ClipView.KeptText(40, 40, 103) == "All 40 kept · highest index 103", "Bones kept: all");
+        check(ClipView.KeptText(37, 40, 103) == "37 of 40 kept · highest index 103", "Bones kept: some");
+        check(ClipView.KeptText(37, 40, -1) == "37 of 40 kept", "Bones kept: no index known");
     }
 
     private static readonly ImmutableDictionary<string, double> NoValues = ImmutableDictionary<string, double>.Empty;
