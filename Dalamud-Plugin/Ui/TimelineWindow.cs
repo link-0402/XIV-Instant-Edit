@@ -738,7 +738,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
         var avail = ImGui.GetContentRegionAvail();
         if (footerHeight <= 0)
-            footerHeight = ImGui.GetFrameHeightWithSpacing() * 3 + ImGui.GetStyle().ItemSpacing.Y * 2;
+            footerHeight = ImGui.GetFrameHeightWithSpacing() + ImGui.GetTextLineHeightWithSpacing() + ImGui.GetStyle().ItemSpacing.Y;
         var height = Math.Max(Theme.Scaled(120), avail.Y - footerHeight - ImGui.GetStyle().ItemSpacing.Y);
         DrawBody(editor, avail.X, height);
         // A link in the side panel (the Source page's startup Open) may have started reading another clip.

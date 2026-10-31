@@ -39,6 +39,7 @@ internal static class ChangelogCatalog
             Entry("Search your mods by name, author, tag, Penumbra folder or what they change (an item, emote, face, hair, idle or sit pose).", 1),
             Entry("Show only mods active or disabled in your collection, mods not enabled anywhere, or mods installed twice. Sort by size or by the date you added them.", 1),
             Highlight("Animations: the new Timeline window opens an animation laid out like a video editor."),
+            Entry("The Timeline has a menu bar, one row of controls and one line for notes.", 1),
             Entry("Change the animation's length. Its sounds and effects can move with it.", 1),
             Entry("Cut the animation like a video: end it at any frame or remove a part. The parts blend into each other so nothing pops.", 1),
             Entry("The clip band shows whether a loop starts over cleanly. Close loop smooths one that jumps.", 1),

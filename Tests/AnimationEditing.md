@@ -2815,3 +2815,17 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   no Blender items, no Reload, and Neutral face instead of Still pose.
 - [ ] 20 The start page has no menu bar, and neither does a timeline that can't be edited. Its banner offers
   "Start page".
+- [ ] 21 At the Timeline's default 1000 px, Save to, the mod name, Skeleton, Save and Undo last save sit on one row,
+  with Save and Undo last save on the right.
+- [ ] 22 Resize to 760 px: the mod name shrinks first and Save stays visible. On a rebuild (the wide Skeleton choice),
+  Save and Undo last save move to a line of their own, on the right.
+- [ ] 23 Save to has New mod and In place. The mod name shows only for New mod and shows "Mod name" while empty.
+- [ ] 24 A blocking problem (In place on a game file, a skeleton too small) shows as one warning line above the row, not
+  a banner; a failed save shows its error there in red. Events past the end and layer bones show there too.
+- [ ] 25 With layers and a repair, Skeleton's tooltip holds the bake-in hint, and the highest index, bones left out
+  and the rebuild lines. On a loop with a startup from the same mod, Save to's tooltip says the startup goes along.
+- [ ] 26 On a face (Edit face): no Skeleton. Save's tooltip names the face, and the face's in-place problem shows on
+  the warning line.
+- [ ] 27 Save, Undo last save and the save running keep their reasons as tooltips, on a face session and a timeline
+  that is read-only too. The spinner, status and Cancel follow Undo last save while it runs.
+- [ ] 28 Saving in place a sound other animations use still asks Everywhere or Only here.

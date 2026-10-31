@@ -11,9 +11,9 @@ using InstantEdit.Services.PenumbraMods;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The save footer, like the rebakes': a new mod or in place, the skeleton repair choice, a problem
-/// banner, Save with the reason it is unavailable, the running job's status with Cancel, and Undo last
-/// save. A save first ends the preview, then reads the timeline again (<paramref name="reload"/>) once it
+/// The save row, like the rebakes': a warning line when something blocks the save, then Save to (a new mod or in
+/// place), the skeleton repair choice, Save with the reason it is unavailable, Undo last save and the running job's
+/// status with Cancel. A save first ends the preview, then reads the timeline again (<paramref name="reload"/>) once it
 /// is committed. Bone layers saved into the clip are carried over the save, so they stay editable.
 /// </summary>
 /// <param name="loading">Whether the timeline is being read.</param>
@@ -49,6 +49,11 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private (string Path, string Model, string? Note)? borrowNote;
     // Whether the clip's file can be written over in place.
     private bool canReplace;
+    // The widths last frame of Skeleton with its choice and of Save with what follows it, to fit the mod name; 0 before drawn.
+    private float skeletonWidth;
+    private float saveGroupWidth;
+    // Save and what follows are on a line of their own, the row leaving no room for them.
+    private bool saveBelow;
 
     /// <summary>Where the next save goes, as the footer's choice says.</summary>
     public AnimationDestination Destination => destination;
@@ -118,68 +123,85 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         saveMessage = null;
     }
 
+    /// <summary>
+    /// Draws the save row under the lanes: one warning line when something blocks or concerns the save, then Save to, the
+    /// mod name (New mod only), Skeleton (body clips only), and on the right Save, Undo last save and the running job or the
+    /// result. The mod name shrinks first; when the row still has no room, the right group moves to a line of its own.
+    /// </summary>
     public void Draw(TimelineEditor current, AnimationTimelineSource loaded)
     {
         var doc = current.Document;
         var clip = session.Fresh(loaded).Clip;
         ImGui.Separator();
-        if (ImGui.RadioButton("Create new mod", destination == AnimationDestination.NewMod))
-            destination = AnimationDestination.NewMod;
-        ImGui.SameLine();
-        if (ImGui.RadioButton("Replace in-place", destination == AnimationDestination.InPlace))
-            destination = AnimationDestination.InPlace;
-        if (destination == AnimationDestination.NewMod)
-        {
-            ImGui.SameLine(0, Theme.Scaled(16));
-            ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(380), Math.Max(Theme.Scaled(120), ImGui.GetContentRegionAvail().X - Theme.Scaled(90))));
-            if (ImGui.InputText("Mod name", ref modName, 128))
-                modName = PathRules.PlainDashes(modName);
-            if (AnimationBakeRules.CompanionClip(loaded.Capture, loaded.Startup, loaded.Resource, destination) != null)
-                Widgets.HintWrapped(AnimationBakeRules.CompanionNote(loaded.Startup));
-        }
-        // An expression's own timeline and a face keep their own skeleton: no repair or rebuild.
-        if (!loaded.Standalone && doc.Face == null)
-        {
-            DrawRepairChoice(loaded);
-            // A rebuild for another race keeps the edits open (AnimationBakeRules.RebuildKeepsEdits): only a repair bakes them in.
-            if (AnimationBakeRules.BakeInNote(doc, session.Rebuild?.Model != null ? null : RepairTarget) is { } bakeIn)
-                Widgets.HintWrapped(bakeIn);
-        }
 
         texts.Refresh(doc);
-        var repair = loaded.Standalone || doc.Face != null ? null : RepairTarget;
+        // An expression's own timeline and a face keep their own skeleton: no repair or rebuild.
+        var skeleton = !loaded.Standalone && doc.Face == null;
+        var repair = skeleton ? RepairTarget : null;
         var inPlace = destination == AnimationDestination.InPlace;
         var faceInPlace = inPlace ? FaceInPlaceProblem(loaded, doc) : null;
         var problem = faceInPlace ?? TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
                           inPlace, canReplace || AnimationEditService.FaceChanged(doc), doc.LengthChanged, clip.Resolution,
                           AnimationBakeRules.ChangesMotion(doc, repair))
                       ?? (loaded.MotionTarget.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, session.EditingSkeleton(loaded), repair, session.Rebuild?.Model));
-        if (problem != null)
-            Widgets.Banner("##timeline-save-problem", FeedbackSeverity.Warning, problem);
-        else if (saveError != null)
-            Widgets.Banner("##timeline-save-error", FeedbackSeverity.Error, saveError);
-        else if (saveMessage == AnimationEditService.SavedSkeletonTooSmall)
-            Widgets.Banner("##timeline-save-warning", FeedbackSeverity.Warning, saveMessage);
-        else if (texts.PastEndWarning != null)
-            ImGui.TextColored(Theme.Warning, "⚠ " + texts.PastEndWarning);
-        else if (texts.LayerBonesWarning != null)
+        var (warning, colour) = problem != null ? (problem, Theme.Warning)
+            : saveError != null ? (saveError, Theme.Error)
+            : saveMessage == AnimationEditService.SavedSkeletonTooSmall ? (saveMessage, Theme.Warning)
+            : (texts.PastEndWarning ?? texts.LayerBonesWarning, Theme.Warning);
+        if (warning != null)
         {
             using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(Theme.Warning, "⚠ " + texts.LayerBonesWarning);
+            ImGui.TextColored(colour, "⚠ " + warning);
         }
 
+        DrawDestination(loaded);
+        var rightWidth = saveGroupWidth > 0 ? saveGroupWidth
+            : ImGui.CalcTextSize("Save").X + ImGui.CalcTextSize("Undo last save").X + ImGui.GetStyle().FramePadding.X * 4 + Theme.Scaled(16);
+        var skeletonPart = skeleton ? Theme.Scaled(16) + skeletonWidth : 0;
+        var newMod = destination == AnimationDestination.NewMod;
+        // Save and what follows keep to the right, on a line of their own when the row has no room for them with the mod
+        // name at its narrowest; some room to spare before they come back up, so a status a few letters longer doesn't
+        // make them jump.
+        var room = ImGui.GetContentRegionMax().X - (ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X) -
+                   (newMod ? Theme.Scaled(16 + 120) : 0) - skeletonPart - Theme.Scaled(16) - rightWidth;
+        saveBelow = saveBelow ? room < Theme.Scaled(24) : room < 0;
+        if (newMod)
+        {
+            ImGui.SameLine(0, Theme.Scaled(16));
+            var reserved = skeletonPart + (saveBelow ? 0 : Theme.Scaled(16) + rightWidth);
+            ImGui.SetNextItemWidth(Math.Max(Theme.Scaled(120), ImGui.GetContentRegionAvail().X - reserved));
+            if (ImGui.InputTextWithHint("##timeline-mod-name", "Mod name", ref modName, 128))
+                modName = PathRules.PlainDashes(modName);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("The new mod's name.");
+        }
+        if (skeleton)
+        {
+            ImGui.SameLine(0, Theme.Scaled(16));
+            var start = ImGui.GetCursorScreenPos().X;
+            // A rebuild for another race keeps the edits open (AnimationBakeRules.RebuildKeepsEdits): only a repair bakes them in.
+            DrawRepairChoice(loaded, AnimationBakeRules.BakeInNote(doc, session.Rebuild?.Model != null ? null : RepairTarget));
+            skeletonWidth = ImGui.GetItemRectMax().X - start;
+        }
+
+        var right = ImGui.GetContentRegionMax().X - rightWidth;
+        if (!saveBelow)
+            ImGui.SameLine(Math.Max(right, ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + Theme.Scaled(16)));
+        else
+            ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), right));
+        var groupStart = ImGui.GetCursorScreenPos().X;
         var missing = SaveMissing(current, problem);
         using (ImRaii.Disabled(missing != null))
         {
             if (ImGui.Button("Save"))
                 soundSave.Begin(current, loaded, destination, () => StartSave(current, loaded));
         }
-        soundSave.Draw(current, () => StartSave(current, loaded), error => saveError = error);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(missing ?? (destination == AnimationDestination.NewMod
                 ? doc.Face != null ? "Save the face into a new mod." : "Save the timeline into a new mod."
                 : doc.Face != null ? "Save the face into the mod it comes from. Undo last save puts it back."
                 : "Save the timeline into the mod it comes from. Undo last save puts it back."));
+        soundSave.Draw(current, () => StartSave(current, loaded), error => saveError = error);
         ImGui.SameLine(0, Theme.Scaled(16));
         DrawUndoLastSave(current);
 
@@ -204,7 +226,41 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Success, saveMessage);
         }
+        saveGroupWidth = ImGui.GetItemRectMax().X - groupStart;
     }
+
+    /// <summary>
+    /// "Save to" with its choice, New mod or In place; its tooltip says when a new mod takes the loop's startup along, or
+    /// the startup's loop.
+    /// </summary>
+    private void DrawDestination(AnimationTimelineSource loaded)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Save to");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(100));
+        using (var combo = ImRaii.Combo("##timeline-save-to", DestinationName(destination)))
+        {
+            if (combo.Success)
+            {
+                foreach (var place in Destinations)
+                    if (ImGui.Selectable(DestinationName(place), destination == place))
+                        destination = place;
+            }
+            else if (ComboWheel.Steps() is var steps and not 0)
+                destination = ComboWheel.Pick(Destinations, destination, steps);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(AnimationBakeRules.CompanionClip(loaded.Capture, loaded.Startup, loaded.Resource, destination) != null
+                ? "Save into a new mod, or into the mod it comes from.\n" + AnimationBakeRules.CompanionNote(loaded.Startup)
+                : "Save into a new mod, or into the mod it comes from.");
+    }
+
+    /// <summary>The choices of Save to, in its order.</summary>
+    private static readonly AnimationDestination[] Destinations = [AnimationDestination.NewMod, AnimationDestination.InPlace];
+
+    /// <summary>A choice's name under Save to.</summary>
+    private static string DestinationName(AnimationDestination place) => place == AnimationDestination.NewMod ? "New mod" : "In place";
 
     /// <summary>
     /// Why a face's save can't go in place: the face's file, and an expression's timeline when its events changed too, must
@@ -563,11 +619,12 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     }
 
     /// <summary>
-    /// The save footer's skeleton choice: keep the clip's own, repair it onto a standard skeleton so
+    /// The save row's skeleton choice: keep the clip's own, repair it onto a standard skeleton so
     /// every bone sits at the index other players' skeletons and sync plugins expect, or, for a clip
-    /// borrowed from another race, rebuild it onto a standard skeleton of the character's race.
+    /// borrowed from another race, rebuild it onto a standard skeleton of the character's race. Its notes,
+    /// and <paramref name="bakeIn"/> when the save bakes the layers in, are its tooltip (<see cref="RepairNotes"/>).
     /// </summary>
-    private void DrawRepairChoice(AnimationTimelineSource loaded)
+    private void DrawRepairChoice(AnimationTimelineSource loaded, string? bakeIn)
     {
         var clip = session.Fresh(loaded).Clip;
         var race = AnimationBones.RebuildRace(clip, loaded.FileModel, loaded.HoldsOthers);
@@ -621,35 +678,42 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Repair moves every bone to the index other players' skeletons use, whatever your skeleton mod adds.\n" +
-                             "Only bones the animation moves are written.");
+            ImGui.SetTooltip(string.Join("\n", RepairNotes(clip, loaded, excluded, bakeIn)));
+    }
+
+    /// <summary>
+    /// The lines of the skeleton choice's tooltip: what a repair does, the chosen standard's highest index and the bones it
+    /// lacks, what a rebuild does or why it can't, the other races that play a rebuilt file, and the bake-in hint.
+    /// </summary>
+    private IEnumerable<string> RepairNotes(AnimationClip clip, AnimationTimelineSource loaded, IReadOnlyCollection<string> excluded, string? bakeIn)
+    {
+        yield return "Repair moves every bone to the index other players' skeletons use, whatever your skeleton mod adds.";
+        yield return "Only bones the animation moves are written.";
         if (RepairTarget is { } repair && AnimationBones.Plan(clip, repair, excluded, session.Rebuild?.Model) is { } plan)
         {
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, plan.Dropped.IsEmpty
+            yield return plan.Dropped.IsEmpty
                 ? $"Highest index {plan.HighestIndex}"
-                : $"Highest index {plan.HighestIndex} · {plan.Dropped.Length} bones left out");
-            if (!plan.Dropped.IsEmpty && ImGui.IsItemHovered())
-                ImGui.SetTooltip($"The {AnimationBones.StandardName(repair)} skeleton lacks " +
-                                 string.Join(", ", plan.Dropped.Take(8).Select(AnimationPresentation.BoneName)) +
-                                 (plan.Dropped.Length > 8 ? $" and {plan.Dropped.Length - 8} more." : "."));
+                : $"Highest index {plan.HighestIndex} · {plan.Dropped.Length} bones left out";
+            if (!plan.Dropped.IsEmpty)
+                yield return $"The {AnimationBones.StandardName(repair)} skeleton lacks " +
+                             string.Join(", ", plan.Dropped.Take(8).Select(AnimationPresentation.BoneName)) +
+                             (plan.Dropped.Length > 8 ? $" and {plan.Dropped.Length - 8} more." : ".");
         }
         if (((session.Rebuild == null ? rebuildFailed : null) ?? AnimationBones.RebuildNote(clip, loaded.FileModel, excluded, session.Rebuild?.Model != null, loaded.HoldsOthers)) is { } note)
+            yield return note;
+        if (session.Rebuild is { Model: { } rebuilding })
         {
-            using var wrap = ImRaii.TextWrapPos(0f);
-            ImGui.TextColored(Theme.Muted, note);
+            // The PAP load table is read once per clip and race, not every time the tooltip shows.
+            if (borrowNote is not { } borrow || borrow.Path != clip.GamePath || borrow.Model != rebuilding)
+                borrowNote = borrow = (clip.GamePath, rebuilding,
+                    session.Animations?.PapTable is { } table && ushort.TryParse(rebuilding.AsSpan(1), out var actor)
+                        ? AnimationBakeRules.BorrowNote(table.PlayedBy(clip.GamePath, Studio.Models.RaceInfo.PlayableCodes), actor)
+                        : null);
+            if (borrow.Note is { } others)
+                yield return others;
         }
-        if (session.Rebuild is not { Model: { } rebuilding })
-            return;
-        // The PAP load table is read once per clip and race, not every frame.
-        if (borrowNote is not { } borrow || borrow.Path != clip.GamePath || borrow.Model != rebuilding)
-            borrowNote = borrow = (clip.GamePath, rebuilding,
-                session.Animations?.PapTable is { } table && ushort.TryParse(rebuilding.AsSpan(1), out var actor)
-                    ? AnimationBakeRules.BorrowNote(table.PlayedBy(clip.GamePath, Studio.Models.RaceInfo.PlayableCodes), actor)
-                    : null);
-        if (borrow.Note is { } others)
-            Widgets.HintWrapped(others);
+        if (bakeIn != null)
+            yield return bakeIn;
     }
 
     /// <summary>One entry of the skeleton choice: keep (no standard), repair onto a standard, or with a race's model rebuild onto its standard.</summary>
