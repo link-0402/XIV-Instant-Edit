@@ -33,7 +33,6 @@ public sealed class MainWindow : Window, IDisposable
     private const string KofiUrl = "https://ko-fi.com/luci_xiv";
     private const string DiscordUrl = "https://discord.gg/w5vzsPXsE7";
     private const int AutoRefreshDelayMs = 1000;
-    private const bool ShowAnimationsTab = true;
     private readonly Configuration _config;
     private readonly PenumbraIpc _penumbra;
     private readonly OnScreenService _onScreen;
@@ -222,8 +221,8 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>The dialogs the Timeline window's rows open, such as Send animation to Blender from Playing now.</summary>
     internal void DrawTimelineDialogs() => _animationSend.Draw(AnimationSendDialog.TimelineOwner);
 
-    /// <summary>Whether this window keeps the listener running: its Animations tab is shown, or Send my character waits for it.</summary>
-    internal bool ListensForAnimations => IsOpen && (_activeTab == MainTab.Animations || _activeTab == MainTab.QuickActions && _sendCharacterCard.Listens);
+    /// <summary>Whether this window keeps the listener running: Quick Actions' Send my character waits for it.</summary>
+    internal bool ListensForAnimations => IsOpen && _activeTab == MainTab.QuickActions && _sendCharacterCard.Listens;
 
     /// <summary> The Mod Browser: Penumbra's mods as tiles, a window per open mod, and the modpack builder. </summary>
     internal void AttachStudio(StudioHost studio) => _modBrowser.Attach(studio, _handoff);
@@ -370,7 +369,6 @@ public sealed class MainWindow : Window, IDisposable
         var activeTab = DrawToolbar();
         var stripHeight = ImGui.GetFrameHeight();
         var contentHeight = Math.Max(1, ImGui.GetContentRegionAvail().Y - stripHeight - ImGui.GetStyle().ItemSpacing.Y);
-        var animationsTabActive = false;
         using (var region = ImRaii.Child("##instant-edit-tab-region", new Vector2(0, contentHeight), false, ImGuiWindowFlags.NoBackground))
         {
             if (region.Success)
@@ -386,10 +384,6 @@ public sealed class MainWindow : Window, IDisposable
                     case MainTab.TextureEdits:
                         _textureTab.Draw();
                         break;
-                    case MainTab.Animations:
-                        animationsTabActive = true;
-                        _playingNow.Draw();
-                        break;
                     case MainTab.QuickActions:
                         _quickActions.Draw();
                         break;
@@ -401,10 +395,9 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         _activeTab = activeTab;
-        // The listener runs only while the Animations tab or the Timeline window is open, or Quick
-        // Actions waits to send your character in the animation it plays: until a skeleton library is
-        // saved, its first match builds one.
-        if (!animationsTabActive && !(activeTab == MainTab.QuickActions && _sendCharacterCard.Listens) && _timelineListens?.Invoke() != true)
+        // The listener runs only while the Timeline window is open, or Quick Actions waits to send your
+        // character in the animation it plays: until a skeleton library is saved, its first match builds one.
+        if (!ListensForAnimations && _timelineListens?.Invoke() != true)
             _animationHub.Service?.StopObservation();
         _textureTab.DrawDialogs();
         _animationSend.Draw(AnimationSendDialog.MainOwner);
@@ -454,11 +447,8 @@ public sealed class MainWindow : Window, IDisposable
         if (Widgets.TabButton(FontAwesomeIcon.Database, "Game Files", active == MainTab.GameFiles)) active = MainTab.GameFiles;
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.TabButton(FontAwesomeIcon.Images, _textureTab.SessionsTabLabel(), active == MainTab.TextureEdits)) active = MainTab.TextureEdits;
-        if (ShowAnimationsTab)
-        {
-            ImGui.SameLine(0, Theme.Gap);
-            if (Widgets.TabButton(FontAwesomeIcon.Running, "Animations", active == MainTab.Animations)) active = MainTab.Animations;
-        }
+        ImGui.SameLine(0, Theme.Gap);
+        DrawAnimationsButton();
         ImGui.SameLine(0, Theme.Gap);
         if (Widgets.TabButton(FontAwesomeIcon.Bolt, "Quick Actions", active == MainTab.QuickActions)) active = MainTab.QuickActions;
 
@@ -510,6 +500,22 @@ public sealed class MainWindow : Window, IDisposable
         return active;
     }
 
+    /// <summary>
+    /// The Animations button: opens the Timeline window or brings it to front, and never becomes the active tab.
+    /// With unfinished edits it shows their count in the warning colour.
+    /// </summary>
+    private void DrawAnimationsButton()
+    {
+        var unfinished = _animationHub.Service is { } service ? TimelineWindow.RecoveryAttention(service) : 0;
+        bool clicked;
+        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, unfinished > 0))
+            clicked = Widgets.TabButton(FontAwesomeIcon.Running, unfinished > 0 ? $"Animations ({unfinished})" : "Animations", false);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(unfinished > 0 ? TimelineWindowViews.UnfinishedText(unfinished) : "Open the Timeline window.");
+        if (clicked)
+            _showTimeline?.Invoke();
+    }
+
     private static Vector4 ConnectionColour(BlenderConnectionState state)
         => state switch
         {
@@ -524,22 +530,11 @@ public sealed class MainWindow : Window, IDisposable
         => tab switch
         {
             MainTab.TextureEdits => StatusChannel.Textures,
-            MainTab.Animations => StatusChannel.Animations,
             _ => StatusChannel.Models,
         };
 
     private FeedbackState GetFeedback(MainTab tab)
     {
-        if (tab == MainTab.Animations)
-        {
-            var service = _animationHub.Service;
-            if (service is null)
-                return new FeedbackState(string.Empty, FeedbackSeverity.Error);
-            return new FeedbackState(service.Status, service.LastFailed && !service.Busy
-                ? FeedbackSeverity.Error
-                : FeedbackSeverity.Success);
-        }
-
         var latest = _feed.Latest(ChannelOf(tab));
         return latest is null
             ? new FeedbackState(string.Empty, FeedbackSeverity.Success)
@@ -564,7 +559,6 @@ public sealed class MainWindow : Window, IDisposable
         OnScreen,
         ModBrowser,
         TextureEdits,
-        Animations,
         GameFiles,
         QuickActions,
     }

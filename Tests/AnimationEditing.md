@@ -2857,3 +2857,12 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 12 Pick Saved edits, open a clip and click Start: the page opens on Saved edits. Animation, Load another opens it
   on Game animations. After a plugin reload it opens on Playing now again.
 - [ ] 13 With animation editing unavailable, the Timeline shows its banner and the recorder.
+- [ ] 14 The main window's Animations button (running icon) opens the Timeline window, or brings it to front when it is
+  open. The main window stays on its tab, and there is no Animations tab or Open timeline button any more. Its tooltip
+  reads "Open the Timeline window."
+- [ ] 15 With an unfinished edit the button reads "Animations (1)" in the warning colour, tooltip "1 edit didn't
+  finish. Undo it in the Timeline."; with three, "Animations (3)" and "3 edits didn't finish. Undo them in the Timeline."
+- [ ] 16 With animation services unavailable, the Animations button still opens the Timeline, which shows its banner
+  and the recorder.
+- [ ] 17 Close the Timeline: the listener stops, unless Quick Actions' Send character card waits for an animation.
+  With that card waiting (main window on Quick Actions), it still hears the animation you play.

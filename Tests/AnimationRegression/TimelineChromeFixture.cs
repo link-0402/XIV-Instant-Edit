@@ -9,7 +9,7 @@ using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
-/// label, the start page's entries and which selection the Edit menu shows.
+/// label, the Animations button's tooltip, the start page's entries and which selection the Edit menu shows.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -19,6 +19,7 @@ internal static class TimelineChromeFixture
     {
         Status(check);
         Start(check);
+        Unfinished(check);
         StartEntries(check);
         Selection(check);
     }
@@ -59,6 +60,13 @@ internal static class TimelineChromeFixture
     private static void Start(Action<bool, string> check)
     {
         check(TimelineWindow.StartLabel(0) == "Start" && TimelineWindow.StartLabel(2) == "Start (2)", "Start shows the unfinished edits");
+    }
+
+    /// <summary> The main window's Animations button's tooltip names the unfinished edits. </summary>
+    private static void Unfinished(Action<bool, string> check)
+    {
+        check(TimelineWindowViews.UnfinishedText(1) == "1 edit didn't finish. Undo it in the Timeline.", "One unfinished edit");
+        check(TimelineWindowViews.UnfinishedText(3) == "3 edits didn't finish. Undo them in the Timeline.", "Several unfinished edits");
     }
 
     /// <summary> The start page's sidebar: Partners only once a spawner is attached, Record only with the recorder. </summary>

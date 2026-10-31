@@ -29,6 +29,11 @@ internal static partial class TimelineWindowViews
 
     public const string NoWritableSource = "This animation has no writable Penumbra source. Choose Create new mod.";
 
+    /// <summary>The main window's Animations button tooltip while <paramref name="edits"/> edits didn't finish.</summary>
+    public static string UnfinishedText(int edits) => edits == 1
+        ? "1 edit didn't finish. Undo it in the Timeline."
+        : $"{edits} edits didn't finish. Undo them in the Timeline.";
+
     /// <summary>What an Add can create, in menu order.</summary>
     public static readonly ImmutableArray<TimelineAddKind> AddKinds =
         [TimelineAddKind.Expression, TimelineAddKind.LipSync, TimelineAddKind.Sound, TimelineAddKind.Effect, TimelineAddKind.Prop];
