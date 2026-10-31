@@ -65,7 +65,7 @@ public sealed class MainWindow : Window, IDisposable
     private readonly OnScreenTab _onScreenTab;
     private readonly GameFileExportDialog _gameExportDialog;
     private readonly GameFilesTab _gameFilesTab;
-    private readonly AnimationsTab _animationsTab;
+    private readonly PlayingNowPage _playingNow;
     private readonly SkinSeamDialog _skinSeams;
     private readonly TextureCompressionCard _compressionCard;
     private readonly HeelsOffsetCard _heelsCard;
@@ -74,6 +74,8 @@ public sealed class MainWindow : Window, IDisposable
     private readonly QuickActionsTab _quickActions;
     // Whether the Timeline window keeps the listener running.
     private Func<bool>? _timelineListens;
+    // Opens the Timeline window as it is, with its start page when no clip is open.
+    private Action? _showTimeline;
     private MainTab _activeTab = MainTab.OnScreen;
     private MainTab? _pendingTab;
     private long _resourcesChangedTicks;
@@ -113,7 +115,7 @@ public sealed class MainWindow : Window, IDisposable
         _onScreenTab = new OnScreenTab(config, saveConfig, onScreen, _rows, _hoverCards, _textureTab, _slotIcons, _expansion);
         _gameExportDialog = new GameFileExportDialog(config, saveConfig, penumbra, log, _feed, _rows);
         _gameFilesTab = new GameFilesTab(onScreen, _rows, _hoverCards, _gameExportDialog);
-        _animationsTab = new AnimationsTab(onScreen, _animationHub, _animationSend, _recorder, _rows, _expansion, _feed, lifetime);
+        _playingNow = new PlayingNowPage(onScreen, _animationHub, _animationSend, _rows, _expansion);
         _skinSeams = new SkinSeamDialog(onScreen, config, log, _feed, lifetime);
         _compressionCard = new TextureCompressionCard(config, log, _notifications, lifetime);
         _heelsCard = new HeelsOffsetCard(config, saveConfig, _feed);
@@ -205,9 +207,20 @@ public sealed class MainWindow : Window, IDisposable
 
     internal void AttachTimeline(Action<AnimationCapture, bool>? open, Action? show = null, Func<bool>? listens = null)
     {
-        _animationsTab.AttachTimeline(open, show);
+        if (open is not null)
+            _playingNow.AttachOpen(open);
+        _showTimeline = show;
         _timelineListens = listens;
     }
+
+    /// <summary>The start page's Playing now entry, drawn by the Timeline window.</summary>
+    internal void DrawPlayingNow() => _playingNow.Draw();
+
+    /// <summary>How many animations play now, for the start page's sidebar.</summary>
+    internal int PlayingCount => _playingNow.Playing;
+
+    /// <summary>The dialogs the Timeline window's rows open, such as Send animation to Blender from Playing now.</summary>
+    internal void DrawTimelineDialogs() => _animationSend.Draw(AnimationSendDialog.TimelineOwner);
 
     /// <summary>Whether this window keeps the listener running: its Animations tab is shown, or Send my character waits for it.</summary>
     internal bool ListensForAnimations => IsOpen && (_activeTab == MainTab.Animations || _activeTab == MainTab.QuickActions && _sendCharacterCard.Listens);
@@ -375,7 +388,7 @@ public sealed class MainWindow : Window, IDisposable
                         break;
                     case MainTab.Animations:
                         animationsTabActive = true;
-                        _animationsTab.Draw();
+                        _playingNow.Draw();
                         break;
                     case MainTab.QuickActions:
                         _quickActions.Draw();

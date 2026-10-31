@@ -2833,3 +2833,11 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   rebuild for" the race and Skeleton shows Keep its own. A clip that can't be rebuilt says why there as a note.
 - [ ] 30 Repair onto a skeleton that lacks bones the animation moves: the warning line reads like "Repair onto IVCS leaves
   out 3 bones." and Skeleton's tooltip lists them.
+
+## UI redesign stage 3 (pending)
+
+- [ ] 1 On Playing now, a click on a row opens its timeline. No row stays selected.
+- [ ] 2 A click on a startup row opens the startup, not its loop.
+- [ ] 3 A row's pen opens Send animation to Blender over the Timeline window.
+- [ ] 4 Make startup instant (in a loop's "..." menu) shows its result on the page's last line, not in the main window's
+  status strip.

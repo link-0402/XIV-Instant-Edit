@@ -18,6 +18,9 @@ internal sealed class AnimationSendDialog
     /// <summary> The main window, as the owner of the dialogs its own rows open. </summary>
     public const string MainOwner = "main";
 
+    /// <summary> The Timeline window, as the owner of the dialogs its Playing now page's rows open. </summary>
+    public const string TimelineOwner = "timeline";
+
     private sealed class AnimationSendState(CancellationToken lifetime) : IDisposable
     {
         private readonly CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
