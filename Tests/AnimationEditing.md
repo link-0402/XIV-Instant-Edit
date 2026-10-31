@@ -2764,3 +2764,12 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   the head follows it. Pick Spot again: the gizmo comes back.
 - [ ] 5 Untick Upper back and Neck: only the head turns, and the same angle. The Bones window shows the same pose as Live.
 - [ ] 6 Save and reopen with Edit again: the look is the same. Moving the dot makes no hitch in dalamud.log.
+
+## UI redesign stage 1 (pending)
+
+- [ ] 1 Preview shows the Video icon and the label Preview.
+- [ ] 2 Live shows its label and stays filled while on.
+- [ ] 3 From start replays the preview from frame 0. No button on the bar uses the Redo icon.
+- [ ] 4 Speed is a narrow field showing 100%. Dragging it and Ctrl+click typing both stay between 10 and 200.
+- [ ] 5 The time beside Stop reads like "6.13s · frame 184" and follows the playhead.
+- [ ] 6 Disabled controls keep today's reason tooltips, such as "Press Preview first." on Play.

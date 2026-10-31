@@ -37,6 +37,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelinePickers pickers;
     private readonly SoundInspector soundInspector;
     private readonly TimelinePreview timelinePreview;
+    private readonly PlayBar playBar;
     private readonly BonePosing posing;
     private readonly BoneEditor boneEditor;
     private readonly PoseSourcePanel poseSources;
@@ -112,6 +113,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
+        playBar = new PlayBar(session, timelinePreview);
         posing = new BonePosing(session, decode);
         boneEditor = new BoneEditor(session, decode, posing, this);
         var poseOptions = new PoseKeyOptions(posing);
@@ -654,7 +656,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         timelinePreview.Update(editor, source);
         CheckGizmo();
         toolbar.Draw(editor);
-        timelinePreview.DrawBar(editor, source, saveFooter.RepairTarget);
+        timelinePreview.DrawBar(playBar, editor, source, saveFooter.RepairTarget);
         toolbar.DrawMessages(editor);
 
         var avail = ImGui.GetContentRegionAvail();

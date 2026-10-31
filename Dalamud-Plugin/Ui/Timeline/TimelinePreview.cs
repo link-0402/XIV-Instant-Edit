@@ -24,7 +24,6 @@ namespace InstantEdit.Ui.Timeline;
 internal sealed class TimelinePreview(TimelineSession session, MotionDecode decode, EffectLookEditor effectLooks, SoundFiles soundFiles)
 {
     private float speedPercent = 100;
-    private bool follow = true;
     private volatile string? previewFingerprint;
     private volatile int previewGeneration;
     private ushort previewTimeline;
@@ -122,6 +121,33 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary>A gizmo drag runs: Live builds every few frames, which the status doesn't flash for.</summary>
     public bool Dragging { get; set; }
 
+    /// <summary>Outside the preview, the playhead moves with this clip while your character plays it.</summary>
+    public bool Follow { get; set; } = true;
+
+    /// <summary>The preview's playback speed in percent, 10 to 200. Setting it while the preview plays changes the speed now.</summary>
+    public float SpeedPercent
+    {
+        get => speedPercent;
+        set
+        {
+            speedPercent = Math.Clamp(value, 10, 200);
+            if (session.Playback.Active)
+                PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
+        }
+    }
+
+    /// <summary>Why Preview can't start now; null when it can.</summary>
+    internal string? PreviewBlocked()
+    {
+        var available = PlaybackAvailable(out var reason);
+        return !available ? reason
+            : session.ReadOnly ? "Wait for the save to finish."
+            : previewJob ? "The preview is being built."
+            : session.Animations!.Busy ? "Another edit is running. Wait for it to end."
+            : session.Preview.Busy ? "The preview is busy."
+            : null;
+    }
+
     /// <summary> Every frame: the playhead and the pose together, Live's layers, and the looks and sounds shown. </summary>
     public void Update(TimelineEditor current, AnimationTimelineSource loaded)
     {
@@ -136,58 +162,22 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         SyncLooks(current);
     }
 
-    /// <summary> The preview bar; <paramref name="repair"/> is the standard skeleton a preview repairs the clip onto, as a save would. </summary>
-    public void DrawBar(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
+    /// <summary>
+    /// The preview bar: <paramref name="bar"/> first, then Follow, the status and the hints. <paramref name="repair"/> is the
+    /// standard skeleton a preview repairs the clip onto, as a save would.
+    /// </summary>
+    public void DrawBar(PlayBar bar, TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
     {
         var service = session.Animations!;
         var available = PlaybackAvailable(out var reason);
         var shown = previewFingerprint != null;
         var active = session.Playback.Active;
-        var paused = active && session.Playback.Paused;
-        var blocked = !available ? reason
-            : session.ReadOnly ? "Wait for the save to finish."
-            : previewJob ? "The preview is being built."
-            : service.Busy ? "Another edit is running. Wait for it to end."
-            : session.Preview.Busy ? "The preview is busy."
-            : null;
-        using (ImRaii.Disabled(blocked != null))
-        {
-            if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Eye, "Preview", null, null, null, null))
-                StartPreview(current, loaded, repair);
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(blocked ?? "Build the edited clip, redraw your GPose character with it and play it. Nothing is saved.");
-
-        ImGui.SameLine(0, Theme.Scaled(2));
-        DrawLiveToggle(current, loaded, "##timeline-live");
-
-        ImGui.SameLine(0, Theme.Scaled(8));
-        if (Widgets.IconButton("##timeline-play", active && !paused ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
-                !shown ? "Press Preview first." : active ? paused ? "Resume" : "Pause" : "Play the preview", shown && available))
-            TogglePlay();
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (Widgets.IconButton("##timeline-replay", FontAwesomeIcon.Redo, shown ? "Play again from the start" : "Press Preview first.", shown && available))
-            Replay(current);
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (Widgets.IconButton("##timeline-stop", FontAwesomeIcon.Stop, "Stop the preview and put your character back",
-                shown || active || session.Preview.Active || previewJob))
-            Stop();
+        bar.Draw(current, loaded, repair, "##timeline-play");
 
         ImGui.SameLine(0, Theme.Scaled(12));
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "Speed");
-        ImGui.SameLine(0, Theme.Gap);
-        ImGui.SetNextItemWidth(Theme.Scaled(110));
-        if (ImGui.SliderFloat("##timeline-speed", ref speedPercent, 10, 200, "%.0f%%"))
-        {
-            speedPercent = Math.Clamp(speedPercent, 10, 200);
-            if (session.Playback.Active)
-                PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Playback speed of the preview.");
-        ImGui.SameLine(0, Theme.Scaled(12));
-        ImGui.Checkbox("Follow", ref follow);
+        var follow = Follow;
+        if (ImGui.Checkbox("Follow", ref follow))
+            Follow = follow;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Outside the preview, move the playhead with this clip while your character plays it.");
 
@@ -249,32 +239,35 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             : "Sounds and effects play only while the preview plays."));
     }
 
-    /// <summary> The Live toggle, in the preview bar and in the Bones window. </summary>
+    /// <summary> The Live toggle, icon and label, filled while on: in the play bar and in the Bones window. </summary>
     public void DrawLiveToggle(TimelineEditor current, AnimationTimelineSource loaded, string id)
     {
         var liveBlocked = liveWanted ? null : LiveBlocked(current, session.Fresh(loaded), PlaybackAvailable(out var reason), reason);
+        var enabled = liveWanted || liveBlocked == null;
+        bool clicked;
+        using (ImRaii.PushId(id))
+        using (ImRaii.Disabled(!enabled))
         using (ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, liveWanted)
                    .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), liveWanted))
-        {
-            if (Widgets.IconButton(id, FontAwesomeIcon.Bolt, liveWanted
-                    ? "Live is on: your bone layers show on the GPose character as you edit. Click to turn it off."
-                    : liveBlocked ?? (OnBuiltPreview() != null
-                        ? "Show your bone layers over the preview as you edit them. Nothing is saved."
-                        : "Show your bone layers on the GPose character as you edit them. Nothing is saved."),
-                    liveWanted || liveBlocked == null))
-            {
-                if (!liveWanted && Carried(session.Fresh(loaded)) && OnBuiltPreview() == null)
-                    // A face opened on its own plays only through the carrier: Live starts over its preview.
-                    StartPreview(current, loaded, null, live: true);
-                else if (!liveWanted)
-                    StartLive(loaded);
-                else if (livePreview != null)
-                    // Back to the preview Live ran over, as built.
-                    StopLive(keepPlaying: true);
-                else
-                    Stop();
-            }
-        }
+            clicked = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Bolt, "Live", null, null, null, null);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(liveWanted
+                ? "Live is on: your bone layers show on the GPose character as you edit. Click to turn it off."
+                : liveBlocked ?? (OnBuiltPreview() != null
+                    ? "Show your bone layers over the preview as you edit them. Nothing is saved."
+                    : "Show your bone layers on the GPose character as you edit them. Nothing is saved."));
+        if (!clicked || !enabled)
+            return;
+        if (!liveWanted && Carried(session.Fresh(loaded)) && OnBuiltPreview() == null)
+            // A face opened on its own plays only through the carrier: Live starts over its preview.
+            StartPreview(current, loaded, null, live: true);
+        else if (!liveWanted)
+            StartLive(loaded);
+        else if (livePreview != null)
+            // Back to the preview Live ran over, as built.
+            StopLive(keepPlaying: true);
+        else
+            Stop();
     }
 
     private static string? FirstText(params string?[] texts)
@@ -313,7 +306,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// Builds the edited clip in the service, writes it with the imports it uses into a temporary
     /// mod on the GPose actor's collection, then plays the clip's timeline on that actor.
     /// </summary>
-    private void StartPreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair, bool live = false)
+    internal void StartPreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair, bool live = false)
     {
         // The preview plays the built file through a temporary mod; Live's swapped motion must go first, and comes back over the build.
         // With live (a face opened on its own) Live starts over it once it plays.
@@ -481,7 +474,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             PlaybackCall(session.Playback.Pause);
     }
 
-    private void Replay(TimelineEditor current)
+    /// <summary>Plays the shown preview again from frame 0, the playhead with it.</summary>
+    internal void Replay(TimelineEditor current)
     {
         if (previewFingerprint is not { } fingerprint)
             return;
@@ -610,7 +604,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 return;
             }
             // After a save the game plays the clip as captured until it loads the saved file, then that file.
-            if (follow && !session.Playback.Active && current.Gesture == TimelineGesture.None && loaded.Clip.BindingFingerprint.Length > 0 &&
+            if (Follow && !session.Playback.Active && current.Gesture == TimelineGesture.None && loaded.Clip.BindingFingerprint.Length > 0 &&
                 (session.Playback.CurrentTime(loaded.Clip.BindingFingerprint) ??
                  (loaded.FileFingerprint.Length > 0 && loaded.FileFingerprint != loaded.Clip.BindingFingerprint
                      ? session.Playback.CurrentTime(loaded.FileFingerprint) : null)) is { } live)
