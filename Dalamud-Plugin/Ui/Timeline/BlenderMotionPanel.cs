@@ -1,6 +1,4 @@
 using Dalamud.Bindings.ImGui;
-using Dalamud.Interface;
-using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
@@ -12,13 +10,11 @@ namespace InstantEdit.Ui.Timeline;
 /// The clip's motion to Blender and back: Send motion to Blender sends it as the timeline plays it now
 /// (cuts and bone layers applied), and Motion from Blender reads the armature's motion back and puts it
 /// in place of the clip's, as one undo step. A still pose takes the clip's place the same way, to start
-/// it from scratch (Add menu), and so do a face's holds (still or moving) and its neutral face. The line
-/// under the toolbar says which motion plays.
+/// it from scratch, and so do a face's holds (still or moving) and its neutral face; the Animation menu
+/// offers them. The status line says which motion plays.
 /// </summary>
 internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode decode)
 {
-    private const string Menu = "##timeline-blender-menu";
-
     /// <summary>What a running read makes: a motion from Blender, a still pose, a face's hold or its neutral face.</summary>
     private enum Hold : byte { Blender, Still, Face, Neutral }
 
@@ -55,13 +51,9 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         note = null;
     }
 
-    public void DrawButton(TimelineEditor current)
+    /// <summary> The Animation menu's Send motion to Blender and Motion from Blender, each with why it is unavailable as its tooltip. </summary>
+    public void DrawMenuItems(TimelineEditor current)
     {
-        if (Widgets.IconButton("##timeline-blender", FontAwesomeIcon.ExchangeAlt, "Send the motion to Blender, or bring Blender's back."))
-            ImGui.OpenPopup(Menu);
-        using var popup = ImRaii.Popup(Menu);
-        if (!popup.Success)
-            return;
         var problem = Unavailable();
         if (ImGui.MenuItem("Send motion to Blender", "", false, problem == null && sending == null && reading == null))
             Send(current);

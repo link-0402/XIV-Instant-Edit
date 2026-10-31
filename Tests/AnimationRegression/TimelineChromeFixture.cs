@@ -1,8 +1,15 @@
+using System.Collections.Immutable;
+using System.Numerics;
+using InstantEdit.Models;
+using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, and the Start button's label.
+/// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
+/// label and which selection the Edit menu shows.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -12,6 +19,39 @@ internal static class TimelineChromeFixture
     {
         Status(check);
         Start(check);
+        Selection(check);
+    }
+
+    private static readonly ImmutableDictionary<string, double> NoValues = ImmutableDictionary<string, double>.Empty;
+
+    /// <summary> An event shaped like TimelineEditorFixture's. </summary>
+    private static TimelineEvent Ev(string key, TimelineLane lane, int start, int duration = 0, bool resizable = false,
+        TimelineAccess access = TimelineAccess.Editable, string? group = null, string magic = "C063", string path = "") =>
+        new(key, magic, lane, start, duration, resizable, path, access, access == TimelineAccess.Editable ? null : "Kept as is", false, NoValues, group);
+
+    /// <summary> An offset layer "m1" over frames 0 to 60 with one key, as LayerWeightFixture's. </summary>
+    private static MotionLayer Offset() =>
+        new("m1", MotionLayerKind.Offset, "Offset 1", 0, 60, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear,
+            Keys: [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_kosi", new(Vector3.Zero, Quaternion.Identity, Vector3.One)))]);
+
+    /// <summary> A 100-frame document with <paramref name="events"/> on the lanes and <paramref name="layers"/> as its bone layers. </summary>
+    internal static TimelineDocument Doc(TimelineEvent[] events, params MotionLayer[] layers) =>
+        new TimelineDocument(100, 100, null, [.. events], 1) { Motion = [.. layers], NextMotionKey = 2 };
+
+    /// <summary> The Edit menu shows the selection's items: a cut first, then a bone layer, then events, else nothing. </summary>
+    private static void Selection(Action<bool, string> check)
+    {
+        var doc = Doc([Ev("e1", TimelineLane.Sound, 10, 20, true)], Offset());
+        var editor = new TimelineEditor(doc);
+        check(TimelineCanvas.SelectionMenuOf(editor) == SelectionMenu.None, "Edit menu: nothing selected");
+        editor.Select("e1");
+        check(TimelineCanvas.SelectionMenuOf(editor) == SelectionMenu.Events, "Edit menu: an event");
+        editor.SelectLayer("m1");
+        check(TimelineCanvas.SelectionMenuOf(editor) == SelectionMenu.Layer, "Edit menu: a bone layer");
+        editor.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+        check(TimelineCanvas.SelectionMenuOf(editor) == SelectionMenu.Cut, "Edit menu: the loop seam");
+        editor.ClearSelection();
+        check(TimelineCanvas.SelectionMenuOf(editor) == SelectionMenu.None, "Edit menu: cleared");
     }
 
     /// <summary> The header's Start button names the unfinished edits. </summary>

@@ -10,24 +10,16 @@ using InstantEdit.Services.Animations.Timeline;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The action bar above the lanes: undo, redo, Add, the play bar, the length and on the right the Bones window; under it
-/// for now snapping, scaling, fit, curves, Blender, load and Follow. Also the status line's notes.
+/// The action bar above the lanes, on one row: undo, redo, Add, the play bar, the length and on the right the Bones window.
+/// Also the Add menu's items and the status line's notes.
 /// </summary>
 internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
-    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, CurveView curves,
-    PlayBar playBar, TimelinePreview preview)
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, PlayBar playBar)
 {
     private const string AddMenu = "##timeline-add-menu";
-    private const string ControlsHelp =
-        "Drag an event to move it. Drag its edges to resize it.\n" +
-        "Drag the grip at the end of the ruler to change the length.\n" +
-        "Click or drag the ruler to move the playhead.\n" +
-        "Wheel scrolls. Ctrl+wheel zooms. Shift+wheel scrolls the lanes.\n" +
-        "Hold Alt while dragging to place freely.\n" +
-        "Right-click the clip row to cut the motion or remove the part before or after a frame.\n" +
-        "Drag a part's edges on the clip row to trim it. B plays a blend in the selected part's place.\n" +
-        "Shift+drag a part's end to play it slower or faster.\n" +
-        "Right-click for more. Double-click a lane to add to it.";
+
+    /// <summary>The Add button's tooltip, which the Add menu repeats.</summary>
+    public const string AddTip = "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or a .livepose file";
 
     private bool lengthActive;
     private float lengthEdit;
@@ -51,7 +43,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         using (ImRaii.Disabled(readOnly))
             add = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Plus, "Add", null, null, null, null);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or a .livepose file");
+            ImGui.SetTooltip(AddTip);
         if (add && !readOnly)
             ImGui.OpenPopup(AddMenu);
         using (var popup = ImRaii.Popup(AddMenu))
@@ -72,8 +64,6 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         // An expression's own timeline takes no bone layers, so it has no bones to pose; its face does.
         if (current.Document.Layered)
             DrawBonesButton(current);
-
-        DrawLeftovers(current);
     }
 
     /// <summary> Bones, icon and label, filled while the Bones window is open: on the bar's right, or on a line of its own when the bar is full. </summary>
@@ -99,44 +89,6 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
                 : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer.");
         if (clicked)
             TimelineUi.Toggle(bonesWindow);
-    }
-
-    /// <summary> The controls that move into the menus later, on a line under the bar: snapping, scaling, fit, curves, Blender, load, Follow and the help. </summary>
-    private void DrawLeftovers(TimelineEditor current)
-    {
-        if (TimelineUi.Toggle("##timeline-snap", FontAwesomeIcon.Magnet, current.Snap,
-                current.Snap ? "Snapping is on. Drags stick to starts, ends and the playhead. Hold Alt to place freely." : "Snapping is off."))
-            current.Snap = !current.Snap;
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (TimelineUi.Toggle("##timeline-scale", FontAwesomeIcon.ArrowsAltH, current.ScaleEvents,
-                current.ScaleEvents ? "Scale events with length is on. A new length moves and stretches the events too." : "Scale events with length is off. A new length keeps the events where they are."))
-            current.ScaleEvents = !current.ScaleEvents;
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (Widgets.IconButton("##timeline-fit", FontAwesomeIcon.Expand, "Show the whole timeline (F)"))
-            current.Fit();
-        if (current.Document.Layered)
-        {
-            ImGui.SameLine(0, Theme.Scaled(2));
-            if (TimelineUi.Toggle("##timeline-curves", FontAwesomeIcon.ChartLine, curves.Shown,
-                    curves.Shown ? "Hide the curves." : "Show the selected bone's turns and moves over the clip, under the lanes."))
-                curves.Shown = !curves.Shown;
-            if (current.Document.Face == null)
-            {
-                ImGui.SameLine(0, Theme.Scaled(2));
-                blenderMotion.DrawButton(current);
-            }
-        }
-        ImGui.SameLine(0, Theme.Scaled(2));
-        loader.DrawButton();
-
-        ImGui.SameLine(0, Theme.Scaled(12));
-        var follow = preview.Follow;
-        if (ImGui.Checkbox("Follow", ref follow))
-            preview.Follow = follow;
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Outside the preview, move the playhead with this clip while your character plays it.");
-        ImGui.SameLine(0, Theme.Gap);
-        Widgets.HelpTip(ControlsHelp);
     }
 
     /// <summary>

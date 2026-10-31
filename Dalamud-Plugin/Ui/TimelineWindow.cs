@@ -61,6 +61,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly LivePosePanel livePose;
     private readonly SidePanel sidePanel;
     private readonly TimelineToolbar toolbar;
+    private readonly TimelineMenus menus;
     private readonly BlenderMotionPanel blenderMotion;
     private readonly BonesWindow bonesWindow;
     private readonly PoseBrowserWindow poseBrowserWindow;
@@ -147,7 +148,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         blenderMotion = new BlenderMotionPanel(session, decode);
-        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, curveView, playBar, timelinePreview);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar);
+        menus = new TimelineMenus(session, canvas, toolbar, blenderMotion, curveView, bonesWindow, timelinePreview, ShowStart, Reload, Open);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, playBar, () => saveFooter.RepairTarget,
             this, textures, keys, () =>
         {
@@ -344,6 +346,26 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             return;
         }
         Load(capture, startup, false);
+    }
+
+    /// <summary>
+    /// Reads the open clip again (Animation, Reload), on the newest capture of it when its file changed. With unsaved
+    /// changes it first asks, inline, whether to discard them, as <see cref="Open"/> does.
+    /// </summary>
+    private void Reload()
+    {
+        // A face from Edit face is read through its clip's capture, which would open the clip instead.
+        if (source is not { } current || reader.Busy || current.Document?.Face != null)
+            return;
+        var capture = ChangedCapture() ?? current.Capture;
+        if (HasUnsavedChanges)
+        {
+            pending = PendingAction.Switch;
+            pendingOpen = (capture, current.Startup);
+            pendingAgain = null;
+            return;
+        }
+        Load(capture, current.Startup, false);
     }
 
     /// <summary>
@@ -611,6 +633,13 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         return framesMerged;
     }
 
+    /// <summary> Before the window begins: the menu bar shows while an editable clip is open and the start page isn't shown. </summary>
+    public override void PreDraw()
+    {
+        var menu = animations != null && source?.Document != null && editor != null && !startShown;
+        Flags = menu ? Flags | ImGuiWindowFlags.MenuBar : Flags & ~ImGuiWindowFlags.MenuBar;
+    }
+
     public override void Draw()
     {
         RespectCloseHotkey = true;
@@ -662,6 +691,13 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
                 ShowStart(null);
             loader.DrawStatus();
             return;
+        }
+        if (!startShown)
+        {
+            menus.Draw(editor, source);
+            // Open startup or loop, or Reload, may have started reading a clip.
+            if (source?.Document == null)
+                return;
         }
         // Other parts read the texts every frame, also while the start page shows.
         texts.Refresh(editor.Document);

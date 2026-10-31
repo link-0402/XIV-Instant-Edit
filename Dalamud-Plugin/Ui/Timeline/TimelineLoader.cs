@@ -16,7 +16,6 @@ namespace InstantEdit.Ui.Timeline;
 /// <param name="open">Opens the timeline of a capture's clip, or of its startup.</param>
 internal sealed class TimelineLoader(TimelineSession session, TimelinePreview timelinePreview, Action<AnimationCapture, bool> open)
 {
-    private const string LoaderPopup = "##timeline-loader";
     // How long the loader waits before it says the listener hasn't heard the animation.
     private static readonly TimeSpan LoaderPatience = TimeSpan.FromSeconds(6);
 
@@ -62,28 +61,6 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
             libraryError = TimelineSession.ErrorText(task.Exception);
             session.Log.Warning(task.Exception!, "Could not read the animation list.");
         }
-    }
-
-    /// <summary>The toolbar's Load button and its popup.</summary>
-    public void DrawButton()
-    {
-        if (Widgets.IconButton("##timeline-load", FontAwesomeIcon.FolderOpen, "Load an animation onto your GPose character and open it here"))
-        {
-            EnsureLibrary();
-            ImGui.OpenPopup(LoaderPopup);
-        }
-        using var popup = ImRaii.Popup(LoaderPopup);
-        if (!popup.Success)
-            return;
-        // A popup sizes itself to its content, so the loader gets a box of its own to fill.
-        var played = false;
-        using (var body = ImRaii.Child("##loader-body", new Vector2(Theme.Scaled(560), Theme.Scaled(420)), false))
-        {
-            if (body.Success)
-                played = Draw(ImGui.GetContentRegionAvail().Y);
-        }
-        if (played)
-            ImGui.CloseCurrentPopup();
     }
 
     /// <summary>

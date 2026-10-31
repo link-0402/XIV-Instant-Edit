@@ -10,6 +10,9 @@ using InstantEdit.Ui.Pose;
 
 namespace InstantEdit.Ui.Timeline;
 
+/// <summary> Which items the Edit menu shows for the selection (see <see cref="TimelineCanvas.SelectionMenuOf"/>). </summary>
+internal enum SelectionMenu : byte { None, Events, Layer, Cut }
+
 /// <summary>
 /// The lanes: one child with one invisible button over it. Input goes to the editor model (hits,
 /// drags, keys); drawing uses the window draw list, clipped per region and culled to the frames in
@@ -794,17 +797,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         }
         if (menuHit.OnEvent && TimelineEdits.Find(current.Document, menuHit.Key) is { } ev)
         {
-            ImGui.TextColored(Theme.Label, TimelineWindowViews.EventLabel(ev));
-            ImGui.Separator();
-            var (editable, movable) = SelectionAccess(current);
-            if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, !readOnly && editable))
-                current.DuplicateSelection();
-            if (ImGui.MenuItem("Delete", "Del", false, !readOnly && movable))
-                current.DeleteSelection();
-            if (ImGui.MenuItem("Move to playhead", "", false, !readOnly && TimelineEdits.CanMove(ev)))
-                current.MoveSelectionTo(current.Playhead);
-            if (ImGui.MenuItem("Copy", "Ctrl+C", false, editable))
-                current.Copy();
+            DrawEventItems(current, ev, readOnly);
             return;
         }
         for (var index = 0; index < TimelineWindowViews.AddKinds.Length; index++)
@@ -820,6 +813,55 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.SetLength(menuFrame);
         if (ImGui.MenuItem("Fit", "F"))
             current.Fit();
+    }
+
+    /// <summary>
+    /// The selected events' items under <paramref name="ev"/>'s name: Duplicate, Delete, Move to playhead (when
+    /// <paramref name="ev"/> can move) and Copy. The right-click menu and the Edit menu draw them.
+    /// </summary>
+    private static void DrawEventItems(TimelineEditor current, TimelineEvent ev, bool readOnly)
+    {
+        ImGui.TextColored(Theme.Label, TimelineWindowViews.EventLabel(ev));
+        ImGui.Separator();
+        var (editable, movable) = SelectionAccess(current);
+        if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, !readOnly && editable))
+            current.DuplicateSelection();
+        if (ImGui.MenuItem("Delete", "Del", false, !readOnly && movable))
+            current.DeleteSelection();
+        if (ImGui.MenuItem("Move to playhead", "", false, !readOnly && TimelineEdits.CanMove(ev)))
+            current.MoveSelectionTo(current.Playhead);
+        if (ImGui.MenuItem("Copy", "Ctrl+C", false, editable))
+            current.Copy();
+    }
+
+    /// <summary> What the Edit menu shows items for: a selected cut first, then a selected bone layer, then selected events, else nothing. </summary>
+    public static SelectionMenu SelectionMenuOf(TimelineEditor current) =>
+        current.SelectedCut != null ? SelectionMenu.Cut
+        : current.SelectedLayerValue != null ? SelectionMenu.Layer
+        : current.PrimaryEvent != null ? SelectionMenu.Events
+        : SelectionMenu.None;
+
+    /// <summary>
+    /// The Edit menu's part for the selection, drawn by the same code as the right-click menus: a bone layer's menu (with its
+    /// key items while keys are picked), the events' items, the clip row's items at the playhead, or "Nothing selected".
+    /// </summary>
+    public void DrawSelectionItems(TimelineEditor current, bool readOnly)
+    {
+        switch (SelectionMenuOf(current))
+        {
+            case SelectionMenu.Layer:
+                DrawLayerMenu(current, current.SelectedLayerValue!, readOnly);
+                break;
+            case SelectionMenu.Events:
+                DrawEventItems(current, current.PrimaryEvent!, readOnly);
+                break;
+            case SelectionMenu.Cut:
+                clipBand.DrawMenu(current, readOnly, current.Playhead);
+                break;
+            default:
+                ImGui.MenuItem("Nothing selected", "", false, false);
+                break;
+        }
     }
 
     /// <summary> A bone layer's menu: its key under the pointer, turning it on or off, copying, ordering and deleting it. </summary>

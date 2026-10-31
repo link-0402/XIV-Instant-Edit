@@ -2798,3 +2798,20 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   window keep running. Back returns to the same view and playhead.
 - [ ] 12 With an unfinished edit, Start reads "Start (1)" in the warning colour.
 - [ ] 13 Select an event, then click the clip's name in the header: the selection clears.
+- [ ] 14 Above the lanes there are two rows, the menu bar (Animation, Edit, Add, View, Help) and the action bar
+  (Undo, Redo, Add, the play bar, the length, Bones), then the status line when it has a note. Snap, Scale events,
+  Fit, Curves, Blender, Load, Follow and the help tip are gone from the bars.
+- [ ] 15 Animation: Start page and Load another (on Game animations) open the start page; Reload reads the clip again
+  and asks "Reload it and lose them?" with unsaved edits; Open startup (or Open loop from a startup) opens the other
+  clip. Send motion to Blender, Motion from Blender and Still pose work as before. After Still pose, Use the clip's
+  motion goes back.
+- [ ] 16 Edit: Undo and Redo work and show Ctrl+Z and Ctrl+Y. With an event selected its Duplicate, Delete, Move to
+  playhead and Copy show; with a bone layer its menu (with the key items while keys are picked); with a cut or the
+  loop seam the clip row's items at the playhead; with nothing "Nothing selected".
+- [ ] 17 Add opens the same items as the action bar's Add. View: Fit (F), then Snap, Scale events with length and
+  Follow as ticks, then Curves and Bones window as ticks. Each one works, and Help, Mouse and keys shows the help text.
+- [ ] 18 While a save runs, Reload, Add, Undo and the Blender items are greyed out, each with its reason as a tooltip.
+- [ ] 19 On an expression's timeline without its face: no Curves, Bones window or Blender items. On a face (Edit face):
+  no Blender items, no Reload, and Neutral face instead of Still pose.
+- [ ] 20 The start page has no menu bar, and neither does a timeline that can't be edited. Its banner offers
+  "Start page".
