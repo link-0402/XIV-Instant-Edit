@@ -27,5 +27,16 @@ internal static class TimelineChromeFixture
         check(StatusLine.Shown([note with { Text = "Copied 4 bones." }], new Dictionary<string, string> { ["notice"] = "Copied 3 bones." }).Length == 1, "A dismissed note comes back when its text changes");
         check(StatusLine.Shown([work], new Dictionary<string, string> { ["decode"] = "Reading the motion 40%" }).Length == 1, "Work running is never dismissed");
         check(StatusLine.MoreText(1) == "+1 note" && StatusLine.MoreText(2) == "+2 notes", "More notes read +1 note and +2 notes");
+
+        var line = new StatusLine();
+        line.Dismiss(note);
+        var hiddenFirst = line.Visible([note]).IsEmpty;
+        var changed = line.Visible([note with { Text = "Copied 4 bones." }]).Length == 1;
+        check(hiddenFirst && changed && line.Visible([note]).Length == 1, "A dismissal ends when the text changes, so the old text shows again");
+        var paste = new StatusNote("error", StatusKind.Error, "Nothing to paste.");
+        line.Dismiss(paste);
+        var hiddenPaste = line.Visible([paste]).IsEmpty;
+        line.Visible([]);
+        check(hiddenPaste && line.Visible([paste]).Length == 1, "A dismissal ends when the note goes away, so the same text shows again");
     }
 }

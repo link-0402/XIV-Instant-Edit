@@ -49,12 +49,30 @@ internal sealed class StatusLine
     public void Dismiss(StatusNote note) => dismissed[note.Key] = note.Text;
 
     /// <summary>
+    /// The notes this line shows. A dismissal ends as soon as its note is gone or its text changes, so the same text
+    /// coming back later shows again.
+    /// </summary>
+    public ImmutableArray<StatusNote> Visible(IEnumerable<StatusNote> notes)
+    {
+        var current = notes as IReadOnlyCollection<StatusNote> ?? notes.ToList();
+        if (dismissed.Count > 0)
+        {
+            foreach (var key in dismissed.Keys.ToList())
+            {
+                if (!current.Any(n => n.Key == key && n.Text == dismissed[key]))
+                    dismissed.Remove(key);
+            }
+        }
+        return Shown(current, dismissed);
+    }
+
+    /// <summary>
     /// Draws the line: the first shown note, then "+N notes" when there are more. <paramref name="id"/> starts every
     /// control's id, so two windows can each draw a line.
     /// </summary>
     public void Draw(string id, IEnumerable<StatusNote> notes)
     {
-        var shown = Shown(notes, dismissed);
+        var shown = Visible(notes);
         if (shown.IsEmpty)
             return;
         using var scope = ImRaii.PushId(id + "-status");
