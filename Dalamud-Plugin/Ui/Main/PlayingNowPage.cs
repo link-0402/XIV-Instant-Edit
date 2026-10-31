@@ -13,7 +13,7 @@ namespace InstantEdit.Ui.Main;
 /// <summary>
 /// The start page's Playing now entry: what your character plays, listed like On Screen with the mod each
 /// animation comes from. A click on a row opens its timeline, the pen sends it to Blender, and the row menu
-/// holds the mod actions and Make startup instant, whose result shows on the page's last line.
+/// holds the mod actions and Make startup instant, whose result shows on the start page's last line.
 /// </summary>
 internal sealed class PlayingNowPage
 {
@@ -22,11 +22,6 @@ internal sealed class PlayingNowPage
     private readonly AnimationSendDialog _animationSend;
     private readonly ResourceRows _rows;
     private readonly ExpansionState _expansion;
-    // The instant startup being saved, reported once its job ends.
-    private Guid? instantStartupJob;
-    // Make startup instant's last result, drawn on the page's last line.
-    private string resultText = "";
-    private Vector4 resultColour = Theme.Muted;
     private string animationFilter = "";
     private readonly ResourceSearch animationSearch = new();
     // The list's view model, rebuilt when the listener's history or the On Screen snapshot changes.
@@ -69,7 +64,7 @@ internal sealed class PlayingNowPage
         }
     }
 
-    /// <summary>The page: the search box, the list, and Make startup instant's result on the last line.</summary>
+    /// <summary>The page: the search box and the list.</summary>
     public void Draw()
     {
         ImGui.Spacing();
@@ -80,23 +75,19 @@ internal sealed class PlayingNowPage
             return;
         }
         animations.StartObservation();
-        ReportInstantStartup(animations);
         var rows = ReadAnimationRows(animations.Observer.History);
         Widgets.SearchBox("##animation-search", ref animationFilter, "Search animations, mods and paths");
         animationSearch.Text = animationFilter;
         var shown = AnimationRows.Filter(rows, animationSearch);
         ImGui.Spacing();
 
-        var resultLine = resultText.Length > 0 ? ImGui.GetTextLineHeightWithSpacing() + ImGui.GetStyle().ItemSpacing.Y : 0;
-        var height = Math.Max(ImGui.GetFrameHeight() * 4, ImGui.GetContentRegionAvail().Y - resultLine);
+        var height = Math.Max(ImGui.GetFrameHeight() * 4, ImGui.GetContentRegionAvail().Y);
         using (ImRaii.PushColor(ImGuiCol.ChildBg, Theme.PanelBg))
         using (var list = ImRaii.Child("##animation-list", new Vector2(0, height), true))
         {
             if (list.Success)
                 DrawAnimationList(animations.Observer.Status, rows, shown);
         }
-        if (resultText.Length > 0)
-            ImGui.TextColored(resultColour, resultText);
     }
 
     /// <summary> The list's rows, rebuilt only when the listener's history or the On Screen snapshot changes. </summary>
@@ -252,25 +243,11 @@ internal sealed class PlayingNowPage
             : AnimationEditService.InstantStartupBlock(capture);
         using (ImRaii.Disabled(blocked is not null))
             if (ImGui.MenuItem("Make startup instant") && service is not null)
-            {
-                instantStartupJob = service.MakeInstantStartup(capture);
-                resultText = "Making the startup instant";
-                resultColour = Theme.Muted;
-            }
+                service.MakeInstantStartup(capture);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(blocked ?? $"Replace the startup with the game's idle, {TimelineDocument.MinLength} frames long,\n" +
                 $"so the loop starts at once. Saved in {UiText.Safe(capture.Sources.FirstOrDefault(s => s.GamePath == capture.Clip.GamePath)?.ModName, "the loop's mod")}.\n" +
                 "Undo it in Saved edits.");
-    }
-
-    /// <summary>Puts how the instant startup save went on the page's last line, once it ends.</summary>
-    private void ReportInstantStartup(AnimationEditService service)
-    {
-        if (instantStartupJob is not { } job || service.LastResult is not { } result || result.Id != job || service.Busy)
-            return;
-        instantStartupJob = null;
-        resultText = result.Message;
-        resultColour = result.Success ? Theme.Success : Theme.Warning;
     }
 
     /// <summary> The line joining a startup row to the animation above it, hanging from that row's glyph. </summary>
