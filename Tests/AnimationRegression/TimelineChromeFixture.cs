@@ -9,8 +9,8 @@ using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
-/// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu shows and the clip view's
-/// Bones kept line.
+/// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu and the side panel show
+/// and the clip view's Bones kept line.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -23,6 +23,7 @@ internal static class TimelineChromeFixture
         Unfinished(check);
         StartEntries(check);
         Selection(check);
+        SideViews(check);
         Kept(check);
     }
 
@@ -64,6 +65,26 @@ internal static class TimelineChromeFixture
         check(TimelineCanvas.SelectionMenuOf(editor) == SelectionMenu.Cut, "Edit menu: the loop seam");
         editor.ClearSelection();
         check(TimelineCanvas.SelectionMenuOf(editor) == SelectionMenu.None, "Edit menu: cleared");
+    }
+
+    /// <summary> The side panel's view: a cut first, then a bone layer, then one event or one group, then several, else the clip. </summary>
+    private static void SideViews(Action<bool, string> check)
+    {
+        var doc = Doc([Ev("e1", TimelineLane.Sound, 10, 20, true), Ev("e2", TimelineLane.Sound, 40, 10, true, group: "g"),
+            Ev("e3", TimelineLane.Sound, 60, 10, true, group: "g")], Offset());
+        var editor = new TimelineEditor(doc);
+        check(SidePanel.ViewFor(editor) == SideView.Clip, "Side panel: nothing selected shows the clip");
+        editor.Select("e1");
+        check(SidePanel.ViewFor(editor) == SideView.Event, "Side panel: one event");
+        editor.Select("e2", ctrl: true);
+        check(SidePanel.ViewFor(editor) == SideView.Several, "Side panel: events from different groups");
+        // Selecting one event of a group selects the whole group: e2 and e3.
+        editor.Select("e2");
+        check(editor.Selected.Count == 2 && SidePanel.ViewFor(editor) == SideView.Event, "Side panel: one group counts as one event");
+        editor.SelectLayer("m1");
+        check(SidePanel.ViewFor(editor) == SideView.Layer, "Side panel: a bone layer");
+        editor.SelectCut(new TimelineCutSelection(TimelineCutTarget.Seam, -1));
+        check(SidePanel.ViewFor(editor) == SideView.Cut, "Side panel: the seam");
     }
 
     /// <summary> The header's Start button names the unfinished edits. </summary>

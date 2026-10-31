@@ -147,10 +147,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => reader.Busy, EditAgain);
         loader = new TimelineLoader(session, timelinePreview, Open);
         blenderMotion = new BlenderMotionPanel(session, decode);
-        sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector,
+        sidePanel = new SidePanel(properties, effectLooks, soundInspector,
             new ClipView(session, posing, timelinePreview, blenderMotion, Open));
         startPage = new StartPage(session, loader, recentEdits, () => sidePanel.Recorder);
-        livePose = new LivePosePanel(session, sidePanel.ShowProperties);
+        livePose = new LivePosePanel(session);
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar);
         menus = new TimelineMenus(session, canvas, toolbar, blenderMotion, curveView, bonesWindow, timelinePreview, ShowStart, Reload, Open);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, playBar, () => saveFooter.RepairTarget,

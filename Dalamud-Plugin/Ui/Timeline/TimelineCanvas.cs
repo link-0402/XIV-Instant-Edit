@@ -265,6 +265,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         // A bone's row picks that bone for the panel and the Bones window; Ctrl adds it.
         if (hit.Bone is { } bone && hit.Layer != null && hit.Part is TimelinePart.BoneKey or TimelinePart.BoneLane or TimelinePart.Legend)
             posing.Selection.Click(bone, io.KeyCtrl && hit.Part != TimelinePart.BoneKey);
+        // The Motion lane's name stands for the clip: a click there clears the selection, so the side panel shows the clip.
+        if (hit.Part == TimelinePart.Legend && hit.Lane == TimelineLane.Motion && hit.Layer == null && !io.KeyCtrl && !io.KeyShift)
+            current.ClearSelection();
         if (!readOnly)
         {
             current.Press(hit, io.KeyCtrl, io.KeyShift, io.KeyAlt);

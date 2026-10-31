@@ -26,6 +26,8 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
     private bool bonesPage;
     private bool lengthActive;
     private float lengthEdit;
+    // The Bones kept line's numbers and the skeleton choice and bones left out they were worked out for.
+    private (SkeletonResolution? Resolution, ImmutableArray<string> Excluded, ImmutableArray<string> Bones, int Kept, int Highest)? keptCounts;
 
     /// <summary>Opens Settings, where the skeleton library is rebuilt; null until the main window attaches it.</summary>
     public Action? OpenSettings { get; set; }
@@ -282,18 +284,33 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
         ImGui.TextColored(Theme.Muted, "s");
     }
 
+    /// <summary>
+    /// The bones <paramref name="clip"/> animates and the Bones kept line's numbers with <paramref name="excluded"/> left
+    /// out, worked out again only when the skeleton it was made for or the bones left out change.
+    /// </summary>
+    private (ImmutableArray<string> Bones, int Kept, int Highest) KeptCounts(AnimationClip clip, ImmutableArray<string> excluded)
+    {
+        if (keptCounts is { } known && ReferenceEquals(known.Resolution, clip.Resolution) && known.Excluded == excluded)
+            return (known.Bones, known.Kept, known.Highest);
+        var bones = AnimationBones.Animated(clip);
+        var left = excluded.ToHashSet(StringComparer.Ordinal);
+        var highest = AnimationBones.HighestIndex(clip, left);
+        keptCounts = (clip.Resolution, excluded, bones, bones.Length - left.Count, highest);
+        return (bones, bones.Length - left.Count, highest);
+    }
+
     /// <summary>The Bones kept line, with Edit, which opens the bones-kept page.</summary>
     private void DrawKept(TimelineEditor current, AnimationTimelineSource loaded)
     {
         var clip = session.Fresh(loaded).Clip;
-        var bones = AnimationBones.Animated(clip);
-        if (bones.IsEmpty)
+        var counts = KeptCounts(clip, current.Document.ExcludedBones);
+        if (counts.Bones.IsEmpty)
         {
             Widgets.HintWrapped("The bones it moves are listed once the skeleton it was made for is known.");
             return;
         }
         ImGui.AlignTextToFramePadding();
-        DrawKeptCount(clip, bones, current.Document.ExcludedBones.ToHashSet(StringComparer.Ordinal));
+        DrawKeptCount(counts);
         ImGui.SameLine(0, Theme.Gap);
         if (ImGui.SmallButton("Edit##bones-kept"))
             bonesPage = true;
@@ -303,10 +320,9 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
     }
 
     /// <summary>How many of the bones stay in and the highest index among them.</summary>
-    private static void DrawKeptCount(AnimationClip clip, ImmutableArray<string> bones, HashSet<string> left)
+    private static void DrawKeptCount((ImmutableArray<string> Bones, int Kept, int Highest) counts)
     {
-        var highest = AnimationBones.HighestIndex(clip, left);
-        ImGui.TextColored(Theme.Muted, KeptText(bones.Length - left.Count, bones.Length, highest));
+        ImGui.TextColored(Theme.Muted, KeptText(counts.Kept, counts.Bones.Length, counts.Highest));
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Sync plugins refuse animations whose bone indices go past the other player's skeleton.");
     }
@@ -337,14 +353,14 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
     private void DrawAnimatedBones(TimelineEditor current, AnimationTimelineSource loaded)
     {
         var clip = session.Fresh(loaded).Clip;
-        var bones = AnimationBones.Animated(clip);
-        if (bones.IsEmpty)
+        var doc = current.Document;
+        var excluded = doc.ExcludedBones;
+        var counts = KeptCounts(clip, excluded);
+        if (counts.Bones.IsEmpty)
         {
             Widgets.HintWrapped("The bones it moves are listed once the skeleton it was made for is known.");
             return;
         }
-        var doc = current.Document;
-        var excluded = doc.ExcludedBones;
         var readOnly = session.ReadOnly;
         // A face, an expression's or a face session's, keeps only its own bones: no Keep only.
         var body = doc.HasClip;
@@ -357,7 +373,7 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
         ImGui.Spacing();
         if (body)
             DrawKeepOnly(current, clip, readOnly);
-        DrawBoneTicks(current, clip, bones, excluded, readOnly);
+        DrawBoneTicks(current, counts, excluded, readOnly);
     }
 
     /// <summary>The Keep only row: one button per standard skeleton, unticking the bones outside it. Body clips only.</summary>
@@ -383,9 +399,10 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
     }
 
     /// <summary>The filter, Tick all and Untick all, the count kept and a tick per bone.</summary>
-    private void DrawBoneTicks(TimelineEditor current, AnimationClip clip, ImmutableArray<string> bones, ImmutableArray<string> excluded, bool readOnly)
+    private void DrawBoneTicks(TimelineEditor current, (ImmutableArray<string> Bones, int Kept, int Highest) counts, ImmutableArray<string> excluded, bool readOnly)
     {
         var doc = current.Document;
+        var bones = counts.Bones;
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextWithHint("##animated-bone-filter", "Filter bones", ref animatedBoneFilter, 128);
         var filter = animatedBoneFilter.Trim();
@@ -400,7 +417,7 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
                 current.Change(MotionEdits.SetExcluded(doc, shown, true));
         }
         var left = excluded.ToHashSet(StringComparer.Ordinal);
-        DrawKeptCount(clip, bones, left);
+        DrawKeptCount(counts);
 
         var row = ImGui.GetFrameHeightWithSpacing();
         var height = Math.Max(row * 3, ImGui.GetContentRegionAvail().Y - Theme.Scaled(4));

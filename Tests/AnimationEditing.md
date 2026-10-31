@@ -2791,6 +2791,7 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 7 The Live tooltip holds the Live hint, and over a preview "Live shows your bone layers over the preview."
 - [ ] 8 The action bar reads Undo, Redo, Add, the play bar, the length and Bones on the right, with no menu button
   on it. The time shows once, without the word "Playhead". The status line sits under the bars, above the lanes.
+  (The length moved to the clip view in stage 4.)
 - [ ] 9 Add opens today's menu without Still pose; a face's Add has no Neutral face.
 - [ ] 10 Bones is filled while the Bones window is open and is hidden on an expression's timeline without its face.
   Resize the Timeline to its narrowest (760 px): Bones stays visible, on a line of its own if the bar is full.
@@ -2800,7 +2801,8 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 13 Select an event, then click the clip's name in the header: the selection clears.
 - [ ] 14 Above the lanes there are two rows, the menu bar (Animation, Edit, Add, View, Help) and the action bar
   (Undo, Redo, Add, the play bar, the length, Bones), then the status line when it has a note. Snap, Scale events,
-  Fit, Curves, Blender, Load, Follow and the help tip are gone from the bars.
+  Fit, Curves, Blender, Load, Follow and the help tip are gone from the bars. (The length moved to the clip view in
+  stage 4.)
 - [ ] 15 Animation: Start page and Load another (on Game animations) open the start page; Reload reads the clip again
   and asks "Reload it and lose them?" with unsaved edits; Open startup (or Open loop from a startup) opens the other
   clip. Send motion to Blender, Motion from Blender and Still pose work as before. After Still pose, Use the clip's
@@ -2869,8 +2871,9 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 
 ## UI redesign stage 4 (pending)
 
-- [ ] 1 Open a body clip, click Source: Source, then Length with its seconds and Scale events with length, then
-  Bones kept reading like "37 of 40 kept · highest index 103" with Edit. The tick and the View menu's stay the same.
+- [ ] 1 Open a body clip with nothing selected: the side panel shows Source, then Length with its seconds and Scale
+  events with length, then Bones kept reading like "37 of 40 kept · highest index 103" with Edit. Ticking it ticks the
+  View menu's Scale events with length, and the other way round.
 - [ ] 2 Type a new length and press Enter: the motion stretches and the header's length turns amber.
 - [ ] 3 Edit opens the bones-kept page: Clip (back arrow), the hint, Keep only, the filter and the ticks. Untick a
   bone, go back with Clip: the line counts one fewer. Open another clip: the clip view shows, the filter is empty.
@@ -2883,3 +2886,13 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   and the ticks are greyed out with today's tooltips.
 - [ ] 8 The action bar reads Undo, Redo, Add, the play bar and Bones, with no length or Face. At 760 px Bones stays on
   the bar's right while there is room, and moves to a line of its own only when there isn't.
+- [ ] 9 The side panel has no tabs. Select an event: its properties show. A prop's parts (one group): one event's
+  properties. Events from different groups: the count with Duplicate and Delete. A bone layer: its settings. A cut or
+  the loop seam: the cut panel. Click empty lane space: the clip view.
+- [ ] 10 Select an event, then click the Motion lane's name: the selection clears and the clip view shows. The same
+  with the header's clip name. A bone layer's name still selects the layer, and its fold arrow and right-click menu
+  work as before.
+- [ ] 11 Select a face event and click Edit face: the face opens on its own as before, and Back returns.
+- [ ] 12 Add a layer from a .livepose file: its settings show in the side panel.
+- [ ] 13 Saved edits and Record are on the start page only, not in the side panel. The splitter and the panel's width
+  stay as before.

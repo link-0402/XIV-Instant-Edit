@@ -25,47 +25,28 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
     /// <summary> Forgets where the collection got each path, with the sounds read for another clip. </summary>
     public void ForgetPathOrigins() => pathOrigins.Clear();
 
-    public void Draw(TimelineEditor current)
+    /// <summary>
+    /// The selection's <paramref name="view"/>, picked by <see cref="SidePanel.ViewFor"/>: the cut panel, the layer's
+    /// settings, the event's properties or the several events'. The clip view is the side panel's own.
+    /// </summary>
+    public void Draw(TimelineEditor current, SideView view)
     {
-        effectLooks.EndEdit(current);
-        soundInspector.EndEdit(current);
-        if (current.SelectedCut != null)
-        {
-            cutPanel.Draw(current);
-            return;
-        }
         var readOnly = session.ReadOnly;
-        if (current.SelectedLayerValue is { } layer && session.Source != null)
+        switch (view)
         {
-            layerPanel.Draw(current, layer, session.Source);
-            return;
+            case SideView.Cut:
+                cutPanel.Draw(current);
+                break;
+            case SideView.Layer when current.SelectedLayerValue is { } layer && session.Source != null:
+                layerPanel.Draw(current, layer, session.Source);
+                break;
+            case SideView.Several:
+                DrawSelection(current, current.Selected.Count, readOnly);
+                break;
+            case SideView.Event when current.PrimaryEvent is { } primary:
+                DrawEventProperties(current, primary, current.Selected.Count, readOnly);
+                break;
         }
-        var primary = current.PrimaryEvent;
-        var count = current.Selected.Count;
-        if (primary == null || count == 0)
-        {
-            Widgets.EmptyState(FontAwesomeIcon.MousePointer, "Select an event",
-                "Click an event or a bone layer to edit it. Double-click a lane to add one.");
-            return;
-        }
-        if (count > 1 && !OneGroup(current, primary))
-        {
-            DrawSelection(current, count, readOnly);
-            return;
-        }
-        DrawEventProperties(current, primary, count, readOnly);
-    }
-
-    /// <summary> Whether every selected event belongs to the primary's group, such as the parts of one prop. </summary>
-    private static bool OneGroup(TimelineEditor current, TimelineEvent primary)
-    {
-        if (primary.Group is not { } group)
-            return false;
-        var events = current.Document.Events.IsDefault ? [] : current.Document.Events;
-        foreach (var ev in events)
-            if (current.IsSelected(ev.Key) && !string.Equals(ev.Group, group, StringComparison.Ordinal))
-                return false;
-        return true;
     }
 
     private static void DrawSelection(TimelineEditor current, int count, bool readOnly)

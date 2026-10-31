@@ -1,31 +1,36 @@
 using System.Numerics;
-using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
 
-/// <summary>
-/// The side panel beside the lanes: Properties, Source (the clip view: where the clip comes from, its length and the bones it
-/// keeps), Edits (every saved edit with Undo) and Record (a live recording for Blender).
-/// </summary>
-internal sealed class SidePanel(TimelineSession session, PropertiesPanel properties, RecentEditsPage recentEdits,
-    EffectLookEditor effectLooks, SoundInspector soundInspector, ClipView clipView)
+/// <summary> What the side panel shows, picked by the selection (see <see cref="SidePanel.ViewFor"/>). </summary>
+internal enum SideView : byte
 {
-    private enum SidePage : byte { Properties, Source, Edits, Record }
+    /// <summary> Nothing selected: the clip view. </summary>
+    Clip,
+    /// <summary> A part, join or the loop seam of the clip band: the cut panel. </summary>
+    Cut,
+    /// <summary> A bone layer: its settings. </summary>
+    Layer,
+    /// <summary> One event, or the events of one group: its properties. </summary>
+    Event,
+    /// <summary> Several events from different groups: the count, Duplicate and Delete. </summary>
+    Several,
+}
 
-    private SidePage sidePage = SidePage.Properties;
-    // A page the panel switches to on its next draw.
-    private SidePage? sideRequest;
-    // What was selected when the panel last looked: a new selection brings the properties back.
-    private string? sideSelection;
+/// <summary>
+/// The side panel beside the lanes: one view at a time, picked by the selection. A cut, a bone layer, an event (or one
+/// group) and several events show their properties; nothing selected shows the clip view (where the clip comes from, its
+/// length and the bones it keeps).
+/// </summary>
+internal sealed class SidePanel(PropertiesPanel properties, EffectLookEditor effectLooks, SoundInspector soundInspector, ClipView clipView)
+{
     private Action? drawRecorder;
 
     /// <summary>The main window's live pose recorder, which sends to Blender through it; null until attached.</summary>
     public Action? Recorder => drawRecorder;
-
-    /// <summary> Shows the properties on the next draw, as for a layer just added. </summary>
-    public void ShowProperties() => sideRequest = SidePage.Properties;
 
     /// <summary> Clears the clip view's bones filter and leaves its bones-kept page, for another clip. </summary>
     public void ClearFilter() => clipView.ClearFilter();
@@ -40,72 +45,46 @@ internal sealed class SidePanel(TimelineSession session, PropertiesPanel propert
         drawRecorder = recorderPanel;
     }
 
-    /// <summary>The side panel: a tab per page, the properties first.</summary>
+    /// <summary>
+    /// The view for <paramref name="current"/>'s selection: a cut first, then a bone layer, then one event or one group,
+    /// then several events, else the clip.
+    /// </summary>
+    public static SideView ViewFor(TimelineEditor current)
+    {
+        if (current.SelectedCut != null)
+            return SideView.Cut;
+        if (current.SelectedLayerValue != null)
+            return SideView.Layer;
+        if (current.PrimaryEvent is not { } primary || current.Selected.Count == 0)
+            return SideView.Clip;
+        return current.Selected.Count > 1 && !OneGroup(current, primary) ? SideView.Several : SideView.Event;
+    }
+
+    /// <summary> Whether every selected event belongs to the primary's group, such as the parts of one prop. </summary>
+    public static bool OneGroup(TimelineEditor current, TimelineEvent primary)
+    {
+        if (primary.Group is not { } group)
+            return false;
+        var events = current.Document.Events.IsDefault ? [] : current.Document.Events;
+        foreach (var ev in events)
+            if (current.IsSelected(ev.Key) && !string.Equals(ev.Group, group, StringComparison.Ordinal))
+                return false;
+        return true;
+    }
+
+    /// <summary>The side panel: the selection's view, or the clip view while nothing is selected.</summary>
     public void Draw(TimelineEditor current, AnimationTimelineSource loaded)
     {
-        // A look or sound edit ends once its control lets go, even when another page is shown by then.
+        // A look or sound edit ends once its control lets go, even when another view is shown by then.
         effectLooks.EndEdit(current);
         soundInspector.EndEdit(current);
-        var selection = $"{current.Primary}|{current.SelectedLayer}|{current.SelectedKey}";
-        if (selection != sideSelection)
-        {
-            if (sideSelection != null && (current.Primary != null || current.SelectedLayer != null))
-                sideRequest = SidePage.Properties;
-            sideSelection = selection;
-        }
-        using var tabs = ImRaii.TabBar("##timeline-side", ImGuiTabBarFlags.FittingPolicyScroll);
-        if (!tabs.Success)
-            return;
-        SideTab(SidePage.Properties, "Properties", "The selected event or bone layer.", () => properties.Draw(current));
-        SideTab(SidePage.Source, "Source", "Where the animation comes from, its length and the bones it keeps.", () => clipView.Draw(current, loaded));
-        DrawEditsTab();
-        if (drawRecorder != null)
-            SideTab(SidePage.Record, "Record", "Record a character's live pose for Blender.", drawRecorder);
-        sideRequest = null;
-    }
-
-    private void SideTab(SidePage page, string label, string tooltip, Action draw)
-    {
-        var flags = sideRequest == page ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
-        var open = ImGui.BeginTabItem(label, flags);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(tooltip);
-        if (!open)
-            return;
-        sidePage = page;
-        DrawPage(draw);
-        ImGui.EndTabItem();
-    }
-
-    /// <summary>The Edits tab, marked while an edit did not finish.</summary>
-    public void DrawEditsTab()
-    {
-        var attention = session.Animations is { } service ? RecentEditsPage.RecoveryAttention(service) : 0;
-        bool open;
-        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, attention > 0))
-            open = ImGui.BeginTabItem(attention > 0 ? $"Edits ({attention})###edits" : "Edits###edits",
-                sideRequest == SidePage.Edits ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(attention switch
-            {
-                0 => "Every saved edit, with Undo.",
-                1 => "An edit did not finish and needs an undo.",
-                _ => $"{attention} edits did not finish and need an undo.",
-            });
-        if (!open)
-            return;
-        sidePage = SidePage.Edits;
-        DrawPage(recentEdits.Draw);
-        ImGui.EndTabItem();
-    }
-
-    /// <summary>A page's body, which scrolls below the tabs.</summary>
-    public static void DrawPage(Action draw)
-    {
         using var body = ImRaii.Child("##side-page", Vector2.Zero, false);
         if (!body.Success)
             return;
-        ImGui.Spacing();
-        draw();
+        var view = ViewFor(current);
+        if (view == SideView.Clip)
+            clipView.Draw(current, loaded);
+        else
+            properties.Draw(current, view);
     }
 }

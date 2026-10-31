@@ -10,8 +10,7 @@ namespace InstantEdit.Ui.Timeline;
 /// The adjustments a .livepose file holds as a bone layer: an offset layer over the whole clip that
 /// stays editable like any other.
 /// </summary>
-/// <param name="showLayer">Brings the side panel's properties back to show the new layer.</param>
-internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
+internal sealed class LivePosePanel(TimelineSession session)
 {
     // A .livepose file read on a task.
     private Task<(string Name, ImmutableArray<PoseBone> Bones)>? livePoseFile;
@@ -88,7 +87,6 @@ internal sealed class LivePosePanel(TimelineSession session, Action showLayer)
             return;
         }
         current.SelectLayer(key, 0);
-        showLayer();
         var text = offsets.Adjusted == 1 ? "Added a layer from 1 adjusted bone." : $"Added a layer from {offsets.Adjusted} adjusted bones.";
         var left = offsets.Missing.Length + offsets.Ik.Length;
         if (left > 0)
