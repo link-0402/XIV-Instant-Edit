@@ -34,7 +34,7 @@ internal interface IBonesOverlay
 
 /// <summary>
 /// The selected bones' values in a bone layer at the playhead, shared by the properties panel and the
-/// Bones window: the turn, move and scale fields, Key, Delete key, Reset, Mirror, pose copy and paste and Clear, the rotation
+/// Bones window: the turn, move and scale fields, Key, Delete key, Reset and Clear, pose copy and paste and Mirror, the rotation
 /// ball and the gizmo's choice, the bone picker and an amplitude's bones. A field's changes until it is
 /// left are one undo step.
 /// </summary>
@@ -62,7 +62,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
     /// <summary>
     /// The selected bones' values at the playhead, for an offset or a pose layer: the primary bone's turn,
     /// move and scale, each change keyed there and made to every other selected bone too; then Key,
-    /// Delete key, Reset, Mirror and Clear for all of them. With <paramref name="ball"/> (the Bones
+    /// Delete key, Reset and Clear, and pose copy and paste and Mirror, for all of them. With <paramref name="ball"/> (the Bones
     /// window) the rotation ball comes first.
     /// </summary>
     public void Draw(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
@@ -148,7 +148,10 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             current.Note(skipped == 1 ? "Skipped 1 bone this skeleton lacks." : $"Skipped {skipped} bones this skeleton lacks.");
     }
 
-    /// <summary> Key, Delete key, Reset, Mirror, Copy pose, Paste pose, Paste mirrored and Clear, each for every selected bone at once. </summary>
+    /// <summary>
+    /// Two groups of buttons, each for every selected bone at once: Key, Delete key, Reset and Clear; then on a line of its
+    /// own Copy pose, Paste pose, Paste mirrored and Mirror.
+    /// </summary>
     private void DrawBoneButtons(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
         List<PoseTarget> targets, int frame, bool readOnly, bool inside)
     {
@@ -186,23 +189,16 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(pose ? "Key the pose the layers above leave, at the playhead." : "Key no change at the playhead, so the layers above show there.");
 
-        var pairs = PoseEdits.MirrorPairs(posing.Selection.Bones, posing.Selection.Primary, index.ContainsKey)
-            .Where(pair => layer.Keys.Any(key => key.Bones.ContainsKey(pair.From))).ToList();
-        var mirrorReady = pairs.Count == 0 || decode.DecodedPose(loaded) != null;
-        FlowLine("Mirror");
-        using (ImRaii.Disabled(readOnly || pairs.Count == 0 || !mirrorReady))
+        FlowLine("Clear");
+        using (ImRaii.Disabled(readOnly || !bones.Any(bone => layer.Keys.Any(key => key.Bones.ContainsKey(bone)))))
         {
-            // The motion as the layers before this one leave it, as Paste mirrored reads it for an offset.
-            if (ImGui.Button("Mirror") && PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton,
-                    at => posing.FramesAt(loaded, current.Document, layer, at)?.Before) is { } mirrored)
-                current.Commit(current.WithReach(mirrored));
+            if (ImGui.Button("Clear"))
+                current.Commit(PoseEdits.Clear(current.Document, layer.Key, bones));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(pairs.Count == 0 ? "Select a bone with keys in this layer and a twin on the other side."
-                : !mirrorReady ? decode.Status
-                : "Give the other side the same edits, mirrored. Replaces what the other side has in this layer.");
+            ImGui.SetTooltip(several ? "Take the selected bones out of every key of this layer." : "Take the bone out of every key of this layer.");
 
-        FlowLine("Copy pose");
+        // The pose group starts its own line: the panel is too narrow for both groups on one.
         if (ImGui.Button("Copy pose"))
         {
             poseClipboard = new PoseCopy(layer.Kind, [.. targets]);
@@ -238,14 +234,21 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(noPaste ?? (waiting ? decode.Status : "Key the copied bones on the other side at the playhead, mirrored."));
 
-        FlowLine("Clear");
-        using (ImRaii.Disabled(readOnly || !bones.Any(bone => layer.Keys.Any(key => key.Bones.ContainsKey(bone)))))
+        var pairs = PoseEdits.MirrorPairs(posing.Selection.Bones, posing.Selection.Primary, index.ContainsKey)
+            .Where(pair => layer.Keys.Any(key => key.Bones.ContainsKey(pair.From))).ToList();
+        var mirrorReady = pairs.Count == 0 || decode.DecodedPose(loaded) != null;
+        FlowLine("Mirror");
+        using (ImRaii.Disabled(readOnly || pairs.Count == 0 || !mirrorReady))
         {
-            if (ImGui.Button("Clear"))
-                current.Commit(PoseEdits.Clear(current.Document, layer.Key, bones));
+            // The motion as the layers before this one leave it, as Paste mirrored reads it for an offset.
+            if (ImGui.Button("Mirror") && PoseEdits.Mirror(current.Document, layer.Key, pairs, skeleton,
+                    at => posing.FramesAt(loaded, current.Document, layer, at)?.Before) is { } mirrored)
+                current.Commit(current.WithReach(mirrored));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(several ? "Take the selected bones out of every key of this layer." : "Take the bone out of every key of this layer.");
+            ImGui.SetTooltip(pairs.Count == 0 ? "Select a bone with keys in this layer and a twin on the other side."
+                : !mirrorReady ? decode.Status
+                : "Give the other side the same edits, mirrored. Replaces what the other side has in this layer.");
     }
 
     /// <summary>
@@ -303,21 +306,19 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
 
     /// <summary>
     /// The breakdown row: Tween, Push / pull or Relax, its slider and Apply, which keys the selected bones at the playhead
-    /// against the layer's keys either side as one undo step (<see cref="PoseEdits.Breakdown"/>). Only offset and pose
-    /// layers have the keys it needs; for the others the row is disabled with a hint. It reads only the layer's keys, so
+    /// against the layer's keys either side as one undo step (<see cref="PoseEdits.Breakdown"/>). Only the layers
+    /// <see cref="ShowsBreakdown"/> names have the keys it needs, and only they draw it. It reads only the layer's keys, so
     /// it never waits for the motion.
     /// </summary>
     public void DrawBreakdown(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, bool readOnly)
     {
-        var keyed = layer.Kind is MotionLayerKind.Offset or MotionLayerKind.Pose;
         var frame = current.Playhead;
         var index = posing.BoneTree(skeleton).Index;
         string[] bones = [.. posing.Selection.Bones.Where(index.ContainsKey)];
-        var waits = !keyed ? null
-            : bones.Length == 0 ? "Select bones first."
+        var waits = bones.Length == 0 ? "Select bones first."
             : frame < layer.Start || frame > layer.End ? "Move the playhead into the layer."
             : null;
-        using (ImRaii.Disabled(readOnly || !keyed))
+        using (ImRaii.Disabled(readOnly))
         {
             ImGui.SetNextItemWidth(Theme.Scaled(96));
             using (var combo = ImRaii.Combo("##breakdown-mode", BreakdownName(breakdownMode)))
@@ -358,9 +359,10 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(waits ?? BreakdownHint(breakdownMode));
         }
-        if (!keyed)
-            Widgets.HintWrapped("Breakdowns need an offset or pose layer.");
     }
+
+    /// <summary> Whether a layer of <paramref name="kind"/> gets the breakdown row: offset and pose layers, whose keys it reads. </summary>
+    public static bool ShowsBreakdown(MotionLayerKind kind) => kind is MotionLayerKind.Offset or MotionLayerKind.Pose;
 
     private static string BreakdownName(BreakdownMode mode) => mode switch
     {

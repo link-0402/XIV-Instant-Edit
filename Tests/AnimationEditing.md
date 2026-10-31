@@ -2941,3 +2941,15 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   switches Paths off and the field goes.
 - [ ] 12 Save pose is greyed out for a face, with "A face can't be saved as a pose." on hover. The help's first line ends
   "View > Every bone shows them all."
+- [ ] 13 Select a layer of each kind in the Bones window: the kind's icon and name, Make symmetrical, then its posing
+  controls. Offset and pose: the ball, Turn, Move and Scale, then Key, Delete key, Reset and Clear on one line and Copy
+  pose, Paste pose, Paste mirrored and Mirror below, each with its old tooltip and greyed out as before; pose sources
+  under a pose layer. Amplitude, fix, idle, swing, smooth and noise: the bone list. Look at: its bones, what the target
+  follows or how to key it, and what the gizmo waits for. Symmetry: its bones and the copied-side hint. Pin: the pin
+  buttons.
+- [ ] 14 The breakdown row (Tween, Push / pull or Relax, the amount and Apply) shows under offset and pose layers only.
+  Other kinds have no breakdown row and no "Breakdowns need an offset or pose layer." hint.
+- [ ] 15 With no layer selected: the hint, then Add layer. It opens a menu with each layer kind (a face's own kinds on a
+  face), then Match startup to loop, Close loop, Smooth jitter, Hand shape and Reset root turn, greyed out with their
+  reasons as the old buttons were. Each adds over the whole clip, as before. On a read-only timeline
+  every item is greyed out.

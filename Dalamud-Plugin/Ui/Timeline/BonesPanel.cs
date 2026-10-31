@@ -614,23 +614,11 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         DrawMakeSymmetrical(current, skeleton, readOnly);
         if (layer == null)
         {
-            Widgets.MutedWrapped("Select a bone layer in the timeline to pose its bones, or add one over the whole clip:");
+            Widgets.MutedWrapped("Select a bone layer in the timeline to pose its bones, or add one over the whole clip.");
             ImGui.Spacing();
-            using (ImRaii.Disabled(readOnly))
-            {
-                foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
-                {
-                    if (ImGui.Button($"{MotionEdits.KindName(kind)} layer"))
-                        current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
-                }
-            }
-            session.LoopPose.DrawAddItems(current, readOnly, (label, enabled) =>
-            {
-                using (ImRaii.Disabled(!enabled))
-                    return ImGui.Button(label);
-            });
+            if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Plus, "Add layer", null, null, null, null))
+                ImGui.OpenPopup("##bones-add-layer");
+            DrawAddLayerMenu(current, readOnly);
             return;
         }
         Widgets.Icon(TimelineUi.LayerIcon(layer.Kind), TimelineWindowViews.LayerColour(layer.Kind));
@@ -659,10 +647,13 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
         else
             boneEditor.Draw(current, layer, skeleton, loaded, readOnly, true);
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-        boneEditor.DrawBreakdown(current, layer, skeleton, readOnly);
+        if (BoneEditor.ShowsBreakdown(layer.Kind))
+        {
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+            boneEditor.DrawBreakdown(current, layer, skeleton, readOnly);
+        }
         if (layer.Kind == MotionLayerKind.Pose)
         {
             ImGui.Spacing();
@@ -670,6 +661,25 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             ImGui.Spacing();
             poseSources.Draw(current, layer, skeleton, loaded, readOnly);
         }
+    }
+
+    /// <summary>
+    /// The Add layer menu: the clip's layer kinds, each over the whole clip, then the loop-pose and fix items, each greyed out
+    /// with its reason where it can't be added.
+    /// </summary>
+    private void DrawAddLayerMenu(TimelineEditor current, bool readOnly)
+    {
+        using var popup = ImRaii.Popup("##bones-add-layer");
+        if (!popup.Success)
+            return;
+        foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
+        {
+            if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer", "", false, !readOnly))
+                current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
+        }
+        session.LoopPose.DrawAddItems(current, readOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
     }
 
     /// <summary>

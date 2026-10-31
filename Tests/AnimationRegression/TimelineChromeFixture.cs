@@ -10,7 +10,8 @@ using InstantEdit.Ui.Timeline;
 /// <summary>
 /// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
 /// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu and the side panel show,
-/// the clip view's Bones kept line, the layer settings' summary line and the Bones window's layer strip.
+/// the clip view's Bones kept line, the layer settings' summary line, the Bones window's layer strip and which layers get its
+/// breakdown row.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -27,6 +28,13 @@ internal static class TimelineChromeFixture
         Kept(check);
         Summary(check);
         Strip(check);
+        Breakdown(check);
+    }
+
+    /// <summary> The Bones window's breakdown row shows only for the layers whose keys it reads. </summary>
+    private static void Breakdown(Action<bool, string> check)
+    {
+        check(BoneEditor.ShowsBreakdown(MotionLayerKind.Offset) && BoneEditor.ShowsBreakdown(MotionLayerKind.Pose) && !BoneEditor.ShowsBreakdown(MotionLayerKind.Pin) && !BoneEditor.ShowsBreakdown(MotionLayerKind.LookAt), "Breakdowns only for offset and pose layers");
     }
 
     /// <summary> The Bones window's layer strip: its arrows step between keys, and a click near a key picks it. </summary>
