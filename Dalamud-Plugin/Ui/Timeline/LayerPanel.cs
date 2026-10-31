@@ -25,6 +25,8 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     // The open pin bone list's search; only one combo is open at a time.
     private static string pinFilter = string.Empty;
     private readonly HandShapePanel hands = new(session, posing);
+    // The summary line of the layer last drawn, kept while its record is the same.
+    private (MotionLayer? Layer, string? Text) summaryShown;
 
     public void Draw(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded)
     {
@@ -271,7 +273,10 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     /// <summary> The summary line in muted text, when the layer has one, and Pose in Bones window, which opens the Bones window or brings it to front. </summary>
     private void DrawPosing(MotionLayer layer)
     {
-        if (Summary(layer) is { } summary)
+        // A layer's record changes with every edit, so the same one keeps its line.
+        if (!ReferenceEquals(summaryShown.Layer, layer))
+            summaryShown = (layer, Summary(layer));
+        if (summaryShown.Text is { } summary)
         {
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, summary);
@@ -282,7 +287,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             bonesWindow.BringToFront();
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Pick and pose this layer's bones on a body map.");
+            ImGui.SetTooltip(session.Editor?.Document.Face != null ? "Pick and pose this layer's face bones." : "Pick and pose this layer's bones on a body map.");
     }
 
     /// <summary>

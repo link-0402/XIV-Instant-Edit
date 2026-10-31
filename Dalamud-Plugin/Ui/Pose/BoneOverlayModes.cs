@@ -3,7 +3,7 @@ using InstantEdit.Services.Animations.Motion;
 
 namespace InstantEdit.Ui.Pose;
 
-/// <summary>What the Bones window's crosshairs show on the GPose character.</summary>
+/// <summary>Which bones the Bones window shows on the GPose character (View, On character).</summary>
 internal enum BoneOverlayMode : byte
 {
     Off,
@@ -16,7 +16,7 @@ internal enum BoneOverlayMode : byte
 /// <summary>The overlay switch's steps and which bones get a dot. Pure, so it is tested without ImGui.</summary>
 internal static class BoneOverlayModes
 {
-    /// <summary>The mode a click on the switch goes to: off, selected, all and round again.</summary>
+    /// <summary>The mode after <paramref name="mode"/>: off, selected, all and round again.</summary>
     public static BoneOverlayMode Next(BoneOverlayMode mode) => mode switch
     {
         BoneOverlayMode.Off => BoneOverlayMode.Selected,

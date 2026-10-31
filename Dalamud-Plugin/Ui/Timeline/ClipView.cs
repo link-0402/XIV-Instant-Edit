@@ -243,8 +243,7 @@ internal sealed class ClipView(TimelineSession session, BonePosing posing, Timel
         if (ImGui.Checkbox("Scale events with length##timeline-scale-events", ref scale))
             current.ScaleEvents = scale;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(current.ScaleEvents ? "Scale events with length is on. A new length moves and stretches the events too."
-                : "Scale events with length is off. A new length keeps the events where they are.");
+            ImGui.SetTooltip(TimelineUi.ScaleEventsTip(current.ScaleEvents));
     }
 
     /// <summary>

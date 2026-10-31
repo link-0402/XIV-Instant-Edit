@@ -188,5 +188,44 @@ internal static class TimelineChromeFixture
         check(StatusLine.TextRoom(760, 300, 200) == 300, "A first note that fits keeps all its text");
         check(StatusLine.TextRoom(760, 700, 200) == 560, "A long first note is cut to the room its buttons and +N notes leave");
         check(StatusLine.TextRoom(150, 700, 200) == 0, "A first note never gets less than no room");
+        Steady(check);
+    }
+
+    /// <summary>
+    /// The status line's work notes: one shows only after 0.3 s, keeps showing 0.5 s after it went (without its button),
+    /// and a short gap keeps it on; other notes show at once.
+    /// </summary>
+    private static void Steady(Action<bool, string> check)
+    {
+        var work = new StatusNote("live-work", StatusKind.Working, "Applying the bone layers", "Cancel", () => { });
+        var notice = new StatusNote("notice", StatusKind.Notice, "Copied 3 bones.");
+        bool Shows(Dictionary<string, WorkTiming> timings, double now, params StatusNote[] notes) =>
+            StatusLine.Debounced(notes, timings, now).Any(n => n.Key == work.Key);
+
+        var brief = new Dictionary<string, WorkTiming>();
+        var briefShown = Shows(brief, 0, work) | Shows(brief, .1, work) | Shows(brief, .2, work) | Shows(brief, .25) | Shows(brief, .6);
+        check(!briefShown, "Steady status: work there less than 0.3 s never shows");
+
+        var timings = new Dictionary<string, WorkTiming>();
+        var early = Shows(timings, 0, work) || Shows(timings, .29, work);
+        check(!early && Shows(timings, .3, work), "Steady status: work there for 0.3 s shows");
+        var kept = StatusLine.Debounced([], timings, 1.0);
+        var keptNote = kept.FirstOrDefault(n => n.Key == work.Key);
+        check(keptNote is { Button: null, Act: null, Text: "Applying the bone layers" }, "Steady status: work just gone keeps its text, without its button");
+        check(Shows(timings, 1.49) && !Shows(timings, 1.5), "Steady status: work gone shows for 0.5 s, then not");
+
+        var gap = new Dictionary<string, WorkTiming>();
+        Shows(gap, 0, work);
+        Shows(gap, .3, work);
+        var during = Shows(gap, .5) && Shows(gap, .9, work);
+        check(during && Shows(gap, 1.2) && Shows(gap, 1.6), "Steady status: a gap shorter than 0.5 s keeps work shown");
+
+        check(StatusLine.Debounced([notice], new Dictionary<string, WorkTiming>(), 0).SequenceEqual([notice]), "Steady status: other notes show at once");
+
+        var result = new Dictionary<string, WorkTiming>();
+        Shows(result, 0, work);
+        Shows(result, .3, work);
+        var done = StatusLine.Debounced([work with { Kind = StatusKind.Notice, Text = "Done." }], result, .4);
+        check(done.Length == 1 && done[0].Kind == StatusKind.Notice, "Steady status: a result with the work's key takes its place");
     }
 }

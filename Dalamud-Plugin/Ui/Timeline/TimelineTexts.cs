@@ -7,7 +7,7 @@ namespace InstantEdit.Ui.Timeline;
 /// <summary>
 /// What the window shows about the document, made again only when the document changes: the events'
 /// labels, the length, the header's note, the save's warnings and the effects that stop too soon.
-/// The canvas, the header, the toolbar's messages, the properties panel and the save footer read them.
+/// The canvas, the header, the status line's notes, the properties panel and the save footer read them.
 /// </summary>
 internal sealed class TimelineTexts(TimelineSession session)
 {

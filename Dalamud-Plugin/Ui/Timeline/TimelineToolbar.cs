@@ -75,10 +75,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             clicked = Widgets.TabButton(FontAwesomeIcon.Child, "Bones", bonesWindow.IsOpen);
         bonesWidth = ImGui.GetItemRectSize().X;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(bonesWindow.IsOpen
-                ? "Close the Bones window."
-                : current.Document.Face != null ? "Open the Bones window: pick face bones and pose them in the selected bone layer."
-                : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer.");
+            ImGui.SetTooltip(TimelineUi.BonesWindowTip(bonesWindow.IsOpen, current.Document.Face != null));
         if (clicked)
             TimelineUi.Toggle(bonesWindow);
     }

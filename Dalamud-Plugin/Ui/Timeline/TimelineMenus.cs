@@ -178,8 +178,7 @@ internal sealed class TimelineMenus(TimelineSession session, TimelineCanvas canv
         if (ImGui.MenuItem("Scale events with length", "", current.ScaleEvents))
             current.ScaleEvents = !current.ScaleEvents;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(current.ScaleEvents ? "Scale events with length is on. A new length moves and stretches the events too."
-                : "Scale events with length is off. A new length keeps the events where they are.");
+            ImGui.SetTooltip(TimelineUi.ScaleEventsTip(current.ScaleEvents));
         if (ImGui.MenuItem("Follow", "", preview.Follow))
             preview.Follow = !preview.Follow;
         if (ImGui.IsItemHovered())
@@ -195,10 +194,7 @@ internal sealed class TimelineMenus(TimelineSession session, TimelineCanvas canv
         if (ImGui.MenuItem("Bones window", "", bonesWindow.IsOpen))
             TimelineUi.Toggle(bonesWindow);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(bonesWindow.IsOpen
-                ? "Close the Bones window."
-                : current.Document.Face != null ? "Open the Bones window: pick face bones and pose them in the selected bone layer."
-                : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer.");
+            ImGui.SetTooltip(TimelineUi.BonesWindowTip(bonesWindow.IsOpen, current.Document.Face != null));
     }
 
     /// <summary> Help: Mouse and keys; true when it was clicked, so the help popup opens. </summary>

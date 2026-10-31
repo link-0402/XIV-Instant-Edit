@@ -87,6 +87,17 @@ internal static class TimelineUi
             current.Redo();
     }
 
+    /// <summary> The Bones window switch's tooltip, on the action bar's Bones and the View menu's Bones window. </summary>
+    public static string BonesWindowTip(bool open, bool face) =>
+        open ? "Close the Bones window."
+        : face ? "Open the Bones window: pick face bones and pose them in the selected bone layer."
+        : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer.";
+
+    /// <summary> Scale events with length's tooltip, in the View menu and the clip view. </summary>
+    public static string ScaleEventsTip(bool on) => on
+        ? "Scale events with length is on. A new length moves and stretches the events too."
+        : "Scale events with length is off. A new length keeps the events where they are.";
+
     /// <summary> Opens <paramref name="window"/> in front, or closes it. </summary>
     public static void Toggle(Window window)
     {

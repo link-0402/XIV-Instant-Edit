@@ -280,8 +280,8 @@ internal sealed partial class AnimationEditService : IDisposable
     });
 
     /// <summary>
-    /// Samples the playing animation for a character send, holding the service busy meanwhile so the
-    /// Animations tab doesn't read and sample at the same time; refused while it is busy itself.
+    /// Samples the playing animation for a character send, holding the service busy meanwhile so no
+    /// other animation job reads and samples at the same time; refused while it is busy itself.
     /// </summary>
     public Task<AnimationTake> SampleForCharacterAsync(AnimationCapture capture, Action<string> status, CancellationToken token)
     {
@@ -289,7 +289,7 @@ internal sealed partial class AnimationEditService : IDisposable
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             if (Busy)
-                throw new InvalidOperationException("The Animations tab is still working. Wait for it to finish, then send again.");
+                throw new InvalidOperationException("Another animation job is running. Wait for it to finish, then send again.");
             var linked = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token);
             var sample = Task.Run(() => SampleForBlenderAsync(capture, false, status, linked.Token), linked.Token);
             work = sample.ContinueWith(_ => linked.Dispose(), TaskScheduler.Default);

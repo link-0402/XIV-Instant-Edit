@@ -33,14 +33,12 @@ internal interface IBonesOverlay
 }
 
 /// <summary>
-/// The selected bones' values in a bone layer at the playhead, shared by the properties panel and the
-/// Bones window: the turn, move and scale fields, Key, Delete key, Reset and Clear, pose copy and paste and Mirror, the rotation
-/// ball and the gizmo's choice, the bone picker and an amplitude's bones. A field's changes until it is
-/// left are one undo step.
+/// The selected bones' values in a bone layer at the playhead, in the Bones window: the turn, move and scale fields, Key,
+/// Delete key, Reset and Clear, pose copy and paste and Mirror, the rotation ball and the gizmo's choice, and an amplitude's
+/// and a symmetry's bones. A field's changes until it is left are one undo step.
 /// </summary>
 internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, BonePosing posing, IBonesOverlay overlay)
 {
-    private string boneFilter = string.Empty;
     // The angles a turn field shows while it is being dragged: read back from the rotation they make,
     // they could flip to an equivalent set mid-drag.
     private (string Id, Vector3 Degrees)? turnEdit;
@@ -60,18 +58,16 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
     public bool CharacterAxes => characterAxes;
 
     /// <summary>
-    /// The selected bones' values at the playhead, for an offset or a pose layer: the primary bone's turn,
-    /// move and scale, each change keyed there and made to every other selected bone too; then Key,
-    /// Delete key, Reset and Clear, and pose copy and paste and Mirror, for all of them. With <paramref name="ball"/> (the Bones
-    /// window) the rotation ball comes first.
+    /// The selected bones' values at the playhead, for an offset or a pose layer: the rotation ball, then the primary bone's
+    /// turn, move and scale, each change keyed there and made to every other selected bone too; then Key, Delete key, Reset
+    /// and Clear, and pose copy and paste and Mirror, for all of them.
     /// </summary>
-    public void Draw(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded,
-        bool readOnly, bool ball)
+    public void Draw(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded, bool readOnly)
     {
         var (index, _) = posing.BoneTree(skeleton);
         if (posing.Selection.Primary is not { } bone || !index.ContainsKey(bone))
         {
-            Widgets.HintWrapped(ball ? "Click a bone on the map to set its value at the playhead." : "Choose a bone to set its value at the playhead.");
+            Widgets.HintWrapped("Click a bone on the map to set its value at the playhead.");
             return;
         }
         var frame = current.Playhead;
@@ -86,7 +82,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         // Several bones change the way the primary one does, as the character sees it, which needs
         // their frames from the motion; so does the ball. One bone alone changes in its own space.
         var turned = targets.Count > 1 ? PoseEdits.Turned(targets, bone, skeleton) : targets;
-        var frames = ball || turned.Count > 1 ? posing.FramesAt(loaded, current.Document, layer, frame) : null;
+        var frames = posing.FramesAt(loaded, current.Document, layer, frame);
         if (turned.Count > 1 && frames == null)
         {
             decode.DrawWait();
@@ -95,7 +91,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         Func<string, Quaternion> space = frames != null ? frames.Space : _ => Quaternion.Identity;
         List<PoseTarget> others = [.. turned.Where(target => target.Bone != bone)];
         // A pose bone whose key only turned it starts a move from where the layers before this one leave it.
-        var before = pose ? (frames ?? posing.FramesAt(loaded, current.Document, layer, frame))?.Before : null;
+        var before = pose ? frames?.Before : null;
         Func<string, Vector3?> own = name => before != null && index.TryGetValue(name, out var at) ? before[at].Position : null;
 
         ImGui.AlignTextToFramePadding();
@@ -119,8 +115,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
 
         using (ImRaii.Disabled(readOnly || !inside))
         {
-            if (ball)
-                DrawBall(current, layer, skeleton, frames, turned, primary, frame);
+            DrawBall(current, layer, skeleton, frames, turned, primary, frame);
             using var table = ImRaii.Table("##bone-value", 2, ImGuiTableFlags.SizingFixedFit);
             if (table.Success)
             {
@@ -482,53 +477,10 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ImGui.SetTooltip(pose ? "The bone's scale, in percent." : "How much the bone scales, in percent: 100% changes nothing.");
     }
 
-    /// <summary> The bone the value fields edit: the layer's own bones first, then the whole skeleton, searchable. Picking one selects only it. </summary>
-    public void DrawPicker(SkeletonDescription skeleton, MotionLayer layer)
-    {
-        var primary = posing.Selection.Primary;
-        var preview = primary == null ? "Choose a bone"
-            : posing.Selection.Count > 1 ? $"{AnimationPresentation.BoneName(primary)} and {posing.Selection.Count - 1} more"
-            : AnimationPresentation.BoneName(primary);
-        ImGui.SetNextItemWidth(-1);
-        using var combo = ImRaii.Combo("##layer-bone", preview, ImGuiComboFlags.HeightLarge);
-        if (!combo.Success)
-        {
-            if (ComboWheel.Steps() is var steps and not 0 && PickerBones(skeleton, layer, out _) is { Count: > 0 } bones)
-                posing.Selection.Only(ComboWheel.Pick(bones, primary!, steps));
-            return;
-        }
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.IsWindowAppearing())
-            ImGui.SetKeyboardFocusHere();
-        ImGui.InputTextWithHint("##bone-search", "Search bones", ref boneFilter, 64);
-        foreach (var bone in PickerBones(skeleton, layer, out var own))
-        {
-            var label = AnimationPresentation.BoneName(bone);
-            if (boneFilter.Length > 0 && !label.Contains(boneFilter, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (ImGui.Selectable($"{label}##{bone}", posing.Selection.Contains(bone)))
-            {
-                posing.Selection.Only(bone);
-                boneFilter = string.Empty;
-            }
-            if (own.Contains(bone) && ImGui.IsItemHovered())
-                ImGui.SetTooltip("This layer already changes it.");
-        }
-    }
-
-    /// <summary> The picker's bones in order: the layer's own (<paramref name="own"/>), then the rest of the skeleton. </summary>
-    private static List<string> PickerBones(SkeletonDescription skeleton, MotionLayer layer, out HashSet<string> own)
-    {
-        var mine = layer.Keys.SelectMany(key => key.Bones.Keys).Concat(layer.Bones).Distinct(StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        own = mine;
-        return [.. mine, .. skeleton.Bones.Select(b => b.Name).Where(name => !mine.Contains(name))];
-    }
-
     /// <summary>
-    /// An amplitude's bones: every bone, or the ones it is limited to. The selected bones join the
-    /// limit; with <paramref name="picker"/> (the properties panel) a bone picker chooses them.
+    /// An amplitude's bones: every bone, or the ones it is limited to. The selected bones join the limit.
     /// </summary>
-    public void DrawLimit(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, bool readOnly, bool picker)
+    public void DrawLimit(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, bool readOnly)
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Bones");
@@ -549,8 +501,6 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted(AnimationPresentation.BoneName(bone));
         }
-        if (picker)
-            DrawPicker(skeleton, layer);
         var index = posing.BoneTree(skeleton).Index;
         string[] chosen = [.. posing.Selection.Bones.Where(index.ContainsKey)];
         using (ImRaii.Disabled(readOnly || chosen.Length == 0 || chosen.All(layer.Bones.Contains)))
@@ -577,10 +527,9 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
 
     /// <summary>
     /// A symmetry layer's bones: the picked ones, each bringing everything below it, how many bones that
-    /// copies, and the ones on the changed side without a twin. The selected bones can be added; with
-    /// <paramref name="picker"/> (the properties panel) a bone picker chooses them.
+    /// copies, and the ones on the changed side without a twin. The selected bones can be added.
     /// </summary>
-    public void DrawSymmetryBones(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, bool readOnly, bool picker)
+    public void DrawSymmetryBones(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, bool readOnly)
     {
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Bones");
@@ -599,11 +548,8 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted(AnimationPresentation.BoneName(bone));
         }
-        if (picker)
-        {
-            DrawPicker(skeleton, layer);
-            Widgets.HintWrapped("Each bone brings everything below it.");
-        }
+        // A bone added here brings its whole branch, however it was picked.
+        Widgets.HintWrapped("Each bone brings everything below it.");
         var index = posing.BoneTree(skeleton).Index;
         string[] chosen = [.. posing.Selection.Bones.Where(index.ContainsKey)];
         using (ImRaii.Disabled(readOnly || chosen.Length == 0 || chosen.All(layer.Bones.Contains)))

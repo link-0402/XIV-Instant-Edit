@@ -627,7 +627,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.TextColored(Theme.Label, MotionEdits.KindName(layer.Kind));
         ImGui.Spacing();
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise)
-            boneEditor.DrawLimit(current, layer, skeleton, readOnly, false);
+            boneEditor.DrawLimit(current, layer, skeleton, readOnly);
         else if (layer.Kind == MotionLayerKind.LookAt)
         {
             LookFields.DrawBones(current, layer, readOnly);
@@ -640,13 +640,13 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         {
             if (posing.Selection.Primary is { } primary && posing.BonesOf(layer, skeleton)?.Changed.Contains(primary) == true)
                 Widgets.HintWrapped("Copied from the other side. Add an Offset layer above this one to adjust it.");
-            boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, false);
+            boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly);
         }
         else if (layer.Kind == MotionLayerKind.Pin)
             // Its own hint says what to select; with the bones on the character the gizmo choice says what the gizmo waits for.
             boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
         else
-            boneEditor.Draw(current, layer, skeleton, loaded, readOnly, true);
+            boneEditor.Draw(current, layer, skeleton, loaded, readOnly);
         if (BoneEditor.ShowsBreakdown(layer.Kind))
         {
             ImGui.Spacing();

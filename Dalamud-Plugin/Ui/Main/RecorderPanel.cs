@@ -7,8 +7,9 @@ using InstantEdit.Services.Animations;
 namespace InstantEdit.Ui.Main;
 
 /// <summary>
-/// Record live pose: records a character's live skeleton and sends it to Blender. Drawn in the Timeline
-/// window's Record page, and on the Animations tab while the animation services are missing.
+/// Record live pose: records a character's live skeleton and sends it to Blender, with its last result under
+/// its controls. Drawn on the Timeline start page's Record entry, and in the Timeline window while the
+/// animation services are missing.
 /// </summary>
 internal sealed class RecorderPanel
 {

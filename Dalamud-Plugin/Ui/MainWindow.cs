@@ -508,8 +508,9 @@ public sealed class MainWindow : Window, IDisposable
     {
         var unfinished = _animationHub.Service is { } service ? TimelineWindow.RecoveryAttention(service) : 0;
         bool clicked;
+        // "###" keeps the button's id when its label gains or loses the count, so a click then isn't dropped.
         using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, unfinished > 0))
-            clicked = Widgets.TabButton(FontAwesomeIcon.Running, unfinished > 0 ? $"Animations ({unfinished})" : "Animations", false);
+            clicked = Widgets.TabButton(FontAwesomeIcon.Running, (unfinished > 0 ? $"Animations ({unfinished})" : "Animations") + "###main-animations", false);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(unfinished > 0 ? TimelineWindowViews.UnfinishedText(unfinished) : "Open the Timeline window.");
         if (clicked)

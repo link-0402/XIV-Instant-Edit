@@ -28,6 +28,12 @@ internal sealed record StatusNote(string Key, StatusKind Kind, string Text, stri
     string? ButtonTooltip = null, bool ButtonEnabled = true);
 
 /// <summary>
+/// A work-running note's timing on the status line: since when its key is there (<paramref name="Since"/>), since when it
+/// is gone (<paramref name="Gone"/>, null while there), whether it shows yet, and the note as it last was.
+/// </summary>
+internal sealed record WorkTiming(double Since, double? Gone, bool Shown, StatusNote Last);
+
+/// <summary>
 /// The one line under a window's action bar: the first note shows, and "+N notes" opens a popup with all of them.
 /// Nothing is drawn when there is no note. Each window keeps its own line, so its dismissed notes stay its own.
 /// </summary>
@@ -35,6 +41,8 @@ internal sealed class StatusLine
 {
     // Dismissed notes by key, with the text they had when dismissed.
     private readonly Dictionary<string, string> dismissed = new();
+    // Work-running notes' timings by key (see Debounced).
+    private readonly Dictionary<string, WorkTiming> timings = new();
 
     /// <summary>
     /// The notes to show, work running first, then errors, warnings and notices, each kind in the order given. A note
@@ -44,6 +52,57 @@ internal sealed class StatusLine
         notes.Where(n => n.Kind == StatusKind.Working || !dismissed.TryGetValue(n.Key, out var text) || text != n.Text)
             .OrderBy(n => n.Kind)
             .ToImmutableArray();
+
+    /// <summary> Seconds a work-running note must be there before it shows, so a few frames of work don't move the lanes. </summary>
+    public const double WorkShowAfter = .3;
+
+    /// <summary> Seconds a work-running note keeps showing after it went, so work that stops and starts again stays on. </summary>
+    public const double WorkKeepFor = .5;
+
+    /// <summary>
+    /// The notes as the line shows them at <paramref name="now"/> seconds. A work-running note shows once its key has been
+    /// there for <see cref="WorkShowAfter"/>; once shown, it stays with its last text until its key has been gone for
+    /// <see cref="WorkKeepFor"/>, without its button then, or until another note with its key takes its place. Other notes
+    /// show at once. <paramref name="timings"/> holds each work note's timing by key and is updated here.
+    /// </summary>
+    public static ImmutableArray<StatusNote> Debounced(IEnumerable<StatusNote> notes, Dictionary<string, WorkTiming> timings, double now)
+    {
+        var shown = ImmutableArray.CreateBuilder<StatusNote>();
+        var working = new HashSet<string>();
+        var others = new HashSet<string>();
+        foreach (var note in notes)
+        {
+            if (note.Kind != StatusKind.Working)
+            {
+                others.Add(note.Key);
+                shown.Add(note);
+                continue;
+            }
+            working.Add(note.Key);
+            var timing = timings.TryGetValue(note.Key, out var known) ? known with { Gone = null, Last = note } : new WorkTiming(now, null, false, note);
+            if (!timing.Shown && now - timing.Since >= WorkShowAfter)
+                timing = timing with { Shown = true };
+            timings[note.Key] = timing;
+            if (timing.Shown)
+                shown.Add(note);
+        }
+        foreach (var (key, timing) in timings.ToList())
+        {
+            if (working.Contains(key))
+                continue;
+            // Work that never showed, or whose result now shows in its place, goes at once.
+            var gone = timing.Gone ?? now;
+            if (!timing.Shown || others.Contains(key) || now - gone >= WorkKeepFor)
+            {
+                timings.Remove(key);
+                continue;
+            }
+            timings[key] = timing with { Gone = gone };
+            // Its task has ended: no button stays to click.
+            shown.Add(timing.Last with { Button = null, Act = null, ButtonTooltip = null });
+        }
+        return shown.ToImmutable();
+    }
 
     /// <summary> The text that opens the popup with every note: "+1 note", "+2 notes". </summary>
     public static string MoreText(int more) => more == 1 ? "+1 note" : $"+{more} notes";
@@ -77,13 +136,14 @@ internal sealed class StatusLine
     public static float TextRoom(float available, float text, float after) => Math.Clamp(available - after, 0, text);
 
     /// <summary>
-    /// Draws the line: the first shown note, then "+N notes" at the right end when there are more. The note's text is cut
-    /// to the room left, so its button, its dismiss button and "+N notes" always stay in view. <paramref name="id"/> starts
-    /// every control's id, so two windows can each draw a line.
+    /// Draws the line: the first shown note, then "+N notes" at the right end when there are more. Work running comes and
+    /// goes on it steadily (<see cref="Debounced"/>). The note's text is cut to the room left, so its button, its dismiss
+    /// button and "+N notes" always stay in view. <paramref name="id"/> starts every control's id, so two windows can each
+    /// draw a line.
     /// </summary>
     public void Draw(string id, IEnumerable<StatusNote> notes)
     {
-        var shown = Visible(notes);
+        var shown = Visible(Debounced(notes, timings, ImGui.GetTime()));
         if (shown.IsEmpty)
             return;
         using var scope = ImRaii.PushId(id + "-status");

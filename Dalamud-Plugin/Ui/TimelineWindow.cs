@@ -450,7 +450,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         autosaver.Closed();
         loader.Reset();
         livePose.ForgetNote();
-        // The listener stays on while the Animations tab still shows it.
+        // The listener stays on while the Send character card still waits on it.
         if (mainListens?.Invoke() != true)
             animations?.StopObservation();
         // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
@@ -687,6 +687,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         pickers.PollLengths();
         loader.PollLibrary();
         loader.Poll();
+        startPage.Poll(source == null || startShown);
         // Every frame: the bone rows' order, Live and the save all read the clip's match.
         session.KeepMatch();
 
@@ -727,6 +728,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         if (!startShown)
             DrawHeader(source);
         livePose.Poll(editor, source);
+        // A finished Still pose, face hold or Blender read goes in here, so the start page over the clip doesn't hold it.
+        blenderMotion.Poll(editor);
         session.LoopPose.Poll(editor);
         if (!startShown && reader.Error is { } readError)
             Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + readError);
@@ -836,9 +839,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     {
         var unfinished = animations is { } service ? RecoveryAttention(service) : 0;
         bool start;
+        // "###" keeps the button's id when its label gains or loses the count, so a click then isn't dropped.
         using (ImRaii.PushId("##timeline-start-button"))
         using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, unfinished > 0))
-            start = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.ArrowLeft, StartLabel(unfinished), null, null, null, null);
+            start = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.ArrowLeft, StartLabel(unfinished) + "###timeline-start", null, null, null, null);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(unfinished switch
             {

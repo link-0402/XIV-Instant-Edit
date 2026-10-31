@@ -40,7 +40,7 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
     private float typed;
     private bool scrubbing;
 
-    /// <summary>The toolbar's Curves switch.</summary>
+    /// <summary>The View menu's Curves switch.</summary>
     public bool Shown { get; set; }
 
     /// <summary>Drops the curves and the bake, for another clip.</summary>

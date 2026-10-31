@@ -2777,6 +2777,7 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 8 Key a bone in the Bones window, then click Undo there: the edit is undone and the Timeline's lanes follow.
   Redo puts it back.
 - [ ] 9 The Bones header's own Live and Play buttons are gone. The key arrows, layer name, frame and help stay.
+  (Replaced by the layer strip in stage 5.)
 
 ## UI redesign stage 2 (pending)
 
@@ -2835,6 +2836,7 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   rebuild for" the race and Skeleton shows Keep its own. A clip that can't be rebuilt says why there as a note.
 - [ ] 30 Repair onto a skeleton that lacks bones the animation moves: the warning line reads like "Repair onto IVCS leaves
   out 3 bones." and Skeleton's tooltip lists them.
+- [ ] 31 Live on, no preview: drag Turn in the Bones window. The lanes don't jump.
 
 ## UI redesign stage 3 (pending)
 
@@ -2868,6 +2870,11 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   and the recorder.
 - [ ] 17 Close the Timeline: the listener stops, unless Quick Actions' Send character card waits for an animation.
   With that card waiting (main window on Quick Actions), it still hears the animation you play.
+- [ ] 18 Still pose, then Start before it finishes, then Back: the still pose is in, and the Bones window never stayed
+  greyed.
+- [ ] 19 Record a live pose from the start page: its result shows on the Record page.
+- [ ] 20 Send an animation to Blender with a Playing now pen and close the dialog before it ends: the page's last line
+  shows the send running with Cancel, then how it went. Undo in Saved edits shows there the same way.
 
 ## UI redesign stage 4 (pending)
 
@@ -2950,6 +2957,7 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 14 The breakdown row (Tween, Push / pull or Relax, the amount and Apply) shows under offset and pose layers only.
   Other kinds have no breakdown row and no "Breakdowns need an offset or pose layer." hint.
 - [ ] 15 With no layer selected: the hint, then Add layer. It opens a menu with each layer kind (a face's own kinds on a
-  face), then Match startup to loop, Close loop, Smooth jitter, Hand shape and Reset root turn, greyed out with their
+  face), then Match startup to loop, Close loop, Smooth jitter, Hand shape and Reset root turn (on a face only Smooth
+  jitter), greyed out with their
   reasons as the old buttons were. Each adds over the whole clip, as before. On a read-only timeline
   every item is greyed out.

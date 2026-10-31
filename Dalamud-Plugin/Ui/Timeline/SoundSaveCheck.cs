@@ -29,6 +29,8 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
     // The sounds the question asks about, and the sound files the coming save writes over in place.
     private List<SharedSound>? soundAsk;
     private HashSet<string>? soundInPlace;
+    // The save Begin was given, started once the check or the answer lets it.
+    private Action? startSave;
 
     /// <summary>The mod is being checked for other animations playing the sounds.</summary>
     public bool Checking => soundCheck != null;
@@ -43,6 +45,15 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
         soundCheckDocument = null;
         soundAsk = null;
         soundInPlace = null;
+        startSave = null;
+    }
+
+    /// <summary> Starts the save <see cref="Begin"/> was given, once. </summary>
+    private void Start()
+    {
+        var start = startSave;
+        startSave = null;
+        start?.Invoke();
     }
 
     /// <summary> The save started: the sound files it writes over in place are its own now. </summary>
@@ -56,12 +67,13 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
     public void Begin(TimelineEditor current, AnimationTimelineSource loaded, AnimationDestination destination, Action startSave)
     {
         soundAsk = null;
+        this.startSave = startSave;
         var candidates = destination == AnimationDestination.InPlace ? InPlaceSounds(current.Document, loaded) : [];
         soundInPlace = new HashSet<string>(candidates, StringComparer.OrdinalIgnoreCase);
         if (candidates.Count == 0 || loaded.Resource.ModRoot is not { } root)
         {
             soundInPlace.Clear();
-            startSave();
+            Start();
             return;
         }
         var exclude = loaded.Resource.ResolvedPath;
@@ -105,35 +117,43 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
     }
 
     /// <summary>
-    /// After Save's check of the mod: saves when no other animation plays the sounds, else asks whether
-    /// to change each one everywhere (the mod's file) or only here (a copy). <paramref name="fail"/> says
-    /// why the save can't go on.
+    /// Every frame, also while the start page shows: after Save's check of the mod, saves when no other animation plays the
+    /// sounds, else leaves the question for <see cref="Draw"/>. <paramref name="fail"/> says why the save can't go on.
     /// </summary>
-    public void Draw(TimelineEditor current, Action startSave, Action<string> fail)
+    public void Poll(Action<string> fail)
     {
-        if (soundCheck is { IsCompleted: true } task)
+        if (soundCheck is not { IsCompleted: true } task)
+            return;
+        soundCheck = null;
+        var checkedDocument = soundCheckDocument;
+        soundCheckDocument = null;
+        if (!task.IsCompletedSuccessfully)
         {
-            soundCheck = null;
-            var checkedDocument = soundCheckDocument;
-            soundCheckDocument = null;
-            if (!task.IsCompletedSuccessfully)
-            {
-                fail("The mod could not be checked for other animations playing its sounds. " + TimelineSession.ErrorText(task.Exception));
-                soundInPlace = null;
-                return;
-            }
-            if (!ReferenceEquals(checkedDocument, current.Document))
-            {
-                fail("The timeline changed while the mod was checked. Save again.");
-                soundInPlace = null;
-                return;
-            }
-            var shared = task.Result.Where(s => s.Users > 0 || s.Game).ToList();
-            if (shared.Count == 0)
-                startSave();
-            else
-                soundAsk = shared;
+            fail("The mod could not be checked for other animations playing its sounds. " + TimelineSession.ErrorText(task.Exception));
+            soundInPlace = null;
+            startSave = null;
+            return;
         }
+        if (session.Editor is not { } current || !ReferenceEquals(checkedDocument, current.Document))
+        {
+            fail("The timeline changed while the mod was checked. Save again.");
+            soundInPlace = null;
+            startSave = null;
+            return;
+        }
+        var shared = task.Result.Where(s => s.Users > 0 || s.Game).ToList();
+        if (shared.Count == 0)
+            Start();
+        else
+            soundAsk = shared;
+    }
+
+    /// <summary>
+    /// The question after Save's check of the mod, when other animations play the sounds: change each one everywhere (the
+    /// mod's file) or only here (a copy). It waits for the save row, so while the start page shows it waits for Back.
+    /// </summary>
+    public void Draw()
+    {
         if (soundAsk is not { } asking)
             return;
         if (!ImGui.IsPopupOpen(SoundAskPopup))
@@ -149,7 +169,7 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
             {
                 soundAsk = null;
                 ImGui.CloseCurrentPopup();
-                startSave();
+                Start();
             }
             TimelineUi.Tip("Change the mod's own file, for every animation that plays it.");
             ImGui.SameLine();
@@ -159,7 +179,7 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
                     soundInPlace?.Remove(sound.Path);
                 soundAsk = null;
                 ImGui.CloseCurrentPopup();
-                startSave();
+                Start();
             }
             TimelineUi.Tip("Save a copy that only this animation plays.");
             ImGui.SameLine();
@@ -167,6 +187,7 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
             {
                 soundAsk = null;
                 soundInPlace = null;
+                startSave = null;
                 ImGui.CloseCurrentPopup();
             }
         }

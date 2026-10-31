@@ -63,11 +63,8 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
         }
     }
 
-    /// <summary>
-    /// The loader's search, group tabs and list, <paramref name="height"/> tall. True when an animation
-    /// was played, so a popup around it can close.
-    /// </summary>
-    public bool Draw(float height)
+    /// <summary> The loader's search, group tabs and list, <paramref name="height"/> tall. </summary>
+    public void Draw(float height)
     {
         EnsureLibrary();
         PollLibrary();
@@ -94,17 +91,15 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
 
         var footer = ImGui.GetFrameHeightWithSpacing() * 2;
         var listHeight = Math.Max(ImGui.GetFrameHeight() * 3, height - (ImGui.GetCursorPosY() - start) - footer);
-        var played = false;
         using (var list = ImRaii.Child("##loader-list", new Vector2(0, listHeight), true))
         {
             if (list.Success)
-                played = DrawLoaderList(available);
+                DrawLoaderList(available);
         }
         if (!available)
             ImGui.TextColored(Theme.Warning, reason);
         else
             ImGui.TextColored(Theme.Hint, "Plays on your GPose character, then opens here.");
-        return played;
     }
 
     private static string GroupTip(AnimationLibraryGroup group) => group switch
@@ -119,8 +114,8 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
         _ => "Every emote, with its sitting and upper body versions.",
     };
 
-    /// <summary>The rows of the chosen group, or every match while searching; true when one was played.</summary>
-    private bool DrawLoaderList(bool available)
+    /// <summary>The rows of the chosen group, or every match while searching.</summary>
+    private void DrawLoaderList(bool available)
     {
         if (libraryTask != null)
         {
@@ -128,21 +123,20 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Muted, "Reading the game's animations");
-            return false;
+            return;
         }
         if (libraryError != null)
         {
             Widgets.HintWrapped("The animation list could not be read: " + libraryError);
-            return false;
+            return;
         }
         var search = loaderSearch.Trim();
         var rows = LoaderRows(search);
         if (rows.Length == 0)
         {
             ImGui.TextDisabled(search.Length > 0 ? "Nothing matches." : "None.");
-            return false;
+            return;
         }
-        var played = false;
         using var align = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f));
         var clipper = ImGui.ImGuiListClipper();
         try
@@ -162,7 +156,7 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
                     {
                         if (ImGui.Selectable(item.Name, waiting, ImGuiSelectableFlags.None,
                                 new Vector2(Math.Max(1, ImGui.GetContentRegionAvail().X - detailWidth - Theme.Gap), 0)))
-                            played = PlayFromLoader(item);
+                            PlayFromLoader(item);
                     }
                     if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                         ImGui.SetTooltip($"{item.Key} · timeline {item.Timeline}");
@@ -175,7 +169,6 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
         {
             clipper.Destroy();
         }
-        return played;
     }
 
     private AnimationLibraryItem[] LoaderRows(string search)
@@ -276,10 +269,10 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     }
 
     /// <summary>
-    /// The loader's own line, for the start page and a timeline that can't be edited; an open clip shows <see cref="Notes"/>
-    /// in the window's status line instead.
+    /// The loader's own line, for the start page and a timeline that can't be edited, with <paramref name="more"/> notes
+    /// after the loader's; an open clip shows <see cref="Notes"/> in the window's status line instead.
     /// </summary>
-    public void DrawStatus() => statusLine.Draw("##loader", Notes());
+    public void DrawStatus(IEnumerable<StatusNote>? more = null) => statusLine.Draw("##loader", more == null ? Notes() : Notes().Concat(more));
 
     /// <summary>The status line's note while the loader waits, with Cancel, or why it couldn't play.</summary>
     public IEnumerable<StatusNote> Notes()

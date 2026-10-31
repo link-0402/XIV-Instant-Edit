@@ -193,15 +193,20 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var missing = SaveMissing(current, problem);
         using (ImRaii.Disabled(missing != null))
         {
+            // The save may start frames later (after the mod's check or the question): it takes the clip as it is then.
             if (ImGui.Button("Save"))
-                soundSave.Begin(current, loaded, destination, () => StartSave(current, loaded));
+                soundSave.Begin(current, loaded, destination, () =>
+                {
+                    if (session.Editor is { } editor && session.Source is { Document: not null } source)
+                        StartSave(editor, source);
+                });
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(missing ?? (destination == AnimationDestination.NewMod
                 ? doc.Face != null ? "Save the face into a new mod." : "Save the timeline into a new mod."
                 : doc.Face != null ? "Save the face into the mod it comes from. Undo last save puts it back."
                 : "Save the timeline into the mod it comes from. Undo last save puts it back."));
-        soundSave.Draw(current, () => StartSave(current, loaded), error => saveError = error);
+        soundSave.Draw();
         ImGui.SameLine(0, Theme.Scaled(16));
         DrawUndoLastSave(current);
 
@@ -391,9 +396,14 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// <summary>How a save's start ended: the job's id (null when another job was running), or why it didn't start.</summary>
     private sealed record SaveStart(Guid? Id, string? Error);
 
+    /// <summary>
+    /// Every frame, also while the start page shows: the mod's check of a save's sounds, the save's start and its result,
+    /// an undo's result and the rebuild picked for you.
+    /// </summary>
     public void Poll()
     {
         PickRebuild();
+        soundSave.Poll(error => saveError = error);
         if (session.Animations is not { } service)
             return;
         if (saveTask is { IsCompleted: true } task)
@@ -421,7 +431,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (pendingSaveId is { } stale && !service.Busy && service.LastResult?.Id != stale)
         {
             pendingSaveId = null;
-            saveError = "The save's result is unknown. Check Edits in the side panel.";
+            saveError = "The save's result is unknown. Check Saved edits on the start page.";
             motionCarry = null;
         }
         var sameClip = session.Source != null && TimelineSession.ClipKey(session.Source) == jobClip;

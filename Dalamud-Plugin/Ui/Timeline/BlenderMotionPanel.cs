@@ -231,8 +231,10 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         cancel?.Cancel();
     }
 
-    /// <summary>Every frame: takes a finished send or read; a read's motion goes in as one undo step.</summary>
-    private void Poll(TimelineEditor current)
+    /// <summary>
+    /// Every frame, also while the start page shows: takes a finished send or read; a read's motion goes in as one undo step.
+    /// </summary>
+    public void Poll(TimelineEditor current)
     {
         if (sending is { IsCompleted: true } sent)
         {
@@ -279,12 +281,11 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
     }
 
     /// <summary>
-    /// Every frame, polls a send or read running, then gives the status line's notes: that send or read, how the last one
-    /// went, and which motion plays.
+    /// The status line's notes: a send or read running, how the last one went, and which motion plays. <see cref="Poll"/>
+    /// takes a finished one.
     /// </summary>
     public IEnumerable<StatusNote> Notes(TimelineEditor current)
     {
-        Poll(current);
         var notes = new List<StatusNote>(2);
         if (sending != null || reading != null)
             notes.Add(reading != null && !stopping

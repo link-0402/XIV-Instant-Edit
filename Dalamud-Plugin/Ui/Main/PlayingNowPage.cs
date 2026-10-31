@@ -260,7 +260,7 @@ internal sealed class PlayingNowPage
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(blocked ?? $"Replace the startup with the game's idle, {TimelineDocument.MinLength} frames long,\n" +
                 $"so the loop starts at once. Saved in {UiText.Safe(capture.Sources.FirstOrDefault(s => s.GamePath == capture.Clip.GamePath)?.ModName, "the loop's mod")}.\n" +
-                "Undo it under Edits in the Timeline window.");
+                "Undo it in Saved edits.");
     }
 
     /// <summary>Puts how the instant startup save went on the page's last line, once it ends.</summary>

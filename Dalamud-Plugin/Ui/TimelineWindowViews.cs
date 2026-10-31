@@ -178,7 +178,7 @@ internal static partial class TimelineWindowViews
     public const string BonesLaneName = "Bones";
 
     /// <summary>
-    /// The line under the toolbar while the clip plays a motion from Blender (where it came from and what it
+    /// The status line's note while the clip plays a motion from Blender (where it came from and what it
     /// kept) or a still pose (the frame it holds).
     /// </summary>
     public static string BlenderMotionLine(MotionReplacement replacement)
@@ -996,7 +996,7 @@ internal static partial class TimelineWindowViews
         $"Speed in {gap.SpeedIn:0.00}, out {gap.SpeedOut:0.00} deg per frame.");
 
     /// <summary>
-    /// Under the preview bar while Live is on. Live plays the clip's own timeline, so with
+    /// The Live button's tooltip, last line. Live plays the clip's own timeline, so with
     /// <paramref name="retimed"/> motion (cut or stretched) its sounds and effects keep their old frames.
     /// </summary>
     public static string LiveHint(bool retimed) => retimed
@@ -1026,13 +1026,13 @@ internal static partial class TimelineWindowViews
     /// <summary>The line while Live plays a rebuilt clip whose layers move bones other than the hips (<see cref="LiveRebuiltPositions"/>).</summary>
     public const string LiveRebuiltPositionsNote = "Live shows position changes only on the hips while rebuilt. Preview, then Live, shows them all.";
 
-    /// <summary>Under the preview bar while Live runs over a built preview that still shows the document.</summary>
+    /// <summary>The Live button's tooltip, last line, while Live runs over a built preview that still shows the document.</summary>
     public const string LiveOnPreviewHint = "Live shows your bone layers over the preview.";
 
-    /// <summary>Under the preview bar when the preview was built from another document or skeleton choice.</summary>
+    /// <summary>The status line's note when the preview was built from another document or skeleton choice.</summary>
     public const string PreviewStale = "Changed since the preview. Press Preview again.";
 
-    /// <summary>Under the preview bar when edits or a rebuild show on the character only once built.</summary>
+    /// <summary>The status line's note when edits or a rebuild show on the character only once built.</summary>
     public const string PreviewNeeded = "Press Preview to see your changes.";
 
     /// <summary>

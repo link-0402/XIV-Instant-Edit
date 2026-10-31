@@ -14,6 +14,18 @@ namespace InstantEdit.Ui.Timeline;
 internal static class LayerStrip
 {
     private static readonly string[] LayerGlyphs = [.. TimelineUi.LayerIcons.Select(icon => icon.ToIconString())];
+    // The closed dropdown's text for a layer that is off, kept while its record is the same.
+    private static (MotionLayer? Layer, string Text) offChoice = (null, string.Empty);
+
+    /// <summary> The closed dropdown's text: the layer's name, with " (off)" while it is off. </summary>
+    private static string ChoiceText(MotionLayer layer)
+    {
+        if (layer.Enabled)
+            return layer.Name;
+        if (!ReferenceEquals(offChoice.Layer, layer))
+            offChoice = (layer, layer.Name + " (off)");
+        return offChoice.Text;
+    }
 
     /// <summary>The layer's last key before <paramref name="frame"/>; null when there is none.</summary>
     public static int? Previous(MotionLayer layer, int frame)
@@ -103,7 +115,7 @@ internal static class LayerStrip
         ImGui.SameLine(0, Theme.Scaled(2));
         ImGui.SetNextItemWidth(Theme.Scaled(150));
         using (ImRaii.Disabled(motion.IsEmpty))
-        using (var combo = ImRaii.Combo(id + "-layer", layer?.Name ?? (motion.IsEmpty ? "No bone layer" : "Choose a layer")))
+        using (var combo = ImRaii.Combo(id + "-layer", layer != null ? ChoiceText(layer) : motion.IsEmpty ? "No bone layer" : "Choose a layer"))
         {
             if (combo.Success)
                 foreach (var each in motion)

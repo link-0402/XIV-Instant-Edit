@@ -10,8 +10,9 @@ namespace InstantEdit.Ui.Timeline;
 internal enum StartEntry : byte { Playing, Game, Saved, Partners, Record }
 
 /// <summary>
-/// The Timeline's start page: a sidebar with one row per entry and the chosen entry's page beside it, the loader's own
-/// line under both. Shown when no clip is open, and over an open clip after Start, with Back to the clip first.
+/// The Timeline's start page: a sidebar with one row per entry and the chosen entry's page beside it, the page's last
+/// line under both: the loader's line, and the animation job running or how it went. Shown when no clip is open, and over
+/// an open clip after Start, with Back to the clip first.
 /// </summary>
 /// <param name="recorder">The live pose recorder's page; null until the main window attaches it.</param>
 internal sealed class StartPage(TimelineSession session, TimelineLoader loader, RecentEditsPage recentEdits, Func<Action?> recorder)
@@ -19,8 +20,13 @@ internal sealed class StartPage(TimelineSession session, TimelineLoader loader, 
     private Action? drawPlaying;
     private Func<int>? playing;
     private Action? drawPartners;
-    // The loader's line under the page as it was last drawn; nothing takes no height.
+    // The last line under the page as it was last drawn; nothing takes no height.
     private float statusHeight;
+    // An animation job runs (a send to Blender, an undo, a save), and whether the page showed while it ran.
+    private bool jobRunning;
+    private bool jobSeen;
+    // How the last job the page saw ended, for its last line; null until one ends, and while the next one runs.
+    private (string Text, bool Failed)? jobResult;
 
     /// <summary> The entry shown, for this session: Playing now at first, then the last one chosen. </summary>
     public StartEntry Current { get; set; } = StartEntry.Playing;
@@ -48,6 +54,43 @@ internal sealed class StartPage(TimelineSession session, TimelineLoader loader, 
 
     /// <summary> The partner spawner's page; its entry shows once this is attached. </summary>
     public void AttachPartners(Action draw) => drawPartners = draw;
+
+    /// <summary>
+    /// Every frame: keeps how the animation service's job ended when the page showed while it ran (<paramref name="shown"/>),
+    /// such as Send to Blender from Playing now or Undo in Saved edits. A job seen only from the clip view keeps nothing:
+    /// its own row says how it went.
+    /// </summary>
+    public void Poll(bool shown)
+    {
+        if (session.Animations is not { } service)
+            return;
+        if (service.Busy)
+        {
+            if (!jobRunning)
+                jobSeen = false;
+            jobRunning = true;
+            jobSeen |= shown;
+            jobResult = null;
+        }
+        else if (jobRunning)
+        {
+            jobRunning = false;
+            if (jobSeen || shown)
+                jobResult = (service.Status, service.LastFailed);
+        }
+    }
+
+    /// <summary> The last line's note on the animation job: running with Cancel when it can stop, else how it ended. </summary>
+    private IEnumerable<StatusNote> JobNotes()
+    {
+        if (session.Animations is not { } service)
+            return [];
+        if (service.Busy)
+            return [service.CanCancel
+                ? new StatusNote("animation-job", StatusKind.Working, service.Status, "Cancel", service.Cancel)
+                : new StatusNote("animation-job", StatusKind.Working, service.Status)];
+        return jobResult is { } result ? [new StatusNote("animation-job", result.Failed ? StatusKind.Error : StatusKind.Notice, result.Text)] : [];
+    }
 
     /// <summary>
     /// The page, <paramref name="height"/> tall. With a clip open behind it, <paramref name="backTo"/> names the clip and a
@@ -81,7 +124,7 @@ internal sealed class StartPage(TimelineSession session, TimelineLoader loader, 
                 DrawPage(Current, record);
         }
         var statusStart = ImGui.GetCursorPosY();
-        loader.DrawStatus();
+        loader.DrawStatus(JobNotes());
         statusHeight = ImGui.GetCursorPosY() - statusStart;
     }
 
