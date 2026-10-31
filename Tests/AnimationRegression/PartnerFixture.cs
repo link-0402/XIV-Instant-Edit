@@ -1,6 +1,6 @@
 using InstantEdit.Services.Actors;
 
-/// <summary>Partners: the player-name rule, a preset's name problems and the preset store.</summary>
+/// <summary>Partners: the player-name rule, a preset's name problems, the preset store and the spawn and despawn sequence.</summary>
 internal static class PartnerFixture
 {
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
@@ -8,6 +8,7 @@ internal static class PartnerFixture
         Names(check);
         Problems(check);
         Store(check);
+        Service(check);
     }
 
     private static void Names(Action<bool, string> check)
@@ -92,6 +93,455 @@ internal static class PartnerFixture
             check(warnings.Count == 1, "partner store: nothing past the bad files warned" + Failed(warnings.Count == 1 ? null : string.Join('|', warnings)));
         }
         finally { Directory.Delete(temp, true); }
+    }
+
+    /// <summary>A check whose detail (the calls so far) is shown only when it fails.</summary>
+    private delegate void Check(bool ok, string message, string? detail = null);
+
+    private static void Service(Action<bool, string> report)
+    {
+        Check check = (ok, message, detail) => report(ok, message + (ok ? "" : Failed(detail)));
+        check(PartnerService.NotInGPose == "Enter GPose to spawn a partner." && PartnerService.TreatedAsYou == "Penumbra would treat it as you" &&
+              PartnerService.DrawnLate == "Drawn late",
+            "partner service: the messages read as the spec says");
+        var duo = new PartnerLink(CollectionId, "Duo");
+        check(PartnerService.ProblemText("Collection", "Penumbra", duo, new LinkOutcome(LinkStatus.NotLoaded)) == "Penumbra isn't loaded" &&
+              PartnerService.ProblemText("Collection", "Penumbra", duo, new LinkOutcome(LinkStatus.Missing)) == "Collection Duo no longer exists" &&
+              PartnerService.ProblemText("Design", "Glamourer", duo, new LinkOutcome(LinkStatus.Failed, 3)) == "Glamourer error 3",
+            "partner service: a link that didn't apply reads as not loaded, no longer exists or the plugin's error code");
+
+        Spawn_RefusedOutsideGPose(check);
+        Spawn_RefusesYourName(check);
+        Spawn_FullOrder(check);
+        Spawn_ParentNotSelf(check);
+        Despawn_UndoesExactly(check);
+        Despawn_RestoresPrevious(check);
+        Spawn_LeftoverTreatedAsOurs(check);
+        Spawn_LinkFailuresContinue(check);
+        Spawn_DrawnLate(check);
+        Spawn_AlreadySpawned(check);
+        Spawn_NoSlot(check);
+        GPoseEnd_DespawnsAll(check);
+        LostActor_CleansWhatItCan(check);
+        Despawn_AfterRename_UsesSpawnName(check);
+        Despawn_PenumbraGone_KeepsLeftover(check);
+        Delete_DespawnsFirst(check);
+        Dispose_DespawnsOnFramework(check);
+    }
+
+    private static void Spawn_RefusedOutsideGPose(Check check)
+    {
+        var rig = new Rig();
+        rig.Actors.InGPose = false;
+        var preset = Aria();
+        var refused = rig.Service.Spawn(preset);
+        check(refused == PartnerService.NotInGPose && rig.Calls.Count == 0 && rig.Service.Find(preset.Id) == null,
+            "partner spawn: out of GPose it is refused and nothing is called", rig.Log);
+    }
+
+    private static void Spawn_RefusesYourName(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria() with { Name = "Lucina Zero" };
+        var refused = rig.Service.Spawn(preset);
+        check(refused == PartnerNames.Yours && rig.Calls.Count == 0 && rig.Service.Find(preset.Id) == null,
+            "partner spawn: your own character's name is refused before any actor is made", rig.Log);
+    }
+
+    private static void Spawn_FullOrder(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        var refused = rig.Service.Spawn(preset);
+        var waiting = rig.Service.Find(preset.Id)?.Stage;
+        rig.Actors.Tick();
+        var afterDraw = rig.Calls.ToArray();
+        var drawn = rig.Service.Find(preset.Id)?.Stage;
+        rig.Actors.Tick();
+        rig.Actors.Tick();
+        rig.Actors.Tick();
+        string[] spawned = ["spawn Aria Rose", "parent 202", "current 202", "assign 202 C true true", "ready 202", "draw 202"];
+        check(refused == null && afterDraw.SequenceEqual(spawned) && rig.Calls.SequenceEqual([.. spawned, "look 202 D", "profile 202 P"]),
+            "partner spawn: spawn, parent check, previous assignment, assign, ready, draw, then the look and profile only once drawn", rig.Log);
+        var view = rig.Service.Find(preset.Id);
+        check(waiting == PartnerStage.Waiting && drawn == PartnerStage.Drawn && view is { Stage: PartnerStage.Ready, ObjectIndex: 202, Name: "Aria Rose" } &&
+              view.PresetId == preset.Id && view.Problems.IsEmpty && view.TemporaryProfile == TemporaryId && rig.Store.OwnsAssignment("Aria Rose"),
+            "partner spawn: the partner goes Waiting, Drawn, Ready with no problems, keeps the temporary profile and owns the new assignment");
+    }
+
+    private static void Spawn_ParentNotSelf(Check check)
+    {
+        var rig = new Rig();
+        rig.Collections.Parent = 201;
+        var preset = Aria();
+        var refused = rig.Service.Spawn(preset);
+        rig.Actors.Tick();
+        check(refused == PartnerService.TreatedAsYou && rig.Calls.SequenceEqual(["spawn Aria Rose", "parent 202", "delete 202"]) &&
+              rig.Service.Find(preset.Id) == null && !rig.Store.OwnsAssignment("Aria Rose"),
+            "partner spawn: an actor Penumbra parents to you is deleted before any assignment", rig.Log);
+    }
+
+    private static void Despawn_UndoesExactly(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        var undone = rig.Since(before);
+        rig.Service.Despawn(preset.Id);
+        check(undone.SequenceEqual(["remove T", "release 202", "assign 202 null false true", "delete 202"]) && rig.Calls.Count == before + 4 &&
+              !rig.Store.OwnsAssignment("Aria Rose") && rig.Service.Find(preset.Id) == null,
+            "partner despawn: removes the profile, releases the look, removes our assignment, deletes the actor, and again does nothing", rig.Log);
+    }
+
+    private static void Despawn_RestoresPrevious(Check check)
+    {
+        var rig = new Rig();
+        rig.Collections.Assignment = new CollectionAssignment(true, UsersId);
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var ownedWhileSpawned = rig.Store.OwnsAssignment("Aria Rose");
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["remove T", "release 202", "assign 202 X false false", "delete 202"]) && !ownedWhileSpawned &&
+              !rig.Store.OwnsAssignment("Aria Rose"),
+            "partner despawn: the user's own assignment is put back and never recorded as ours", rig.Log);
+    }
+
+    private static void Spawn_LeftoverTreatedAsOurs(Check check)
+    {
+        var rig = new Rig();
+        rig.Store.SetOwnsAssignment("Aria Rose", true);
+        rig.Collections.Assignment = new CollectionAssignment(true, OldId);
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["remove T", "release 202", "assign 202 null false true", "delete 202"]) && !rig.Store.OwnsAssignment("Aria Rose"),
+            "partner despawn: an assignment left by a crash is removed, not put back", rig.Log);
+    }
+
+    private static void Spawn_LinkFailuresContinue(Check check)
+    {
+        var rig = new Rig();
+        rig.Collections.Available = false;
+        rig.Looks.Outcome = new LinkOutcome(LinkStatus.Missing);
+        rig.Profiles.Outcome = new LinkOutcome(LinkStatus.Failed, 255);
+        var preset = Aria();
+        var refused = rig.SpawnReady(preset);
+        var view = rig.Service.Find(preset.Id);
+        check(refused == null && view is { Stage: PartnerStage.Ready, TemporaryProfile: null } &&
+              view.Problems.SequenceEqual(["Penumbra isn't loaded", "Design Aria no longer exists", "Customize+ error 255"]) &&
+              rig.Calls.SequenceEqual(["spawn Aria Rose", "ready 202", "draw 202", "look 202 D", "profile 202 P"]),
+            "partner spawn: links that fail are listed and the next step still runs; without Penumbra no collection call is made",
+            rig.Log + (view == null ? "" : " / " + string.Join('|', view.Problems)));
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["delete 202"]),
+            "partner despawn: only what applied is undone, so a failed look, profile and collection leave just the delete", rig.Log);
+    }
+
+    private static void Spawn_DrawnLate(Check check)
+    {
+        var rig = new Rig();
+        rig.Actors.NeverReady = true;
+        rig.Actors.NeverDrawn = true;
+        var preset = Aria();
+        rig.Service.Spawn(preset);
+        rig.Actors.Tick();
+        var waiting = rig.Service.Find(preset.Id)?.Stage == PartnerStage.Waiting && !rig.Calls.Contains("draw 202");
+        rig.Now = TimeSpan.FromSeconds(1.5);
+        rig.Actors.Tick();
+        var late = rig.Service.Find(preset.Id);
+        var drawnLate = late is { Stage: PartnerStage.Drawn } && late.Problems.SequenceEqual([PartnerService.DrawnLate]) && rig.Calls[^1] == "draw 202";
+        rig.Now = TimeSpan.FromSeconds(2);
+        rig.Actors.Tick();
+        var stillDrawn = rig.Service.Find(preset.Id)?.Stage == PartnerStage.Drawn && !rig.Calls.Contains("look 202 D");
+        rig.Now = TimeSpan.FromSeconds(2.6);
+        rig.Actors.Tick();
+        var view = rig.Service.Find(preset.Id);
+        check(waiting && drawnLate && stillDrawn && view is { Stage: PartnerStage.Ready } && view.Problems.SequenceEqual([PartnerService.DrawnLate]) &&
+              rig.Calls.Contains("look 202 D") && rig.Calls.Contains("profile 202 P"),
+            "partner spawn: an actor never ready is drawn after 1 s, one more second without a draw object applies the links anyway, and Drawn late shows once", rig.Log);
+    }
+
+    private static void Spawn_AlreadySpawned(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var before = rig.Calls.Count;
+        var again = rig.Service.Spawn(preset);
+        check(again == null && rig.Calls.Count == before && rig.Service.Find(preset.Id)?.ObjectIndex == 202,
+            "partner spawn: a preset already spawned spawns nothing more", rig.Log);
+    }
+
+    private static void Spawn_NoSlot(Check check)
+    {
+        var rig = new Rig();
+        rig.Actors.SpawnProblem = "No free actor slot";
+        var preset = Aria();
+        var refused = rig.Service.Spawn(preset);
+        rig.Actors.Tick();
+        check(refused == "No free actor slot" && rig.Calls.SequenceEqual(["spawn Aria Rose"]) && rig.Service.Find(preset.Id) == null,
+            "partner spawn: the actor's own refusal is returned and nothing else is called", rig.Log);
+    }
+
+    private static void GPoseEnd_DespawnsAll(Check check)
+    {
+        var rig = new Rig();
+        var aria = Aria();
+        var mira = Aria() with { Name = "Mira Vale" };
+        rig.Service.Spawn(aria);
+        rig.Service.Spawn(mira);
+        rig.Actors.Tick();
+        rig.Actors.Tick();
+        var bothReady = rig.Service.Find(aria.Id)?.Stage == PartnerStage.Ready && rig.Service.Find(mira.Id) is { Stage: PartnerStage.Ready, ObjectIndex: 203 };
+        rig.Actors.InGPose = false;
+        var before = rig.Calls.Count;
+        rig.Actors.Tick();
+        var undone = rig.Since(before);
+        check(bothReady && undone.Contains("delete 202") && undone.Contains("delete 203") && undone.Count(call => call.StartsWith("remove ")) == 2 &&
+              rig.Service.Find(aria.Id) == null && rig.Service.Find(mira.Id) == null &&
+              !rig.Store.OwnsAssignment("Aria Rose") && !rig.Store.OwnsAssignment("Mira Vale"),
+            "partner despawn: the first frame out of GPose despawns every partner", rig.Log);
+    }
+
+    private static void LostActor_CleansWhatItCan(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Actors.Lost = true;
+        var before = rig.Calls.Count;
+        rig.Actors.Tick();
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["remove T"]) && rig.Store.OwnsAssignment("Aria Rose") && rig.Service.Find(preset.Id) == null,
+            "partner lost: an actor gone by itself only has its profile removed, and the assignment stays recorded as ours", rig.Log);
+    }
+
+    private static void Despawn_AfterRename_UsesSpawnName(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.Store.Save(preset, null, out _);
+        rig.SpawnReady(preset);
+        var owned = rig.Store.OwnsAssignment("Aria Rose");
+        rig.Store.Save(preset with { Name = "Aria Lee" }, null, out _);
+        var name = rig.Service.Find(preset.Id)?.Name;
+        rig.Service.Despawn(preset.Id);
+        check(owned && name == "Aria Rose" && !rig.Store.OwnsAssignment("Aria Rose") && !rig.Store.OwnsAssignment("Aria Lee") && rig.Calls[^1] == "delete 202",
+            "partner despawn: a preset renamed while spawned clears the assignment of the name it spawned with", rig.Log);
+    }
+
+    private static void Despawn_PenumbraGone_KeepsLeftover(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Collections.AssignOutcome = new LinkOutcome(LinkStatus.NotLoaded);
+        var before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(rig.Since(before).SequenceEqual(["remove T", "release 202", "assign 202 null false true", "delete 202"]) && rig.Store.OwnsAssignment("Aria Rose") &&
+              rig.Service.Find(preset.Id) == null,
+            "partner despawn: an assignment Penumbra couldn't remove stays recorded as ours and the actor is still deleted", rig.Log);
+    }
+
+    private static void Delete_DespawnsFirst(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.Store.Save(preset, null, out _);
+        rig.SpawnReady(preset);
+        int? listedAtDelete = null;
+        rig.Actors.Deleting = () => listedAtDelete = rig.Store.Presets.Length;
+        rig.Service.Delete(preset.Id);
+        check(listedAtDelete == 1 && rig.Calls[^1] == "delete 202" && rig.Store.Presets.IsEmpty && rig.Service.Find(preset.Id) == null,
+            "partner delete: a spawned preset is despawned, then removed from the store", rig.Log);
+    }
+
+    private static void Dispose_DespawnsOnFramework(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var subscribed = rig.Actors.Subscribed;
+        var before = rig.Calls.Count;
+        rig.Service.Dispose();
+        check(subscribed && !rig.Actors.Subscribed &&
+              rig.Since(before).SequenceEqual(["onframework", "remove T", "release 202", "assign 202 null false true", "delete 202"]) &&
+              rig.Service.Find(preset.Id) == null,
+            "partner dispose: every partner is despawned on the framework thread and the frame callback is dropped", rig.Log);
+    }
+
+    private static readonly Guid CollectionId = Guid.NewGuid(), DesignId = Guid.NewGuid(), ProfileId = Guid.NewGuid(), TemporaryId = Guid.NewGuid(),
+        UsersId = Guid.NewGuid(), OldId = Guid.NewGuid();
+
+    /// <summary>A preset named Aria Rose with all three links: collection C "Duo", design D "Aria", profile P "Tall".</summary>
+    private static PartnerPreset Aria() => new(Guid.NewGuid(), "Aria Rose", new PartnerLink(CollectionId, "Duo"), new PartnerLink(DesignId, "Aria"),
+        new PartnerLink(ProfileId, "Tall"));
+
+    /// <summary>How the calls name an id: C, D, P, T (the temporary profile), X (the user's collection), Old (a leftover), or null.</summary>
+    private static string Label(Guid? id) =>
+        id == null ? "null" : id == CollectionId ? "C" : id == DesignId ? "D" : id == ProfileId ? "P" : id == TemporaryId ? "T" : id == UsersId ? "X" : id == OldId ? "Old" : id.Value.ToString();
+
+    private static string Flag(bool value) => value ? "true" : "false";
+
+    /// <summary>A service over fakes that log every game and plugin call to one list, and a clock the scenario sets.</summary>
+    private sealed class Rig
+    {
+        public readonly List<string> Calls = [];
+        public readonly PartnerPresetStore Store = new(null);
+        public readonly FakeActors Actors;
+        public readonly FakeCollections Collections;
+        public readonly FakeLooks Looks;
+        public readonly FakeProfiles Profiles;
+        public readonly PartnerService Service;
+        public TimeSpan Now;
+
+        public Rig()
+        {
+            Actors = new FakeActors(Calls);
+            Collections = new FakeCollections(Calls);
+            Looks = new FakeLooks(Calls);
+            Profiles = new FakeProfiles(Calls);
+            Service = new PartnerService(Store, Actors, Collections, Looks, Profiles, () => Now);
+        }
+
+        /// <summary>Spawns, then runs the two frames that draw it and apply its links.</summary>
+        public string? SpawnReady(PartnerPreset preset)
+        {
+            var refused = Service.Spawn(preset);
+            Actors.Tick();
+            Actors.Tick();
+            return refused;
+        }
+
+        public string[] Since(int count) => Calls.Skip(count).ToArray();
+
+        public string Log => string.Join('|', Calls);
+    }
+
+    /// <summary>Hands out object indices from 202; the draw object shows the frame after the draw.</summary>
+    private sealed class FakeActors(List<string> calls) : IPartnerActors
+    {
+        public event Action? Updated;
+        public bool InGPose { get; set; } = true;
+        public string? PlayerName { get; set; } = "Lucina Zero";
+        public string? SpawnProblem;
+        public bool Lost, NeverReady, NeverDrawn;
+        public Action? Deleting;
+        private readonly Dictionary<ushort, int> drawnOn = [];
+        private ushort next = 202;
+        private int frame;
+
+        public bool Subscribed => Updated != null;
+
+        public void Tick()
+        {
+            frame++;
+            Updated?.Invoke();
+        }
+
+        public (SpawnedActor? Actor, string? Problem) Spawn(string name)
+        {
+            calls.Add("spawn " + name);
+            if (SpawnProblem != null)
+                return (null, SpawnProblem);
+            var index = next++;
+            return (new SpawnedActor((uint)(index - 200), index, 0x10000 + index), null);
+        }
+
+        public bool Exists(SpawnedActor actor) => !Lost;
+
+        public bool ReadyToDraw(SpawnedActor actor)
+        {
+            calls.Add($"ready {actor.ObjectIndex}");
+            return !NeverReady;
+        }
+
+        public void Draw(SpawnedActor actor)
+        {
+            calls.Add($"draw {actor.ObjectIndex}");
+            drawnOn[actor.ObjectIndex] = frame;
+        }
+
+        public bool IsDrawn(SpawnedActor actor) => !NeverDrawn && drawnOn.TryGetValue(actor.ObjectIndex, out var drawn) && frame > drawn;
+
+        public void Delete(SpawnedActor actor)
+        {
+            Deleting?.Invoke();
+            calls.Add($"delete {actor.ObjectIndex}");
+        }
+
+        public void OnFramework(Action action)
+        {
+            calls.Add("onframework");
+            action();
+        }
+    }
+
+    /// <summary>Parents each actor to itself and reports no individual assignment unless the scenario sets one.</summary>
+    private sealed class FakeCollections(List<string> calls) : IPartnerCollections
+    {
+        public bool Available { get; set; } = true;
+        public int? Parent;
+        public CollectionAssignment? Assignment;
+        public LinkOutcome AssignOutcome = new(LinkStatus.Applied);
+
+        public IReadOnlyList<PartnerLink> List() => [];
+
+        public int ParentOf(int objectIndex)
+        {
+            calls.Add($"parent {objectIndex}");
+            return Parent ?? objectIndex;
+        }
+
+        public CollectionAssignment? Current(int objectIndex)
+        {
+            calls.Add($"current {objectIndex}");
+            return Assignment;
+        }
+
+        public LinkOutcome Assign(int objectIndex, Guid? collection, bool allowCreate, bool allowDelete)
+        {
+            calls.Add($"assign {objectIndex} {Label(collection)} {Flag(allowCreate)} {Flag(allowDelete)}");
+            return AssignOutcome;
+        }
+    }
+
+    private sealed class FakeLooks(List<string> calls) : IPartnerLooks
+    {
+        public bool Available => true;
+        public LinkOutcome Outcome = new(LinkStatus.Applied);
+
+        public IReadOnlyList<PartnerLink> List() => [];
+
+        public LinkOutcome Apply(int objectIndex, Guid design)
+        {
+            calls.Add($"look {objectIndex} {Label(design)}");
+            return Outcome;
+        }
+
+        public void Release(int objectIndex) => calls.Add($"release {objectIndex}");
+    }
+
+    /// <summary>Hands out the temporary profile T when the apply succeeds.</summary>
+    private sealed class FakeProfiles(List<string> calls) : IPartnerProfiles
+    {
+        public bool Available => true;
+        public LinkOutcome Outcome = new(LinkStatus.Applied);
+
+        public IReadOnlyList<PartnerLink> List() => [];
+
+        public (LinkOutcome Outcome, Guid? Temporary) Apply(ushort objectIndex, Guid profile)
+        {
+            calls.Add($"profile {objectIndex} {Label(profile)}");
+            return (Outcome, Outcome.Status == LinkStatus.Applied ? TemporaryId : null);
+        }
+
+        public void Remove(Guid temporary) => calls.Add("remove " + Label(temporary));
     }
 
     private static string Failed(string? detail) => string.IsNullOrEmpty(detail) ? "" : $" ({detail})";
