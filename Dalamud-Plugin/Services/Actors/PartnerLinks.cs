@@ -58,7 +58,7 @@ internal interface IPartnerCollections
 
     IReadOnlyList<PartnerLink> List();
 
-    /// <summary>The index of the object Penumbra takes this object's identity from, or -1 for none.</summary>
+    /// <summary>The index of the object Penumbra takes this object's identity from: -1 for no parent; int.MinValue when the parent can't be read (the spawn is refused).</summary>
     int ParentOf(int objectIndex);
 
     /// <summary>The object's assignment; null means no individual one.</summary>

@@ -132,6 +132,7 @@ internal static class PartnerFixture
         Spawn_RefusesYourName(check);
         Spawn_FullOrder(check);
         Spawn_ParentNotSelf(check);
+        Spawn_ParentUnknown(check);
         Despawn_UndoesExactly(check);
         Despawn_RestoresPrevious(check);
         Spawn_LeftoverTreatedAsOurs(check);
@@ -283,6 +284,18 @@ internal static class PartnerFixture
         check(refused == PartnerService.TreatedAsYou && rig.Calls.SequenceEqual(["spawn Aria Rose", "parent 202", "delete 202"]) &&
               rig.Service.Find(preset.Id) == null && !rig.Store.OwnsAssignment("Aria Rose"),
             "partner spawn: an actor Penumbra parents to you is deleted before any assignment", rig.Log);
+    }
+
+    private static void Spawn_ParentUnknown(Check check)
+    {
+        var rig = new Rig();
+        rig.Collections.Parent = int.MinValue;
+        var preset = Aria();
+        var refused = rig.Service.Spawn(preset);
+        rig.Actors.Tick();
+        check(refused == PartnerService.TreatedAsYou && rig.Calls.SequenceEqual(["spawn Aria Rose", "parent 202", "delete 202"]) &&
+              rig.Service.Find(preset.Id) == null && !rig.Store.OwnsAssignment("Aria Rose"),
+            "partner spawn: a parent Penumbra couldn't read refuses the spawn and deletes the actor before any assignment", rig.Log);
     }
 
     private static void Despawn_UndoesExactly(Check check)

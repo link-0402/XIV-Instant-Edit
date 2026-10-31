@@ -51,14 +51,15 @@ internal sealed class PartnerCollections(PenumbraIpc ipc, Func<bool> available) 
         {
             return ipc.CutsceneParentOnFramework(objectIndex);
         }
+        // An unknown parent refuses the spawn: assigning to an actor parented to you would assign you.
         catch (IpcNotReadyError)
         {
-            return -1;
+            return int.MinValue;
         }
         catch (Exception e)
         {
             ipc.Log.Warning(e, $"Could not read Penumbra's parent of object {objectIndex}.");
-            return -1;
+            return int.MinValue;
         }
     }
 
