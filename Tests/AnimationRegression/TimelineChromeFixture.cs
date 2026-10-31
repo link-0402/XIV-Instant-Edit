@@ -9,8 +9,8 @@ using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
-/// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu and the side panel show
-/// and the clip view's Bones kept line.
+/// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu and the side panel show,
+/// the clip view's Bones kept line and the layer settings' summary line.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -25,7 +25,33 @@ internal static class TimelineChromeFixture
         Selection(check);
         SideViews(check);
         Kept(check);
+        Summary(check);
     }
+
+    /// <summary> The layer settings' line on a layer's bones, by kind; one bone or pin reads singular. </summary>
+    private static void Summary(Action<bool, string> check)
+    {
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Amplitude, bones: ["a", "b"])) == "Limited to 2 bones", "Summary: amplitude");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Amplitude)) == "Every bone", "Summary: amplitude without a list");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Offset, keyed: ["a", "b", "c", "a"])) == "3 bones keyed", "Summary: offset counts keyed bones once");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Symmetry, bones: ["a", "b"])) == "Copies 2 bones", "Summary: symmetry");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Pin, pins: 3)) == "3 pins", "Summary: pins");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.LookAt, bones: ["a", "b", "c"])) == "Turns 3 bones", "Summary: look at");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Noise, bones: ["a"])) == "Wobbles 1 bone", "Summary: noise, one bone");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Swing)) == "Swings no bones", "Summary: swing without a list");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Smooth)) == "Smooths every bone", "Summary: smooth without a list");
+    }
+
+    /// <summary>
+    /// A layer of <paramref name="kind"/> shaped like <see cref="Offset"/>: <paramref name="bones"/> as its bones, each
+    /// <paramref name="keyed"/> name a one-bone key at frames 0, 1, 2 and so on, and <paramref name="pins"/> pins.
+    /// </summary>
+    private static MotionLayer Kind(MotionLayerKind kind, string[]? bones = null, string[]? keyed = null, int pins = 0) =>
+        new("m1", kind, "Layer 1", 0, 60, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear,
+            Bones: bones is null ? default : [.. bones],
+            Keys: keyed is null ? default : [.. keyed.Select((bone, frame) =>
+                new MotionKey(frame, ImmutableDictionary<string, BoneTransform>.Empty.Add(bone, new(Vector3.Zero, Quaternion.Identity, Vector3.One))))],
+            Pins: [.. Enumerable.Range(0, pins).Select(i => new MotionPin($"p{i}"))]);
 
     /// <summary> The clip view's Bones kept line: all or some kept, then the highest index when one is known. </summary>
     private static void Kept(Action<bool, string> check)

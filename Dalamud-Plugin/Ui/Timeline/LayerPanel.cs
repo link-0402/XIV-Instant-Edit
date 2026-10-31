@@ -11,13 +11,12 @@ using InstantEdit.Services.Animations.Timeline;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The selected bone layer in the properties panel: its timing, amount and the parts of a bone it
-/// changes; for offsets and poses the selected bones' values at the playhead, which set the layer's
-/// key there (<see cref="BoneEditor"/>), and the selected key's ease; for amplitudes and fixes the bones it is
-/// limited to, and a match's length and loop. A field's changes until it is left are one undo step, and Live shows each change as it
+/// The selected bone layer in the side panel: its timing, amount and the parts of a bone it changes, its keys and the
+/// selected key's ease, a match's length and loop, and a line on the bones it works on with Pose in Bones window, where
+/// its bones are picked and posed. A field's changes until it is left are one undo step, and Live shows each change as it
 /// is made.
 /// </summary>
-internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, BonePosing posing, BoneEditor boneEditor, PoseSourcePanel poseSources, Window bonesWindow)
+internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, BonePosing posing, Window bonesWindow)
 {
     // The layer the selection last started on: a newly chosen layer with nothing selected starts on its first bone.
     private string? selectionLayer;
@@ -145,30 +144,39 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             }
         }
         PollIdle(current);
+        // Bones are picked and posed in the Bones window: here a line on them and the button that opens it.
         if (skeleton == null)
+        {
             Widgets.HintWrapped(session.Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
+            DrawPosing(layer);
+        }
         else if (layer.Kind == MotionLayerKind.Idle)
         {
             DrawIdle(current, layer, loaded, skeleton, readOnly);
             ImGui.Spacing();
-            boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
+            DrawPosing(layer);
         }
         else if (hand != null)
+        {
             hands.Draw(current, layer, hand, loaded, skeleton, readOnly);
+            ImGui.Spacing();
+            DrawPosing(layer);
+        }
         else if (reset)
+        {
             Widgets.MutedWrapped("Changes the root bone only, so the whole body turns with it.");
-        else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth)
-            boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
+            DrawPosing(layer);
+        }
+        else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Symmetry)
+            DrawPosing(layer);
         else if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise)
         {
-            boneEditor.DrawLimit(current, layer, skeleton, readOnly, true);
+            DrawPosing(layer);
             SwingFields.DrawNotes(layer);
         }
-        else if (layer.Kind == MotionLayerKind.Symmetry)
-            boneEditor.DrawSymmetryBones(current, layer, skeleton, readOnly, true);
         else if (layer.Kind == MotionLayerKind.LookAt)
         {
-            LookFields.DrawBones(current, layer, readOnly);
+            DrawPosing(layer);
             if (layer.Look?.Follow == null)
             {
                 ImGui.Spacing();
@@ -185,10 +193,10 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         else if (layer.Kind == MotionLayerKind.Pin)
         {
             DrawPins(current, layer, skeleton, loaded, readOnly);
+            ImGui.Spacing();
+            DrawPosing(layer);
             if (layer.Pins.Any(pin => !pin.Planted))
             {
-                ImGui.Spacing();
-                boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
                 ImGui.Spacing();
                 DrawLayerKeys(current, layer);
                 using (ImRaii.Disabled(readOnly))
@@ -202,14 +210,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         }
         else
         {
-            // An empty Motion keys layer shows its rows only for the selected bones.
-            if (layer.Markers != null && layer.Keys.IsEmpty && posing.Selection.Count == 0)
-            {
-                Widgets.MutedWrapped("Select bones to see their markers.");
-                ImGui.Spacing();
-            }
-            boneEditor.DrawPicker(skeleton, layer);
-            boneEditor.Draw(current, layer, skeleton, loaded, readOnly, false);
+            DrawPosing(layer);
             ImGui.Spacing();
             DrawLayerKeys(current, layer);
             using (ImRaii.Disabled(readOnly))
@@ -218,11 +219,6 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             {
                 ImGui.Spacing();
                 DrawKeyEase(current, layer, layer.Keys[keyAt], readOnly);
-            }
-            if (layer.Kind == MotionLayerKind.Pose)
-            {
-                ImGui.Spacing();
-                poseSources.Draw(current, layer, skeleton, loaded, readOnly);
             }
         }
 
@@ -235,11 +231,58 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             if (ImGui.Button("Delete layer"))
                 current.Commit(MotionEdits.Remove(current.Document, layer.Key));
         }
-        ImGui.SameLine();
-        if (ImGui.Button("Bones"))
-            TimelineUi.Toggle(bonesWindow);
+    }
+
+    /// <summary>
+    /// One line on the bones the layer works on: how many it is limited to, keys, copies, turns, swings, wobbles or smooths,
+    /// or how many pins it has. Null for a hand shape or a root reset, whose bones are set by what they do.
+    /// </summary>
+    public static string? Summary(MotionLayer layer)
+    {
+        if (layer.Fix?.Kind is MotionFixKind.HandShape or MotionFixKind.ResetRoot)
+            return null;
+        var bones = layer.Bones.IsDefaultOrEmpty ? 0 : layer.Bones.Distinct().Count();
+        return layer.Kind switch
+        {
+            MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle => bones == 0 ? "Every bone" : $"Limited to {Count(bones, "bone")}",
+            MotionLayerKind.Offset or MotionLayerKind.Pose => Keyed(layer) is var keyed and > 0 ? $"{Count(keyed, "bone")} keyed" : "No bones keyed",
+            MotionLayerKind.Symmetry => $"Copies {Count(bones, "bone")}",
+            MotionLayerKind.Pin => layer.Pins.IsDefaultOrEmpty ? "No pins" : Count(layer.Pins.Length, "pin"),
+            MotionLayerKind.LookAt => $"Turns {Count(bones, "bone")}",
+            MotionLayerKind.Noise => $"Wobbles {Count(bones, "bone")}",
+            MotionLayerKind.Swing => $"Swings {Count(bones, "bone")}",
+            MotionLayerKind.Smooth => bones == 0 ? "Smooths every bone" : $"Smooths {Count(bones, "bone")}",
+            _ => null,
+        };
+    }
+
+    /// <summary> How many bones the layer's keys set, each counted once. </summary>
+    private static int Keyed(MotionLayer layer) =>
+        layer.Keys.IsDefaultOrEmpty ? 0 : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct().Count();
+
+    /// <summary> "1 bone", "3 bones" or "no bones" for <paramref name="thing"/> "bone". </summary>
+    private static string Count(int count, string thing) => count switch
+    {
+        0 => $"no {thing}s",
+        1 => $"1 {thing}",
+        _ => $"{count} {thing}s",
+    };
+
+    /// <summary> The summary line in muted text, when the layer has one, and Pose in Bones window, which opens the Bones window or brings it to front. </summary>
+    private void DrawPosing(MotionLayer layer)
+    {
+        if (Summary(layer) is { } summary)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, summary);
+        }
+        if (ImGui.Button("Pose in Bones window"))
+        {
+            bonesWindow.IsOpen = true;
+            bonesWindow.BringToFront();
+        }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Pick and pose bones on a body map.");
+            ImGui.SetTooltip("Pick and pose this layer's bones on a body map.");
     }
 
     /// <summary>
@@ -880,9 +923,9 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             ImGui.AlignTextToFramePadding();
             ImGui.TextColored(Theme.Hint, layer.Kind switch
             {
-                MotionLayerKind.Pin => "None yet. Pin here adds one.",
+                MotionLayerKind.Pin => "None yet. Pin here in the Bones window adds one.",
                 MotionLayerKind.LookAt => "None yet. Move the target with the gizmo.",
-                _ => "None yet. Set a bone's value to add one.",
+                _ => "None yet. Set a bone's value in the Bones window to add one.",
             });
             return;
         }

@@ -2896,3 +2896,15 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 12 Add a layer from a .livepose file: its settings show in the side panel.
 - [ ] 13 Saved edits and Record are on the start page only, not in the side panel. The splitter and the panel's width
   stay as before.
+- [ ] 14 Select a layer of each kind: its settings show a muted line where the bone lists were ("Limited to 2 bones" or
+  "Every bone" on amplitude, fix and idle, "3 bones keyed" on offset and pose, "Copies 2 bones", "3 pins", "Turns 3 bones",
+  "Wobbles 1 bone", "Swings no bones", "Smooths every bone") and Pose in Bones window. A hand shape and a root reset show
+  the button with no line. There is no bone picker, bone values, pin buttons, Look at bone ticks, pose sources or Bones
+  button any more.
+- [ ] 15 The settings keep the name, on/off, timing, amount, Weight, parts, the Swing, Smooth, Noise and Look at fields,
+  each pin's settings with Bend, the keys, spread and the selected key's ease.
+- [ ] 16 Pose in Bones window opens the Bones window when it is closed and brings it to front when it is open; it never
+  closes it.
+- [ ] 17 For each kind, the Bones window still poses it: offset and pose bones with the ball, pose sources on a pose
+  layer, the bone list for amplitude, fix, idle, swing, smooth and noise, the head chain ticks for Look at, the symmetry
+  bones and Pin here. The summary line follows each change.

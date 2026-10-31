@@ -111,7 +111,7 @@ internal static class ChangelogCatalog
             Entry("The LivePose plugin is no longer needed. Bone layers replace baking its adjustments into an animation or a face.", 1),
             Entry("Untick the bones an animation moves and see it live in GPose. Saving leaves them out.", 1),
             Entry("Repair onto the game's, IVCS or IVCS + YAS skeleton when you save.", 1),
-            Entry("Source, saved edits and the live pose recorder are in the timeline's side panel.", 1),
+            Entry("The side panel shows what you select, or the clip: its source, length and the bones it keeps.", 1),
             Highlight("Quick Actions: 'Body physics' builds customizable body physics, optimized for your character."),
             Entry("Start from scratch or any other physics preset you're already using, matched for your character's skeleton.", 1),
             Entry("Tune each area with plain sliders, both sides at once, and preview it on your character before you save.", 1),

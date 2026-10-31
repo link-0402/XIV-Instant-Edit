@@ -130,7 +130,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         poseThumbnails = new PoseThumbnails(textures);
         poseBrowser = new PoseBrowser(session, decode, posing, poseOptions, poseThumbnails);
         poseSources = new PoseSourcePanel(session, decode, posing, recorder, poseOptions, poseBrowserWindow);
-        layerPanel = new LayerPanel(session, decode, posing, boneEditor, poseSources, bonesWindow);
+        layerPanel = new LayerPanel(session, decode, posing, bonesWindow);
         keys = new ShortcutKeys(keyState, framework);
         canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
         curveView = new CurveView(session, decode, posing);
