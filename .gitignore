@@ -1,6 +1,7 @@
 # Build output
 **/obj/
 **/bin/
+Dalamud-Plugin/dist/
 
 # Python and local tooling
 **/__pycache__/
