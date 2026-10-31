@@ -9,7 +9,7 @@ using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
-/// label and which selection the Edit menu shows.
+/// label, the start page's entries and which selection the Edit menu shows.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -19,6 +19,7 @@ internal static class TimelineChromeFixture
     {
         Status(check);
         Start(check);
+        StartEntries(check);
         Selection(check);
     }
 
@@ -58,6 +59,14 @@ internal static class TimelineChromeFixture
     private static void Start(Action<bool, string> check)
     {
         check(TimelineWindow.StartLabel(0) == "Start" && TimelineWindow.StartLabel(2) == "Start (2)", "Start shows the unfinished edits");
+    }
+
+    /// <summary> The start page's sidebar: Partners only once a spawner is attached, Record only with the recorder. </summary>
+    private static void StartEntries(Action<bool, string> check)
+    {
+        check(StartPage.Entries(partners: false, record: true).SequenceEqual([StartEntry.Playing, StartEntry.Game, StartEntry.Saved, StartEntry.Record]), "Start page without partners");
+        check(StartPage.Entries(partners: true, record: true).SequenceEqual([StartEntry.Playing, StartEntry.Game, StartEntry.Saved, StartEntry.Partners, StartEntry.Record]), "Start page with partners");
+        check(StartPage.Entries(partners: false, record: false).SequenceEqual([StartEntry.Playing, StartEntry.Game, StartEntry.Saved]), "Start page without a recorder");
     }
 
     /// <summary> The status line: notes sort by kind, a dismissed note stays hidden until its text changes, work running never hides. </summary>

@@ -2841,3 +2841,19 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 3 A row's pen opens Send animation to Blender over the Timeline window.
 - [ ] 4 Make startup instant (in a loop's "..." menu) shows its result on the page's last line, not in the main window's
   status strip.
+- [ ] 5 With no clip open, the Timeline shows the start page: a sidebar with Playing now, Game animations, Saved edits
+  and Record, each with its icon, and the chosen page beside it. There is no Partners row.
+- [ ] 6 Playing now's row shows how many animations play now. With an unfinished edit, Saved edits shows the count in
+  the warning colour.
+- [ ] 7 Game animations has the loader. Play one: "Waiting for" it shows on the page's last line with Cancel, and its
+  timeline opens once it plays.
+- [ ] 8 Open a clip, turn on Live and click Start: the page starts with "Back to" the clip, and Live keeps updating,
+  the preview plays, autosave keeps the edits and the Bones window stays open and posable.
+- [ ] 9 Back to the clip returns to the same view and playhead.
+- [ ] 10 With unsaved edits, click Start and open another clip from Playing now, Game animations or Saved edits' Edit
+  again: the Discard / Keep editing banner shows over the start page. Keep editing stays on the start page with the
+  clip still open; Discard opens the other clip.
+- [ ] 11 On the start page, click the open clip's own row in Playing now: the clip view comes back, nothing is read again.
+- [ ] 12 Pick Saved edits, open a clip and click Start: the page opens on Saved edits. Animation, Load another opens it
+  on Game animations. After a plugin reload it opens on Playing now again.
+- [ ] 13 With animation editing unavailable, the Timeline shows its banner and the recorder.

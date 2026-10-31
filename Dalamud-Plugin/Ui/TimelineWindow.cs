@@ -60,6 +60,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private readonly TimelineLoader loader;
     private readonly LivePosePanel livePose;
     private readonly SidePanel sidePanel;
+    private readonly StartPage startPage;
     private readonly TimelineToolbar toolbar;
     private readonly TimelineMenus menus;
     private readonly BlenderMotionPanel blenderMotion;
@@ -72,6 +73,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     // Plays a sound file in game for the sound inspector's listen buttons; null when unavailable.
     private readonly GameSoundPlayer? soundPlayer;
     private Func<bool>? mainListens;
+    // The dialogs the start page's rows open, such as Send animation to Blender; drawn every frame.
+    private Action? drawDialogs;
 
     private string title = string.Empty;
     private string subtitle = string.Empty;
@@ -88,8 +91,6 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private bool closeConfirmed;
     // The start page shows over the open clip, which keeps running behind it (Start; Back to the clip ends it).
     private bool startShown;
-    // The start page entry Start asked for; null for the last one shown. The start page reads it.
-    private StartEntry? startRequest;
     private float footerHeight;
     private float propertiesWidth;
     private bool disposed;
@@ -146,6 +147,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => reader.Busy, EditAgain);
         loader = new TimelineLoader(session, timelinePreview, Open);
         sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
+        startPage = new StartPage(session, loader, recentEdits, () => sidePanel.Recorder);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         blenderMotion = new BlenderMotionPanel(session, decode);
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar);
@@ -185,6 +187,16 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     /// <summary>The main window's connection to Blender, which Send motion to Blender and Motion from Blender go through.</summary>
     internal void AttachBlender(Main.AnimationDelivery delivery) => blenderMotion.Attach(delivery);
 
+    /// <summary>
+    /// The main window's Playing now page for the start page, how many animations play now for its sidebar, and the
+    /// dialogs its rows open, which this window draws every frame.
+    /// </summary>
+    internal void AttachPlayingNow(Action draw, Func<int> playing, Action dialogs)
+    {
+        startPage.AttachPlayingNow(draw, playing);
+        drawDialogs = dialogs;
+    }
+
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
     internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
 
@@ -198,7 +210,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     internal void ShowStart(StartEntry? entry)
     {
         startShown = true;
-        startRequest = entry;
+        if (entry is { } shown)
+            startPage.Current = shown;
     }
 
     /// <summary>Back from the start page to the open clip, with its view and playhead as they were.</summary>
@@ -332,12 +345,16 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     {
         IsOpen = true;
         BringToFront();
-        startShown = false;
         if (animations == null)
             return;
         startup &= capture.Startup != null;
+        // The clip already open, such as its row on the start page: back to it. Another clip leaves the start page
+        // only once it loads, so Keep editing stays on the page.
         if (Showing(capture, startup) && ChangedCapture() == null)
+        {
+            startShown = false;
             return;
+        }
         if (HasUnsavedChanges)
         {
             pending = PendingAction.Switch;
@@ -383,7 +400,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     {
         IsOpen = true;
         BringToFront();
-        startShown = false;
+        // The start page stays until the clip loads (Load), so Keep editing stays on it.
         if (animations is not { } service || journal.Request.Timeline is not { } edit)
             return;
         capture ??= AnimationEditService.EditAgainCapture(journal, service.Observer.History);
@@ -656,6 +673,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         }
         // The listener runs while this window is open: the loader and the clip's skeleton choice read it.
         animations.StartObservation();
+        // At the window's own level, so a dialog opened from a page inside a child keeps its popup.
+        drawDialogs?.Invoke();
         PollLoad();
         autosaver.Poll(editor);
         saveFooter.Poll();
@@ -672,14 +691,14 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             autosaver.Draw(HasUnsavedChanges || reader.Busy);
         if (source == null)
         {
-            DrawNothingOpen();
+            DrawStart(null);
             return;
         }
         if (source.Document == null || editor == null)
         {
             if (startShown)
             {
-                DrawStartOverClip();
+                DrawStart(title);
                 return;
             }
             DrawHeader(source);
@@ -730,7 +749,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         // The start page over the clip: everything above keeps the clip running; the bars, lanes and save row wait.
         if (startShown)
         {
-            DrawStartOverClip();
+            DrawStart(title);
             return;
         }
         toolbar.Draw(editor, source);
@@ -759,10 +778,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     }
 
     /// <summary>
-    /// Before a clip is open: the loader fills the window, with the saved edits and the recorder
-    /// beside it in tabs.
+    /// The start page, while a clip is read the spinner line instead. <paramref name="backTo"/> names the clip open behind
+    /// it, which keeps running; null when none is open.
     /// </summary>
-    private void DrawNothingOpen()
+    private void DrawStart(string? backTo)
     {
         if (reader.Busy)
         {
@@ -774,34 +793,19 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         }
         if (reader.Error is { } readError)
         {
-            Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error,
-                (reader.ErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + readError);
+            // With a clip open, the read that failed was that clip's again, worded as the clip view words it.
+            Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error, backTo != null ? "Reading the timeline again failed: " + readError
+                : (reader.ErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + readError);
             ImGui.Spacing();
-            // A face Edit face couldn't open: the timeline it was opened from waits with its edits.
-            if (parkedClip != null)
+            // A face Edit face couldn't open: the timeline it was opened from waits with its edits. Over an open clip
+            // Back to it is the way back.
+            if (backTo == null && parkedClip != null)
             {
                 DrawBack(null);
                 ImGui.Spacing();
             }
         }
-        loader.DrawStatus();
-        using var tabs = ImRaii.TabBar("##timeline-start");
-        if (!tabs.Success)
-            return;
-        if (ImGui.BeginTabItem("Load an animation"))
-        {
-            Widgets.HintWrapped("Pick an animation to play on your GPose character and edit it here, " +
-                                "or open one from the Animations tab.");
-            ImGui.Spacing();
-            loader.Draw(ImGui.GetContentRegionAvail().Y);
-            ImGui.EndTabItem();
-        }
-        sidePanel.DrawEditsTab();
-        if (sidePanel.Recorder is { } recorder && ImGui.BeginTabItem("Record live pose"))
-        {
-            SidePanel.DrawPage(recorder);
-            ImGui.EndTabItem();
-        }
+        startPage.Draw(ImGui.GetContentRegionAvail().Y, backTo, BackToClip);
     }
 
     /// <summary>Back from Edit face to the timeline it left; <paramref name="open"/> is the face open, null when it couldn't be read.</summary>
@@ -870,15 +874,6 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             ImGui.SetTooltip(editor.Document.Face != null ? "The length shown. The face's own length is in the toolbar."
                 : editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
                 : current.Standalone ? "The expression's timeline length." : "The clip's length.");
-    }
-
-    /// <summary> The start page while a clip is open behind it: Back to the clip first. </summary>
-    private void DrawStartOverClip()
-    {
-        if (ImGui.Button($"Back to {title}##timeline-back-to-clip"))
-            BackToClip();
-        ImGui.Spacing();
-        DrawNothingOpen();
     }
 
     /// <summary> The inline question before unsaved changes are lost: Discard or Keep editing, never a modal. </summary>
