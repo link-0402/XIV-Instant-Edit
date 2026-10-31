@@ -97,9 +97,10 @@ internal sealed unsafe class ActorSpawner : IPartnerActors, IDisposable
         }
     }
 
+    /// <summary>Whether the actor's client slot still holds it; the object table may not list an actor made this frame yet.</summary>
     public bool Exists(SpawnedActor actor)
     {
-        try { return Held(actor) != null && _objects[actor.ObjectIndex]?.Address == actor.Address; }
+        try { return Held(actor) != null; }
         catch (Exception e)
         {
             _log.Warning(e, "Partner check failed");
@@ -131,7 +132,6 @@ internal sealed unsafe class ActorSpawner : IPartnerActors, IDisposable
     {
         try
         {
-            // Only the slot is checked: an actor made this frame may not be in the object table yet.
             var character = Held(actor);
             if (character == null)
                 return;
