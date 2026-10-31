@@ -73,6 +73,20 @@ internal static class TimelineUi
         return Widgets.IconButton(id, icon, tooltip);
     }
 
+    /// <summary>
+    /// Undo and Redo for <paramref name="current"/>'s history, on one line. <paramref name="id"/> starts both ids, so the
+    /// Timeline and the Bones window each draw their own; both are disabled while <paramref name="readOnly"/>.
+    /// </summary>
+    public static void DrawUndoRedo(string id, TimelineEditor current, bool readOnly)
+    {
+        var history = current.History;
+        if (Widgets.IconButton(id + "-undo", FontAwesomeIcon.Undo, "Undo the last change (Ctrl+Z)", !readOnly && history.CanUndo))
+            current.Undo();
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (Widgets.IconButton(id + "-redo", FontAwesomeIcon.Redo, "Redo the change (Ctrl+Y)", !readOnly && history.CanRedo))
+            current.Redo();
+    }
+
     /// <summary> Opens <paramref name="window"/> in front, or closes it. </summary>
     public static void Toggle(Window window)
     {

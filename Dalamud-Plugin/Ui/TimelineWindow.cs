@@ -141,7 +141,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         blenderMotion = new BlenderMotionPanel(session, decode);
         toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, curveView);
-        bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, this, textures, keys, () =>
+        bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, playBar, () => saveFooter.RepairTarget,
+            this, textures, keys, () =>
         {
             // Save pose: the pose browser at its last folder, the name to type in focused.
             poseBrowserWindow.IsOpen = true;

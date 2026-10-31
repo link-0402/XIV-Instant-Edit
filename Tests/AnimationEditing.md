@@ -2773,3 +2773,7 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 4 Speed is a narrow field showing 100%. Dragging it and Ctrl+click typing both stay between 10 and 200.
 - [ ] 5 The time beside Stop reads like "6.13s · frame 184" and follows the playhead.
 - [ ] 6 Disabled controls keep today's reason tooltips, such as "Press Preview first." on Play.
+- [ ] 7 The Bones window shows Undo and Redo first, then the same play bar as the Timeline.
+- [ ] 8 Key a bone in the Bones window, then click Undo there: the edit is undone and the Timeline's lanes follow.
+  Redo puts it back.
+- [ ] 9 The Bones header's own Live and Play buttons are gone. The key arrows, layer name, frame and help stay.

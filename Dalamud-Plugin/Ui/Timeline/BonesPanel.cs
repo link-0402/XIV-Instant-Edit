@@ -20,8 +20,8 @@ namespace InstantEdit.Ui.Timeline;
 /// shared with the properties panel's bone picker and the bones on the character.
 /// </summary>
 internal sealed class BonesPanel(TimelineSession session, string? animationError, BonePosing posing, BoneEditor boneEditor,
-    PoseSourcePanel poseSources, TimelinePreview timelinePreview, IBonesOverlay overlay, ITextureProvider textures, ShortcutKeys keys,
-    Action savePose)
+    PoseSourcePanel poseSources, TimelinePreview timelinePreview, PlayBar playBar, Func<SkeletonStandard?> repair, IBonesOverlay overlay,
+    ITextureProvider textures, ShortcutKeys keys, Action savePose)
 {
     private enum BonesPage : byte { Map, List }
 
@@ -133,18 +133,13 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             Widgets.HintWrapped(choiceError);
     }
 
-    /// <summary> Live and pause, the layer's previous and next key, the layer and the playhead. </summary>
+    /// <summary> Undo and redo, the shared play bar, the layer's previous and next key, the layer and the playhead. </summary>
     private void DrawBonesHeader(TimelineEditor current, AnimationTimelineSource loaded, MotionLayer? layer)
     {
-        timelinePreview.DrawLiveToggle(current, loaded, "##bones-live");
-        ImGui.SameLine(0, Theme.Scaled(2));
-        var shown = timelinePreview.Fingerprint != null;
-        var playing = session.Playback.Active && !session.Playback.Paused;
-        if (Widgets.IconButton("##bones-play", playing ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
-                !shown ? "Turn on Live first." : playing ? "Pause" : session.Playback.Active ? "Resume" : "Play",
-                shown && timelinePreview.PlaybackAvailable(out _)))
-            timelinePreview.TogglePlay();
-        ImGui.SameLine(0, Theme.Scaled(8));
+        TimelineUi.DrawUndoRedo("##bones", current, session.ReadOnly);
+        ImGui.SameLine(0, Theme.Scaled(12));
+        playBar.Draw(current, loaded, repair(), "##bones-play");
+        ImGui.SameLine(0, Theme.Scaled(12));
         var frame = current.Playhead;
         int? previous = null, next = null;
         if (layer != null)

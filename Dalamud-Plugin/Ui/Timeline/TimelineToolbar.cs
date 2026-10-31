@@ -31,12 +31,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
     public void Draw(TimelineEditor current)
     {
         var readOnly = session.ReadOnly;
-        var history = current.History;
-        if (Widgets.IconButton("##timeline-undo", FontAwesomeIcon.Undo, "Undo the last change (Ctrl+Z)", !readOnly && history.CanUndo))
-            current.Undo();
-        ImGui.SameLine(0, Theme.Scaled(2));
-        if (Widgets.IconButton("##timeline-redo", FontAwesomeIcon.Redo, "Redo the change (Ctrl+Y)", !readOnly && history.CanRedo))
-            current.Redo();
+        TimelineUi.DrawUndoRedo("##timeline", current, readOnly);
 
         ImGui.SameLine(0, Theme.Scaled(12));
         if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or a .livepose file", !readOnly))
