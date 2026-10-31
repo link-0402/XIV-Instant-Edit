@@ -13,7 +13,7 @@ using InstantEdit.Services.PenumbraMods;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// What plays on the GPose actor for the open clip. The preview bar builds the edited clip, shows it
+/// What plays on the GPose actor for the open clip. The play bar's Preview builds the edited clip, shows it
 /// through a Penumbra temporary mod on the actor's collection and plays it there, with pause, speed,
 /// replay and stop: paused, the playhead scrubs the pose; playing, it follows the clip. Live plays the
 /// clip's own file instead and shows its bone layers over it, swapped in by <see cref="MotionLiveDisplay"/>
@@ -160,22 +160,6 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         SyncPlayback(current, loaded);
         UpdateLive(current, loaded);
         SyncLooks(current);
-    }
-
-    /// <summary>
-    /// The preview bar: <paramref name="bar"/> first, then Follow. <paramref name="repair"/> is the standard skeleton a
-    /// preview repairs the clip onto, as a save would.
-    /// </summary>
-    public void DrawBar(PlayBar bar, TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
-    {
-        bar.Draw(current, loaded, repair, "##timeline-play");
-
-        ImGui.SameLine(0, Theme.Scaled(12));
-        var follow = Follow;
-        if (ImGui.Checkbox("Follow", ref follow))
-            Follow = follow;
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Outside the preview, move the playhead with this clip while your character plays it.");
     }
 
     /// <summary>

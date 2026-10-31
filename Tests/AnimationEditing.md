@@ -2789,3 +2789,12 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
 - [ ] 6 The Preview tooltip holds "Sounds and effects play only while the preview plays." and "Changing an effect
   look redraws your character."
 - [ ] 7 The Live tooltip holds the Live hint, and over a preview "Live shows your bone layers over the preview."
+- [ ] 8 The action bar reads Undo, Redo, Add, the play bar, the length and Bones on the right, with no menu button
+  on it. The time shows once, without the word "Playhead". The status line sits under the bars, above the lanes.
+- [ ] 9 Add opens today's menu without Still pose; a face's Add has no Neutral face.
+- [ ] 10 Bones is filled while the Bones window is open and is hidden on an expression's timeline without its face.
+  Resize the Timeline to its narrowest (760 px): Bones stays visible, on a line of its own if the bar is full.
+- [ ] 11 Click Start with Live on: the start page shows "Back to" the clip, and Live, the preview and the Bones
+  window keep running. Back returns to the same view and playhead.
+- [ ] 12 With an unfinished edit, Start reads "Start (1)" in the warning colour.
+- [ ] 13 Select an event, then click the clip's name in the header: the selection clears.

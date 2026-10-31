@@ -1,6 +1,7 @@
 ﻿using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
@@ -84,6 +85,10 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private (AnimationCapture Capture, bool Startup)? parkedClip;
     private TimelineAutosave? parkedEdits;
     private bool closeConfirmed;
+    // The start page shows over the open clip, which keeps running behind it (Start; Back to the clip ends it).
+    private bool startShown;
+    // The start page entry Start asked for; null for the last one shown. The start page reads it.
+    private StartEntry? startRequest;
     private float footerHeight;
     private float propertiesWidth;
     private bool disposed;
@@ -142,7 +147,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         sidePanel = new SidePanel(session, properties, recentEdits, effectLooks, soundInspector, posing, timelinePreview, Open);
         livePose = new LivePosePanel(session, sidePanel.ShowProperties);
         blenderMotion = new BlenderMotionPanel(session, decode);
-        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, curveView);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, curveView, playBar, timelinePreview);
         bonesPanel = new BonesPanel(session, animationError, posing, boneEditor, poseSources, timelinePreview, playBar, () => saveFooter.RepairTarget,
             this, textures, keys, () =>
         {
@@ -180,6 +185,22 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
 
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
     internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
+
+    /// <summary>The header's Start button: "Start", or "Start (2)" with 2 <paramref name="unfinished"/> edits.</summary>
+    internal static string StartLabel(int unfinished) => unfinished > 0 ? $"Start ({unfinished})" : "Start";
+
+    /// <summary>
+    /// Shows the start page, on <paramref name="entry"/> or with null on the last entry shown. An open clip stays open and
+    /// keeps running behind it.
+    /// </summary>
+    internal void ShowStart(StartEntry? entry)
+    {
+        startShown = true;
+        startRequest = entry;
+    }
+
+    /// <summary>Back from the start page to the open clip, with its view and playhead as they were.</summary>
+    internal void BackToClip() => startShown = false;
 
     internal BonesWindow Bones => bonesWindow;
 
@@ -309,6 +330,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     {
         IsOpen = true;
         BringToFront();
+        startShown = false;
         if (animations == null)
             return;
         startup &= capture.Startup != null;
@@ -339,6 +361,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     {
         IsOpen = true;
         BringToFront();
+        startShown = false;
         if (animations is not { } service || journal.Request.Timeline is not { } edit)
             return;
         capture ??= AnimationEditService.EditAgainCapture(journal, service.Observer.History);
@@ -359,6 +382,7 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
     private void Restore(TimelineAutosave kept)
     {
         IsOpen = true;
+        startShown = false;
         // The kept capture names the character of the run that kept it; the clip is opened on the newest capture of it.
         var capture = animations is { } service ? AnimationEditService.LatestCapture(kept.Capture, kept.Startup, service.Observer.History) : kept.Capture;
         Load(capture, kept.Startup, false, afterUndo: kept.BaseHash != null);
@@ -473,6 +497,8 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         if (!keepView)
         {
             // Another clip: the timeline Edit face left is let go (opening asked first when it had edits).
+            // It shows in place of the start page; a clip read again after a save or undo leaves the page shown.
+            startShown = false;
             parkedClip = null;
             parkedEdits = null;
             source = null;
@@ -620,25 +646,32 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             DrawNothingOpen();
             return;
         }
-        DrawHeader(source);
         if (source.Document == null || editor == null)
         {
+            if (startShown)
+            {
+                DrawStartOverClip();
+                return;
+            }
+            DrawHeader(source);
             ImGui.Spacing();
             Widgets.Banner("##timeline-read-only", FeedbackSeverity.Warning,
                 "This timeline can't be edited. " + (source.ReadOnlyReason ?? "Its file could not be read."));
             ImGui.Spacing();
-            loader.DrawButton();
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Hint, "Load another animation");
+            if (ImGui.Button("Start page##timeline-read-only"))
+                ShowStart(null);
             loader.DrawStatus();
             return;
         }
+        // Other parts read the texts every frame, also while the start page shows.
+        texts.Refresh(editor.Document);
+        if (!startShown)
+            DrawHeader(source);
         livePose.Poll(editor, source);
         session.LoopPose.Poll(editor);
-        if (reader.Error is { } readError)
+        if (!startShown && reader.Error is { } readError)
             Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + readError);
-        if (pending == PendingAction.None && ChangedCapture() is { } changed)
+        if (!startShown && pending == PendingAction.None && ChangedCapture() is { } changed)
         {
             Widgets.Banner("##timeline-file-changed", FeedbackSeverity.Info, "This file changed in your mods.");
             if (ImGui.Button("Reload##timeline-file-changed"))
@@ -658,8 +691,13 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         timelinePreview.Dragging = OverlayDragging;
         timelinePreview.Update(editor, source);
         CheckGizmo();
-        toolbar.Draw(editor);
-        timelinePreview.DrawBar(playBar, editor, source, saveFooter.RepairTarget);
+        // The start page over the clip: everything above keeps the clip running; the bars, lanes and save row wait.
+        if (startShown)
+        {
+            DrawStartOverClip();
+            return;
+        }
+        toolbar.Draw(editor, source);
         statusLine.Draw("##timeline", toolbar.Notes(editor).Concat(timelinePreview.Notes(editor, source, saveFooter.RepairTarget)));
 
         var avail = ImGui.GetContentRegionAvail();
@@ -746,9 +784,27 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
                 : $"Back to {AnimationPresentation.AnimationName(parked.Capture, parked.Startup)}.");
     }
 
-    /// <summary> The clip's name and state, the mod it comes from and its length. </summary>
+    /// <summary>
+    /// The header: Start, marked while an edit did not finish; Back after Edit face; the clip's name, which clears the
+    /// selection; its state and mod; and on the right its length.
+    /// </summary>
     private void DrawHeader(AnimationTimelineSource current)
     {
+        var unfinished = animations is { } service ? RecoveryAttention(service) : 0;
+        bool start;
+        using (ImRaii.PushId("##timeline-start-button"))
+        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, unfinished > 0))
+            start = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.ArrowLeft, StartLabel(unfinished), null, null, null, null);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(unfinished switch
+            {
+                0 => "Go to the start page. This clip stays open.",
+                1 => "Go to the start page. An edit did not finish and needs an undo.",
+                _ => $"Go to the start page. {unfinished} edits did not finish and need an undo.",
+            });
+        if (start)
+            ShowStart(null);
+        ImGui.SameLine(0, Theme.Scaled(12));
         if (parkedClip != null)
         {
             DrawBack(current);
@@ -757,13 +813,18 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         Widgets.Icon(current.Standalone || current.Document?.Face != null ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running, Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, title);
+        bool name;
+        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Label))
+            name = ImGui.Selectable(title + "##timeline-clip-name", false, ImGuiSelectableFlags.None, new Vector2(ImGui.CalcTextSize(title).X, 0));
+        if (editor != null && ImGui.IsItemHovered())
+            ImGui.SetTooltip("Clear the selection.");
+        if (name)
+            editor?.ClearSelection();
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, subtitle);
         if (current.Document == null || editor == null)
             return;
-        texts.Refresh(editor.Document);
         var after = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + Theme.Scaled(16);
         var right = ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(texts.LengthText).X;
         ImGui.SameLine(Math.Max(after, right));
@@ -773,6 +834,15 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
             ImGui.SetTooltip(editor.Document.Face != null ? "The length shown. The face's own length is in the toolbar."
                 : editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
                 : current.Standalone ? "The expression's timeline length." : "The clip's length.");
+    }
+
+    /// <summary> The start page while a clip is open behind it: Back to the clip first. </summary>
+    private void DrawStartOverClip()
+    {
+        if (ImGui.Button($"Back to {title}##timeline-back-to-clip"))
+            BackToClip();
+        ImGui.Spacing();
+        DrawNothingOpen();
     }
 
     /// <summary> The inline question before unsaved changes are lost: Discard or Keep editing, never a modal. </summary>

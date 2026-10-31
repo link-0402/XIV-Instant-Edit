@@ -1,7 +1,8 @@
+using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order.
+/// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, and the Start button's label.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -10,6 +11,13 @@ internal static class TimelineChromeFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         Status(check);
+        Start(check);
+    }
+
+    /// <summary> The header's Start button names the unfinished edits. </summary>
+    private static void Start(Action<bool, string> check)
+    {
+        check(TimelineWindow.StartLabel(0) == "Start" && TimelineWindow.StartLabel(2) == "Start (2)", "Start shows the unfinished edits");
     }
 
     /// <summary> The status line: notes sort by kind, a dismissed note stays hidden until its text changes, work running never hides. </summary>

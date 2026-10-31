@@ -1,15 +1,21 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Ui.Timeline;
 
-/// <summary> The row above the lanes: undo, redo, add, snapping, fit, the Bones window, load, the length and the playhead, and the status line's notes. </summary>
+/// <summary>
+/// The action bar above the lanes: undo, redo, Add, the play bar, the length and on the right the Bones window; under it
+/// for now snapping, scaling, fit, curves, Blender, load and Follow. Also the status line's notes.
+/// </summary>
 internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
-    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, CurveView curves)
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, CurveView curves,
+    PlayBar playBar, TimelinePreview preview)
 {
     private const string AddMenu = "##timeline-add-menu";
     private const string ControlsHelp =
@@ -25,19 +31,79 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
 
     private bool lengthActive;
     private float lengthEdit;
-    private int readoutFrame = -1;
-    private string readout = string.Empty;
+    // The Bones button's width last frame, to right-align it; 0 before it was drawn.
+    private float bonesWidth;
+    // Bones is on a line of its own, the bar leaving no room for it.
+    private bool bonesBelow;
 
-    public void Draw(TimelineEditor current)
+    /// <summary>
+    /// Draws the bar for <paramref name="current"/>, the timeline of <paramref name="loaded"/>. Bones keeps to the right
+    /// and moves to a line of its own when the bar leaves no room for it.
+    /// </summary>
+    public void Draw(TimelineEditor current, AnimationTimelineSource loaded)
     {
         var readOnly = session.ReadOnly;
         TimelineUi.DrawUndoRedo("##timeline", current, readOnly);
 
         ImGui.SameLine(0, Theme.Scaled(12));
-        if (Widgets.IconButton("##timeline-add", FontAwesomeIcon.Plus, "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or a .livepose file", !readOnly))
+        bool add;
+        using (ImRaii.PushId("##timeline-add"))
+        using (ImRaii.Disabled(readOnly))
+            add = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Plus, "Add", null, null, null, null);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or a .livepose file");
+        if (add && !readOnly)
             ImGui.OpenPopup(AddMenu);
-        DrawAddMenu(current);
-        ImGui.SameLine(0, Theme.Scaled(2));
+        using (var popup = ImRaii.Popup(AddMenu))
+        {
+            if (popup.Success)
+                DrawAddItems(current);
+        }
+
+        ImGui.SameLine(0, Theme.Scaled(12));
+        playBar.Draw(current, loaded, saveFooter.RepairTarget, "##timeline-play");
+
+        ImGui.SameLine(0, Theme.Scaled(12));
+        if (current.Document.Face is { } face)
+            DrawFaceLength(current, face, readOnly);
+        else
+            DrawLength(current, readOnly);
+
+        // An expression's own timeline takes no bone layers, so it has no bones to pose; its face does.
+        if (current.Document.Layered)
+            DrawBonesButton(current);
+
+        DrawLeftovers(current);
+    }
+
+    /// <summary> Bones, icon and label, filled while the Bones window is open: on the bar's right, or on a line of its own when the bar is full. </summary>
+    private void DrawBonesButton(TimelineEditor current)
+    {
+        var width = bonesWidth > 0 ? bonesWidth : ImGui.CalcTextSize("Bones").X + ImGui.GetFrameHeight() * 2;
+        var after = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + Theme.Scaled(12);
+        var right = ImGui.GetContentRegionMax().X - width;
+        // Some room to spare before it comes back up, so a playhead time a digit longer doesn't make it jump.
+        bonesBelow = bonesBelow ? right < after + Theme.Scaled(24) : right < after;
+        if (!bonesBelow)
+            ImGui.SameLine(right);
+        else
+            ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), right));
+        bool clicked;
+        using (ImRaii.PushId("##timeline-bones"))
+            clicked = Widgets.TabButton(FontAwesomeIcon.Child, "Bones", bonesWindow.IsOpen);
+        bonesWidth = ImGui.GetItemRectSize().X;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(bonesWindow.IsOpen
+                ? "Close the Bones window."
+                : current.Document.Face != null ? "Open the Bones window: pick face bones and pose them in the selected bone layer."
+                : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer.");
+        if (clicked)
+            TimelineUi.Toggle(bonesWindow);
+    }
+
+    /// <summary> The controls that move into the menus later, on a line under the bar: snapping, scaling, fit, curves, Blender, load, Follow and the help. </summary>
+    private void DrawLeftovers(TimelineEditor current)
+    {
         if (TimelineUi.Toggle("##timeline-snap", FontAwesomeIcon.Magnet, current.Snap,
                 current.Snap ? "Snapping is on. Drags stick to starts, ends and the playhead. Hold Alt to place freely." : "Snapping is off."))
             current.Snap = !current.Snap;
@@ -48,19 +114,12 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.IconButton("##timeline-fit", FontAwesomeIcon.Expand, "Show the whole timeline (F)"))
             current.Fit();
-        // An expression's own timeline takes no bone layers, so it has no bones to pose; its face does.
         if (current.Document.Layered)
         {
             ImGui.SameLine(0, Theme.Scaled(2));
             if (TimelineUi.Toggle("##timeline-curves", FontAwesomeIcon.ChartLine, curves.Shown,
                     curves.Shown ? "Hide the curves." : "Show the selected bone's turns and moves over the clip, under the lanes."))
                 curves.Shown = !curves.Shown;
-            ImGui.SameLine(0, Theme.Scaled(2));
-            if (TimelineUi.Toggle("##timeline-bones", FontAwesomeIcon.Child, bonesWindow.IsOpen, bonesWindow.IsOpen
-                    ? "Close the Bones window."
-                    : current.Document.Face != null ? "Open the Bones window: pick face bones and pose them in the selected bone layer."
-                    : "Open the Bones window: pick bones on a body map and pose them in the selected bone layer."))
-                TimelineUi.Toggle(bonesWindow);
             if (current.Document.Face == null)
             {
                 ImGui.SameLine(0, Theme.Scaled(2));
@@ -71,19 +130,11 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         loader.DrawButton();
 
         ImGui.SameLine(0, Theme.Scaled(12));
-        if (current.Document.Face is { } face)
-            DrawFaceLength(current, face, readOnly);
-        else
-            DrawLength(current, readOnly);
-
-        ImGui.SameLine(0, Theme.Scaled(16));
-        if (current.Playhead != readoutFrame)
-        {
-            readoutFrame = current.Playhead;
-            readout = "Playhead " + TimelineWindowViews.FrameText(readoutFrame);
-        }
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, readout);
+        var follow = preview.Follow;
+        if (ImGui.Checkbox("Follow", ref follow))
+            preview.Follow = follow;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Outside the preview, move the playhead with this clip while your character plays it.");
         ImGui.SameLine(0, Theme.Gap);
         Widgets.HelpTip(ControlsHelp);
     }
@@ -159,11 +210,12 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         ImGui.TextColored(Theme.Muted, "s");
     }
 
-    private void DrawAddMenu(TimelineEditor current)
+    /// <summary>
+    /// The Add menu's items, drawn into the popup or menu that is open: events at the playhead, bone layers, Pin feet, Motion
+    /// keys, the loop-pose items and the .livepose file; for a face its layer kinds and Smooth jitter.
+    /// </summary>
+    public void DrawAddItems(TimelineEditor current)
     {
-        using var popup = ImRaii.Popup(AddMenu);
-        if (!popup.Success)
-            return;
         // A face opened on its own plays no events of its own; an expression's timeline does.
         if (current.Document.HasClip || current.Document.Expression)
             foreach (var kind in TimelineWindowViews.AddKinds)
@@ -198,20 +250,13 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(TimelineWindowViews.MotionKeysTip(markers));
         session.LoopPose.DrawAddItems(current, session.ReadOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
-        ImGui.Separator();
-        var still = blenderMotion.StillUnavailable(current);
-        if (ImGui.MenuItem("Still pose (start from scratch)", "", false, still == null))
-            blenderMotion.HoldStill(current);
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(still ?? "Hold the pose at the playhead for the whole clip, in place of its motion, and add a pose layer to animate it. " +
-                "Use the clip's motion goes back.");
         if (session.Source == null)
             return;
         ImGui.Separator();
         livePose.DrawItems();
     }
 
-    /// <summary>A face's part of the Add menu: the layers a face takes over the face, Smooth jitter and Neutral face.</summary>
+    /// <summary>A face's part of the Add menu: the layers a face takes over the face and Smooth jitter.</summary>
     private void DrawFaceAddItems(TimelineEditor current, TimelineFace face)
     {
         ImGui.Separator();
@@ -227,12 +272,6 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             current.AddFix(new MotionFix(MotionFixKind.SmoothJitter));
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(TimelineWindowViews.SmoothJitterHint);
-        ImGui.Separator();
-        var unavailable = blenderMotion.FaceUnavailable(current);
-        if (ImGui.MenuItem("Neutral face", "", false, unavailable == null))
-            blenderMotion.NeutralFace(current);
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(unavailable ?? "Start from the face at rest, and add a pose layer to key the new face.");
     }
 
     /// <summary>
