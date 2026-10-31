@@ -15,8 +15,7 @@ internal static class PartnerNames
 
     /// <summary>
     /// Whether <paramref name="name"/> is shaped like a player's name, which Penumbra needs to tell actors apart: two
-    /// parts split by one space, each 2-15 characters, A-Z then a-z, ' or - (A-Z again after a -, as in Rose-Lee), without
-    /// --, -' or '-, 21 characters at most.
+    /// parts split by one space, each 2-15 characters, A-Z then a-z, ' or -, without --, -' or '-, 21 characters at most.
     /// </summary>
     public static bool IsPlayerName(string name)
     {
@@ -33,7 +32,7 @@ internal static class PartnerNames
         for (var i = 1; i < part.Length; i++)
         {
             var c = part[i];
-            if (c is not (>= 'a' and <= 'z' or '\'' or '-') && !(c is >= 'A' and <= 'Z' && part[i - 1] == '-'))
+            if (c is not (>= 'a' and <= 'z' or '\'' or '-'))
                 return false;
             if ((part[i - 1], c) is ('-', '-') or ('-', '\'') or ('\'', '-'))
                 return false;

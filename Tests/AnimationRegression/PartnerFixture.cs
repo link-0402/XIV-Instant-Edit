@@ -12,11 +12,11 @@ internal static class PartnerFixture
 
     private static void Names(Action<bool, string> check)
     {
-        var good = new[] { "Aria Rose", "Xb Yq", "Aria Rose-Lee", "O'neil Rose", "Abcdefghij Klmnopqrst" };
+        var good = new[] { "Aria Rose", "Xb Yq", "Aria Rose-lee", "O'neil Rose", "Abcdefghij Klmnopqrst" };
         var bad = new[]
         {
             "Aria", "aria Rose", "XIVBridgeTest Partner", "A Rose", "Abcdefghijklmnop Rose", "Abcdefghijk Klmnopqrst",
-            "Aria Ro--se", "Aria Ro-'se", "Aria  Rose", "Aria Rose Lee",
+            "Aria Ro--se", "Aria Ro-'se", "Aria  Rose", "Aria Rose Lee", "Aria Rose-Lee",
         };
         var wrong = good.Where(name => !PartnerNames.IsPlayerName(name)).Concat(bad.Where(PartnerNames.IsPlayerName)).ToArray();
         check(wrong.Length == 0, "partner names: player names are two capitalised parts of 2-15 letters, 21 characters at most" + Failed(string.Join('|', wrong)));
