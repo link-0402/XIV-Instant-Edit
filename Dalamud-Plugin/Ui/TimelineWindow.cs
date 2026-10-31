@@ -198,6 +198,9 @@ public sealed partial class TimelineWindow : Window, IDisposable, IBonesOverlay
         drawDialogs = dialogs;
     }
 
+    /// <summary>The start page's Partners page; its sidebar entry shows once this is attached.</summary>
+    internal void AttachPartners(Action draw) => startPage.AttachPartners(draw);
+
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
     internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
 

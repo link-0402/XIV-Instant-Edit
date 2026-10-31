@@ -5,6 +5,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using InstantEdit.Services;
+using InstantEdit.Services.Actors;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.GameFiles;
 using InstantEdit.Services.Previews;
@@ -31,6 +32,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly PreviewService          _previews;
     private readonly AnimationEditService?   _animations;
     private readonly AnimationRecorder       _recorder;
+    private readonly ActorSpawner            _actorSpawner;
+    private readonly PartnerService          _partners;
     private readonly Services.Animations.Timeline.TimelineCatalog _timelineCatalog;
     private readonly Services.Animations.Preview.AnimationPreviewService _animationPreview;
     private readonly Services.Audio.GameSoundPlayer _soundPlayer;
@@ -267,6 +270,12 @@ public sealed class Plugin : IDalamudPlugin
             configDirectory, () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         _timelineWindow.HandTips = _physics.ReadHandTipsAsync;
         _timelineWindow.AttachPoseFolders(_config, SaveConfiguration);
+        // Partners: a second GPose actor from a preset, with its Penumbra collection, Glamourer design and Customize+ profile.
+        var partnerStore = new PartnerPresetStore(configDirectory, message => log.Warning("{Message}", message));
+        _actorSpawner = new ActorSpawner(framework, clientState, objects, log);
+        _partners = new PartnerService(partnerStore, _actorSpawner, new PartnerCollections(_penumbra.Ipc, () => _penumbra.Ipc.Available),
+            new GlamourerIpc(pi, log), new CustomizePlusProfiles(pi, log), warn: message => log.Warning("{Message}", message));
+        _timelineWindow.AttachPartners(new Ui.Timeline.PartnersPage(_partners).Draw);
         // In GPose your posed character walks or runs for the builder through the Timeline preview's playback.
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
@@ -484,6 +493,9 @@ public sealed class Plugin : IDalamudPlugin
         _windowSystem.RemoveWindow(_physicsWindow);
         _glamourer.AppearanceChanged -= _window.OnGlamourerAppearanceChanged;
         _glamourer.Dispose();
+        // Despawns the partners and undoes their links while Penumbra, Glamourer and Customize+ are still there.
+        _partners.Dispose();
+        _actorSpawner.Dispose();
         _recorder.Dispose();
         // The window first, then the live display (puts the clip's own motion back), playback (puts the
         // GPose actor back), the preview (removes its temporary mod) and the catalog; all of them before
