@@ -46,7 +46,8 @@ public sealed partial class TimelineWindow
     private (PinChain Chain, Vector3 RestNormal)? dragLimb;
     // How far a Drag on a hand or a foot turns the elbow or knee about the line to the aim, in degrees: the Bones window's Bend field.
     private float dragBend;
-    // What a Drag on the hips or the head holds where it is, found once per drag.
+    // What a Drag on the hips or the head holds where it is: the Bones window's Hold boxes, and their anchors found once per drag.
+    private readonly DragHolds dragHolds = new();
     private ImmutableArray<HipAnchor>? dragAnchors;
     // The back a Drag on the head leans, found once per drag, and the hips' move the drag's last frame keyed.
     private PinChain? dragBack;
@@ -442,7 +443,7 @@ public sealed partial class TimelineWindow
                     if (bone == PinChains.Hips)
                     {
                         // The hips: the body bends around them to hold the anchors, then the hips' key moves them as Move does.
-                        dragAnchors ??= HipSolver.Anchors(skeleton, selection.Bones);
+                        dragAnchors ??= dragHolds.Anchors(skeleton, false, selection.Bones);
                         var changed = PoseEdits.DragHips(current.Document, layer, frame, skeleton, frames.Before, frames.Through, dragFrom,
                             from + move, dragAnchors.Value.AsSpan(), weight, BonePosing.LoopFrames(loaded, current.Document));
                         var offset = layer.Kind == MotionLayerKind.Offset;
@@ -462,7 +463,7 @@ public sealed partial class TimelineWindow
                     else if (TimelineWindowViews.HeadDrag(layer, bone, skeleton) && (dragBack ??= HeadSolver.Back(skeleton)) is { } back)
                     {
                         // The head: the back leans to it and the hips move by what the lean can't cover; their keys and the back base's then move as Move does.
-                        dragAnchors ??= HeadSolver.Anchors(skeleton, selection.Bones);
+                        dragAnchors ??= dragHolds.Anchors(skeleton, true, selection.Bones);
                         var loop = BonePosing.LoopFrames(loaded, current.Document);
                         var (changed, hipsMove) = PoseEdits.DragHead(current.Document, layer, frame, skeleton, frames.Before, frames.Through, dragFrom,
                             from + move, back, dragAnchors.Value.AsSpan(), weight, loop);

@@ -83,6 +83,7 @@ internal static class ChangelogCatalog
             Entry("The gizmo's Drag mode pulls a bone where you want it and bends the limb above to follow.", 1),
             Entry("Drag mode on the hips moves them and keeps the feet and hands where they are; the legs, arms and back follow.", 1),
             Entry("Drag mode on the head moves it and keeps the feet where they are; the back leans and the hips follow.", 1),
+            Entry("Tick what stays where it is under Hold: each foot and hand, and any other bone you select with the hips or head.", 1),
             Entry("Pins and drags bend knees and elbows only forward, up to 150 degrees. Bend turns a knee or elbow, on a pin or while dragging.", 1),
             Entry("The Bones window's View > On character shows no bones, the selected ones, or all of them on your character.", 1),
             Entry("View > Onion skins shows faint bones for the pose at the layer's keys before and after the playhead.", 1),

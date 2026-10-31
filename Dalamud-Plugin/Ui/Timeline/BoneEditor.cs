@@ -28,6 +28,9 @@ internal interface IBonesOverlay
     /// <summary>How far a Drag on a hand or a foot turns the elbow or knee about the line to the aim, in degrees; not saved.</summary>
     float DragBend { get; set; }
 
+    /// <summary>What a Drag on the hips or the head holds where it is: the Hold boxes; not saved.</summary>
+    DragHolds Holds { get; }
+
     /// <summary>What to do so the gizmo can pose the character with <paramref name="layer"/> at <paramref name="frame"/>; null when nothing the user does helps.</summary>
     string? GizmoWaits(MotionLayer layer, int frame, SkeletonDescription skeleton);
 }
@@ -687,16 +690,16 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(dragHint ?? (posing.Selection.Primary == PinChains.Hips
-                ? "The gizmo drags the hips. The feet and hands hold where they are; the legs, arms and back follow."
+                ? "The gizmo drags the hips. The ticked bones hold where they are; the legs, arms and back follow."
                 : TimelineWindowViews.HeadDrag(layer, posing.Selection.Primary, skeleton)
-                    ? "The gizmo drags the head. The feet hold where they are; the back leans and the hips follow."
+                    ? "The gizmo drags the head. The ticked bones hold where they are; the back leans and the hips follow."
                     : "The gizmo drags the bone; the limb above bends to follow."));
         if (overlay.GizmoWaits(layer, frame, skeleton) is { } reason)
             Widgets.HintWrapped(reason);
-        else if (drag && posing.Selection.Primary == PinChains.Hips)
-            Widgets.HintWrapped(TimelineWindowViews.HipDragHint(skeleton, posing.Selection.Bones));
+        if (drag && posing.Selection.Primary == PinChains.Hips)
+            DrawHolds(skeleton, false);
         else if (drag && TimelineWindowViews.HeadDrag(layer, posing.Selection.Primary, skeleton))
-            Widgets.HintWrapped(TimelineWindowViews.HeadDragHint(skeleton, posing.Selection.Bones));
+            DrawHolds(skeleton, true);
         // A hand's or a foot's drag can turn the elbow or knee about the line to the aim; the drag keys the turned pose.
         if (drag && posing.Selection.Primary is { } end && posing.BoneTree(skeleton).Index is var bones && bones.ContainsKey(end) &&
             PinChains.Chain(skeleton, bones, new MotionPin(end)).Shape == PinChainShape.Limb)
@@ -711,6 +714,50 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip("Turns the knee or elbow around the line to the aim as you drag. Ctrl+click to type.");
         }
+    }
+
+    /// <summary>
+    /// The Hold boxes under the gizmo radios while Drag is chosen on the hips or the <paramref name="head"/>: a box for each bone
+    /// that can hold where it is (<see cref="DragHolds"/>), wrapping under the first.
+    /// </summary>
+    private void DrawHolds(SkeletonDescription skeleton, bool head)
+    {
+        var holds = overlay.Holds;
+        var bones = holds.Bones(skeleton, head, posing.Selection.Bones);
+        var any = false;
+        if (bones.Length > 0)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, "Hold");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(head
+                    ? "Ticked bones stay where they are while you drag the head. To add another bone, select it, then Ctrl+click the head."
+                    : "Ticked bones stay where they are while you drag the hips. To add another bone, select it, then Ctrl+click the hips.");
+            ImGui.SameLine(0, Theme.Gap);
+            var start = ImGui.GetCursorPosX();
+            for (var i = 0; i < bones.Length; i++)
+            {
+                var bone = bones[i];
+                var label = DragHolds.Label(bone);
+                if (i > 0)
+                {
+                    ImGui.SameLine();
+                    if (ImGui.GetContentRegionAvail().X < ImGui.GetFrameHeight() + ImGui.GetStyle().ItemInnerSpacing.X + ImGui.CalcTextSize(label).X)
+                    {
+                        ImGui.NewLine();
+                        ImGui.SetCursorPosX(start);
+                    }
+                }
+                var held = holds.Holds(head, bone);
+                if (ImGui.Checkbox($"{label}##hold-{bone}", ref held))
+                    holds.Hold(head, bone, held);
+                any |= held;
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(AnimationPresentation.BoneName(bone));
+            }
+        }
+        if (!any)
+            Widgets.HintWrapped(head ? "Nothing holds; the whole body follows the head." : "Nothing holds; the hips move alone.");
     }
 
     /// <summary>The rotation of the game camera's view, for the ball; null without a camera.</summary>

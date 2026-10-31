@@ -2046,8 +2046,10 @@ playhead. Spec: docs/superpowers/specs/2026-10-24-ik-drag-design.md.
 
 ## Hip drag (pending)
 
-Drag mode on the hips moves them; the other selected bones, or both feet and both hands, hold where they
-are and the legs, arms and back follow. Spec: docs/superpowers/specs/2026-10-27-hip-drag-design.md.
+Drag mode on the hips moves them; the bones ticked under Hold (both feet and both hands at first, plus any
+bone selected before Ctrl+clicking the hips) stay where they are and the legs, arms and back follow. Spec:
+docs/superpowers/specs/2026-10-27-hip-drag-design.md. Changed 2026-10-31 (user): Hold boxes replace choosing
+the held bones by selecting them and Ctrl+clicking the hips.
 
 - [x] 1 The seated pose (hips on the floor, heels down, hands planted behind): an offset layer, select the
   hips, Gizmo: Drag. In GPose with Live on and paused, drag the hips forward 10 cm and up 5 cm: the feet
@@ -2069,10 +2071,11 @@ are and the legs, arms and back follow. Spec: docs/superpowers/specs/2026-10-27-
   the playhead only; one Undo takes the drag back. Left: a real mouse drag (the test drives the gizmo's hip step).
 - [x] 2 The layer's amount at 50 %: the hips still land under the gizmo and the feet and hands still hold.
   (XIV Bridge 351, 2026-10-28: within 0.0 mm in the evaluator and in game; the hips' key carries 2x the move.)
-- [x] 3 A standing dance frame, the hips alone selected: drag down 10 cm: the knees bend, the feet and
-  hands hold. Select both feet, then Ctrl+click the hips (the hint names the feet) and drag again: the
-  hands now ride with the body.
-  (XIV Bridge 352, 2026-10-28, Idle pose 3: knees 13/9 to 59/58 deg, the hint names the two feet only.)
+- [ ] 3 A standing dance frame, the hips alone selected: drag down 10 cm: the knees bend, the feet and
+  hands hold. Untick Left hand and Right hand under Hold and drag again: the hands now ride with the body.
+  Select the tail, then Ctrl+click the hips: a ticked Tail box joins the row and the tail holds; untick
+  all boxes: "Nothing holds; the hips move alone." and the whole body moves with the hips.
+  (Before the Hold boxes: XIV Bridge 352, 2026-10-28, Idle pose 3: knees 13/9 to 59/58 deg.)
 - [x] 4 Drag the hips up past the legs' reach: the legs straighten smoothly and the feet lift, nothing
   snaps; back down, the feet are back on the floor under the gizmo.
   (XIV Bridge 353, 2026-10-28: 2 cm steps, no jump; back down the feet are where they were.)
@@ -2088,10 +2091,12 @@ are and the legs, arms and back follow. Spec: docs/superpowers/specs/2026-10-27-
 
 Drag mode on the head (j_kao) moves it with the body following: the back leans whole about its lowest
 joint (j_sebo_a) toward the gizmo, the hips move by what the lean can't cover, and the head keeps
-facing the way it did. The other selected bones, or both feet, hold where they are; the arms ride
-with the body. On a layer that only turns bones the head drags as before (the neck bends). Decided
-2026-10-30 (user): feet only by default, the back leans at its length with the hips taking the rest,
-the head keeps its facing; the back stays straight (an even bend shortens it and lifts planted feet).
+facing the way it did. The bones ticked under Hold (both feet at first; the hands are offered unticked,
+plus any other selected bone that can hold) stay where they are; the rest rides with the body. On a
+layer that only turns bones the head drags as before (the neck bends). Decided 2026-10-30 (user): feet
+only by default, the back leans at its length with the hips taking the rest, the head keeps its facing;
+the back stays straight (an even bend shortens it and lifts planted feet). Changed 2026-10-31 (user):
+Hold boxes replace choosing the held bones by selecting them and Ctrl+clicking the head.
 
 - [ ] 1 A standing dance frame, an offset layer, select the head, Gizmo: Drag. In GPose with Live on and
   paused, drag the head forward and down along an arc: the torso leans over from the waist, the feet
@@ -2101,8 +2106,9 @@ the head keeps its facing; the back stays straight (an even bend shortens it and
   planted. Back up: it stands again.
 - [ ] 3 Drag the head straight up past the legs' reach: the legs straighten smoothly and the feet lift,
   nothing snaps; back down, the feet are back on the floor.
-- [ ] 4 Select the left hand, then Ctrl+click the head (the hint names the hand): drag the head
-  forward: the hand holds, the arm and clavicle bend; the feet now ride with the body.
+- [ ] 4 Select the head, Gizmo: Drag. Under Hold tick Left hand and untick both feet: drag the head
+  forward: the hand holds, the arm and clavicle bend; the feet now ride with the body. Select the hips
+  with Drag: their boxes are their own (all four ticked).
 - [ ] 5 The layer's amount at 50 %: the head still lands under the gizmo and the feet still hold.
 - [ ] 6 A pose layer with Position off: Drag on the head bends the neck as before, with the old tooltip.
 - [ ] 7 Undo once after a drag: the whole drag comes back in one step.

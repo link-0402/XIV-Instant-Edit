@@ -25,9 +25,9 @@ internal static class HipDragFixture
         int[] Held(SkeletonDescription skeleton, string[] selected) => [.. HipSolver.Anchors(skeleton, selected).Select(a => a.Bone)];
         int[] defaults = [FootL, FootR, HandL, HandR];
 
-        foreach (var selected in new[] { new[] { "j_kosi" }, [] })
+        foreach (var selected in new[] { [.. HipSolver.Defaults], new[] { "j_kosi", "j_te_r", "j_asi_d_l", "j_te_l", "j_asi_d_r" } })
         {
-            var name = selected.Length == 0 ? "nothing selected" : "the hips alone";
+            var name = selected.Length == 4 ? "the defaults" : "the hips and the defaults in another order";
             var anchors = HipSolver.Anchors(body, selected);
             check(anchors.Select(a => a.Bone).SequenceEqual(defaults), $"with {name} a drag holds both feet, then both hands");
             check(anchors[0].Chain.Shape == PinChainShape.Limb && Names(anchors[0].Chain.Bones).SequenceEqual(["j_asi_a_l", "j_asi_b_l"]) &&
@@ -45,18 +45,19 @@ internal static class HipDragFixture
                 $"with {name} a solve may turn the 17 chain bones and anchors, each once, ascending");
         }
 
-        check(Held(body, ["j_kosi", "n_hara", "n_root"]).SequenceEqual(defaults) && HipSolver.Candidates(body, ["j_kosi", "n_hara", "n_root"]).Count == 0,
-            "the hips and the bones above them are no candidates, so the defaults hold");
-        check(Held(body, ["j_asi_d_l", "j_kosi"]).SequenceEqual([FootL]), "a selected foot holds alone");
+        check(Held(body, ["j_kosi", "n_hara", "n_root"]).Length == 0 && HipSolver.Candidates(body, ["j_kosi", "n_hara", "n_root"]).Count == 0,
+            "the hips and the bones above them are no candidates, and the defaults don't hold in their place");
+        check(Held(body, []).Length == 0, "nothing to hold holds nothing");
+        check(Held(body, ["j_asi_d_l", "j_kosi"]).SequenceEqual([FootL]), "a foot alone holds alone");
         check(Held(body, ["j_kosi", "j_te_l", "j_ude_b_l"]).SequenceEqual([HandL]), "of a hand and its forearm only the lower, the hand, holds");
         check(Held(body, ["j_kosi", "j_sebo_a"]).Length == 0 && HipSolver.Candidates(body, ["j_kosi", "j_sebo_a"]).SequenceEqual([SpineA]),
-            "a bone right under the hips has nothing to bend and holds nothing, and the defaults stay off");
+            "a bone right under the hips has nothing to bend and holds nothing");
         check(Held(body, ["j_kosi", "j_asi_a_l"]).Length == 0 && HipSolver.Candidates(body, ["j_kosi", "j_asi_a_l"]).SequenceEqual([ThighL]),
             "a thigh has nothing to bend and holds nothing");
         check(HipSolver.Anchors(body, ["j_kosi", "n_sippo_b"]) is [{ Bone: TailB, Chain.Shape: PinChainShape.Chain } tail] &&
               Names(tail.Chain.Bones).SequenceEqual(["n_sippo_a"]),
             "another bone bends the chain from below the hips down to it");
-        check(Held(body, ["j_kosi", "j_nothing"]).SequenceEqual(defaults), "a bone the skeleton lacks is no candidate");
+        check(Held(body, ["j_kosi", "j_nothing"]).Length == 0, "a bone the skeleton lacks is no candidate");
 
         SkeletonDescription spine = new("spine", "spine-fingerprint",
         [
@@ -65,15 +66,15 @@ internal static class HipDragFixture
             new("j_kosi", Hara, 0, T(Vector3.Zero)),
             new("j_sebo_a", Hara, 0, T(new Vector3(0, .1f, 0))),
         ], [], [], []);
-        check(HipSolver.Anchors(spine, []).IsEmpty, "a skeleton without the default bones has no anchors");
+        check(HipSolver.Anchors(spine, HipSolver.Defaults).IsEmpty, "a skeleton without the default bones has no anchors");
         var hipless = body with { Bones = body.Bones.SetItem(Kosi, body.Bones[Kosi] with { Name = "j_kosi_x" }) };
-        check(HipSolver.Anchors(hipless, []).IsEmpty && HipSolver.Anchors(hipless, ["j_te_l"]).IsEmpty, "a skeleton without the hips has no anchors");
+        check(HipSolver.Anchors(hipless, HipSolver.Defaults).IsEmpty && HipSolver.Anchors(hipless, ["j_te_l"]).IsEmpty, "a skeleton without the hips has no anchors");
     }
 
     private static void Solving(Action<bool, string> check)
     {
         var body = Body();
-        var anchors = HipSolver.Anchors(body, []);
+        var anchors = HipSolver.Anchors(body, HipSolver.Defaults);
         var legs = new[] { anchors[0].Chain, anchors[1].Chain };
         int[] back = [SpineA, SpineB, Chest];
         // Both elbows bent 80 degrees: the hands sit well within the arms' reach, so the back needn't lean to hold them.
@@ -164,7 +165,7 @@ internal static class HipDragFixture
     {
         var body = Body();
         var index = MotionEvaluator.Index(body);
-        var anchors = HipSolver.Anchors(body, []);
+        var anchors = HipSolver.Anchors(body, HipSolver.Defaults);
         // Both elbows bent 80 degrees, as Solving starts: the hands stay within the arms' reach.
         var before = Rest();
         before[ForearmL] = before[ForearmL] with { Rotation = Q(Vector3.UnitY, 80) };
@@ -318,13 +319,30 @@ internal static class HipDragFixture
               TimelineWindowViews.DragGizmo(turnless, PinChains.Hips, body) == "This layer doesn't turn bones." &&
               TimelineWindowViews.DragGizmo(pose, null, body) == "Select a bone to drag.",
             "other bones drag as before, and the first rules still come first");
-        const string defaults = "The feet and hands hold where they are. To hold other bones instead, select them first, then Ctrl+click the hips.";
-        check(TimelineWindowViews.HipDragHint(body, [PinChains.Hips]) == defaults && TimelineWindowViews.HipDragHint(body, [PinChains.Hips, PinChains.Body]) == defaults,
-            "with nothing else that can hold selected, the hint names the feet and hands and says how to choose others");
-        check(TimelineWindowViews.HipDragHint(body, ["j_asi_d_l", "j_te_r", PinChains.Hips]) == "Holds where they are: Left Foot (j_asi_d_l), Right Hand (j_te_r).",
-            "the hint names the selected bones that hold");
-        check(TimelineWindowViews.HipDragHint(body, [PinChains.Hips, "j_sebo_a"]) == "Nothing holds; the hips move alone.",
-            "a selection none of which can hold holds nothing, not the defaults");
+        // The Hold boxes: the feet and hands always, ticked; other selected bones that can hold after them, ticked until unticked.
+        var holds = new DragHolds();
+        int[] Holding(params string[] selected) => [.. holds.Anchors(body, false, selected).Select(a => a.Bone)];
+        check(holds.Bones(body, false, [PinChains.Hips]).SequenceEqual(["j_asi_d_l", "j_asi_d_r", "j_te_l", "j_te_r"]) &&
+              Holding(PinChains.Hips).SequenceEqual([FootL, FootR, HandL, HandR]),
+            "the hips alone offer both feet and both hands, all ticked");
+        var boxes = holds.Bones(body, false, ["j_te_r", PinChains.Hips, "n_sippo_b", "j_sebo_a", "j_asi_a_l", PinChains.Body]);
+        check(boxes.SequenceEqual(["j_asi_d_l", "j_asi_d_r", "j_te_l", "j_te_r", "n_sippo_b"]),
+            $"a selected tail adds a box after the ends; a bone right under the hips, a thigh and the body add none, and an end shows once (got {string.Join(", ", boxes)})");
+        var tailHeld = Holding(PinChains.Hips, "n_sippo_b");
+        check(tailHeld.SequenceEqual([FootL, FootR, HandL, TailB, HandR]), $"the tail's box is ticked and the tail holds with the ends (got {string.Join(", ", tailHeld)})");
+        holds.Hold(false, "j_te_l", false);
+        holds.Hold(false, "n_sippo_b", false);
+        check(!holds.Holds(false, "j_te_l") && Holding(PinChains.Hips, "n_sippo_b").SequenceEqual([FootL, FootR, HandR]) && holds.Holds(true, PinChains.FootL),
+            "unticked bones stop holding, whether selected or not, and the head drag's boxes are its own");
+        check(holds.Bones(body, false, [PinChains.Hips]).SequenceEqual(["j_asi_d_l", "j_asi_d_r", "j_te_l", "j_te_r"]) && !holds.Holds(false, "n_sippo_b"),
+            "a bone no longer selected leaves the boxes and keeps its tick for next time");
+        foreach (var end in new[] { "j_asi_d_l", "j_asi_d_r", "j_te_r" })
+            holds.Hold(false, end, false);
+        check(holds.Anchors(body, false, [PinChains.Hips]).IsEmpty, "with every box unticked nothing holds, not the defaults");
+        holds.Hold(false, "j_te_l", true);
+        check(Holding(PinChains.Hips).SequenceEqual([HandL]), "ticking a box again holds it");
+        check(DragHolds.Label("j_te_l") == "Left hand" && DragHolds.Label("n_sippo_b") == AnimationPresentation.BoneName("n_sippo_b"),
+            "the ends have short labels, other bones their names");
 
         // The hips and a spine, and a bone right under the body: no feet or hands to hold.
         SkeletonDescription spine = new("spine", "spine-fingerprint",
@@ -338,8 +356,7 @@ internal static class HipDragFixture
         var underBody = $"{AnimationPresentation.BoneName("n_throw")} sits right under the body, so nothing can bend to drag it.";
         check(TimelineWindowViews.DragGizmo(pose, "n_throw", spine) == underBody && TimelineWindowViews.DragGizmo(pose, "n_throw", spine, MotionEvaluator.Index(spine)) == underBody,
             "a bone right under the body has nothing to bend to drag it");
-        check(TimelineWindowViews.HipDragHint(spine, [PinChains.Hips]) == "Nothing holds; the hips move alone.",
-            "without the feet and hands on the skeleton, the hint says nothing holds, not the defaults");
+        check(new DragHolds().Bones(spine, false, [PinChains.Hips]).IsEmpty, "without the feet and hands on the skeleton there are no boxes");
     }
 
     // PinLayerFixture's small body with a mirrored right clavicle and arm: both legs from the hips, the spine

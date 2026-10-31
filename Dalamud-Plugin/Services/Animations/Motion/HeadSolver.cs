@@ -10,7 +10,7 @@ namespace InstantEdit.Services.Animations.Motion;
 /// </summary>
 internal static class HeadSolver
 {
-    /// <summary>Held when nothing else is selected with the head: both feet. The arms ride with the body.</summary>
+    /// <summary>What a head drag holds until the user changes it: both feet. The arms ride with the body.</summary>
     public static readonly ImmutableArray<string> Defaults = [PinChains.FootL, PinChains.FootR];
 
     private const float Tiny = 1e-6f;
@@ -33,7 +33,7 @@ internal static class HeadSolver
             : null;
     }
 
-    /// <summary>The selected bones that may hold: those a hip drag may hold (<see cref="HipSolver.Candidates"/>), less the back that leans, the head and what hangs from it.</summary>
+    /// <summary>The bones of <paramref name="selected"/> that may hold: those a hip drag may hold (<see cref="HipSolver.Candidates"/>), less the back that leans, the head and what hangs from it.</summary>
     public static List<int> Candidates(SkeletonDescription skeleton, IEnumerable<string> selected) =>
         Back(skeleton) is { } back ? Candidates(skeleton, back, selected) : [];
 
@@ -41,16 +41,14 @@ internal static class HeadSolver
         [.. HipSolver.Candidates(skeleton, selected).Where(bone => bone != back.End && !back.Bones.Contains(bone) && !PinChains.IsBelow(skeleton, bone, back.End))];
 
     /// <summary>
-    /// The anchors of a head drag: the candidates, or with none the defaults the skeleton has; each with the chain from its farthest
-    /// ancestor below the hips and off the back down to it, so a hand bends its arm and clavicle. In skeleton order; empty without <see cref="Back"/>.
+    /// The anchors of a head drag that holds <paramref name="held"/>: their candidates, each with the chain from its farthest ancestor
+    /// below the hips and off the back down to it, so a hand bends its arm and clavicle. In skeleton order; empty without <see cref="Back"/>.
     /// </summary>
-    public static ImmutableArray<HipAnchor> Anchors(SkeletonDescription skeleton, IEnumerable<string> selected)
+    public static ImmutableArray<HipAnchor> Anchors(SkeletonDescription skeleton, IEnumerable<string> held)
     {
         if (Back(skeleton) is not { } back)
             return [];
-        var candidates = Candidates(skeleton, back, selected);
-        if (candidates.Count == 0)
-            candidates = Candidates(skeleton, back, Defaults);
+        var candidates = Candidates(skeleton, back, held);
         var leaning = back.Bones.Select(bone => skeleton.Bones[bone].Name).ToHashSet(StringComparer.Ordinal);
         return HipSolver.Chains(skeleton, candidates, leaning.Contains);
     }

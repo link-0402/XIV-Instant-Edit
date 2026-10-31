@@ -27,9 +27,9 @@ internal static class HeadDragFixture
         var back = HeadSolver.Back(body)!;
         int[] Held(string[] selected) => [.. HeadSolver.Anchors(body, selected).Select(a => a.Bone)];
 
-        foreach (var selected in new[] { new[] { "j_kao" }, [] })
+        foreach (var selected in new[] { [.. HeadSolver.Defaults], new[] { "j_kao", "j_asi_d_r", "j_asi_d_l" } })
         {
-            var name = selected.Length == 0 ? "nothing selected" : "the head alone";
+            var name = selected.Length == 2 ? "the defaults" : "the head and the defaults in another order";
             var anchors = HeadSolver.Anchors(body, selected);
             check(anchors.Select(a => a.Bone).SequenceEqual([FootL, FootR]), $"with {name} a head drag holds both feet, not the hands");
             check(anchors.All(a => a.Chain.Shape == PinChainShape.Limb && a.Chain.Bones.Length == 2), $"with {name} a foot bends the thigh and the knee");
@@ -38,16 +38,16 @@ internal static class HeadDragFixture
         }
         check(HeadSolver.Anchors(body, ["j_te_l", "j_kao"]) is [{ Bone: HandL, Chain.Shape: PinChainShape.Limb } hand] &&
               Names(hand.Chain.Bones).SequenceEqual(["j_sako_l", "j_ude_a_l", "j_ude_b_l"]),
-            "a selected hand holds alone and bends its arm and clavicle, not the back");
+            "a hand alone holds alone and bends its arm and clavicle, not the back");
         foreach (var bone in new[] { "j_sebo_a", "j_sebo_b", "j_kubi", "j_ago", "j_kosi", "n_hara" })
-            check(HeadSolver.Candidates(body, [bone, "j_kao"]).Count == 0 && Held([bone, "j_kao"]).SequenceEqual([FootL, FootR]),
-                $"{bone}, on the head's line or at or above the hips, can't hold, so the feet do");
+            check(HeadSolver.Candidates(body, [bone, "j_kao"]).Count == 0 && Held([bone, "j_kao"]).Length == 0,
+                $"{bone}, on the head's line or at or above the hips, can't hold, and the feet don't in its place");
         check(Held(["j_sako_l", "j_kao"]).Length == 0 && HeadSolver.Candidates(body, ["j_sako_l", "j_kao"]).SequenceEqual([ClavicleL]),
             "a clavicle hangs from the back that leans, so it has nothing to bend and holds nothing");
 
         var headless = body with { Bones = body.Bones.SetItem(Head, body.Bones[Head] with { Name = "j_kao_x" }) };
         var hipless = body with { Bones = body.Bones.SetItem(Kosi, body.Bones[Kosi] with { Name = "j_kosi_x" }) };
-        check(HeadSolver.Back(headless) == null && HeadSolver.Back(hipless) == null && HeadSolver.Anchors(hipless, []).IsEmpty && HeadSolver.Candidates(hipless, ["j_te_l"]).Count == 0,
+        check(HeadSolver.Back(headless) == null && HeadSolver.Back(hipless) == null && HeadSolver.Anchors(hipless, HeadSolver.Defaults).IsEmpty && HeadSolver.Candidates(hipless, ["j_te_l"]).Count == 0,
             "a skeleton without the head or the hips has no head drag");
         // The back hangs from the body, but under another name than the one the hips carry: their move wouldn't take it along.
         var stray = body with { Bones = body.Bones.SetItem(SpineA, body.Bones[SpineA] with { Name = "j_sebo_x" }) };
@@ -58,7 +58,7 @@ internal static class HeadDragFixture
     {
         var body = Body();
         var back = HeadSolver.Back(body)!;
-        var feet = HeadSolver.Anchors(body, []);
+        var feet = HeadSolver.Anchors(body, HeadSolver.Defaults);
         var start = Rest();
         var startModel = MotionEvaluator.ModelSpace(body, start);
         var head = startModel[Head].Position;
@@ -124,7 +124,7 @@ internal static class HeadDragFixture
         var body = Body();
         var index = MotionEvaluator.Index(body);
         var back = HeadSolver.Back(body)!;
-        var feet = HeadSolver.Anchors(body, []);
+        var feet = HeadSolver.Anchors(body, HeadSolver.Defaults);
         var before = Rest();
         var beforeModel = MotionEvaluator.ModelSpace(body, before);
         TimelineDocument Doc(MotionLayer layer) => new TimelineDocument(100, 100, null, [], 1) with { Motion = [layer] };
@@ -216,12 +216,16 @@ internal static class HeadDragFixture
         check(!TimelineWindowViews.HeadDrag(pose, "j_kubi", body) && !TimelineWindowViews.HeadDrag(pose, PinChains.Head, null) && !TimelineWindowViews.HeadDrag(pose, PinChains.Head, hipless),
             "other bones, an unknown skeleton and one without the hips have no head drag");
 
-        const string defaults = "The feet hold where they are. To hold other bones instead, select them first, then Ctrl+click the head.";
-        check(TimelineWindowViews.HeadDragHint(body, [PinChains.Head]) == defaults && TimelineWindowViews.HeadDragHint(body, [PinChains.Head, "j_sebo_b"]) == defaults,
-            "with nothing else that can hold selected, the hint names the feet and says how to choose others");
-        check(TimelineWindowViews.HeadDragHint(body, ["j_te_r", PinChains.Head]) == "Holds where they are: Right Hand (j_te_r).", "the hint names the selected bones that hold");
-        check(TimelineWindowViews.HeadDragHint(body, ["j_sako_l", PinChains.Head]) == "Nothing holds; the whole body follows the head.",
-            "a selection none of which can hold holds nothing, not the feet");
+        // The Hold boxes: the feet and hands, the hands unticked at first; a selected bone on the head's line or a clavicle adds none.
+        var holds = new DragHolds();
+        int[] Holding(params string[] selected) => [.. holds.Anchors(body, true, selected).Select(a => a.Bone)];
+        check(holds.Bones(body, true, [PinChains.Head, "j_sebo_b", "j_sako_l"]).SequenceEqual(["j_asi_d_l", "j_asi_d_r", "j_te_l", "j_te_r"]) &&
+              holds.Holds(true, "j_asi_d_l") && !holds.Holds(true, "j_te_l") && Holding(PinChains.Head).SequenceEqual([FootL, FootR]),
+            "the head offers both feet, ticked, and both hands, unticked; the back and a clavicle add no box");
+        holds.Hold(true, "j_te_l", true);
+        holds.Hold(true, "j_asi_d_l", false);
+        holds.Hold(true, "j_asi_d_r", false);
+        check(Holding(PinChains.Head).SequenceEqual([HandL]) && holds.Holds(false, "j_asi_d_l"), "ticking the left hand and unticking the feet holds the hand alone; the hip drag's boxes stay");
     }
 
     /// <summary>A head drag from <paramref name="start"/> to <paramref name="aim"/> on fresh copies, as each drag frame solves.</summary>

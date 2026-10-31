@@ -10,7 +10,7 @@ internal sealed record HipAnchor(int Bone, PinChain Chain, Vector3 RestNormal);
 /// <summary>What a hip drag holds and how the body bends around the moved hips. Pure.</summary>
 internal static class HipSolver
 {
-    /// <summary>Held when nothing else is selected with the hips: both feet and both hands.</summary>
+    /// <summary>What a hip drag holds until the user unticks it: both feet and both hands.</summary>
     public static readonly ImmutableArray<string> Defaults = [PinChains.FootL, PinChains.FootR, "j_te_l", "j_te_r"];
 
     /// <summary>The bone the upper body hangs from, which the hips' move carries along: the game's lowest back bone, a sibling of the hips.</summary>
@@ -26,7 +26,7 @@ internal static class HipSolver
             : -1;
     }
 
-    /// <summary>The selected bones that may hold: those the skeleton has below the hips or at or below the carried back, in skeleton order; the hips and bones above them are left out.</summary>
+    /// <summary>The bones of <paramref name="selected"/> that may hold: those the skeleton has below the hips or at or below the carried back, in skeleton order; the hips and bones above them are left out.</summary>
     public static List<int> Candidates(SkeletonDescription skeleton, IEnumerable<string> selected)
     {
         var index = MotionEvaluator.Index(skeleton);
@@ -41,17 +41,12 @@ internal static class HipSolver
     }
 
     /// <summary>
-    /// The anchors of a drag: the candidates, or with none the defaults the skeleton has; each with the chain from its
-    /// farthest ancestor below the hips down to it. A bone whose parent is the hips has nothing to bend and is left out;
-    /// of two on one line only the lower holds. In skeleton order. Empty on a skeleton without the hips.
+    /// The anchors of a drag that holds <paramref name="held"/>: their candidates, each with the chain from its farthest
+    /// ancestor below the hips down to it. A bone whose parent is the hips has nothing to bend and is left out; of two on
+    /// one line only the lower holds. In skeleton order. Empty on a skeleton without the hips.
     /// </summary>
-    public static ImmutableArray<HipAnchor> Anchors(SkeletonDescription skeleton, IEnumerable<string> selected)
-    {
-        var candidates = Candidates(skeleton, selected);
-        if (candidates.Count == 0)
-            candidates = Candidates(skeleton, Defaults);
-        return Chains(skeleton, candidates, _ => false);
-    }
+    public static ImmutableArray<HipAnchor> Anchors(SkeletonDescription skeleton, IEnumerable<string> held) =>
+        Chains(skeleton, Candidates(skeleton, held), _ => false);
 
     /// <summary>
     /// <paramref name="candidates"/> as anchors, each with the chain from its farthest ancestor below the hips and below every bone
