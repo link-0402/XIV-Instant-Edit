@@ -2961,3 +2961,23 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   jitter), greyed out with their
   reasons as the old buttons were. Each adds over the whole clip, as before. On a read-only timeline
   every item is greyed out.
+
+## Partners (pending)
+
+The Timeline start page's Partners page spawns a second GPose actor from a preset that links a Penumbra collection, a
+Glamourer design and a Customize+ profile. Spec: docs/superpowers/specs/2026-10-30-partner-spawner-design.md (local
+only).
+
+- [ ] 1 Make a preset "Aria Rose" with a collection, a design and a C+ profile; in GPose Spawn: the partner stands on
+  your spot facing your way, wearing the design with the profile's proportions and the collection's mods.
+- [ ] 2 While spawned, Penumbra's Individual Assignments list "Aria Rose" with that collection; after Despawn the entry
+  is gone.
+- [ ] 3 Leave GPose with the partner spawned: it disappears and the Individual entry is gone.
+- [ ] 4 Delete the preset's design in Glamourer: the row shows it missing; Spawn still works and lists "Design <name>
+  no longer exists" with the name of the design you deleted.
+- [ ] 5 A Glamourer automation set for "Aria Rose" doesn't change the spawned look.
+- [ ] 6 "Aria" alone and your own name are refused with their messages.
+- [ ] 7 Reload Instant Edit with a partner spawned: the partner is gone and Penumbra lists no "Aria Rose".
+- [ ] 8 The Partners page: right-click a row (its name or links) for Edit and Delete; Edit opens the editor with the
+  preset's values; the name box takes 21 characters; delete a linked design in Glamourer and the row marks it
+  (missing) within 5 seconds.
