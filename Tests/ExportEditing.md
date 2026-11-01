@@ -82,6 +82,9 @@ The headless suites cover the rig coming back with the skeleton. This needs the 
 ## Split by Material 2026-10-27 (pending)
 
 The headless Blender suites cover Split by Material. This needs Blender's own window:
-- [ ] Select a model with several materials and choose Split by Material in the Material Properties
+- [x] Select a model with several materials and choose Split by Material in the Material Properties
   menu (the v menu). Each material becomes its own mesh, numbered with a free mesh number. One Ctrl+Z
   puts everything back.
+  (Blender-Addon/testing/split_by_material_menu_regression.py, headless 2026-10-31, now in run_blender_suites.py's
+  SUITES: the v menu's entry splits a three-material outfit into one mesh per material with free, unique mesh numbers,
+  and one undo puts everything back. The Ctrl+Z key itself: by hand, the keymap doesn't load headless.)
