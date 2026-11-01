@@ -7,7 +7,7 @@ using Penumbra.Api.Enums;
 
 namespace InstantEdit.Services.Physics;
 
-/// <summary> The temporary mod a physics preview registered, saved before Penumbra is called so a crash can't leave it behind. </summary>
+/// <summary> The temporary mod a file preview registered, saved before Penumbra is called so a crash can't leave it behind. </summary>
 internal sealed record PhysicsPreviewRecord
 {
     public required string Tag { get; init; }
@@ -36,7 +36,6 @@ internal sealed class PhysicsPreviewService : IDisposable
     public const string Tag = "XIV Instant Edit physics preview";
     public const string CacheFolder = "physics-preview";
     public const int Priority = int.MaxValue;
-    private const string RecordFile = "PhysicsPreview.json";
     private const int VerifyAttempts = 10;
     private static readonly TimeSpan VerifyDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan RedrawSettle = TimeSpan.FromMilliseconds(1500);
@@ -44,6 +43,9 @@ internal sealed class PhysicsPreviewService : IDisposable
     private static readonly Regex SessionName = new("^[0-9a-f]{16}$", RegexOptions.CultureInvariant);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
+    private readonly FilePreviewKind kind;
+    // "physics" and "Physics" for physics previews: how logs and messages name the preview.
+    private readonly string noun, Noun;
     private readonly PenumbraIpc penumbra;
     private readonly PreviewModWriter previewMods;
     private readonly IFramework framework;
@@ -63,17 +65,21 @@ internal sealed class PhysicsPreviewService : IDisposable
     private PhysicsPreviewNotice? notice;
     private volatile bool disposed;
 
-    public PhysicsPreviewService(PenumbraIpc penumbra, PreviewModWriter previewMods, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot)
+    public PhysicsPreviewService(PenumbraIpc penumbra, PreviewModWriter previewMods, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot,
+        FilePreviewKind? kind = null)
     {
+        this.kind = kind ?? FilePreviewKind.Physics;
+        noun = this.kind.File.Noun;
+        Noun = char.ToUpperInvariant(noun[0]) + noun[1..];
         this.penumbra = penumbra;
         this.previewMods = previewMods;
         this.framework = framework;
         this.log = log;
         this.cacheRoot = cacheRoot;
-        recordPath = Path.Combine(configDirectory, RecordFile);
+        recordPath = Path.Combine(configDirectory, this.kind.RecordFile);
         record = LoadRecord();
         try { lifecycle = penumbra.SubscribePenumbraLifecycle(OnPenumbraRestarted); }
-        catch (Exception e) { log.Warning(e, "Could not watch Penumbra restarts for the physics preview."); }
+        catch (Exception e) { log.Warning(e, $"Could not watch Penumbra restarts for the {noun} preview."); }
         startup = Task.Run(CleanUpLeftoversAsync);
     }
 
@@ -116,13 +122,13 @@ internal sealed class PhysicsPreviewService : IDisposable
         try
         {
             gamePath = PathRules.NormalizeGamePath(gamePath).ToLowerInvariant();
-            if (!ModPaths.IsSafeGameResourcePath(gamePath, ".phyb") || bytes.Length is 0 or > PhybFile.MaxFileBytes)
+            if (!ModPaths.IsSafeGameResourcePath(gamePath, kind.File.Extension) || bytes.Length == 0 || bytes.Length > kind.File.MaxBytes)
                 throw new InvalidDataException("The preview file is invalid.");
             if (!penumbra.Available)
                 throw new IOException("Penumbra is not available.");
             var collection = await penumbra.TemporaryModCollectionAsync(objectIndex).ConfigureAwait(false)
                 ?? throw new IOException("Your character's Penumbra collection is unavailable.");
-            var root = Path.Combine(Path.GetFullPath(cacheRoot()), CacheFolder);
+            var root = Path.Combine(Path.GetFullPath(cacheRoot()), kind.CacheFolder);
             var modRoot = await previewMods.PreviewModRootAsync().ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(modRoot) && (PathRules.IsPathWithin(root, modRoot) || PathRules.IsPathWithin(modRoot, root)))
                 throw new IOException("The cache folder is inside Penumbra's mod folder. Choose another cache folder in Settings.");
@@ -152,7 +158,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             }
             var current = new PhysicsPreviewRecord
             {
-                Tag = Tag, CollectionId = collection.Id, Priority = Priority, SessionFolder = sessionFolder, CreatedUtc = DateTime.UtcNow,
+                Tag = kind.Tag, CollectionId = collection.Id, Priority = Priority, SessionFolder = sessionFolder, CreatedUtc = DateTime.UtcNow,
                 ObjectIndex = objectIndex,
             };
             SaveRecord(current);
@@ -161,7 +167,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             try
             {
                 var added = await framework.RunOnFrameworkThread(() =>
-                    penumbra.AddTemporaryModOnFramework(Tag, collection.Id, new Dictionary<string, string> { [gamePath] = file }, string.Empty, Priority)).ConfigureAwait(false);
+                    penumbra.AddTemporaryModOnFramework(kind.Tag, collection.Id, new Dictionary<string, string> { [gamePath] = file }, string.Empty, Priority)).ConfigureAwait(false);
                 if (added != PenumbraApiEc.Success)
                     throw new IOException($"Penumbra could not add the preview ({added}).");
                 await VerifyAsync(collection.Id, gamePath, file).ConfigureAwait(false);
@@ -169,7 +175,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             catch
             {
                 try { await StopLockedAsync(redrawObject: null).ConfigureAwait(false); }
-                catch (Exception stop) { log.Warning(stop, "Could not end the physics preview after a failed update."); }
+                catch (Exception stop) { log.Warning(stop, $"Could not end the {noun} preview after a failed update."); }
                 throw;
             }
 
@@ -182,7 +188,7 @@ internal sealed class PhysicsPreviewService : IDisposable
                 TryDelete(Path.Combine(sessionFolder, older));
             if (oldSession != null && !sameSession)
                 TryDelete(oldSession);
-            log.Information($"Physics preview {next} registered in {collection.Name} at {gamePath}.");
+            log.Information($"{Noun} preview {next} registered in {collection.Name} at {gamePath}.");
             if (await penumbra.RedrawObjectAsync(objectIndex).ConfigureAwait(false) is { } redraw)
                 return redraw;
             CheckAfterRedraw(objectIndex, collection.Id, gamePath, file, bytes.Length, sessionFolder, next);
@@ -264,7 +270,7 @@ internal sealed class PhysicsPreviewService : IDisposable
                 var resolved = (await penumbra.ResolveCollectionPathsAsync(collection, [gamePath]).ConfigureAwait(false))[0];
                 if (PathRules.SamePhysicalPath(resolved, file))
                 {
-                    log.Information($"Physics preview still served after the redraw ({size} bytes).");
+                    log.Information($"{Noun} preview still served after the redraw ({size} bytes).");
                     return;
                 }
                 await gate.WaitAsync(life.Token).ConfigureAwait(false);
@@ -281,7 +287,7 @@ internal sealed class PhysicsPreviewService : IDisposable
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception e) { log.Warning(e, "Could not check the physics preview after the redraw."); }
+            catch (Exception e) { log.Warning(e, $"Could not check the {noun} preview after the redraw."); }
         });
 
     /// <summary> Whether revision <paramref name="shown"/> of <paramref name="sessionFolder"/> is still the preview Penumbra has. </summary>
@@ -293,17 +299,17 @@ internal sealed class PhysicsPreviewService : IDisposable
     /// <summary> Adds a preview that lost its path again and redraws; a warning when it still loses, naming the file that wins. </summary>
     private async Task<string?> AddAgainAsync(int objectIndex, Guid collection, string gamePath, string file, string? resolved)
     {
-        log.Warning($"Physics preview lost after the redraw: Penumbra resolves {gamePath} to {resolved ?? "nothing"} instead of {file}. Adding it again.");
+        log.Warning($"{Noun} preview lost after the redraw: Penumbra resolves {gamePath} to {resolved ?? "nothing"} instead of {file}. Adding it again.");
         var added = await framework.RunOnFrameworkThread(() =>
-            penumbra.AddTemporaryModOnFramework(Tag, collection, new Dictionary<string, string> { [gamePath] = file }, string.Empty, Priority)).ConfigureAwait(false);
+            penumbra.AddTemporaryModOnFramework(kind.Tag, collection, new Dictionary<string, string> { [gamePath] = file }, string.Empty, Priority)).ConfigureAwait(false);
         if (added != PenumbraApiEc.Success)
             return $"Penumbra dropped the preview after the redraw and could not add it again ({added}).";
         try { await VerifyAsync(collection, gamePath, file).ConfigureAwait(false); }
         catch (IOException)
         {
             var winner = (await penumbra.ResolveCollectionPathsAsync(collection, [gamePath]).ConfigureAwait(false))[0];
-            log.Warning($"Physics preview still loses to {winner ?? "nothing"}.");
-            return $"Penumbra uses {Path.GetFileName(winner) ?? "another file"} instead of the preview. Turn your physics mod off and preview again.";
+            log.Warning($"{Noun} preview still loses to {winner ?? "nothing"}.");
+            return $"Penumbra uses {Path.GetFileName(winner) ?? "another file"} instead of the preview. Turn your {noun} mod off and preview again.";
         }
         return await penumbra.RedrawObjectAsync(objectIndex).ConfigureAwait(false);
     }
@@ -323,7 +329,7 @@ internal sealed class PhysicsPreviewService : IDisposable
                 var removed = await penumbra.RemoveTemporaryModAsync(leftover.Tag, leftover.CollectionId, leftover.Priority).ConfigureAwait(false);
                 if (!removed.Gone)
                 {
-                    log.Warning($"Could not remove the last physics preview from Penumbra: {removed.Error}");
+                    log.Warning($"Could not remove the last {noun} preview from Penumbra: {removed.Error}");
                     return;
                 }
                 TryDelete(leftover.SessionFolder);
@@ -334,7 +340,7 @@ internal sealed class PhysicsPreviewService : IDisposable
                     await penumbra.RedrawObjectAsync(index).ConfigureAwait(false);
             }
             string root;
-            try { root = Path.Combine(Path.GetFullPath(cacheRoot()), CacheFolder); }
+            try { root = Path.Combine(Path.GetFullPath(cacheRoot()), kind.CacheFolder); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return; }
             foreach (var name in Subfolders(root).Where(name => SessionName.IsMatch(name)))
             {
@@ -349,7 +355,7 @@ internal sealed class PhysicsPreviewService : IDisposable
         }
         catch (Exception e)
         {
-            log.Warning(e, "Could not clean up the last physics preview.");
+            log.Warning(e, $"Could not clean up the last {noun} preview.");
         }
     }
 
@@ -368,7 +374,7 @@ internal sealed class PhysicsPreviewService : IDisposable
                 finally { gate.Release(); }
             }
             catch (OperationCanceledException) { }
-            catch (Exception e) { log.Warning(e, "Could not end the physics preview after Penumbra restarted."); }
+            catch (Exception e) { log.Warning(e, $"Could not end the {noun} preview after Penumbra restarted."); }
         });
     }
 
@@ -383,7 +389,7 @@ internal sealed class PhysicsPreviewService : IDisposable
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
         {
-            log.Warning(e, "Could not read the physics preview record.");
+            log.Warning(e, $"Could not read the {noun} preview record.");
             return null;
         }
     }
@@ -405,18 +411,18 @@ internal sealed class PhysicsPreviewService : IDisposable
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            log.Warning(e, "Could not delete the physics preview record.");
+            log.Warning(e, $"Could not delete the {noun} preview record.");
         }
     }
 
-    /// <summary> A session folder this feature made: a session name directly inside a physics-preview folder. </summary>
-    private static bool IsSessionFolder(string? path)
+    /// <summary> A session folder this feature made: a session name directly inside the kind's cache folder. </summary>
+    private bool IsSessionFolder(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
             return false;
         var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
         return SessionName.IsMatch(Path.GetFileName(full)) &&
-               string.Equals(Path.GetFileName(Path.GetDirectoryName(full)), CacheFolder, StringComparison.OrdinalIgnoreCase);
+               string.Equals(Path.GetFileName(Path.GetDirectoryName(full)), kind.CacheFolder, StringComparison.OrdinalIgnoreCase);
     }
 
     private static IEnumerable<string> Subfolders(string folder)
@@ -444,7 +450,7 @@ internal sealed class PhysicsPreviewService : IDisposable
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            log.Debug(e, "Could not delete the physics preview folder {Folder}.", folder);
+            log.Debug(e, $"Could not delete the {noun} preview folder {{Folder}}.", folder);
         }
     }
 
@@ -482,7 +488,7 @@ internal sealed class PhysicsPreviewService : IDisposable
             }
             if (!removed.Gone)
             {
-                log.Warning($"Could not remove the physics preview from Penumbra while unloading: {removed.Error}");
+                log.Warning($"Could not remove the {noun} preview from Penumbra while unloading: {removed.Error}");
                 return;
             }
             TryDelete(current.SessionFolder);
@@ -490,7 +496,7 @@ internal sealed class PhysicsPreviewService : IDisposable
         }
         catch (Exception e)
         {
-            log.Warning(e, "Could not remove the physics preview while unloading; the next load removes it.");
+            log.Warning(e, $"Could not remove the {noun} preview while unloading; the next load removes it.");
         }
     }
 }

@@ -186,6 +186,13 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public List<Services.Physics.PhysicsSavedMod> PhysicsMods { get; set; } = [];
 
+    /// <summary> The Head tracking card's mod (one for every race saved) and its identifier, so saves follow it when renamed. </summary>
+    public string HeadTrackingModDirectory { get; set; } = "";
+    public Guid HeadTrackingModIdentifier { get; set; }
+
+    /// <summary> The head tracking each race was saved with. Replaced as a whole, never changed in place. </summary>
+    public List<Services.Skeletons.HeadTrackingSaved> HeadTrackingRaces { get; set; } = [];
+
     /// <summary> The physics builder previews every change on your character once you let go of a control. </summary>
     public bool PhysicsAutoPreview { get; set; }
 

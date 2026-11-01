@@ -69,6 +69,7 @@ public sealed class MainWindow : Window, IDisposable
     private readonly TextureCompressionCard _compressionCard;
     private readonly HeelsOffsetCard _heelsCard;
     private readonly PhysicsCard _physicsCard;
+    private readonly HeadTrackingCard _headTrackingCard;
     private readonly SendCharacterCard _sendCharacterCard;
     private readonly QuickActionsTab _quickActions;
     // Whether the Timeline window keeps the listener running.
@@ -119,6 +120,7 @@ public sealed class MainWindow : Window, IDisposable
         _compressionCard = new TextureCompressionCard(config, log, _notifications, lifetime);
         _heelsCard = new HeelsOffsetCard(config, saveConfig, _feed);
         _physicsCard = new PhysicsCard();
+        _headTrackingCard = new HeadTrackingCard();
         _sendCharacterCard = new SendCharacterCard(config, saveConfig, onScreen, penumbra, blender, _blenderConnection, _models, _animationHub,
             _animationDelivery, _recorder, resourceSources, chat, log, _feed, lifetime);
         // The cards in their built-in order; the user's order and removed cards are applied by the tab.
@@ -128,6 +130,7 @@ public sealed class MainWindow : Window, IDisposable
             _heelsCard.Card,
             new SkinSeamCard(onScreen, _skinSeams).Card,
             _physicsCard.Card,
+            _headTrackingCard.Card,
             new PaintSkinCard(config, onScreen, _painter, openSettings).Card,
             _sendCharacterCard.Card,
         ]);
@@ -260,6 +263,8 @@ public sealed class MainWindow : Window, IDisposable
     internal void AttachHeelsOffset(HeelsOffsetService service) => _heelsCard.Attach(service);
 
     internal void AttachPhysics(Action open) => _physicsCard.Attach(open);
+
+    internal void AttachHeadTracking(Services.Skeletons.HeadTrackingService service) => _headTrackingCard.Attach(service);
 
     /// <summary> Material rows of On Screen, Game Files and the mod windows open the Material window; a mod window's can save a copy into an option. </summary>
     internal void AttachMaterials(Action<ResourceView, ActorView, IModFileCopies?> edit, Func<ResourceView, string?> block)

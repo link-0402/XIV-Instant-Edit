@@ -20,6 +20,7 @@ internal sealed record PhysicsModSaved(string Directory, Guid Identifier, string
 /// The physics builder's own mods, one per name you save under, whose default option maps each race's
 /// body physics file. Every save writes a new file name (the game never reads a path it already loaded
 /// again) and removes the mod's older ones; the mod is enabled at a high priority in the character's collection.
+/// The same single-file mods hold other <see cref="ModFileKind"/>s too (head tracking's skeleton parameters).
 /// </summary>
 internal sealed class PhysicsModService
 {
@@ -45,21 +46,29 @@ internal sealed class PhysicsModService
 
     internal const string PhysicsFolder = "physics";
     private const int PreviewModPriority = PreviewModWriter.PreviewModPriority;
-    private static readonly Regex PhysicsFileVersion = new(@"\.(?<n>\d{1,9})\.phyb$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary> Matches "phy_c0801b0001.3.phyb" for physics: a saved copy's version number. </summary>
+    private static Regex FileVersion(ModFileKind kind) =>
+        new($@"\.(?<n>\d{{1,9}}){Regex.Escape(kind.Extension)}$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <inheritdoc cref="SaveFileModAsync"/>
+    internal Task<PhysicsModSaved> SavePhysicsModAsync(string? directory, Guid identifier, string name, string description,
+        string gamePath, byte[] bytes, int objectIndex, CancellationToken token)
+        => SaveFileModAsync(ModFileKind.Physics, directory, identifier, name, description, gamePath, bytes, objectIndex, token);
 
     /// <summary>
-    /// Writes <paramref name="bytes"/> as the file for <paramref name="gamePath"/> into the physics mod
+    /// Writes <paramref name="bytes"/> as the file for <paramref name="gamePath"/> into the mod
     /// at <paramref name="directory"/> when it is still the mod with <paramref name="identifier"/>, or
     /// into a new mod named <paramref name="name"/> otherwise (refused when another mod has that name). Then reloads or adds the mod and enables
     /// it at <see cref="PreviewModPriority"/> in the collection of the object at <paramref name="objectIndex"/>.
     /// Doesn't redraw.
     /// </summary>
-    internal async Task<PhysicsModSaved> SavePhysicsModAsync(string? directory, Guid identifier, string name, string description,
+    internal async Task<PhysicsModSaved> SaveFileModAsync(ModFileKind kind, string? directory, Guid identifier, string name, string description,
         string gamePath, byte[] bytes, int objectIndex, CancellationToken token)
     {
         gamePath = NormalizeGamePath(gamePath);
-        if (!IsSafeGameResourcePath(gamePath, ".phyb") || bytes.Length == 0)
-            throw new InvalidDataException("The physics file to save is invalid.");
+        if (!IsSafeGameResourcePath(gamePath, kind.Extension) || bytes.Length == 0 || bytes.Length > kind.MaxBytes)
+            throw new InvalidDataException($"The {kind.Noun} file to save is invalid.");
         var collection = await _ipc.GetCollectionTargetAsync(objectIndex).ConfigureAwait(false)
             ?? throw new IOException("Your character's Penumbra collection is unavailable. Try again once your character is loaded.");
 
@@ -82,7 +91,7 @@ internal sealed class PhysicsModService
             if (FindPhysicsModFolder(root, directory, identifier, listed?.Keys) is { } existing)
             {
                 modDirectory = existing;
-                relative = UpdatePhysicsModFiles(Path.Combine(root, existing), gamePath, bytes);
+                relative = UpdateModFiles(kind, Path.Combine(root, existing), gamePath, bytes);
                 created = false;
             }
             else
@@ -99,11 +108,11 @@ internal sealed class PhysicsModService
                 var target = Path.GetFullPath(Path.Combine(root, modDirectory));
                 if (!IsPathWithin(target, root))
                     throw new IOException("The new mod's folder is outside Penumbra's mod directory.");
-                var staging = Path.Combine(root, $".instant-edit-physics-{Guid.NewGuid():N}.tmp");
+                var staging = Path.Combine(root, $".instant-edit-{kind.Folder}-{Guid.NewGuid():N}.tmp");
                 try
                 {
                     Directory.CreateDirectory(staging);
-                    relative = CreatePhysicsModFiles(staging, modDirectory, description, gamePath, bytes, _author());
+                    relative = CreateModFiles(kind, staging, modDirectory, description, gamePath, bytes, _author());
                     token.ThrowIfCancellationRequested();
                     Directory.Move(staging, target);
                 }
@@ -138,12 +147,38 @@ internal sealed class PhysicsModService
         return new PhysicsModSaved(modDirectory, newIdentifier, relative, created, collection.Name, warnings);
     }
 
+    /// <summary>
+    /// Drops <paramref name="gamePath"/> from the mod at <paramref name="directory"/> (followed by its identifier when renamed)
+    /// and reloads it in Penumbra. Removed is false when the mod is gone or didn't map the path.
+    /// </summary>
+    internal async Task<(bool Removed, string? Warning)> RemoveFileModAsync(ModFileKind kind, string directory, Guid identifier, string gamePath)
+    {
+        gamePath = NormalizeGamePath(gamePath);
+        var root = await _framework.RunOnFrameworkThread(_ipc.GetModDirectory).ConfigureAwait(false);
+        await LeaveFrameworkThread();
+        if (string.IsNullOrWhiteSpace(root) || await FindPhysicsModAsync(directory, identifier).ConfigureAwait(false) is not { } found)
+            return (false, null);
+        bool removed;
+        await _exportGate.WaitAsync().ConfigureAwait(false);
+        try { removed = RemoveModFile(kind, Path.Combine(root, found), gamePath); }
+        finally { _exportGate.Release(); }
+        if (!removed)
+            return (false, null);
+        var reload = await _framework.RunOnFrameworkThread(() => _activation.ReloadModOnFramework(found)).ConfigureAwait(false);
+        return (true, reload?.Message);
+    }
+
     /// <summary> Writes a new physics mod's file and metadata into an empty folder; returns the file's relative path. </summary>
     internal static string CreatePhysicsModFiles(string folder, string name, string description, string gamePath, byte[] bytes,
         string? author = null)
+        => CreateModFiles(ModFileKind.Physics, folder, name, description, gamePath, bytes, author);
+
+    /// <summary> Writes a new mod's file and metadata into an empty folder; returns the file's relative path. </summary>
+    internal static string CreateModFiles(ModFileKind kind, string folder, string name, string description, string gamePath, byte[] bytes,
+        string? author = null)
     {
-        var relative = PhysicsRelativePath(gamePath, 1);
-        WritePhysicsFile(folder, relative, bytes);
+        var relative = RelativePath(kind, gamePath, 1);
+        WriteModFile(kind, folder, relative, bytes);
         WriteJsonAtomic(Path.Combine(folder, "meta.json"), CreateV4ModMetadata(name, AuthorOrDefault(author), description, "",
             new JsonObject
             {
@@ -159,14 +194,18 @@ internal sealed class PhysicsModService
     /// mod's files for it, and deletes the older physics files no entry maps any more.
     /// </summary>
     internal static string UpdatePhysicsModFiles(string folder, string gamePath, byte[] bytes)
+        => UpdateModFiles(ModFileKind.Physics, folder, gamePath, bytes);
+
+    /// <inheritdoc cref="UpdatePhysicsModFiles"/>
+    internal static string UpdateModFiles(ModFileKind kind, string folder, string gamePath, byte[] bytes)
     {
         // meta.json is read and written as one step under the gate Studio's writers take too; the one
-        // physics file written in between is small.
+        // file written in between is small.
         lock (Studio.Services.Project.ModFiles.Gate)
-            return UpdatePhysicsModFilesLocked(folder, gamePath, bytes);
+            return UpdateModFilesLocked(kind, folder, gamePath, bytes);
     }
 
-    private static string UpdatePhysicsModFilesLocked(string folder, string gamePath, byte[] bytes)
+    private static string UpdateModFilesLocked(ModFileKind kind, string folder, string gamePath, byte[] bytes)
     {
         var meta = LoadV4ModMetadata(folder);
         if (meta["DefaultData"] is not JsonObject defaults)
@@ -174,14 +213,15 @@ internal sealed class PhysicsModService
         if (defaults["Files"] is not JsonObject files)
             defaults["Files"] = files = new JsonObject();
 
-        var physicsFolder = Path.Combine(folder, PhysicsFolder);
+        var kindFolder = Path.Combine(folder, kind.Folder);
         var stem = Path.GetFileNameWithoutExtension(gamePath);
-        var used = Directory.Exists(physicsFolder)
-            ? Directory.EnumerateFiles(physicsFolder, stem + ".*.phyb").Select(file => PhysicsFileVersion.Match(Path.GetFileName(file)))
+        var version = FileVersion(kind);
+        var used = Directory.Exists(kindFolder)
+            ? Directory.EnumerateFiles(kindFolder, stem + ".*" + kind.Extension).Select(file => version.Match(Path.GetFileName(file)))
                 .Where(match => match.Success).Select(match => int.Parse(match.Groups["n"].Value, CultureInfo.InvariantCulture)).DefaultIfEmpty(0).Max()
             : 0;
-        var relative = PhysicsRelativePath(gamePath, used + 1);
-        WritePhysicsFile(folder, relative, bytes);
+        var relative = RelativePath(kind, gamePath, used + 1);
+        WriteModFile(kind, folder, relative, bytes);
 
         var previous = files.Where(pair => SameGamePath(pair.Key, gamePath)).Select(pair => (pair.Key, Value: JsonString(pair.Value))).ToList();
         foreach (var (key, _) in previous)
@@ -189,16 +229,44 @@ internal sealed class PhysicsModService
         files[gamePath] = relative.Replace('/', '\\');
         TouchV4ModMetadata(meta);
         WriteJsonAtomic(Path.Combine(folder, "meta.json"), meta);
+        DeleteUnmapped(kind, folder, meta, previous.Select(pair => pair.Value));
+        return relative;
+    }
 
-        // Older versions of this file that nothing maps any more.
+    /// <summary>
+    /// Drops <paramref name="gamePath"/> from the mod's default option and deletes its file when nothing maps it any more;
+    /// true when there was a mapping to drop.
+    /// </summary>
+    internal static bool RemoveModFile(ModFileKind kind, string folder, string gamePath)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(folder);
+            if (meta["DefaultData"] is not JsonObject defaults || defaults["Files"] is not JsonObject files)
+                return false;
+            var previous = files.Where(pair => SameGamePath(pair.Key, gamePath)).Select(pair => (pair.Key, Value: JsonString(pair.Value))).ToList();
+            if (previous.Count == 0)
+                return false;
+            foreach (var (key, _) in previous)
+                files.Remove(key);
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(folder, "meta.json"), meta);
+            DeleteUnmapped(kind, folder, meta, previous.Select(pair => pair.Value));
+            return true;
+        }
+    }
+
+    /// <summary> Deletes the kind's files among <paramref name="values"/> (relative paths a mapping held) that nothing maps any more. </summary>
+    private static void DeleteUnmapped(ModFileKind kind, string folder, JsonObject meta, IEnumerable<string?> values)
+    {
         var mapped = MappedRelativePaths(meta);
-        foreach (var (_, value) in previous)
+        foreach (var value in values)
         {
             if (value is null)
                 continue;
             var old = value.Replace('\\', '/').TrimStart('/');
-            if (mapped.Contains(old) || !old.StartsWith(PhysicsFolder + "/", StringComparison.OrdinalIgnoreCase) ||
-                !old.EndsWith(".phyb", StringComparison.OrdinalIgnoreCase))
+            if (mapped.Contains(old) || !old.StartsWith(kind.Folder + "/", StringComparison.OrdinalIgnoreCase) ||
+                !old.EndsWith(kind.Extension, StringComparison.OrdinalIgnoreCase))
                 continue;
             var file = Path.GetFullPath(Path.Combine(folder, old.Replace('/', Path.DirectorySeparatorChar)));
             try
@@ -211,11 +279,13 @@ internal sealed class PhysicsModService
                 // The game may still read it; the next save tries again.
             }
         }
-        return relative;
     }
 
     /// <summary> The physics file the mod's default option maps for a game path, or null. </summary>
-    internal static string? PhysicsModFile(string folder, string gamePath)
+    internal static string? PhysicsModFile(string folder, string gamePath) => ModFile(ModFileKind.Physics, folder, gamePath);
+
+    /// <summary> The file the mod's default option maps for a game path, or null. </summary>
+    internal static string? ModFile(ModFileKind kind, string folder, string gamePath)
     {
         var meta = LoadV4ModMetadata(folder);
         if (meta["DefaultData"] is not JsonObject defaults || defaults["Files"] is not JsonObject files)
@@ -248,16 +318,19 @@ internal sealed class PhysicsModService
     }
 
     /// <summary> "physics/phy_c0801b0001.3.phyb": the file's name with a version number. </summary>
-    internal static string PhysicsRelativePath(string gamePath, int version)
-        => $"{PhysicsFolder}/{Path.GetFileNameWithoutExtension(gamePath)}.{version.ToString(CultureInfo.InvariantCulture)}.phyb";
+    internal static string PhysicsRelativePath(string gamePath, int version) => RelativePath(ModFileKind.Physics, gamePath, version);
 
-    private static void WritePhysicsFile(string folder, string relative, byte[] bytes)
+    /// <summary> "skeleton/skl_c0801b0001.2.skp" for skeleton parameters: the file's name with a version number. </summary>
+    internal static string RelativePath(ModFileKind kind, string gamePath, int version)
+        => $"{kind.Folder}/{Path.GetFileNameWithoutExtension(gamePath)}.{version.ToString(CultureInfo.InvariantCulture)}{kind.Extension}";
+
+    private static void WriteModFile(ModFileKind kind, string folder, string relative, byte[] bytes)
     {
         var target = Path.GetFullPath(Path.Combine(folder, relative.Replace('/', Path.DirectorySeparatorChar)));
-        var parent = Path.GetDirectoryName(target) ?? throw new InvalidDataException("The physics file has no folder.");
+        var parent = Path.GetDirectoryName(target) ?? throw new InvalidDataException($"The {kind.Noun} file has no folder.");
         if (!IsPathWithin(target, folder) || HasReparsePointInPath(folder, parent) ||
             File.Exists(target) && (File.GetAttributes(target) & FileAttributes.ReparsePoint) != 0)
-            throw new IOException("The physics file would leave the mod's folder.");
+            throw new IOException($"The {kind.Noun} file would leave the mod's folder.");
         Directory.CreateDirectory(parent);
         var temporary = Path.Combine(parent, $".instant-edit-{Guid.NewGuid():N}.tmp");
         try

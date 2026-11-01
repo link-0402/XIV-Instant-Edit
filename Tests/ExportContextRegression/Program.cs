@@ -276,6 +276,7 @@ try
     Scenarios.Run(HeelsOffsetScenarios.Run);
     Scenarios.Run(CharacterSendScenarios.Run);
     Scenarios.Run(() => PhysicsScenarios.Run(testRoot));
+    Scenarios.Run(() => HeadTrackingScenarios.Run(testRoot));
     Scenarios.Run(() => TextureCopyScenarios.Run(testRoot));
     await Scenarios.RunAsync(() => CheckExportContextsAsync(testRoot));
 }

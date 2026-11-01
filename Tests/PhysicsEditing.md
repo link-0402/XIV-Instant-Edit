@@ -318,3 +318,23 @@ slot count for the areas they move with, and genital tips are placed. Use a test
   eye). (physics/39 checks the penis tip.)
 - [ ] Walk and run: the arms stop at the breasts and the breasts don't knock each other apart (by eye).
 - [ ] Both sides: Tip place on Ashley's chest moves both tips, the other side mirrored (by hand).
+
+## Head tracking (2026-11-01, pending)
+
+Quick Actions > Head tracking edits the game's body skeleton parameters (.skp) for your race; the edit and the mod's
+files are covered by `Tests/ExportContextRegression` (HeadTrackingScenarios, every race's vanilla file). Check in GPose
+with Face Camera on and the camera to one side, so the head turns.
+
+1. [ ] The card reads "For Female Miqo'te (c0801)" (your race); outside a loaded character it says so and has no controls.
+   (The service's label checked in game; the card itself not yet seen.)
+2. [x] Preview with Lower back on a chest-touching idle: the hands stay on the chest while the back turns, and the head
+   still turns as far. (XIV Bridge physics/60, 2026-11-01, Lucina in GPose: clavicle and upper arm 0.6° off the chest vs
+   27.3° with the game's settings; head 64.1° vs 64.2°. The preview survived its own redraw with Refresh every frame.)
+3. [x] Each slider at 0 % stops its part (back and arms, neck and head, eyes); at 50 % it turns half as far. (physics/60,
+   2026-11-01: back 8.5° of 16.9°, neck and head 24.0° of 48.0°, eyes 3.3° of 6.9°.)
+4. [ ] Save makes "Head tracking" in Penumbra at priority 1,000,000, enabled in your collection, and it still applies after
+   a game restart.
+5. [ ] Game default, then Save: your race's file leaves the mod and the game's turn is back.
+6. [ ] Change race with Glamourer while previewing: the preview ends and the card shows the new race.
+7. [ ] /sit and /groundsit with Lower back on (by eye): the lower-back turn with the hips planted still looks right.
+8. [ ] With another mod replacing your race's .skp, the card names it.

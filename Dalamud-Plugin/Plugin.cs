@@ -46,6 +46,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly GameFileExportService   _gameExport;
     private readonly Services.Heels.HeelsOffsetService _heels;
     private readonly Services.Physics.PhysicsBuilderService _physics;
+    private readonly Services.Skeletons.HeadTrackingService _headTracking;
     private readonly PhysicsWindow           _physicsWindow;
     private readonly Ui.Material.MaterialWindows _materialWindows;
     private readonly Services.Testing.BridgeTools? _bridgeTools;
@@ -268,6 +269,9 @@ public sealed class Plugin : IDalamudPlugin
         // The physics builder: body physics for your skeleton, previewed through a temporary mod and saved into a mod of its own.
         _physics = new Services.Physics.PhysicsBuilderService(pi, _penumbra.Ipc, _penumbra.Physics, _penumbra.Previews, data, framework, objects, clientState, skeletons, log, _config, SaveConfiguration,
             configDirectory, () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
+        // Head tracking: the game's skeleton parameters for your race, edited, previewed through a temporary mod and saved into a mod of its own.
+        _headTracking = new Services.Skeletons.HeadTrackingService(_penumbra.Ipc, _penumbra.Physics, _penumbra.Previews, data, framework, objects, clientState, log,
+            _config, SaveConfiguration, configDirectory, () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         _timelineWindow.HandTips = _physics.ReadHandTipsAsync;
         _timelineWindow.AttachPoseFolders(_config, SaveConfiguration);
         // Partners: a second GPose actor from a preset, with its Penumbra collection, Glamourer design and Customize+ profile.
@@ -279,6 +283,7 @@ public sealed class Plugin : IDalamudPlugin
         // In GPose your posed character walks or runs for the builder through the Timeline preview's playback.
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
+        _window.AttachHeadTracking(_headTracking);
         // The Material window: every setting of a material named, shown on the character through a temporary mod, saved with a backup.
         // One window per open material, each with its own preview.
         _windowSystem = new WindowSystem();
@@ -518,6 +523,7 @@ public sealed class Plugin : IDalamudPlugin
         // The Material windows leave the window system and their previews' temporary mods go, before Penumbra too.
         _materialWindows.Dispose();
         _physics.Dispose();
+        _headTracking.Dispose();
         _gameFiles.Dispose();
         _textures.FileChanged -= _previews.Invalidate;
         _previews.Dispose();
