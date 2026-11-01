@@ -972,10 +972,13 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         return TimelineWindowViews.SoundSpan(shown.Seconds, ev.Pin is { } pin && shown.Ids.IndexOf(pin) is >= 0 and var index ? index : null);
     }
 
+    // Counts PollLengths' calls, so it looks every 15th update; it runs outside the ImGui frame, so not by ImGui's frame count.
+    private int lengthPolls;
+
     /// <summary> Lays the lanes out again once sound lengths that were being read are known. </summary>
     public void PollLengths()
     {
-        if (session.Editor == null || pendingLengths.Count == 0 || ImGui.GetFrameCount() % 15 != 0)
+        if (session.Editor == null || pendingLengths.Count == 0 || ++lengthPolls % 15 != 0)
             return;
         if (pendingLengths.RemoveWhere(path => session.Catalog.Seconds(path) != null || SoundReadEnded(path)) == 0)
             return;

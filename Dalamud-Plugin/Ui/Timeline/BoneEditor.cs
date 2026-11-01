@@ -12,7 +12,7 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The bones and the gizmo on the GPose character, as the bone editor and the Bones window use them.
-/// The Timeline window draws them (TimelineWindow.Overlay.cs) and implements this.
+/// The Timeline workspace draws them (TimelineWorkspace.Overlay.cs) and implements this.
 /// </summary>
 internal interface IBonesOverlay
 {

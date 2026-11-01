@@ -8,9 +8,8 @@ using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Pose;
-using InstantEdit.Ui.Timeline;
 
-namespace InstantEdit.Ui;
+namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The bones on the posed character, drawn for <see cref="BonesOverlay"/> while the Bones window is open
@@ -20,7 +19,7 @@ namespace InstantEdit.Ui;
 /// moves the bones the edit changes in the selected layer at the playhead, as one undo step. Adapted
 /// from Brio's posing overlay (GPL-3.0).
 /// </summary>
-public sealed partial class TimelineWindow
+internal sealed partial class TimelineWorkspace
 {
     // ImGuizmo's state is shared by every plugin; this id keeps our drags apart from Brio's gizmo.
     private const int GizmoId = 0x1E5E;
@@ -32,7 +31,6 @@ public sealed partial class TimelineWindow
     // How many frames the "barely applies" tooltip stays after ImGuizmo last had the mouse over its rings.
     private const int GizmoTipFrames = 4;
 
-    private readonly BonesOverlay overlayWindow;
     private readonly ActorPose actorPose = new();
     private BoneOverlayMode showOnCharacter = BoneOverlayMode.All;
     private GizmoMode gizmoMode;
@@ -71,10 +69,8 @@ public sealed partial class TimelineWindow
     private Vector2[] pathAt = [];
     private bool[] pathShown = [];
 
-    internal BonesOverlay Overlay => overlayWindow;
-
     /// <summary>Whether the bones show on the character now: the Bones window is open on a clip or a face, in GPose.</summary>
-    internal bool OverlayWanted => showOnCharacter != BoneOverlayMode.Off && IsOpen && bonesWindow.IsOpen && animations != null &&
+    internal bool OverlayWanted => showOnCharacter != BoneOverlayMode.Off && host.IsOpen && bonesWindow.IsOpen && animations != null &&
                                    source is { Document: not null } open && !open.MotionTarget.Standalone && editor != null && OverlayActor() != null;
 
     /// <summary>A gizmo drag is running: the overlay takes the mouse.</summary>
