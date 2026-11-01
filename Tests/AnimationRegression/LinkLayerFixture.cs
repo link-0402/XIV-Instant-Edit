@@ -7,7 +7,7 @@ using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
-/// <summary>Link layers: a bone that moves with a partner's bone. Their validation, activity, partner tracks and journals.</summary>
+/// <summary>Link layers: a bone that moves with a partner's bone. Their validation, activity, partner tracks, journals and solves.</summary>
 internal static class LinkLayerFixture
 {
     private static readonly Guid Partner = new("6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
@@ -18,6 +18,7 @@ internal static class LinkLayerFixture
         Tracks(check, reject);
         Journals(check);
         Solving(check);
+        Hips(check);
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
@@ -270,13 +271,11 @@ internal static class LinkLayerFixture
                   .SequenceEqual(MotionEvaluator.ApplyAt(body, fine.Pose(frame), [chest, after], frame, 0, 30))),
             "ApplyAt without tracks leaves the link out too");
 
-        // A bone right under the body has nothing to bend, as for a pin; the hips follow in their own way (not yet).
+        // A bone right under the body has nothing to bend, as for a pin; the hips follow in their own way (Hips).
         var back = Layer(link with { Bone = "j_sebo_a", PartnerBone = "j_sebo_a" });
         var backSet = Set(("m1", Track(clip, index["j_sebo_a"], (_, before) => before with { Position = before.Position + push })));
         check(SameRows(Applied(clip, [back], backSet), Applied(clip, [])), "a link on a bone right under the body does nothing");
         var hips = Layer(link with { Bone = PinChains.Hips, PartnerBone = PinChains.Hips });
-        var hipsSet = Set(("m1", Track(clip, index[PinChains.Hips], (_, before) => before with { Position = before.Position + push })));
-        check(SameRows(Applied(clip, [hips], hipsSet), Applied(clip, [])), "a hips link does nothing yet");
 
         // Symmetry counts what a link may move, with or without its track; paths mark no keys on a link.
         ImmutableArray<short> tracked = [0, 1, 2];
@@ -292,6 +291,113 @@ internal static class LinkLayerFixture
         check(MotionLinks.Moved(body, back).IsEmpty && MotionLinks.Moved(body, chest).IsEmpty, "nothing to bend, or another kind, moves nothing");
         var keyed = layer with { Keys = [new MotionKey(5, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_te_r", T(Vector3.Zero)))] };
         check(MotionPaths.KeyFrames(keyed, "j_te_r", 0).Count == 0, "a link marks no keys on a motion path");
+    }
+
+    private static void Hips(Action<bool, string> check)
+    {
+        var body = HipDragFixture.Body();
+        var index = MotionEvaluator.Index(body);
+        int kosi = index[PinChains.Hips], hara = index[PinChains.Body], spine = index[HipSolver.BackBase];
+        int[] feet = [index[PinChains.FootL], index[PinChains.FootR]];
+        int[] hands = [index["j_te_l"], index["j_te_r"]];
+        var layer = Layer(Hips());
+        var loose = Layer(Hips() with { Holds = [] });
+        var clip = Crouching();
+        bool Held(MotionClip got, int bone) => All(clip, i =>
+            Vector3.Distance(Model(got, i)[bone].Position, Model(clip, i)[bone].Position) < 1e-4f && Degrees(Model(got, i)[bone].Rotation, Model(clip, i)[bone].Rotation) < .1f);
+        bool Carried(MotionClip got, int bone, Vector3 by) => All(clip, i => Vector3.Distance(Model(got, i)[bone].Position, Model(clip, i)[bone].Position + by) < 1e-4f);
+
+        var still = Set(("m1", Track(clip, kosi, (_, before) => before)));
+        check(SameRows(Applied(clip, [layer], still), Applied(clip, [])), "a hips link whose partner doesn't move leaves every sample exactly as it was");
+
+        // The partner's hips go 8 cm forward: these hips go as far, the feet stay planted and the unheld hands go with the back.
+        var forward = new Vector3(0, 0, .08f);
+        var pushed = Set(("m1", Track(clip, kosi, (_, before) => before with { Position = before.Position + forward })));
+        var moved = Applied(clip, [layer], pushed);
+        check(Carried(moved, kosi, forward), "a partner's hips moved 8 cm move the hips 8 cm");
+        check(feet.All(foot => Held(moved, foot)), "the held feet stay where they were");
+        check(Carried(moved, spine, forward) && hands.All(hand => Carried(moved, hand, forward)), "the unheld hands go with the upper body");
+        var free = Applied(clip, [loose], pushed);
+        check(Carried(free, kosi, forward) && feet.All(foot => Carried(free, foot, forward)), "with nothing held the feet go with the hips");
+        var half = Applied(clip, [layer with { Amount = .5f }], pushed);
+        check(Carried(half, kosi, forward * .5f) && feet.All(foot => Held(half, foot)), "a pull of 50% moves the hips halfway, the feet still held");
+
+        // The partner's hips turn 10° about Y on their spot: these hips turn as far and the feet still hold.
+        var turn = Q(Vector3.UnitY, 10);
+        var turnSet = Set(("m1", Track(clip, kosi, (_, before) => before with { Rotation = Quaternion.Normalize(turn * before.Rotation) })));
+        var turned = Applied(clip, [layer], turnSet);
+        check(All(clip, i => Degrees(Model(turned, i)[kosi].Rotation, Quaternion.Normalize(turn * Model(clip, i)[kosi].Rotation)) < .01f &&
+                             Math.Abs(Degrees(Model(turned, i)[kosi].Rotation, Model(clip, i)[kosi].Rotation) - 10) < .05f &&
+                             Vector3.Distance(Model(turned, i)[kosi].Position, Model(clip, i)[kosi].Position) < 1e-5f),
+            "a partner's 10° turn turns the hips 10° on their spot");
+        check(feet.All(foot => Held(turned, foot)), "the feet hold through the turn");
+        var unturned = Applied(clip, [Layer(Hips() with { HoldTurn = false })], turnSet);
+        check(SameRows(unturned, Applied(clip, [])), "a hips link on position only leaves a turn on the spot out");
+
+        // On a clip whose hips' move goes onto n_hara the hips keep their own spot, n_hara carries the move, and the body lands as on any clip.
+        var onHara = OnHara(clip);
+        var both = Set(("m1", Track(clip, kosi, (_, before) => before with
+        {
+            Position = before.Position + forward, Rotation = Quaternion.Normalize(turn * before.Rotation),
+        })));
+        var plain = Applied(clip, [layer], both);
+        var carried = Applied(onHara, [layer], both);
+        check(All(clip, i => carried.Get(i, kosi).Position == clip.Get(i, kosi).Position &&
+                             Vector3.Distance(carried.Get(i, hara).Position, clip.Get(i, hara).Position + forward) < 1e-5f),
+            "on an n_hara clip the hips keep their own spot and n_hara carries the move");
+        check(All(clip, i => Degrees(carried.Get(i, kosi).Rotation, plain.Get(i, kosi).Rotation) < .01f), "on an n_hara clip the hips still turn");
+        check(All(clip, i => new[] { kosi, spine, feet[0], feet[1], hands[0], hands[1] }.All(b =>
+                Vector3.Distance(Model(carried, i)[b].Position, Model(plain, i)[b].Position) < 1e-4f)),
+            "on an n_hara clip the hips, the back, the feet and the hands land where they do on any clip");
+
+        // ApplyAt gives Apply's samples for a hips link, with the hips' move on n_hara or not.
+        var fine = Crouching(61);
+        var chest = new MotionLayer("m0", MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1, PoseComponents.All, MotionInterpolation.Linear,
+            Keys: [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_sebo_c", new BoneTransform(Vector3.Zero, Q(Vector3.UnitY, 10), Vector3.One)))]);
+        ImmutableArray<MotionLayer> layers = [chest, layer with { FadeIn = 10 }];
+        var fineSet = Set(("m1", Track(fine, kosi, (_, before) => before with
+        {
+            Position = before.Position + forward, Rotation = Quaternion.Normalize(turn * before.Rotation),
+        })));
+        foreach (var hipsOnHara in new[] { false, true })
+        {
+            var source = hipsOnHara ? OnHara(fine) : fine;
+            var applied = Applied(source, layers, fineSet);
+            check(new[] { 0, 15, 30 }.All(s => MotionEvaluator.ApplyAt(body, Row(source, s), layers, source.Frame(s), 0, 30, hipsOnHara: hipsOnHara, links: fineSet)
+                    .Zip(Row(applied, s)).All(pair => Near(pair.First, pair.Second))),
+                hipsOnHara ? "ApplyAt gives Apply's samples for a hips link on an n_hara clip" : "ApplyAt gives Apply's samples for a hips link");
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Reaching"/> with the hips 15 cm lower and the feet where they were, so the knees bend and the legs can reach the feet
+    /// from hips moved a few centimetres.
+    /// </summary>
+    private static MotionClip Crouching(int samples = 31)
+    {
+        var clip = Reaching(samples);
+        var body = clip.Skeleton;
+        var hips = MotionEvaluator.Index(body)[PinChains.Hips];
+        var anchors = HipSolver.Anchors(body, [PinChains.FootL, PinChains.FootR]);
+        var crouched = clip.Clone();
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            var local = Row(clip, i);
+            var start = MotionEvaluator.ModelSpace(body, local);
+            var model = start.ToArray();
+            HipSolver.Solve(body, local, model, hips, start[hips].Position - new Vector3(0, .15f, 0), anchors.AsSpan(), start);
+            for (var b = 0; b < local.Length; b++)
+                crouched.Set(i, b, local[b]);
+        }
+        return crouched;
+    }
+
+    /// <summary><paramref name="clip"/> as a clip whose layers' moves of the hips go onto <c>n_hara</c> (<see cref="MotionClip.HipsOnHara"/>).</summary>
+    private static MotionClip OnHara(MotionClip clip)
+    {
+        var copy = new MotionClip(clip.Skeleton, clip.Duration, clip.Samples) { HipsOnHara = true };
+        copy.CopyFrom(clip);
+        return copy;
     }
 
     /// <summary>

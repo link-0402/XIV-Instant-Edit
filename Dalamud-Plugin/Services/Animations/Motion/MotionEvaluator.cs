@@ -430,7 +430,7 @@ internal static class MotionEvaluator
                     MotionSmoothing.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
                     break;
                 case MotionLayerKind.Link:
-                    ApplyLink(clip, layer, index, links!.For(layer.Key)!, end, token);
+                    ApplyLink(clip, layer, index, links!.For(layer.Key)!, end, hipsBefore != null, token);
                     break;
             }
             if (hipsBefore != null)
@@ -881,8 +881,13 @@ internal static class MotionEvaluator
             }
             if (layer.Kind == MotionLayerKind.Link)
             {
+                // A hips link's move of the hips goes onto n_hara with the next layer's carry, as every layer's does.
                 var follow = Weight(layer, frame, end);
-                if (follow > 0 && links?.For(layer.Key) is { } linkTrack && ResolveLink(skeleton, layer.Link!, index) is { } resolvedLink)
+                if (follow <= 0 || links?.For(layer.Key) is not { } linkTrack)
+                    continue;
+                if (layer.Link!.Bone == PinChains.Hips)
+                    HipsLinkAt(skeleton, pose, ModelSpace(skeleton, pose), ResolveHipsLink(skeleton, layer.Link, index), linkTrack, frame, follow, hips.Hips >= 0);
+                else if (ResolveLink(skeleton, layer.Link, index) is { } resolvedLink)
                     LinkAt(skeleton, pose, ModelSpace(skeleton, pose), resolvedLink, linkTrack, frame, follow);
                 continue;
             }
@@ -1152,13 +1157,11 @@ internal static class MotionEvaluator
     private sealed record ResolvedLink(MotionPin Pin, PinChain Chain, Vector3 RestNormal);
 
     /// <summary>
-    /// <paramref name="link"/> resolved on <paramref name="skeleton"/>; null when it has nothing to bend: a bone right under the body,
-    /// as for a pin, and the hips, which don't follow yet. Throws for a bone or top the skeleton can't resolve.
+    /// <paramref name="link"/> resolved on <paramref name="skeleton"/>, for a bone other than the hips (<see cref="ResolveHipsLink"/>);
+    /// null when it has nothing to bend: a bone right under the body, as for a pin. Throws for a bone or top the skeleton can't resolve.
     /// </summary>
     private static ResolvedLink? ResolveLink(SkeletonDescription skeleton, MotionLink link, Dictionary<string, int> index)
     {
-        if (link.Bone == PinChains.Hips)
-            return null;
         var pin = MotionLinks.AsPin(link);
         var chain = PinChains.Chain(skeleton, index, pin);
         return chain.Shape == PinChainShape.None ? null : new(pin, chain, PinSolver.RestNormal(skeleton, chain));
@@ -1182,14 +1185,76 @@ internal static class MotionEvaluator
         return true;
     }
 
+    /// <summary>A hips link resolved on the skeleton: the hips, the back their move carries (-1 for none), what it holds and whether it turns them.</summary>
+    private sealed record ResolvedHipsLink(int Hips, int Carried, ImmutableArray<HipAnchor> Anchors, bool HoldTurn);
+
+    /// <summary><paramref name="link"/> on the hips resolved on <paramref name="skeleton"/>. Throws for a skeleton without the hips.</summary>
+    private static ResolvedHipsLink ResolveHipsLink(SkeletonDescription skeleton, MotionLink link, Dictionary<string, int> index) =>
+        new(index.TryGetValue(PinChains.Hips, out var hips) ? hips : throw Missing(PinChains.Hips), HipSolver.Carried(skeleton),
+            HipSolver.Anchors(skeleton, link.Holds), link.HoldTurn);
+
+    /// <summary>
+    /// A hips link on one pose (<paramref name="local"/> and its <paramref name="model"/> space, kept in step) at timeline
+    /// <paramref name="frame"/>: eases the hips toward where the partner's edit takes them by <paramref name="weight"/> (the hip solve
+    /// takes no weight), turns them first when the link holds the turn, then moves them there with the held bones planted where the
+    /// pose had them, so the replant also undoes what the turn did to them. With <paramref name="hipsOnHara"/> the caller moves the
+    /// hips' move onto <c>n_hara</c>, which carries the back too, so the back keeps its own spot here. False, the pose untouched,
+    /// when the partner's edit leaves the hips where they are.
+    /// </summary>
+    private static bool HipsLinkAt(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, ResolvedHipsLink link, LinkTrack track,
+        float frame, float weight, bool hipsOnHara)
+    {
+        var (before, after) = track.At(frame);
+        var current = model[link.Hips];
+        var aim = MotionLinks.Aim(current, before, after, link.HoldTurn);
+        if (aim == current)
+            return false;
+        var start = model.ToArray();
+        var back = link.Carried >= 0 ? local[link.Carried].Position : Vector3.Zero;
+        var eased = Lerp(current, aim, weight);
+        if (link.HoldTurn)
+            PinSolver.HoldTurn(skeleton, local, model, link.Hips, eased.Rotation);
+        HipSolver.Solve(skeleton, local, model, link.Hips, eased.Position, link.Anchors.AsSpan(), start);
+        if (hipsOnHara && link.Carried >= 0)
+        {
+            local[link.Carried] = local[link.Carried] with { Position = back };
+            PinSolver.Refresh(skeleton, local, model, link.Carried);
+        }
+        return true;
+    }
+
     /// <summary>
     /// A link layer over the clip, sample by sample: its bone follows the partner's edit in <paramref name="track"/>, its chain bending
-    /// as a pin's. Only the chain and the bone are written back, so the rest keep their values exactly.
+    /// as a pin's. Only the chain and the bone are written back, so the rest keep their values exactly; a hips link writes every bone,
+    /// as the hip solve turns the back and every held chain and leaves the rest exact copies. <paramref name="hipsOnHara"/> says
+    /// <see cref="Apply"/> moves the hips' move onto <c>n_hara</c> after this layer.
     /// </summary>
-    private static void ApplyLink(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, LinkTrack track, float end, CancellationToken token)
+    private static void ApplyLink(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, LinkTrack track, float end, bool hipsOnHara,
+        CancellationToken token)
     {
         var skeleton = clip.Skeleton;
-        if (ResolveLink(skeleton, layer.Link!, index) is not { } link)
+        if (layer.Link!.Bone == PinChains.Hips)
+        {
+            var hips = ResolveHipsLink(skeleton, layer.Link, index);
+            var pose = new MotionTransform[clip.Bones];
+            for (var i = 0; i < clip.Samples; i++)
+            {
+                if ((i & 63) == 0)
+                    token.ThrowIfCancellationRequested();
+                var frame = clip.Frame(i);
+                var weight = Weight(layer, frame, end);
+                if (weight <= 0)
+                    continue;
+                for (var b = 0; b < pose.Length; b++)
+                    pose[b] = clip.Get(i, b);
+                if (!HipsLinkAt(skeleton, pose, ModelSpace(skeleton, pose), hips, track, frame, weight, hipsOnHara))
+                    continue;
+                for (var b = 0; b < pose.Length; b++)
+                    clip.Set(i, b, pose[b]);
+            }
+            return;
+        }
+        if (ResolveLink(skeleton, layer.Link, index) is not { } link)
             return;
         var changed = link.Chain.Bones.Append(link.Chain.End).ToArray();
         var local = new MotionTransform[clip.Bones];
