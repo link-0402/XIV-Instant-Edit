@@ -10,8 +10,12 @@ internal enum PartnerStage : byte
     Ready,
 }
 
-/// <summary>A spawned partner as the UI shows it: the name it spawned with, its stage and each link that didn't apply.</summary>
-internal sealed record PartnerView(Guid PresetId, string Name, ushort ObjectIndex, PartnerStage Stage, ImmutableArray<string> Problems, Guid? TemporaryProfile);
+/// <summary>
+/// A spawned partner as the UI shows it: the name it spawned with, its stage and each link that didn't apply. Spawn numbers
+/// the spawns from 1, so a respawn of the preset is told apart even on the same object index.
+/// </summary>
+internal sealed record PartnerView(Guid PresetId, string Name, ushort ObjectIndex, PartnerStage Stage, ImmutableArray<string> Problems, Guid? TemporaryProfile,
+    int Spawn);
 
 /// <summary>
 /// Spawns partners from presets and despawns them, a few steps each frame on the framework thread. Each spawn records what
@@ -36,9 +40,11 @@ internal sealed class PartnerService : IDisposable
     private readonly Func<TimeSpan> clock;
     private readonly Action<string>? warn;
     private readonly List<Partner> partners = [];
+    // How many actors this service spawned; each partner's view carries its number.
+    private int spawns;
 
     /// <summary>A spawned partner: the preset as it was at spawn and what the spawn changed.</summary>
-    private sealed class Partner(PartnerPreset preset, string name, SpawnedActor actor, TimeSpan started)
+    private sealed class Partner(PartnerPreset preset, string name, SpawnedActor actor, TimeSpan started, int spawn)
     {
         public readonly PartnerPreset Preset = preset;
         public readonly string Name = name;
@@ -48,7 +54,7 @@ internal sealed class PartnerService : IDisposable
         public bool Assigned;
         public Guid? Previous;
         public bool Looked;
-        public PartnerView View = new(preset.Id, name, actor.ObjectIndex, PartnerStage.Waiting, [], null);
+        public PartnerView View = new(preset.Id, name, actor.ObjectIndex, PartnerStage.Waiting, [], null, spawn);
 
         public void Problem(string text) => View = View with { Problems = View.Problems.Add(text) };
     }
@@ -76,6 +82,15 @@ internal sealed class PartnerService : IDisposable
     /// <summary>The spawned partner of this preset, or null.</summary>
     public PartnerView? Find(Guid presetId) => Tracked(presetId)?.View;
 
+    /// <summary>The preset of the partner spawned at this object index, whatever its stage; null for any other actor.</summary>
+    public Guid? PresetAt(ushort objectIndex)
+    {
+        foreach (var partner in partners)
+            if (partner.Actor.ObjectIndex == objectIndex)
+                return partner.Preset.Id;
+        return null;
+    }
+
     /// <summary>
     /// Makes the preset's actor and sets its collection; the next frames draw it and apply the look and profile. Why it
     /// was refused, or null (also when it is already spawned). A call that throws deletes the actor again and rethrows.
@@ -97,7 +112,7 @@ internal sealed class PartnerService : IDisposable
             return problem ?? "Spawning failed: create";
 
         // Tracked at once, so whatever throws below finds it and its recorded changes to undo.
-        var partner = new Partner(preset, name, actor, clock());
+        var partner = new Partner(preset, name, actor, clock(), ++spawns);
         partners.Add(partner);
         try
         {

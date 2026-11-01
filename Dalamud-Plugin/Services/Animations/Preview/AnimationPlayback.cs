@@ -13,6 +13,14 @@ using Lumina.Excel.Sheets;
 namespace InstantEdit.Services.Animations.Preview;
 
 /// <summary>
+/// The actor a Timeline workspace's playback acts on. <paramref name="GPose"/> is the one it plays on and that
+/// <see cref="AnimationPlayback.ActorIndex"/> names, null outside GPose; <paramref name="Reads"/> is the one the bone
+/// reads (facing, bone names, worn models) and the follow read outside a session use: your workspace's falls back to
+/// your own character outside GPose, a partner's to nothing.
+/// </summary>
+internal sealed record PlaybackActor(Func<ICharacter?> GPose, Func<IGameObject?> Reads);
+
+/// <summary>
 /// Plays, pauses, speeds up and scrubs a timeline on the GPose actor (the GPose target, else the
 /// posed copy of the player at object 201), following Brio: AnimLock mode, BaseOverride and
 /// ActionTimelineSequencer.PlayTimeline. Writes happen only in GPose, whose actors are client-only;
@@ -29,7 +37,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     // GPose copies the player into this slot; the overworld player is hidden while posing.
     public const int GPosePlayerIndex = 201;
     // GPose characters (the posed copies and actors posing tools add) start here.
-    private const int FirstGPoseIndex = 200;
+    public const int FirstGPoseIndex = 200;
     // ActionTimeline row normal/idle, played after a stop when nothing overrode the base before (Brio does the same).
     private const ushort IdleTimeline = 3;
     // ActionTimeline row facial/pose/base (Straight Face), played after an expression preview: a kept face stays otherwise.
@@ -99,7 +107,9 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         public float? Hold { get; set; }
     }
 
-    public AnimationPlayback(IFramework framework, IDataManager data, IObjectTable objects, IClientState clientState, ITargetManager targets, IPluginLog log)
+    /// <param name="actor">The actor this playback acts on and reads, for a Timeline workspace; null for the GPose target or your posed character.</param>
+    public AnimationPlayback(IFramework framework, IDataManager data, IObjectTable objects, IClientState clientState, ITargetManager targets, IPluginLog log,
+        PlaybackActor? actor = null)
     {
         _framework = framework;
         _data = data;
@@ -107,8 +117,11 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         _clientState = clientState;
         _targets = targets;
         _log = log;
+        _actor = actor;
         _framework.Update += OnUpdate;
     }
+
+    private readonly PlaybackActor? _actor;
 
     public bool Active => _session != null;
     public bool Paused => _session?.Paused == true;
@@ -164,7 +177,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     public Quaternion? ActorRotation()
     {
         RequireFrameworkThread();
-        var actor = (IGameObject?)GPoseActor() ?? _objects.LocalPlayer;
+        var actor = ReadActor();
         if (actor is not { Address: not 0 })
             return null;
         var drawObject = ((FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)actor.Address)->DrawObject;
@@ -179,7 +192,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     public string[]? ActorBoneNames()
     {
         RequireFrameworkThread();
-        var actor = (IGameObject?)GPoseActor() ?? _objects.LocalPlayer;
+        var actor = ReadActor();
         if (actor is not { Address: not 0 } || actor is not ICharacter)
             return null;
         var drawn = ((Character*)actor.Address)->GetCharacterBase();
@@ -208,7 +221,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     public IReadOnlyList<Painter.PainterLiveModel>? ActorModels()
     {
         RequireFrameworkThread();
-        var actor = (IGameObject?)GPoseActor() ?? _objects.LocalPlayer;
+        var actor = ReadActor();
         if (actor is not { Address: not 0 } || actor is not ICharacter)
             return null;
         var drawn = ((Character*)actor.Address)->GetCharacterBase();
@@ -439,7 +452,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
             if (chara == null && GPoseActor() is { } posed)
                 chara = (Character*)posed.Address;
         }
-        else if (_objects.LocalPlayer is { Address: not 0 } player)
+        else if (ReadActor() is { Address: not 0 } player)
             chara = (Character*)player.Address;
         return chara == null ? null : ReadTime(chara, bindingFingerprint);
     }
@@ -738,10 +751,15 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     {
         if (!_clientState.IsGPosing)
             return null;
+        if (_actor != null)
+            return _actor.GPose();
         if (_targets.GPoseTarget is ICharacter { Address: not 0, ObjectIndex: >= FirstGPoseIndex } target)
             return target;
         return _objects[GPosePlayerIndex] is ICharacter { Address: not 0 } posed ? posed : null;
     }
+
+    /// <summary>The character the bone reads are for: the workspace's actor, else the GPose actor, else your own character.</summary>
+    private IGameObject? ReadActor() => _actor != null ? _actor.Reads() : (IGameObject?)GPoseActor() ?? _objects.LocalPlayer;
 
     /// <summary> The GPose character at <paramref name="index"/>; never a character of the world, for the same reason. </summary>
     private ICharacter? GPoseCharacter(ushort index)

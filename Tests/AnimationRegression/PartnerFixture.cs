@@ -159,6 +159,35 @@ internal static class PartnerFixture
         Spawn_NameAlreadySpawned(check);
         Despawn_RestoreFails_Warns(check);
         Spawn_NoCollectionLink(check);
+        Spawn_CountsSpawns(check);
+        PresetAt_TracksIndex(check);
+    }
+
+    private static void Spawn_CountsSpawns(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var first = rig.Service.Find(preset.Id)?.Spawn;
+        rig.Service.Despawn(preset.Id);
+        rig.SpawnReady(preset);
+        var second = rig.Service.Find(preset.Id)?.Spawn;
+        check(first == 1 && second == 2, "partner spawn: every spawn of a preset has a new number, so a respawn is told apart", $"{first} {second}");
+    }
+
+    private static void PresetAt_TracksIndex(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.Service.Spawn(preset);
+        var waiting = rig.Service.PresetAt(202);
+        rig.Actors.Tick();
+        rig.Actors.Tick();
+        var ready = rig.Service.PresetAt(202);
+        var other = rig.Service.PresetAt(201);
+        rig.Service.Despawn(preset.Id);
+        check(waiting == preset.Id && ready == preset.Id && other == null && rig.Service.PresetAt(202) == null,
+            "partner index: the preset at an index while it spawns and once Ready, none for 201 or after Despawn", rig.Log);
     }
 
     private static void Despawn_RestoresNone(Check check)
