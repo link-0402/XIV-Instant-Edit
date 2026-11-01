@@ -81,6 +81,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     // The document the preview was built from. previewDocument follows it to later documents the preview shows as well
     // (other looks, and under Live other bone layers); Live turned off goes back to this one.
     private TimelineDocument? builtDocument;
+    // The content of the partner tracks the preview baked its active link layers with: another snapshot makes it stale.
+    private ImmutableDictionary<string, string> builtPrints = MotionLinks.NoPrints;
 
     /// <summary>A built preview Live runs over: the binding it plays, its timeline and actor, and its length when the document changed it.</summary>
     private sealed record BuiltPreview(string Fingerprint, ushort Timeline, ushort Actor, float? Duration);
@@ -113,6 +115,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private TimelineDocument? staleChecked;
     private TimelineDocument? lookChecked;
     private bool previewStale;
+    // A preview asked for while a link track built: it starts once the track is in (see Poll), with the tracks Live shows.
+    private (SkeletonStandard? Repair, bool Live)? previewWaiting;
 
     /// <summary>Live is on, or waits to start.</summary>
     public bool LiveWanted => liveWanted;
@@ -122,8 +126,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     public ushort? Actor => previewActor;
     /// <summary>The binding fingerprint of what the preview or Live plays; null while neither does.</summary>
     public string? Fingerprint => previewFingerprint;
-    /// <summary>A preview is being built.</summary>
-    public bool Building => previewJob;
+    /// <summary>A preview is being built, or waits for a link track to build first.</summary>
+    public bool Building => previewJob || previewWaiting != null;
     /// <summary>The removal of the preview's temporary mod, while it runs.</summary>
     public Task? Stopping => previewStop;
 
@@ -293,7 +297,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         return !available ? reason
             : session.Editor?.PastEnd == true ? PastEnd
             : session.Busy ? "Wait for the save to finish."
-            : previewJob ? "The preview is being built."
+            : previewJob || previewWaiting != null ? "The preview is being built."
             : session.Animations!.Busy ? "Another edit is running. Wait for it to end."
             : session.Preview.Busy ? "The preview is busy."
             : null;
@@ -436,6 +440,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// </summary>
     internal void StartPreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair, bool live = false)
     {
+        // A link track still building: the preview waits for it, so it shows what Live will.
+        if (session.LinksBuilding)
+        {
+            previewWaiting = (repair, live);
+            return;
+        }
+        previewWaiting = null;
         // The preview plays the built file through a temporary mod; Live's swapped motion must go first, and comes back over the build.
         // With live (a face opened on its own) Live starts over it once it plays.
         var relive = liveWanted || live;
@@ -515,6 +526,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         lastSeekFrame = -1;
         var service = session.Animations!;
         Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
+        // Taken here, on the framework thread: the build runs on a worker.
+        var links = LiveLinks(document, session.Links);
+        builtPrints = MotionLinks.Prints(document.Motion, links);
         service.PreviewTimeline(target, shown, async (built, token) =>
         {
             // A clip moving bones the actor lacks (an edit made for a bigger skeleton) is never handed to the game.
@@ -570,7 +584,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 return true;
             });
             return played ? redraw == null ? "Preview playing." : "Preview playing. " + redraw : "Preview on. " + session.Playback.Error;
-        }, current.MotionFrames, target.Standalone ? null : repair);
+        }, current.MotionFrames, target.Standalone ? null : repair, links);
     }
 
     /// <summary>
@@ -655,9 +669,11 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     public void Stop()
     {
         StopLive();
+        previewWaiting = null;
         liveAfterPreview = false;
         previewSkeleton = null;
         builtDocument = null;
+        builtPrints = MotionLinks.NoPrints;
         previewGeneration++;
         ForgetPreviewLooks();
         try
@@ -713,6 +729,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     public void Poll()
     {
+        // A preview waiting for a link track starts once the track is in, unless something else holds it now.
+        if (previewWaiting is { } waiting && !session.LinksBuilding)
+        {
+            previewWaiting = null;
+            if (session.Editor is { } editor && session.Source is { Document: not null } source && PreviewBlocked() == null)
+                StartPreview(editor, source, waiting.Repair, waiting.Live);
+        }
         if (previewJob && session.Animations is { Busy: false } service)
         {
             previewJob = false;
@@ -893,6 +916,16 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     internal static ImmutableArray<MotionLayer> LiveLayers(TimelineDocument doc) =>
         doc.Face is { } face ? TimelineFace.ToFace(doc.Motion, face.Anchor) : doc.Motion;
 
+    /// <summary>The partner tracks Live and the preview apply <paramref name="doc"/>'s link layers with: none for a face, whose links are never on.</summary>
+    internal static MotionLinkSet? LiveLinks(TimelineDocument doc, MotionLinkSet links) => doc.Face != null ? null : links;
+
+    /// <summary>
+    /// Whether a preview built with the link prints <paramref name="built"/> no longer shows <paramref name="doc"/>'s links as
+    /// <paramref name="links"/> has them: a link's partner track has other content, or a link turned on or off.
+    /// </summary>
+    internal static bool LinksStale(IReadOnlyDictionary<string, string> built, TimelineDocument doc, MotionLinkSet links) =>
+        !MotionLinks.SamePrints(built, MotionLinks.Prints(doc.Motion, LiveLinks(doc, links)));
+
     /// <summary>Whether <paramref name="loaded"/> is a face opened on its own, which plays through the carrier (<see cref="FaceCarrier"/>).</summary>
     private static bool Carried(AnimationTimelineSource loaded) => !loaded.Standalone && loaded.Document?.Face != null;
 
@@ -909,7 +942,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     {
         var fresh = session.Fresh(loaded);
         if (previewFingerprint != null && previewDocument != null && session.Preview.Active)
-            return ReferenceEquals(previewDocument, current.Document) && previewSkeleton == SkeletonChoice(fresh, repair) ? null : TimelineWindowViews.PreviewStale;
+            // Live over the preview shows the links itself; the built file holds them as the preview took them.
+            return ReferenceEquals(previewDocument, current.Document) && previewSkeleton == SkeletonChoice(fresh, repair) &&
+                   (liveWanted || !LinksStale(builtPrints, current.Document, session.Links)) ? null : TimelineWindowViews.PreviewStale;
         if (liveWanted && livePreview == null)
             return null;
         // After a save the game plays the saved file, rebuilt or repaired as it was saved.
@@ -1085,7 +1120,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                     StartDisplay(current, fresh, decoded, shown);
                 return;
             }
-            session.MotionDisplay.Show(LiveLayers(current.Document), current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document));
+            session.MotionDisplay.Show(LiveLayers(current.Document), current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
+                LiveLinks(current.Document, session.Links));
         }
         catch (InvalidOperationException e)
         {
@@ -1101,9 +1137,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         // convert. That file holds the layers as they were built, so a copy always shows: the motion with the layers as they are now.
         // An expression's motion is its face's.
         var motion = fresh.MotionTarget;
+        var links = LiveLinks(current.Document, session.Links);
         if (livePreview is { } built
                 ? session.MotionDisplay!.Start(actor, built.Fingerprint, [], decoded, LiveLayers(current.Document), current.Document.ExcludedBones,
-                    current.Document.Cuts, LiveLength(current.Document), built.Duration, baseDiffers: true)
+                    current.Document.Cuts, LiveLength(current.Document), built.Duration, baseDiffers: true, links: links)
                 // After a save the game plays either file until it reloads the clip: the one saved or the one before.
                 : session.MotionDisplay!.Start(actor, motion.Clip.BindingFingerprint, [motion.FileFingerprint, motion.BaseFingerprint ?? string.Empty],
                 decoded, LiveLayers(current.Document), current.Document.ExcludedBones, current.Document.Cuts, LiveLength(current.Document),
@@ -1116,7 +1153,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 playedOn: fresh.Rebuild is { Model: null } ? session.Playback.ActorSkeleton(actor) ?? fresh.Clip.Resolution!.Selected!.Skeleton
                     : fresh.Rebuild != null ? fresh.Clip.Resolution!.Selected!.Skeleton : null,
                 playedTracks: fresh.Rebuild != null ? fresh.Clip.Resolution!.TrackBones : default,
-                sameRace: fresh.Rebuild is { Model: null }))
+                sameRace: fresh.Rebuild is { Model: null }, links: links))
         {
             liveDecoded = decoded;
             return true;

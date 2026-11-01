@@ -94,6 +94,7 @@ internal sealed class EditedSeam
     public static SeamReport Measure(MotionClip cut, ImmutableArray<MotionLayer> layers, int length, CancellationToken token)
     {
         var edited = cut.Clone();
+        // The seam of this clip's own edits: the partner link isn't part of it.
         MotionEvaluator.Apply(edited, layers, token);
         token.ThrowIfCancellationRequested();
         return LoopSeam.Analyze(edited, 0, length);

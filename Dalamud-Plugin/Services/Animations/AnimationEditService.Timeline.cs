@@ -536,12 +536,13 @@ internal sealed partial class AnimationEditService
     /// Builds the edited clip and hands it to <paramref name="show"/>, whose message becomes the
     /// status: the GPose preview. A changed length bakes the motion first. Nothing is saved.
     /// <paramref name="motionFrames"/> are facial motions' own lengths (see <see cref="TimelineConvert.Apply"/>).
+    /// <paramref name="links"/> are the partner tracks of the document's link layers, taken on the framework thread.
     /// </summary>
     public void PreviewTimeline(AnimationTimelineSource source, TimelineDocument document,
         Func<AnimationTimelineBuild, CancellationToken, Task<string>> show, IReadOnlyDictionary<string, int>? motionFrames = null,
-        SkeletonStandard? repair = null) => Launch(async token =>
+        SkeletonStandard? repair = null, MotionLinkSet? links = null) => Launch(async token =>
     {
-        var request = TimelineRequest(source, document, AnimationDestination.NewMod, "", repair);
+        var request = TimelineRequest(source, document, AnimationDestination.NewMod, "", repair, links: links);
         // A preview is never journaled, so a length change bakes in a folder of its own.
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit timeline preview", request.Id.ToString("N"));
         try
@@ -583,6 +584,7 @@ internal sealed partial class AnimationEditService
     /// each must still be what the collection gives. <paramref name="aliases"/> are game paths that share an
     /// <paramref name="added"/> file (alias to that file's game path: a prop material's other version folders, see
     /// <see cref="Timeline.PropCopy.Aliases"/>); they are mapped to that one file and go with it.
+    /// <paramref name="links"/> are the partner tracks of the document's link layers, taken on the framework thread; null leaves the links out.
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
@@ -590,10 +592,10 @@ internal sealed partial class AnimationEditService
         IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null,
         IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null,
         IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null, IReadOnlyDictionary<string, string>? copied = null,
-        IReadOnlyDictionary<string, string>? cutSounds = null, IReadOnlyDictionary<string, string>? aliases = null)
+        IReadOnlyDictionary<string, string>? cutSounds = null, IReadOnlyDictionary<string, string>? aliases = null, MotionLinkSet? links = null)
     {
         if (Busy) return null;
-        var request = TimelineRequest(source, document, destination, modName.Trim(), repair, cutSounds);
+        var request = TimelineRequest(source, document, destination, modName.Trim(), repair, cutSounds, links);
         Launch(async token =>
         {
             if (destination == AnimationDestination.NewMod && !ModPaths.IsSafeNewModName(request.ModName))
@@ -652,7 +654,8 @@ internal sealed partial class AnimationEditService
                 timelineEdit = timelineEdit with { Face = savedFace with { AfterFingerprint = built.BindingFingerprint } };
             if (motionBase != null)
                 timelineEdit = timelineEdit with { MotionBaseHash = AnimationPap.Hash(motionBase) };
-            var journaled = request with { Timeline = timelineEdit };
+            // The bake has used the partner tracks: the journal kept in Recovery doesn't hold on to them.
+            var journaled = request with { Timeline = timelineEdit with { Links = null } };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
                 files.Count > 0 ? (edited, files, owners, copies, kept) : null,
                 built.Manipulations.IsEmpty ? null : (built.GamePath, built.Manipulations));
@@ -700,10 +703,12 @@ internal sealed partial class AnimationEditService
     /// sounds were cut into with the motion and what each was cut from, which Edit again plays again.
     /// The source's <see cref="AnimationTimelineSource.Rebuild"/>, when set, is the repair instead of <paramref name="repair"/>.
     /// A face session's request carries what its face is baked with (<see cref="TimelineFace.BakeDocument"/>): its layers in
-    /// the face's own frames and the face's length, never the canvas's.
+    /// the face's own frames and the face's length, never the canvas's. <paramref name="links"/> are the partner tracks the
+    /// bake applies the link layers with; a face's links are never on, so its request has none.
     /// </summary>
     internal static AnimationBakeRequest TimelineRequest(AnimationTimelineSource source, TimelineDocument document,
-        AnimationDestination destination, string modName, SkeletonStandard? repair = null, IReadOnlyDictionary<string, string>? cutSounds = null)
+        AnimationDestination destination, string modName, SkeletonStandard? repair = null, IReadOnlyDictionary<string, string>? cutSounds = null,
+        MotionLinkSet? links = null)
         => document.Face is { } face && source.MotionTarget is { Standalone: false } target
             ? FaceRequest(source, target, document, face, destination, modName)
             : new(Guid.NewGuid(), source.Capture, destination, modName, false, AnimationOperation.EditTimeline,
@@ -711,7 +716,11 @@ internal sealed partial class AnimationEditService
             RepairTarget: source.Standalone ? null : source.Rebuild?.Target.Standard ?? repair,
             Timeline: new AnimationTimelineEdit(source.Startup, source.EntryIndex, RetimeSeconds(document),
                 document.MotionChanged ? document.Motion : [], Cuts: SavedCuts(document),
-                CutSounds: cutSounds is { Count: > 0 } ? cutSounds.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase) : null),
+                CutSounds: cutSounds is { Count: > 0 } ? cutSounds.ToImmutableDictionary(StringComparer.OrdinalIgnoreCase) : null)
+            {
+                Links = source.Standalone ? null : links,
+                LinkPrints = source.Standalone || MotionLinks.Prints(document.Motion, links) is not { Count: > 0 } prints ? null : prints,
+            },
             RepairModel: source.Standalone ? null : source.Rebuild?.Model);
 
     /// <summary>
@@ -777,7 +786,7 @@ internal sealed partial class AnimationEditService
             source.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } selected })
             return null;
         var skeleton = (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes;
-        var plain = request with { Timeline = request.Timeline! with { DurationSeconds = null, Motion = [], Cuts = null, CutSounds = null } };
+        var plain = request with { Timeline = request.Timeline! with { DurationSeconds = null, Motion = [], Cuts = null, CutSounds = null, Links = null } };
         var work = Path.Combine(journals.DirectoryFor(request.Id), "rebuilt-base");
         Directory.CreateDirectory(work);
         return await baker.BakeAsync(source.BaseMotion ?? file, skeleton, source.MotionClip, plain,

@@ -19,12 +19,45 @@ internal sealed class LinkTrack
         Before = before;
         After = after;
         Duration = float.IsFinite(duration) && duration > 0 ? duration : 0;
+        Print = Fingerprint(before, after, Duration);
     }
 
     public ImmutableArray<MotionTransform> Before { get; }
     public ImmutableArray<MotionTransform> After { get; }
     public float Duration { get; }
     public int Samples => Before.Length;
+
+    /// <summary>
+    /// The track's content as 16 hex digits: the same for two tracks with the same samples and duration, bit for bit, whatever their
+    /// instances. What a save remembers of a link, so a partner rebuilt to the same content doesn't make the clip unsaved.
+    /// </summary>
+    public string Print { get; }
+
+    // FNV-1a over the float bits, 64 bits wide: stable across runs and machines, so a journal can keep it.
+    private static string Fingerprint(ImmutableArray<MotionTransform> before, ImmutableArray<MotionTransform> after, float duration)
+    {
+        var hash = 14695981039346656037UL;
+        void Add(float value)
+        {
+            var bits = BitConverter.SingleToUInt32Bits(value);
+            for (var i = 0; i < 4; i++, bits >>= 8)
+                hash = (hash ^ (bits & 0xFF)) * 1099511628211UL;
+        }
+        void AddAll(ImmutableArray<MotionTransform> samples)
+        {
+            foreach (var t in samples)
+            {
+                Add(t.Position.X); Add(t.Position.Y); Add(t.Position.Z);
+                Add(t.Rotation.X); Add(t.Rotation.Y); Add(t.Rotation.Z); Add(t.Rotation.W);
+                Add(t.Scale.X); Add(t.Scale.Y); Add(t.Scale.Z);
+            }
+        }
+        Add(duration);
+        Add(before.Length);
+        AddAll(before);
+        AddAll(after);
+        return hash.ToString("x16");
+    }
 
     /// <summary>
     /// The partner bone at timeline <paramref name="frame"/>, between the partner's samples there: its first sample before
@@ -65,6 +98,44 @@ internal static class MotionLinks
     /// </summary>
     public static bool MayChange(MotionLayer layer) =>
         layer.Kind == MotionLayerKind.Link && layer.Amount > 0 && layer.Link != null && MotionEvaluator.Weighted(layer);
+
+    /// <summary>No prints: the one empty instance.</summary>
+    public static readonly ImmutableDictionary<string, string> NoPrints = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The <see cref="LinkTrack.Print"/> of each link layer of <paramref name="motion"/> that is active with <paramref name="links"/>, by
+    /// layer key: what a save or a preview bakes the links as. Links that are off have none.
+    /// </summary>
+    public static ImmutableDictionary<string, string> Prints(IReadOnlyList<MotionLayer> motion, MotionLinkSet? links)
+    {
+        if (links == null || links.Tracks.IsEmpty)
+            return NoPrints;
+        var prints = NoPrints.ToBuilder();
+        foreach (var layer in motion)
+            if (layer.Kind == MotionLayerKind.Link && MotionEvaluator.Active(layer, links))
+                prints[layer.Key] = links.For(layer.Key)!.Print;
+        return prints.Count == 0 ? NoPrints : prints.ToImmutable();
+    }
+
+    /// <summary>Whether two sets of prints hold the same links with the same content.</summary>
+    public static bool SamePrints(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b) =>
+        ReferenceEquals(a, b) || a.Count == b.Count && a.All(pair => b.TryGetValue(pair.Key, out var print) && print == pair.Value);
+
+    /// <summary>
+    /// Whether an active link layer of <paramref name="motion"/> follows a track in <paramref name="links"/> whose content isn't the
+    /// print <paramref name="saved"/> holds for it, or has no saved print (it was off when saved): the partner changed since. A link that
+    /// is off now counts for nothing.
+    /// </summary>
+    public static bool Unsaved(IReadOnlyList<MotionLayer> motion, MotionLinkSet links, IReadOnlyDictionary<string, string> saved)
+    {
+        if (links.Tracks.IsEmpty)
+            return false;
+        foreach (var layer in motion)
+            if (layer.Kind == MotionLayerKind.Link && MotionEvaluator.Active(layer, links) &&
+                (!saved.TryGetValue(layer.Key, out var print) || print != links.For(layer.Key)!.Print))
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// Where the partner's edit takes this bone, <paramref name="current"/> in model space, as if it were attached to the partner's bone:

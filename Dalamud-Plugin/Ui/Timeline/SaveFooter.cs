@@ -54,6 +54,10 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private float saveGroupWidth;
     // Save and what follows are on a line of their own, the row leaving no room for them.
     private bool saveBelow;
+    // A save asked for while a link track built: it starts once the track is in (see Poll), so it bakes what Live shows.
+    private bool linksWait;
+    // The content of the partner tracks the running save bakes the link layers with, for SavedPrints once it succeeds.
+    private ImmutableDictionary<string, string> savePrints = MotionLinks.NoPrints;
 
     /// <summary>Where the next save goes, as the footer's choice says.</summary>
     public AnimationDestination Destination => destination;
@@ -64,8 +68,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// session (<see cref="TimelineSession.Rebuild"/>, a repair without a race), so the bones are edited on that standard.
     /// </summary>
     public SkeletonStandard? RepairTarget => session.Rebuild?.Target.Standard;
-    /// <summary>A save or an undo runs, or waits for the service's result.</summary>
-    public bool Working => saveTask != null || pendingSaveId != null || undoPending;
+    /// <summary>A save or an undo runs, waits for a link track to build first, or waits for the service's result.</summary>
+    public bool Working => saveTask != null || pendingSaveId != null || undoPending || linksWait;
     /// <summary>The document must not change: a save with its sound check or question, or an undo, runs.</summary>
     public bool Busy => Working || soundSave.Checking || soundSave.Asking;
 
@@ -83,6 +87,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             saveError = null;
             saveMessage = null;
             lastSaveId = null;
+            linksWait = false;
+            session.SavedPrints = MotionLinks.NoPrints;
             session.Rebuild = null;
             rebuildDecided = null;
             rebuildAutomatic = false;
@@ -109,6 +115,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         motionBase = null;
         motionCarry = null;
         bakedOnBase = false;
+        linksWait = false;
+        session.SavedPrints = MotionLinks.NoPrints;
     }
 
     /// <summary> <paramref name="journal"/>, an edit of the open clip, is being undone from the Edits page; the clip is read again once it ends. </summary>
@@ -213,14 +221,14 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         DrawUndoLastSave(current);
 
         var service = session.Animations!;
-        if (saveTask != null || pendingSaveId != null || undoPending || service.Busy && !timelinePreview.Building)
+        if (saveTask != null || pendingSaveId != null || undoPending || linksWait || service.Busy && !timelinePreview.Building)
         {
             ImGui.SameLine(0, Theme.Scaled(16));
             Widgets.Spinner();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, saveTask != null ? "Ending the preview" : service.Status);
-            if (service.CanCancel && saveTask == null)
+            ImGui.TextColored(Theme.Muted, linksWait ? "Reading the link" : saveTask != null ? "Ending the preview" : service.Status);
+            if (service.CanCancel && saveTask == null && !linksWait)
             {
                 ImGui.SameLine(0, Theme.Gap);
                 if (ImGui.SmallButton("Cancel"))
@@ -311,7 +319,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     {
         if (problem != null)
             return problem;
-        if (saveTask != null || pendingSaveId != null)
+        if (saveTask != null || pendingSaveId != null || linksWait)
             return "Saving.";
         if (soundSave.Checking)
             return "Checking the mod.";
@@ -321,7 +329,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             return "Undoing the last save.";
         if (loading())
             return "Reading the timeline.";
-        if (!current.Dirty && RepairTarget == null)
+        if (!current.Dirty && !session.LinksUnsaved && RepairTarget == null)
             return "Nothing changed since the last save.";
         if (current.Gesture != TimelineGesture.None)
             return "Finish the drag first.";
@@ -338,7 +346,15 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// </summary>
     private void StartSave(TimelineEditor current, AnimationTimelineSource loaded)
     {
+        // A link track still building: the save waits for it, so the file holds what Live shows (see Poll).
+        if (session.LinksBuilding)
+        {
+            linksWait = true;
+            return;
+        }
         var document = current.Document;
+        // Taken here, on the framework thread: the bake runs on a worker.
+        var links = TimelinePreview.LiveLinks(document, session.Links);
         var motionFrames = current.MotionFrames;
         var target = session.Fresh(loaded);
         var place = destination;
@@ -380,6 +396,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var service = session.Animations!;
         saveError = null;
         saveMessage = null;
+        savePrints = MotionLinks.Prints(document.Motion, links);
         jobClip = TimelineSession.ClipKey(loaded);
         KeepMotionForSave(target, document, repair);
         timelinePreview.Stop();
@@ -406,7 +423,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             {
                 session.Playback.Stop();
                 return service.EditTimeline(target, saved, place, name, files, beside, motionFrames, repair, rebuild,
-                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds, aliases.IsEmpty ? null : aliases);
+                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds, aliases.IsEmpty ? null : aliases, links);
             }), null);
         });
     }
@@ -424,6 +441,13 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         soundSave.Poll(error => saveError = error);
         if (session.Animations is not { } service)
             return;
+        // A save waiting for a link track starts once the track is in, with the clip as it is then.
+        if (linksWait && !session.LinksBuilding)
+        {
+            linksWait = false;
+            if (session.Editor is { } editor && session.Source is { Document: not null } source)
+                StartSave(editor, source);
+        }
         if (saveTask is { IsCompleted: true } task)
         {
             saveTask = null;
@@ -461,6 +485,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             if (result.Success)
             {
                 session.Editor?.MarkSaved();
+                // The link layers are saved as the partner was then: a partner that changes since makes the clip unsaved again.
+                session.SavedPrints = savePrints;
                 lastSaveId = job;
                 // A rebuilt file's header names the character's race, so it offers no rebuild. A repaired one is
                 // repaired again when it reads back as a smaller skeleton (see PickRebuild).
@@ -485,7 +511,11 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             if (service.LastFailed)
                 saveError = service.Status;
             else
+            {
                 saveMessage = "The last save was undone.";
+                // The file is another save's now, whose links aren't known.
+                session.SavedPrints = MotionLinks.NoPrints;
+            }
             // While this window edits layers on a motion of its own, or brings back layers baked onto one, a file that is
             // again what an earlier layered edit saved brings that edit's layers back as the saved state, so it matches the file.
             reload(motionBase?.Clip == TimelineSession.ClipKey(session.Source!) || motionCarry is { Unsaved: true } && bakedOnBase);

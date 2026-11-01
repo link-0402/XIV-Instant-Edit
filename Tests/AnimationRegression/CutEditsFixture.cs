@@ -299,6 +299,16 @@ internal static class CutEditsFixture
         check(JsonSerializer.Deserialize<AnimationTimelineEdit>(withSounds, options)!.CutSounds!["sound/instant_edit/song_cut_ab.scd"] == "sound/test/song.scd" &&
               JsonSerializer.Deserialize<AnimationTimelineEdit>(journalJson, options)!.CutSounds == null,
             "journals carry the sounds a save cut and what they were cut from, and older ones load without");
+        // A save's partner tracks go to the bake only: a journal never holds them.
+        var track = new LinkTrack([new MotionTransform(Vector3.Zero, Quaternion.Identity, Vector3.One)], [new MotionTransform(Vector3.UnitX, Quaternion.Identity, Vector3.One)], 0);
+        var linked = new AnimationTimelineEdit(false, 0, null, [])
+        {
+            Links = new MotionLinkSet(ImmutableDictionary<string, LinkTrack>.Empty.Add("m1", track)),
+        };
+        var linkedJson = JsonSerializer.Serialize(linked, options);
+        check(linked.Links != null && System.Text.Json.Nodes.JsonNode.Parse(linkedJson)!.AsObject() is var edit && !edit.ContainsKey("Links") &&
+              JsonSerializer.Deserialize<AnimationTimelineEdit>(linkedJson, options)!.Links == null,
+            "a journal leaves a save's partner tracks out, and loads without them");
     }
 
     private static void Editor(Action<bool, string> check)

@@ -69,17 +69,20 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
 
     /// <summary>
     /// What the display shows over the clip: its bone layers, the bones left out, its cuts and the length
-    /// it plays at in timeline frames (0 for the clip's own). Two are the same when they hold the same
-    /// arrays and cuts, as an unchanged document's do.
+    /// it plays at in timeline frames (0 for the clip's own), and the partner tracks its link layers follow. Two are the same when they
+    /// hold the same arrays, cuts and tracks, as an unchanged document's do.
     /// </summary>
-    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded, MotionCuts? Cuts = null, int Length = 0);
+    private readonly record struct Edits(ImmutableArray<MotionLayer> Layers, ImmutableArray<string> Excluded, MotionCuts? Cuts = null, int Length = 0,
+        MotionLinkSet? Links = null);
 
     /// <summary>
-    /// Whether the display swaps in a copy: when the edits change the motion, or when the motion they apply to
-    /// isn't the file the game plays (<paramref name="baseDiffers"/>, a motion from Blender), which shows only in a copy.
+    /// Whether the display swaps in a copy: when the edits change the motion (link layers only with their partner's track in
+    /// <paramref name="links"/>), or when the motion they apply to isn't the file the game plays (<paramref name="baseDiffers"/>, a
+    /// motion from Blender), which shows only in a copy.
     /// </summary>
-    internal static bool Copies(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, MotionCuts? cuts, int length, bool baseDiffers) =>
-        baseDiffers || MotionEvaluator.Changes(layers) || !excluded.IsDefaultOrEmpty || cuts is { Whole: false } || length != 0;
+    internal static bool Copies(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, MotionCuts? cuts, int length, bool baseDiffers,
+        MotionLinkSet? links = null) =>
+        baseDiffers || MotionEvaluator.Changes(layers, links) || !excluded.IsDefaultOrEmpty || cuts is { Whole: false } || length != 0;
 
     /// <summary>
     /// Whether a playing binding's tracks and the decoded motion's agree as far as both go: a save keeps a clip's
@@ -185,8 +188,9 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// <summary>How many of the actor's controls show the edited motion.</summary>
     public int Showing => session?.Swapped.Count ?? 0;
 
-    /// <summary>Whether the controls show <paramref name="layers"/> now, with nothing left to apply.</summary>
-    public bool Shows(ImmutableArray<MotionLayer> layers) => session is { } current && evaluation == null && current.Shown.Layers == layers;
+    /// <summary>Whether the controls show <paramref name="layers"/> with the partner tracks <paramref name="links"/> now, with nothing left to apply.</summary>
+    public bool Shows(ImmutableArray<MotionLayer> layers, MotionLinkSet? links = null) =>
+        session is { } current && evaluation == null && current.Shown.Layers == layers && ReferenceEquals(current.Shown.Links, links);
 
     public string Error { get; private set; } = string.Empty;
 
@@ -204,11 +208,11 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// <paramref name="baseDiffers"/> says the decoded motion isn't that file's at all (a motion from Blender, a rebuild).
     /// <paramref name="playedOn"/> is the clip's own skeleton when <paramref name="decoded"/> is rebuilt onto another race's, or repaired
     /// onto a standard of its own (<paramref name="sameRace"/>), and <paramref name="playedTracks"/> the playing binding's tracks on it:
-    /// copies are handed back to it (see <see cref="LiveConversion"/>).
+    /// copies are handed back to it (see <see cref="LiveConversion"/>). <paramref name="links"/> are the partner tracks the link layers follow.
     /// </summary>
     public bool Start(ushort actorIndex, string fingerprint, IEnumerable<string> alsoAccepted, MotionClip decoded, ImmutableArray<MotionLayer> layers,
         ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0, float? savedDuration = null, bool baseDiffers = false,
-        SkeletonDescription? playedOn = null, ImmutableArray<short> playedTracks = default, bool sameRace = false)
+        SkeletonDescription? playedOn = null, ImmutableArray<short> playedTracks = default, bool sameRace = false, MotionLinkSet? links = null)
     {
         RequireFrameworkThread();
         Stop();
@@ -229,22 +233,24 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         if (baseDiffers)
             session.Shown = new Edits(default, default, null, -1);
         Error = string.Empty;
-        Show(layers, excluded, cuts, length);
+        Show(layers, excluded, cuts, length, links);
         return true;
     }
 
     /// <summary>
-    /// The layers to show, the bones left out, the cuts and the length in timeline frames (0 for the
-    /// clip's own). A changed set is applied off the framework thread, then swapped in.
+    /// The layers to show, the bones left out, the cuts, the length in timeline frames (0 for the
+    /// clip's own) and the partner tracks the link layers follow (null: none). A changed set is applied off the framework
+    /// thread, then swapped in.
     /// </summary>
-    public void Show(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0)
+    public void Show(ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded = default, MotionCuts? cuts = null, int length = 0,
+        MotionLinkSet? links = null)
     {
         RequireFrameworkThread();
         if (session == null || layers.IsDefault)
             return;
         if (length == Frames(session.Base))
             length = 0;
-        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded, cuts, length);
+        session.Requested = new Edits(layers, excluded.IsDefault ? [] : excluded, cuts, length, links);
         Evaluate();
     }
 
@@ -274,7 +280,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         if (session is not { } current || evaluation != null || current.Requested == current.Shown)
             return;
         var edits = current.Requested;
-        if (!Copies(edits.Layers, edits.Excluded, edits.Cuts, edits.Length, current.BaseDiffers))
+        if (!Copies(edits.Layers, edits.Excluded, edits.Cuts, edits.Length, current.BaseDiffers, edits.Links))
         {
             // Nothing to change: the clip shows its own motion.
             current.Shown = edits;
@@ -290,7 +296,8 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
         var decoded = current.Base;
         var (playedOn, playedTracks, sameRace) = (current.PlayedOn, current.PlayedTracks, current.SameRace);
         evaluating = edits;
-        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Cuts, edits.Length, playedOn, playedTracks, sameRace, token), token);
+        evaluation = Task.Run(() => (Built?)Build(decoded, edits.Layers, edits.Excluded, edits.Cuts, edits.Length, playedOn, playedTracks, sameRace,
+            edits.Links, token), token);
     }
 
     private void OnUpdate(IFramework _)
@@ -641,17 +648,17 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     /// clip's blend hint. The <paramref name="excluded"/> bones get no track, as in a saved file that
     /// leaves them out. With <paramref name="playedOn"/>, the result is handed back to that skeleton, the clip's own,
     /// with tracks in <paramref name="playedTracks"/>' terms, its translations kept when <paramref name="sameRace"/>
-    /// (see <see cref="LiveConversion"/>). Runs off the framework thread.
+    /// (see <see cref="LiveConversion"/>). The link layers follow <paramref name="links"/>. Runs off the framework thread.
     /// </summary>
     private static Built Build(MotionClip decoded, ImmutableArray<MotionLayer> layers, ImmutableArray<string> excluded, MotionCuts? cuts,
-        int length, SkeletonDescription? playedOn, ImmutableArray<short> playedTracks, bool sameRace, CancellationToken token)
+        int length, SkeletonDescription? playedOn, ImmutableArray<short> playedTracks, bool sameRace, MotionLinkSet? links, CancellationToken token)
     {
         // The motion the layers apply to, and which tells the bones they moved: the clip's own, or as cut.
         var basis = cuts is { Whole: false } || length != 0
             ? MotionCutter.Apply(decoded, cuts ?? MotionCuts.WholeOf(Frames(decoded)), length == 0 ? Frames(decoded) : length, token)
             : decoded;
         var edited = basis.Clone();
-        MotionEvaluator.Apply(edited, layers, token);
+        MotionEvaluator.Apply(edited, layers, token, links);
         var left = new HashSet<int>();
         if (!excluded.IsDefaultOrEmpty)
         {

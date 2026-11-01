@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
@@ -24,6 +25,115 @@ internal static class LinkLayerFixture
         Planner(check);
         Service(check);
         AddLinks(check);
+        Wiring(check);
+    }
+
+    /// <summary>Where the partner tracks go: saves, Live, the Bones window and the unsaved state.</summary>
+    private static void Wiring(Action<bool, string> check)
+    {
+        var layer = Layer(Hand());
+        var doc = new TimelineDocument(30, 30, null, [], 1) { Motion = [layer] };
+        // MotionChanged_OnlyLink: a link that may change the motion counts without its track.
+        check(doc.MotionChanged && !(doc with { Motion = [layer with { Enabled = false }] }).MotionChanged &&
+              !(doc with { Motion = [layer with { Amount = 0 }] }).MotionChanged && !(doc with { Motion = [layer with { Link = null }] }).MotionChanged,
+            "wiring: MotionChanged_OnlyLink: a document whose only layer is a link that is on with a pull changes the motion");
+
+        // The save rules read it so: a link-only document bakes, keeps its layers in the request and its base for Edit again.
+        var clip = new AnimationClip(Hug, "hug", 1, 0, 42, "chara/test.sklb");
+        var source = TimelineToolsFixture.Source(clip, doc);
+        check(AnimationBakeRules.ChangesMotion(doc) && AnimationBakeRules.NewMotion(doc) && AnimationEditService.ChangesMotion(doc),
+            "wiring: a link-only document bakes its motion when saved");
+        check(AnimationBakeRules.BakeInNote(doc, SkeletonStandard.Vanilla) != null && AnimationBakeRules.BakeInNote(doc, null) == null,
+            "wiring: a repair says it bakes a link-only document's layers in");
+        byte[] file = [1, 2, 3];
+        check(AnimationEditService.MotionBase(source, doc, file) == file, "wiring: a link-only save keeps the motion from before it for Edit again");
+        var set = Set(("m1", Still()));
+        var request = AnimationEditService.TimelineRequest(source, doc, AnimationDestination.InPlace, "Mod", links: set);
+        check(request.Timeline is { Motion: [{ Kind: MotionLayerKind.Link }] } edit && ReferenceEquals(edit.Links, set) &&
+              AnimationEditService.TimelineRequest(source, doc, AnimationDestination.InPlace, "Mod").Timeline!.Links == null,
+            "wiring: a save's request carries the link layers and the partner tracks it was given");
+        check(AnimationBakeRules.RebuildKeepsEdits(request with { RepairModel = "c0801", RepairTarget = SkeletonStandard.Vanilla }, doc),
+            "wiring: a rebuild keeps a link-only document's edits open");
+
+        // Live copies the clip for a link only with its partner's track.
+        check(MotionLiveDisplay.Copies([layer], [], null, 0, false, set) && !MotionLiveDisplay.Copies([layer], [], null, 0, false) &&
+              !MotionLiveDisplay.Copies([layer], [], null, 0, false, MotionLinkSet.Empty), "wiring: Live shows a link only with its partner's track");
+        check(TimelinePreview.LiveLinks(doc, set) == set &&
+              TimelinePreview.LiveLinks(TimelineFace.Open(new TimelineDocument(150, 150, null, [], 1), 0, 1, 150) with { Motion = [layer] }, set) == null,
+            "wiring: a face's Live and preview get no partner tracks");
+
+        // The Bones window's onion skins and paths pose a frame as Apply bakes it, with the same tracks.
+        var fine = Reaching(61);
+        var hand = MotionEvaluator.Index(fine.Skeleton)["j_te_r"];
+        var fineSet = Set(("m1", Track(fine, hand, (_, before) => before with { Position = before.Position + new Vector3(.1f, 0, 0) })));
+        var faded = doc with { Motion = [layer with { FadeIn = 10 }] };
+        var applied = Applied(fine, faded.Motion, fineSet);
+        // Samples 0, 20 and 30 of a clip with two samples a frame: frames 0, 10 and 15.
+        check(new[] { 0, 20, 30 }.All(s => BonePosing.Layered(fine, faded, (int)fine.Frame(s), 0, 30, fineSet).Zip(Row(applied, s)).All(pair => Near(pair.First, pair.Second))) &&
+              BonePosing.Layered(fine, faded, 15, 0, 30, null).SequenceEqual(fine.Pose(15)),
+            "wiring: the Bones window's pose at a frame is Apply's with the same tracks, and the clip's own without");
+
+        // A track's print is its content: the same samples in a new instance print the same, another After prints otherwise.
+        var moving = Track(fine, hand, (_, before) => before with { Position = before.Position + new Vector3(.1f, 0, 0) });
+        var rebuiltSame = new LinkTrack(moving.Before, [.. moving.After], moving.Duration);
+        var movedMore = new LinkTrack(moving.Before, [.. moving.After.Select(t => t with { Position = t.Position + new Vector3(0, 1e-4f, 0) })], moving.Duration);
+        check(moving.Print.Length == 16 && rebuiltSame.Print == moving.Print && movedMore.Print != moving.Print &&
+              new LinkTrack(moving.Before, moving.After, moving.Duration + 1 / 30f).Print != moving.Print,
+            "wiring: a track's print is its content: equal for a same-content rebuild, other for another After or length");
+
+        // LinksUnsaved: an active link follows a track whose content its save didn't bake.
+        var saved = Set(("m1", moving));
+        var savedPrints = MotionLinks.Prints(doc.Motion, saved);
+        check(savedPrints.Count == 1 && savedPrints["m1"] == moving.Print && MotionLinks.Prints(doc.Motion, null).IsEmpty &&
+              MotionLinks.Prints([layer with { Enabled = false }], saved).IsEmpty, "wiring: a save remembers the prints of its active links only");
+        check(!MotionLinks.Unsaved(doc.Motion, saved, savedPrints) && !MotionLinks.Unsaved(doc.Motion, Set(("m1", rebuiltSame)), savedPrints),
+            "wiring: LinksUnsaved: a same-content rebuild of the track stays saved");
+        check(MotionLinks.Unsaved(doc.Motion, Set(("m1", movedMore)), savedPrints), "wiring: LinksUnsaved: a track of other content is unsaved");
+        check(MotionLinks.Unsaved(doc.Motion, saved, MotionLinks.NoPrints), "wiring: LinksUnsaved: a link that was off when saved and is on now is unsaved");
+        check(!MotionLinks.Unsaved([layer with { Enabled = false }], Set(("m1", movedMore)), savedPrints) &&
+              !MotionLinks.Unsaved(doc.Motion, MotionLinkSet.Empty, savedPrints), "wiring: LinksUnsaved: a link that is off now is never unsaved");
+        var session = new TimelineSession(null, null!, null!, null!, null, null!, null!, null!) { Links = Set(("m1", movedMore)), SavedPrints = savedPrints };
+        check(!session.LinksUnsaved, "wiring: a session without an open clip has nothing unsaved");
+        session.Editor = new TimelineEditor(doc);
+        check(session.LinksUnsaved, "wiring: a session's open document is unsaved when its link follows other content");
+        session.Links = Set(("m1", rebuiltSame));
+        check(!session.LinksUnsaved, "wiring: a session's open document stays saved across a same-content rebuild");
+
+        // The prints go into the request and its journal, and Edit again takes them back as the saved state.
+        var printed = AnimationEditService.TimelineRequest(source, doc, AnimationDestination.InPlace, "Mod", links: saved);
+        check(printed.Timeline!.LinkPrints is { } inRequest && MotionLinks.SamePrints(inRequest, savedPrints) &&
+              AnimationEditService.TimelineRequest(source, doc, AnimationDestination.InPlace, "Mod").Timeline!.LinkPrints == null,
+            "wiring: a save's request journals the prints of the links it bakes");
+        var temp = Path.Combine(Path.GetTempPath(), "ie-link-prints-regression-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var journaled = printed with { Timeline = printed.Timeline with { Links = null } };
+            new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = journaled.Id, Request = AnimationCommitService.RecoveryRequest(journaled) });
+            var loaded = new AnimationJournalStore(temp).Load().Single();
+            check(loaded.Request.Timeline is { Links: null, LinkPrints: { } back } && MotionLinks.SamePrints(back, savedPrints) &&
+                  MotionLinks.SamePrints(TimelineSession.SavedPrintsOf(loaded), savedPrints),
+                "wiring: a journal keeps the link prints and Edit again seeds the saved state from them");
+            var older = new AnimationEditJournal { Id = Guid.NewGuid(), Request = journaled with { Timeline = journaled.Timeline! with { LinkPrints = null } } };
+            check(TimelineSession.SavedPrintsOf(older).IsEmpty, "wiring: an edit saved without prints opens again with none saved");
+        }
+        finally { Directory.Delete(temp, true); }
+
+        // A built preview is stale once its links' content changes, or a link turns on or off.
+        check(!TimelinePreview.LinksStale(savedPrints, doc, Set(("m1", rebuiltSame))) && TimelinePreview.LinksStale(savedPrints, doc, Set(("m1", movedMore))) &&
+              TimelinePreview.LinksStale(savedPrints, doc, MotionLinkSet.Empty) && TimelinePreview.LinksStale(MotionLinks.NoPrints, doc, saved) &&
+              !TimelinePreview.LinksStale(MotionLinks.NoPrints, doc, MotionLinkSet.Empty),
+            "wiring: a preview is stale when its links' content or which are on changed");
+
+        // The base stays the base: read back after an in-place save, the clip's layers apply to the motion from before it again,
+        // which is read again as a new decode (so a partner's track rebuilds on the same motion).
+        var opened = source with { FileFingerprint = "before" };
+        var motion = SaveFooter.KeptMotion(opened);
+        var reread = opened with { Pap = [9, 9], Resource = opened.Resource with { Hash = "saved" } };
+        var based = SaveFooter.WithKeptMotion(reread, motion);
+        check(ReferenceEquals(based.MotionSource, opened.Pap) && based.BaseHash == "file" && ReferenceEquals(SaveFooter.WithKeptMotion(opened, motion).MotionSource, opened.Pap) &&
+              SaveFooter.WithKeptMotion(opened, motion).BaseMotion == null && MotionDecode.KeyOf(based) != MotionDecode.KeyOf(opened),
+            "wiring: after an in-place save the clip's motion is still the one from before, decoded again");
     }
 
     /// <summary>How a link stands with its partner's view, and the inputs its track is built from.</summary>

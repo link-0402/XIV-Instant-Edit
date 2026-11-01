@@ -83,6 +83,7 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
     private static MotionClip Playing(MotionClip output, IReadOnlyList<MotionLayer> layers, CancellationToken token)
     {
         var playing = output.Clone();
+        // The motion as this clip plays it on its own: the partner link isn't part of it.
         MotionEvaluator.Apply(playing, layers, token);
         return playing;
     }

@@ -210,6 +210,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         // The edit's bone layers (a timeline edit only), and the source skeleton float slot each
         // float track drives, kept managed so a decode can be read off the framework thread.
         private readonly ImmutableArray<MotionLayer> motion = [];
+        // The partner tracks the edit's link layers follow; null leaves every link out.
+        private readonly MotionLinkSet? links;
         private readonly short[] floatSlots = [];
         private readonly short[] sourceTracks = [];
         private readonly sbyte blendHint;
@@ -341,7 +343,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 floatSlots = new ReadOnlySpan<short>(originalBinding->FloatTrackToFloatSlotIndices.Data,
                     originalBinding->FloatTrackToFloatSlotIndices.Length).ToArray();
                 motion = request.Operation == AnimationOperation.EditTimeline && request.Timeline is { } edit ? edit.Motion : [];
-                if (MotionEvaluator.Changes(motion))
+                links = request.Operation == AnimationOperation.EditTimeline ? request.Timeline?.Links : null;
+                if (MotionEvaluator.Changes(motion, links))
                 {
                     // Refuse before sampling: a layer naming a bone this skeleton lacks would fail only at the end.
                     MotionEvaluator.Validate(motion);
@@ -421,7 +424,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             return frame == frames;
         }
         /// <summary>Whether the edit's bone layers change the motion, so <see cref="ApplyMotion"/> must run before the build.</summary>
-        public bool EditsMotion => MotionEvaluator.Changes(motion);
+        public bool EditsMotion => MotionEvaluator.Changes(motion, links);
 
         /// <summary>Whether the edit cuts the motion, so <see cref="ApplyCuts"/> must run before the layers and the build.</summary>
         public bool Cuts => cuts != null;
@@ -488,7 +491,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             for (var f = 0; f < frames; f++)
                 for (var b = 0; b < expected[f].Length; b++)
                     clip.Set(f, b, FromHavok(expected[f][b]));
-            MotionEvaluator.Apply(clip, motion, token);
+            MotionEvaluator.Apply(clip, motion, token, links);
             for (var f = 0; f < frames; f++)
             {
                 token.ThrowIfCancellationRequested();

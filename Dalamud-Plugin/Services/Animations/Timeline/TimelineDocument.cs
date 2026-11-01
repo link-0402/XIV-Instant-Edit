@@ -136,8 +136,11 @@ internal sealed record TimelineDocument(
     /// <summary>The number the next added layer's "m" key uses.</summary>
     public int NextMotionKey { get; init; } = 1;
 
-    /// <summary>Whether saving changes the motion through its bone layers.</summary>
-    public bool MotionChanged => MotionEvaluator.Changes(Motion);
+    /// <summary>
+    /// Whether saving changes the motion through its bone layers. A link layer that may change it counts without its partner's track,
+    /// which the document doesn't hold: such a save bakes, and changes nothing while the link is off.
+    /// </summary>
+    public bool MotionChanged => MotionEvaluator.Changes(Motion) || Motion.Any(MotionLinks.MayChange);
 
     /// <summary>
     /// Bones the clip animates that saving leaves without a track, by name, in order: nothing in the

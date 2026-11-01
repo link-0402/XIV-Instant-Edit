@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Numerics;
+using System.Text.Json.Serialization;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
 
@@ -130,6 +131,19 @@ internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float
     ImmutableDictionary<string, string>? CutSounds = null, AnimationFaceEdit? Face = null)
 {
     public ImmutableArray<MotionLayer> Motion { get; init; } = Motion.IsDefault ? [] : Motion;
+
+    /// <summary>
+    /// The partner tracks of <see cref="Motion"/>'s link layers the bake applies them with, as the save or preview took them; null leaves
+    /// every link out. Never journaled: Edit again brings the links back, and they follow the partner as it is then.
+    /// </summary>
+    [JsonIgnore]
+    public MotionLinkSet? Links { get; init; }
+
+    /// <summary>
+    /// The content (<see cref="LinkTrack.Print"/>) of each partner track the save baked an active link layer with, by layer key: Edit again
+    /// tells by them whether the partner changed since. Null without links, and in journals written before links.
+    /// </summary>
+    public ImmutableDictionary<string, string>? LinkPrints { get; init; }
 }
 /// <summary>
 /// The face a face session saved: its file, its entry and motion name, where it starts on the timeline and its length

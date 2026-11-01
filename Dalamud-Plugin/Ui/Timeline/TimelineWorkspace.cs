@@ -358,8 +358,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     }
 
     /// <summary> Unsaved edits of an editable timeline. </summary>
-    // The edits of the timeline Edit face left count too: opening another clip would lose them.
-    internal bool HasUnsavedChanges => editor is { Dirty: true } && source?.Document != null || parkedEdits != null;
+    // The edits of the timeline Edit face left count too: opening another clip would lose them. So does a partner that changed
+    // what a link layer follows since the last save.
+    internal bool HasUnsavedChanges => (editor is { Dirty: true } || session.LinksUnsaved) && source?.Document != null || parkedEdits != null;
 
     /// <summary>
     /// Edit face: opens face <paramref name="motion"/> in <paramref name="gamePath"/> on its own, for the open clip's
@@ -663,6 +664,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             livePose.ForgetNote();
         }
         saveFooter.Loaded(loaded, sameClip, again != null);
+        // Edit again: the file holds the links as that save baked them.
+        if (again != null)
+            session.SavedPrints = TimelineSession.SavedPrintsOf(again);
         if (restore != null && !TimelineAutosaver.Fits(loaded, restore))
         {
             autosaver.Error = "The animation changed since its edits were kept, so they can't come back onto it.";

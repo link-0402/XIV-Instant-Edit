@@ -123,6 +123,19 @@ internal sealed class TimelineSession
     public bool LinksBuilding { get; set; }
 
     /// <summary>
+    /// The content of the partner tracks the clip's file holds its active link layers baked with, by layer key (<see cref="LinkTrack.Print"/>):
+    /// from the last save in this window, or the saved edit Edit again opened; empty before either.
+    /// </summary>
+    public ImmutableDictionary<string, string> SavedPrints { get; set; } = MotionLinks.NoPrints;
+
+    /// <summary>The open document's link layers follow partner tracks of other content than its file holds (see <see cref="MotionLinks.Unsaved"/>).</summary>
+    public bool LinksUnsaved => Editor is { } editor && MotionLinks.Unsaved(editor.Document.Motion, Links, SavedPrints);
+
+    /// <summary>The prints <paramref name="journal"/>'s save baked its links with, for <see cref="SavedPrints"/> once Edit again opens it.</summary>
+    public static ImmutableDictionary<string, string> SavedPrintsOf(AnimationEditJournal journal) =>
+        journal.Request.Timeline?.LinkPrints is { Count: > 0 } prints ? prints : MotionLinks.NoPrints;
+
+    /// <summary>
     /// The skeleton <paramref name="loaded"/>'s motion is edited on: its rebuild's, else the one it was made for;
     /// null while it is unknown.
     /// </summary>

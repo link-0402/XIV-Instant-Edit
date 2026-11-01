@@ -380,7 +380,7 @@ internal sealed partial class TimelineWorkspace
         // back to the bone as the game still shows it.
         if (gizmoEditor == null && gizmoHeld is { } held)
         {
-            var shown = motionDisplay?.Shows(current.Document.Motion) == true ? held.Shown + 1 : 0;
+            var shown = motionDisplay?.Shows(current.Document.Motion, TimelinePreview.LiveLinks(current.Document, session.Links)) == true ? held.Shown + 1 : 0;
             gizmoHeld = held.Layer != layer.Key || held.Bone != bone || held.Frame != frame || shown > GizmoShownFrames ||
                         held.Since >= GizmoHoldFrames || !LiveShowing
                 ? null

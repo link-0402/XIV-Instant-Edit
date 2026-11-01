@@ -84,6 +84,7 @@ internal sealed class CurveBake
         try
         {
             baked = output.Clone();
+            // The curves show this clip's own layers: the partner link isn't part of them.
             MotionEvaluator.Apply(baked, layers, token);
             token.ThrowIfCancellationRequested();
         }
