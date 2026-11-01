@@ -102,7 +102,7 @@ internal static class MotionSymmetry
     /// <summary>
     /// The bones the layer at <paramref name="at"/> in <paramref name="layers"/> counts as moving, for
     /// <see cref="Plan"/>: the ones the clip has tracks for and every bone an earlier layer that is on
-    /// moves (an offset's or pose's keyed bones, a symmetry's targets), since those have motion to copy
+    /// moves (an offset's or pose's keyed bones, a symmetry's targets, a link's chain), since those have motion to copy
     /// and get a track when saved. Null when the clip's tracks are unknown, which counts every bone.
     /// Bones the skeleton lacks are left out; applying the layers reports them.
     /// </summary>
@@ -115,7 +115,8 @@ internal static class MotionSymmetry
         for (var i = 0; i < Math.Min(at, layers.Count); i++)
         {
             var layer = layers[i];
-            if (!MotionEvaluator.Active(layer))
+            // A link counts while it may move its bones, track or not: a hand it follows with while off just copies the hand's own motion.
+            if (!MotionEvaluator.Active(layer) && !MotionLinks.MayChange(layer))
                 continue;
             switch (layer.Kind)
             {
@@ -158,6 +159,16 @@ internal static class MotionSymmetry
                         {
                             // Applying the layers reports the missing bone.
                         }
+                    break;
+                case MotionLayerKind.Link:
+                    try
+                    {
+                        animated.UnionWith(MotionLinks.Moved(skeleton, layer));
+                    }
+                    catch (InvalidDataException)
+                    {
+                        // Applying the layers reports the missing bone.
+                    }
                     break;
             }
         }

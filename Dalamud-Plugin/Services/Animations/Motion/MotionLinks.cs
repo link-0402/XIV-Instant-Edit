@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Numerics;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Services.Animations.Motion;
@@ -63,4 +65,47 @@ internal static class MotionLinks
     /// </summary>
     public static bool MayChange(MotionLayer layer) =>
         layer.Kind == MotionLayerKind.Link && layer.Amount > 0 && layer.Link != null && MotionEvaluator.Weighted(layer);
+
+    /// <summary>
+    /// Where the partner's edit takes this bone, <paramref name="current"/> in model space, as if it were attached to the partner's bone:
+    /// the partner's move from <paramref name="before"/> to <paramref name="after"/>, and its turn about the partner bone's spot. With
+    /// <paramref name="holdTurn"/> the bone turns with it too, else it keeps its own turn. <paramref name="current"/> itself when the
+    /// partner didn't move.
+    /// </summary>
+    public static MotionTransform Aim(MotionTransform current, MotionTransform before, MotionTransform after, bool holdTurn)
+    {
+        if (before == after)
+            return current;
+        var turn = Quaternion.Normalize(Quaternion.Normalize(after.Rotation) * Quaternion.Inverse(Quaternion.Normalize(before.Rotation)));
+        return current with
+        {
+            Position = after.Position + Vector3.Transform(current.Position - before.Position, turn),
+            Rotation = holdTurn ? Quaternion.Normalize(turn * current.Rotation) : current.Rotation,
+        };
+    }
+
+    /// <summary>The pin on <paramref name="link"/>'s bone whose chain it bends: its top, bend and turn, relative to the character.</summary>
+    public static MotionPin AsPin(MotionLink link) => new(link.Bone, link.HoldTurn, null, link.Top, false, PinSensitivity.Normal, link.Bend);
+
+    /// <summary>
+    /// The bones link layer <paramref name="layer"/> may write, by index, ascending: on the hips, the hips, the back they carry and
+    /// what bends round the held bones; on another bone, the chain it bends and the bone. None when nothing can bend or for other
+    /// kinds. For the views and <see cref="MotionSymmetry.Animated"/>. Throws for a linked bone or top the skeleton lacks; held bones
+    /// it lacks are left out.
+    /// </summary>
+    public static ImmutableArray<int> Moved(SkeletonDescription skeleton, MotionLayer layer)
+    {
+        if (layer is not { Kind: MotionLayerKind.Link, Link: { } link })
+            return [];
+        if (link.Bone != PinChains.Hips)
+            return [.. PinChains.Changed(skeleton, AsPin(link)).Order()];
+        var index = MotionEvaluator.Index(skeleton);
+        var bones = new SortedSet<int> { index.TryGetValue(PinChains.Hips, out var hips) ? hips : throw MotionEvaluator.Missing(PinChains.Hips) };
+        if (HipSolver.Carried(skeleton) is >= 0 and var carried)
+            bones.Add(carried);
+        var anchors = HipSolver.Anchors(skeleton, link.Holds).AsSpan();
+        bones.UnionWith(HipSolver.Back(anchors));
+        bones.UnionWith(HipSolver.Turned(anchors));
+        return [.. bones];
+    }
 }

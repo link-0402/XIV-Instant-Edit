@@ -364,9 +364,10 @@ internal static class MotionEvaluator
     /// layers covering it wrap their keys round (<see cref="Wraps"/>), and layers reaching its end cover its
     /// last samples (<see cref="ReachesEnd"/>). On a clip whose hips' move goes onto <c>n_hara</c> (<see cref="MotionClip.HipsOnHara"/>),
     /// what each layer moves the hips by moves <c>n_hara</c> instead, and the clip's own hips stay as they were.
+    /// Link layers apply with their partner tracks in <paramref name="links"/>; without one a link is left out.
     /// Throws for a layer naming a bone the clip's skeleton does not have.
     /// </summary>
-    public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default)
+    public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default, MotionLinkSet? links = null)
     {
         Validate(layers);
         var index = Index(clip.Skeleton);
@@ -379,10 +380,10 @@ internal static class MotionEvaluator
         {
             var layer = layers[at];
             token.ThrowIfCancellationRequested();
-            if (!Active(layer))
+            if (!Active(layer, links))
                 continue;
-            // A pin layer keeps a bone limit it never uses.
-            var mask = layer.Kind == MotionLayerKind.Pin ? null : Mask(layer, index);
+            // A pin or link layer keeps a bone limit it never uses.
+            var mask = layer.Kind is MotionLayerKind.Pin or MotionLayerKind.Link ? null : Mask(layer, index);
             if (layer.Fix?.Kind is MotionFixKind.MatchLoop or MotionFixKind.CloseLoop)
                 continue;
             if (hipsBefore != null)
@@ -427,6 +428,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Smooth:
                     MotionSmoothing.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
+                    break;
+                case MotionLayerKind.Link:
+                    ApplyLink(clip, layer, index, links!.For(layer.Key)!, end, token);
                     break;
             }
             if (hipsBefore != null)
@@ -525,7 +529,7 @@ internal static class MotionEvaluator
             index.TryGetValue(PinChains.Body, out var body) && PinChains.IsBelow(skeleton, body, bone))
             throw new InvalidDataException($"{name} links {AnimationPresentation.BoneName(link.Bone)}, which would move the whole character.");
         // The chain bends as a pin on the bone would: the same top and bend rules.
-        PinChains.Check(skeleton, layer with { Pins = [new MotionPin(link.Bone, link.HoldTurn, null, link.Top, false, PinSensitivity.Normal, link.Bend)] });
+        PinChains.Check(skeleton, layer with { Pins = [MotionLinks.AsPin(link)] });
         foreach (var hold in link.Holds)
         {
             if (!index.ContainsKey(hold))
@@ -795,11 +799,12 @@ internal static class MotionEvaluator
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
     /// unknown. <paramref name="trackedBones"/> are the bones the clip has tracks for, as a decode gives them
     /// (<see cref="MotionClip.SourceTracks"/>), so symmetry layers skip the same pairs they do over the clip.
-    /// <paramref name="hipsOnHara"/> is the clip's <see cref="MotionClip.HipsOnHara"/>.
+    /// <paramref name="hipsOnHara"/> is the clip's <see cref="MotionClip.HipsOnHara"/>. Link layers apply with their partner tracks in
+    /// <paramref name="links"/>, as <see cref="Apply"/> applies them; without one a link is left out.
     /// Throws for a layer naming a bone the skeleton does not have.
     /// </summary>
     public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers,
-        float frame, float loop = 0, float end = 0, IReadOnlyCollection<short>? trackedBones = null, bool hipsOnHara = false)
+        float frame, float loop = 0, float end = 0, IReadOnlyCollection<short>? trackedBones = null, bool hipsOnHara = false, MotionLinkSet? links = null)
     {
         if (local.Length != skeleton.Bones.Length)
             throw new InvalidDataException("The pose does not match the skeleton.");
@@ -818,7 +823,7 @@ internal static class MotionEvaluator
                 hipsBefore = pose[hips.Hips].Position;
             }
             var layer = layers[at];
-            if (!Active(layer))
+            if (!Active(layer, links))
                 continue;
             if (layer.Fix?.Kind == MotionFixKind.HandShape)
             {
@@ -872,6 +877,13 @@ internal static class MotionEvaluator
                     if (!resolved.Pin.Planted && keyed.TryGetValue(resolved.Chain.End, out var pinTrack))
                         PinSolver.Pin(skeleton, pose, space, resolved.Chain, resolved.Pin, resolved.RelativeTo,
                             Sample(pinTrack.Frames, pinTrack.Values, pinTrack.Curves, frame, around), pull, resolved.RestNormal);
+                continue;
+            }
+            if (layer.Kind == MotionLayerKind.Link)
+            {
+                var follow = Weight(layer, frame, end);
+                if (follow > 0 && links?.For(layer.Key) is { } linkTrack && ResolveLink(skeleton, layer.Link!, index) is { } resolvedLink)
+                    LinkAt(skeleton, pose, ModelSpace(skeleton, pose), resolvedLink, linkTrack, frame, follow);
                 continue;
             }
             if (layer.Kind == MotionLayerKind.Idle)
@@ -1131,6 +1143,68 @@ internal static class MotionEvaluator
                     continue;
                 PinSolver.Pin(skeleton, local, model, pin.Chain, pin.Pin, pin.RelativeTo, target, pull, pin.RestNormal);
             }
+            foreach (var b in changed)
+                clip.Set(i, b, local[b]);
+        }
+    }
+
+    /// <summary>A link layer's bone resolved on the skeleton: the pin its chain bends as (<see cref="MotionLinks.AsPin"/>), the chain and its limb's rest bend.</summary>
+    private sealed record ResolvedLink(MotionPin Pin, PinChain Chain, Vector3 RestNormal);
+
+    /// <summary>
+    /// <paramref name="link"/> resolved on <paramref name="skeleton"/>; null when it has nothing to bend: a bone right under the body,
+    /// as for a pin, and the hips, which don't follow yet. Throws for a bone or top the skeleton can't resolve.
+    /// </summary>
+    private static ResolvedLink? ResolveLink(SkeletonDescription skeleton, MotionLink link, Dictionary<string, int> index)
+    {
+        if (link.Bone == PinChains.Hips)
+            return null;
+        var pin = MotionLinks.AsPin(link);
+        var chain = PinChains.Chain(skeleton, index, pin);
+        return chain.Shape == PinChainShape.None ? null : new(pin, chain, PinSolver.RestNormal(skeleton, chain));
+    }
+
+    /// <summary>
+    /// One link on one pose (<paramref name="local"/> and its <paramref name="model"/> space, kept in step) at timeline
+    /// <paramref name="frame"/>: aims the bone where the partner's edit takes it (<see cref="MotionLinks.Aim"/>) and bends the chain
+    /// toward that by <paramref name="weight"/>, which <see cref="PinSolver.Pin"/> eases itself. False, the pose untouched, when the
+    /// partner's edit leaves the bone where it is.
+    /// </summary>
+    private static bool LinkAt(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, ResolvedLink link, LinkTrack track,
+        float frame, float weight)
+    {
+        var (before, after) = track.At(frame);
+        var current = model[link.Chain.End];
+        var aim = MotionLinks.Aim(current, before, after, link.Pin.HoldTurn);
+        if (aim == current)
+            return false;
+        PinSolver.Pin(skeleton, local, model, link.Chain, link.Pin, -1, aim, weight, link.RestNormal);
+        return true;
+    }
+
+    /// <summary>
+    /// A link layer over the clip, sample by sample: its bone follows the partner's edit in <paramref name="track"/>, its chain bending
+    /// as a pin's. Only the chain and the bone are written back, so the rest keep their values exactly.
+    /// </summary>
+    private static void ApplyLink(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, LinkTrack track, float end, CancellationToken token)
+    {
+        var skeleton = clip.Skeleton;
+        if (ResolveLink(skeleton, layer.Link!, index) is not { } link)
+            return;
+        var changed = link.Chain.Bones.Append(link.Chain.End).ToArray();
+        var local = new MotionTransform[clip.Bones];
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var frame = clip.Frame(i);
+            var weight = Weight(layer, frame, end);
+            if (weight <= 0)
+                continue;
+            for (var b = 0; b < local.Length; b++)
+                local[b] = clip.Get(i, b);
+            if (!LinkAt(skeleton, local, ModelSpace(skeleton, local), link, track, frame, weight))
+                continue;
             foreach (var b in changed)
                 clip.Set(i, b, local[b]);
         }
