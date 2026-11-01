@@ -11,7 +11,7 @@ internal static class PartnerNames
 {
     public const string Taken = "Name is taken";
     public const string Yours = "Use a name other than your character's";
-    public const string FirstLast = "Use a first and last name, like Aria Rose";
+    public const string FirstLast = "Use a first and last name";
 
     /// <summary>
     /// Whether <paramref name="name"/> is shaped like a player's name, which Penumbra needs to tell actors apart: two

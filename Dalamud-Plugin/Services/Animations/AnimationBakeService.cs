@@ -484,7 +484,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
             if (!EditsMotion) return;
             if (expected.Count != frames) throw new InvalidOperationException("The animation must be sampled before its bone layers apply.");
             var clip = AnimationBakeRules.LayerClip(targetDescription, duration, frames, this.clip.IsLoop,
-                retarget == null ? sourceTracks : retarget.MapTracks(sourceTracks));
+                retarget == null ? sourceTracks : retarget.MapTracks(sourceTracks), HipsOnHara);
             for (var f = 0; f < frames; f++)
                 for (var b = 0; b < expected[f].Length; b++)
                     clip.Set(f, b, FromHavok(expected[f][b]));
@@ -579,6 +579,12 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 affected.Add(bone);
         }
 
+        /// <summary>
+        /// Whether the layers' moves of the hips go onto n_hara (<see cref="MotionClip.HipsOnHara"/>): a clip rebuilt for another race,
+        /// which Live shows through the game's race conversion. Its save moves the hips that way too, so it plays as Live shows it.
+        /// </summary>
+        private bool HipsOnHara => request.RepairModel != null;
+
         /// <summary>The sampled motion as owned data, with each sample's float track values. Touches managed state only.</summary>
         public MotionClip Decode()
         {
@@ -595,6 +601,7 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                     .Select(b => retarget?.BoneMap[b] ?? b).Where(b => b >= 0).Select(b => (short)b)],
                 BlendHint = blendHint,
                 Loops = this.clip.IsLoop,
+                HipsOnHara = HipsOnHara,
             };
             for (var f = 0; f < frames; f++)
                 for (var b = 0; b < expected[f].Length; b++)

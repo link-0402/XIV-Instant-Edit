@@ -20,6 +20,7 @@ internal static class FaceEditingFixture
         Model(check, reject);
         Sources(check);
         Saves(check);
+        PlayedOnce(check);
         Edits(check);
         Window(check);
         Live(check);
@@ -300,6 +301,46 @@ internal static class FaceEditingFixture
               AnimationEditService.FaceInPlaceProblem(Expression(tmbWritable: false, faceWritable: true), timelineChanged: false) == null &&
               AnimationEditService.FaceInPlaceProblem(Expression(tmbWritable: false, faceWritable: true), timelineChanged: true) != null,
             "in place needs every written file to be writable");
+
+        // The footer judges in place as the save does: a face from a mod saves in place over a timeline of the game's
+        // until that timeline changes too (its events, face library or the face's length, which retimes it).
+        var modFace = Expression(tmbWritable: false, faceWritable: true);
+        var keyed = TimelineFace.Open(modFace.Document!, 0, 1, 150) with { Motion = [Layer(0, 2, 0)] };
+        check(SaveFooter.CanReplace(modFace, keyed) && !SaveFooter.TimelineChanged(modFace, keyed) &&
+              !SaveFooter.CanReplace(modFace, TimelineFace.WithFrames(keyed, 300, 150)) &&
+              SaveFooter.CanReplace(Expression(tmbWritable: true, faceWritable: true), TimelineFace.WithFrames(keyed, 300, 150)),
+            "a mod's face saves in place over the game's timeline, and with it once the face's length changes");
+        var packed = TimelineFace.Open(modFace.Document!, 0, 1, 150) with { FacePack = "emot/other" };
+        check(!SaveFooter.CanReplace(modFace, packed) && SaveFooter.CanReplace(Expression(tmbWritable: true, faceWritable: false), packed) &&
+              !SaveFooter.CanReplace(modFace, null) && !SaveFooter.CanReplace(Expression(tmbWritable: true, faceWritable: false), keyed),
+            "a timeline-only change is judged by the timeline's file, a face change by the face's");
+    }
+
+    /// <summary>
+    /// An expression's face plays once, though the expression's own row loops: a layer ramping over a moving face holds its
+    /// last key at the face's end instead of wrapping round to its first.
+    /// </summary>
+    private static void PlayedOnce(Action<bool, string> check)
+    {
+        var expression = Source(standalone: true).Capture;
+        var looping = expression with { Clip = expression.Clip with { IsLoop = true } };
+        var face = AnimationEditService.ExpressionFaceCapture(looping);
+        check(face is { ExpressionTimeline: null, Clip.IsLoop: false } && face.Id == looping.Id && face.Clip.GamePath == looping.Clip.GamePath,
+            "an expression's face is read as its own clip, played once");
+        static MotionKey Jaw(int frame, float angle) => new(frame, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_f_ago",
+            new BoneTransform(Vector3.Zero, Quaternion.CreateFromAxisAngle(Vector3.UnitX, angle), Vector3.One)));
+        float LastJaw(bool loops)
+        {
+            var rig = FaceRig();
+            var clip = new MotionClip(rig, 10f, 301) { Loops = loops, SourceTracks = [0, 1, 2, 3] };
+            for (var i = 0; i < clip.Samples; i++)
+                for (var b = 0; b < rig.Bones.Length; b++)
+                    clip.Set(i, b, MotionTransform.From(rig.Bones[b].Reference));
+            MotionEvaluator.Apply(clip, [Layer(0, 300, 0) with { Keys = [Jaw(0, 0), Jaw(299, .5f)] }]);
+            return 2 * MathF.Acos(Math.Min(1, Math.Abs(clip.Get(clip.Samples - 1, 1).Rotation.W)));
+        }
+        check(Math.Abs(LastJaw(face.Clip.IsLoop) - .5f) < .01f && LastJaw(true) < .01f,
+            "a jaw opening over a 300-frame face is open at its last frame (a looping clip would close it again)");
     }
 
     private static AnimationTimelineSource FaceSource(string path, int entry, string fingerprint)

@@ -31,6 +31,7 @@ internal static partial class TmbFileFixture
         EffectCopies(check, reject);
         EffectLooks(check, reject);
         Expressions(check, reject);
+        FaceLength(check);
         Props(check, reject);
     }
 
@@ -330,6 +331,23 @@ internal static partial class TmbFileFixture
         var pose = Open(Taunt(150, 1));
         reject(() => TimelineConvert.Apply(Taunt(150, 1), TimelineEdits.Keep(pose, pose.Events[0].Key, true, frames), shortFace),
             "a save refuses a loop of a face too short to loop");
+    }
+
+    /// <summary>
+    /// A face's own timeline in its PAP at a new length: its header and its whole-face motion entry follow, as mods' moving
+    /// faces have them (a vanilla pose says 1 frame, a mod's 455-frame face 455 with its motion 453).
+    /// </summary>
+    private static void FaceLength(Action<bool, string> check)
+    {
+        static (int Header, int Motion) Lengths(byte[] tmb) =>
+            TmbFile.Parse(tmb) is var file ? (file.Length, file.Entries.Single(e => e.Magic == "C009").Int32(12)) : default;
+        var pose = new Tmb().Head(1, null, 2).Actor(2, 3).Track(3, 4).Motion(4, 1).Build();
+        var moving = AnimationEditService.FaceTimeline(pose, 1, 300);
+        check(Lengths(moving) == (300, 300) && Lengths(AnimationEditService.FaceTimeline(moving, 300, 1)) == (1, 1) &&
+              ReferenceEquals(AnimationEditService.FaceTimeline(pose, 1, 1), pose),
+            "a still face made to move says its new length in its own timeline, and back");
+        var mod = new Tmb().Head(455, null, 2).Actor(2, 3).Track(3, 4).Motion(4, 453).Build();
+        check(Lengths(AnimationEditService.FaceTimeline(mod, 453, 600)) == (600, 600), "a mod's face whose header counts two frames more than its motion follows too");
     }
 
     private readonly record struct C010(short Time, int Duration, int Flags, float From, float To);

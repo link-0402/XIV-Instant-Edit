@@ -73,6 +73,13 @@ internal sealed class MotionClip
     /// <summary>Whether the game plays the clip as a loop, its last sample running back into its first.</summary>
     public bool Loops { get; init; }
 
+    /// <summary>
+    /// Whether a layer's move of the hips (<c>j_kosi</c>) goes onto <c>n_hara</c>: a clip borrowed from another race and rebuilt for
+    /// the character's, which Live shows through the game's race conversion, and that keeps <c>n_hara</c>'s translation only.
+    /// The document, Live and the save then all move the hips the one way the game can show (<see cref="MotionEvaluator.Apply"/>).
+    /// </summary>
+    public bool HipsOnHara { get; init; }
+
     /// <summary>A sample's time in seconds; the last is exactly the duration, as the bake samples it.</summary>
     public float Time(int sample) => sample == Samples - 1 ? Duration : Duration * sample / (Samples - 1);
 
@@ -109,7 +116,8 @@ internal sealed class MotionClip
     /// <summary>A copy to apply layers to, so this decode stays the unedited motion.</summary>
     public MotionClip Clone()
     {
-        var copy = new MotionClip(Skeleton, Duration, Samples, TrackFloats, FloatTracks) { SourceTracks = SourceTracks, ReferenceFollowers = ReferenceFollowers, BlendHint = BlendHint, Loops = Loops };
+        var copy = new MotionClip(Skeleton, Duration, Samples, TrackFloats, FloatTracks)
+            { SourceTracks = SourceTracks, ReferenceFollowers = ReferenceFollowers, BlendHint = BlendHint, Loops = Loops, HipsOnHara = HipsOnHara };
         data.CopyTo(copy.data, 0);
         return copy;
     }

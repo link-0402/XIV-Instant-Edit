@@ -44,6 +44,8 @@ public sealed partial class TimelineWindow
     private MotionTransform[]? dragFrom;
     // The limb a Drag bends, found once per drag.
     private (PinChain Chain, Vector3 RestNormal)? dragLimb;
+    // The side the limb bends to, carried from each frame of a Drag to the next so the knee or elbow can't swap sides in one.
+    private LimbSide? dragSide;
     // How far a Drag on a hand or a foot turns the elbow or knee about the line to the aim, in degrees: the Bones window's Bend field.
     private float dragBend;
     // What a Drag on the hips or the head holds where it is: the Bones window's Hold boxes, and their anchors found once per drag.
@@ -424,6 +426,7 @@ public sealed partial class TimelineWindow
             dragAim = null;
             dragFrom = null;
             dragLimb = null;
+            dragSide = null;
             dragAnchors = null;
             dragBack = null;
             dragHipsMove = Vector3.Zero;
@@ -450,8 +453,9 @@ public sealed partial class TimelineWindow
                         var under = offset ? null : frames.Before;
                         var (index, _) = BoneTree(skeleton);
                         var moving = new List<PoseTarget> { targets.First(t => t.Bone == bone) };
-                        // The back's base goes with the hips, from its key as the drag has just left it.
-                        if (HipSolver.Carried(skeleton) is >= 0 and var carried && MotionEdits.Find(changed, layer.Key) is { } edited)
+                        // The back's base goes with the hips, from its key as the drag has just left it; on a clip whose hips' move goes
+                        // onto n_hara, n_hara carries it already.
+                        if (!frames.HipsOnHara && HipSolver.Carried(skeleton) is >= 0 and var carried && MotionEdits.Find(changed, layer.Key) is { } edited)
                         {
                             var name = skeleton.Bones[carried].Name;
                             if (PoseEdits.Value(edited, name, frame, offset ? null : frames.Before[carried]) is { } value)
@@ -471,7 +475,9 @@ public sealed partial class TimelineWindow
                         var under = offset ? null : frames.Before;
                         var (index, _) = BoneTree(skeleton);
                         var moving = new List<PoseTarget>();
-                        string[] carriers = HipSolver.Carried(skeleton) is >= 0 and var carried ? [PinChains.Hips, skeleton.Bones[carried].Name] : [PinChains.Hips];
+                        string[] carriers = !frames.HipsOnHara && HipSolver.Carried(skeleton) is >= 0 and var carried
+                            ? [PinChains.Hips, skeleton.Bones[carried].Name]
+                            : [PinChains.Hips];
                         if (MotionEdits.Find(changed, layer.Key) is { } edited)
                             foreach (var carrier in carriers)
                                 if (PoseEdits.Value(edited, carrier, frame, offset ? null : frames.Before[index[carrier]], loop) is { } value)
@@ -485,8 +491,9 @@ public sealed partial class TimelineWindow
                     else
                     {
                         dragLimb ??= PoseEdits.Limb(skeleton, bone);
+                        dragSide ??= new LimbSide();
                         current.Change(current.WithReach(PoseEdits.Reach(current.Document, layer, frame, skeleton, frames.Before, frames.Through, bone,
-                            from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb, dragBend)));
+                            from + move, weight, BonePosing.LoopFrames(loaded, current.Document), dragFrom, dragLimb, dragBend, dragSide)));
                     }
                 }
             }

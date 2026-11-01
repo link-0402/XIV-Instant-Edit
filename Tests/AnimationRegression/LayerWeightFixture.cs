@@ -78,17 +78,28 @@ internal static class LayerWeightFixture
         var plain = Offset();
         check(MotionEvaluator.WeightAt(plain, 30) == 1 && MotionEvaluator.Fade(plain, 30) == 1, "a layer without weight points is at full weight");
         var weighted = plain with { Weights = [new(10, .2f), new(30, 1)] };
-        check(MotionEvaluator.WeightAt(weighted, 0) == .2f && MotionEvaluator.WeightAt(weighted, 10) == .2f && MotionEvaluator.WeightAt(weighted, 50) == 1,
-            "before the first point its value holds, after the last point its value");
+        check(MotionEvaluator.WeightAt(weighted, 0) == 1 && MathF.Abs(MotionEvaluator.WeightAt(weighted, 5) - .6f) < 1e-6f &&
+              MathF.Abs(MotionEvaluator.WeightAt(weighted, 10) - .2f) < 1e-6f && MotionEvaluator.WeightAt(weighted, 50) == 1,
+            "the line starts at full weight on the layer's first frame and eases to the first point");
         check(MathF.Abs(MotionEvaluator.WeightAt(weighted, 20) - .6f) < 1e-6f && MathF.Abs(MotionEvaluator.WeightAt(weighted, 15) - (.2f + .8f * .15625f)) < 1e-6f,
             "between two points the weight goes on a smoothstep, halfway at the middle");
+        // XIV Bridge 509: one point at 22 % weighed the whole layer.
+        var lone = plain with { Weights = [new(30, .22f)] };
+        check(MotionEvaluator.WeightAt(lone, 0) == 1 && MotionEvaluator.WeightAt(lone, 60) == 1 && MathF.Abs(MotionEvaluator.WeightAt(lone, 30) - .22f) < 1e-6f &&
+              MathF.Abs(MotionEvaluator.WeightAt(lone, 15) - .61f) < 1e-6f && MathF.Abs(MotionEvaluator.WeightAt(lone, 45) - .61f) < 1e-6f,
+            "a lone point dips the weight around itself only, full weight at the layer's ends");
+        var ends = plain with { Weights = [new(0, .3f), new(30, 1), new(60, .4f)] };
+        check(MotionEvaluator.WeightAt(ends, 0) == .3f && MotionEvaluator.WeightAt(ends, 60) == .4f && MotionEvaluator.Fade(ends, 61, 61.4f) == .4f,
+            "points on the layer's first and last frames set the weight there, and past a layer reaching the end its last weight holds");
         var faded = weighted with { FadeIn = 10 };
-        check(MathF.Abs(MotionEvaluator.Fade(faded, 5) - .5f * .2f) < 1e-6f && MathF.Abs(MotionEvaluator.Weight(faded with { Amount = 2 }, 20) - 1.2f) < 1e-6f,
+        check(MathF.Abs(MotionEvaluator.Fade(faded, 5) - .5f * .6f) < 1e-6f && MathF.Abs(MotionEvaluator.Weight(faded with { Amount = 2 }, 20) - 1.2f) < 1e-6f,
             "the weight multiplies the fade, and the amount on top");
         check(MotionEvaluator.Fade(weighted, 61) == 0 && MotionEvaluator.Fade(weighted, 61, 61.4f) == 1,
             "outside the layer nothing applies, and past a layer reaching the end its last weight holds");
-        check(!MotionEvaluator.Active(plain with { Weights = [new(10, 0), new(40, 0)] }) && MotionEvaluator.Active(plain with { Weights = [new(10, 0), new(40, .1f)] }),
-            "a layer whose points are all 0 isn't active");
+        check(!MotionEvaluator.Active(plain with { Weights = [new(0, 0), new(60, 0)] }) && !MotionEvaluator.Active(plain with { Weights = [new(0, 0), new(30, 0), new(60, 0)] }) &&
+              MotionEvaluator.Active(plain with { Weights = [new(0, 0), new(40, .1f)] }) && MotionEvaluator.Active(plain with { Weights = [new(10, 0), new(40, 0)] }) &&
+              MotionEvaluator.Active(plain with { Weights = [new(30, 0)] }),
+            "a layer held at 0 from its first frame to its last isn't active; one with points at 0 inside it still is");
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
@@ -151,12 +162,15 @@ internal static class LayerWeightFixture
     private static void Apply(Action<bool, string> check)
     {
         var still = Clip(61, 60, _ => 0);
-        var half = Applied(still, Offset() with { Weights = [new(0, .5f)] });
+        var half = Applied(still, Offset() with { Weights = [new(0, .5f), new(60, .5f)] });
         var full = Applied(still, Offset());
         check(MathF.Abs(Angle(full, 30) - 20) < .01f && MathF.Abs(Angle(half, 30) - 10) < .01f, "an offset at weight 0.5 gives half its change");
-        var eased = Applied(still, Offset() with { Weights = [new(10, 0), new(50, 1)] });
+        var eased = Applied(still, Offset() with { Weights = [new(0, 0), new(10, 0), new(50, 1)] });
         check(Angle(eased, 5) < 1e-3f && MathF.Abs(Angle(eased, 30) - 10) < .01f && MathF.Abs(Angle(eased, 55) - 20) < .01f,
             "an offset eases in along its weight points");
+        var dipped = Applied(still, Offset() with { Weights = [new(30, .22f)] });
+        check(MathF.Abs(Angle(dipped, 30) - 4.4f) < .01f && MathF.Abs(Angle(dipped, 0) - 20) < .01f && MathF.Abs(Angle(dipped, 60) - 20) < .01f,
+            "an offset with one point at 22 % is that weak there only, and full at its ends");
 
         // The hips sway 0 to 30 degrees and back: an amplitude doubles it where its weight is 1 and leaves it alone where it is 0.
         var sway = Clip(61, 60, f => 30 * MathF.Sin(f / 60 * MathF.PI));
@@ -169,7 +183,7 @@ internal static class LayerWeightFixture
             "an amplitude at weight 0 changes nothing, at weight 1 its full factor");
 
         var local = Enumerable.Range(0, still.Bones).Select(b => still.Get(30, b)).ToArray();
-        var at = MotionEvaluator.ApplyAt(SwingLayerFixture.Rig(), local, [Offset() with { Weights = [new(0, .5f)] }], 30, 0, 60);
+        var at = MotionEvaluator.ApplyAt(SwingLayerFixture.Rig(), local, [Offset() with { Weights = [new(0, .5f), new(60, .5f)] }], 30, 0, 60);
         check(Near(at[Index(Hips)], half.Get(30, Index(Hips))), "one pose takes the weight as the clip does");
     }
 
@@ -216,6 +230,10 @@ internal static class LayerWeightFixture
               MathF.Abs(face.Weights[0].Value - MotionEvaluator.WeightAt(Offset() with { Weights = [new(5, .2f), new(20, 1)] }, 10)) < 1e-6f &&
               face.Weights[1] == new MotionWeight(10, 1),
             "on a face starting later the points move back, and those before it become one point at its first frame");
+        var rising = TimelineFace.ToFace([Offset() with { Weights = [new(20, .2f)] }], 10).Single();
+        check(rising.Weights.Length == 2 && rising.Weights[0].Frame == 0 && MathF.Abs(rising.Weights[0].Value - .6f) < 1e-6f &&
+              rising.Weights[1] == new MotionWeight(10, .2f),
+            "a layer starting before the face, its first point after, gets a point at the face's first frame with the weight it had there");
     }
 
     private static void Cuts(Action<bool, string> check)

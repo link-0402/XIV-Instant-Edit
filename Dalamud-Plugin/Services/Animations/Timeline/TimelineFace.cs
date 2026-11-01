@@ -86,9 +86,10 @@ internal sealed record TimelineFace(int Anchor, int SourceFrames, int Frames)
                     keys.Insert(0, held);
             }
             var fadeIn = Math.Clamp(layer.FadeIn - (start - (layer.Start - anchor)), 0, end - start);
-            // Weight points move back with the keys; those before the face's first frame become one point there with the weight it had.
+            // Weight points move back with the keys. A layer starting before the face's first frame gets a point there with the weight
+            // it had, so neither the points before it nor its full weight at its own start come back on the face.
             var weights = layer.Weights.Select(point => point with { Frame = point.Frame - anchor }).Where(point => point.Frame >= 0).ToList();
-            if (layer.Weights.Any(point => point.Frame < anchor) && !weights.Any(point => point.Frame == 0))
+            if (layer.Start < anchor && !layer.Weights.IsEmpty && !weights.Any(point => point.Frame == 0))
                 weights.Insert(0, new MotionWeight(0, MotionEvaluator.WeightAt(layer, anchor)));
             var moved = layer with
             {
@@ -112,6 +113,7 @@ internal sealed record TimelineFace(int Anchor, int SourceFrames, int Frames)
         var shown = new MotionClip(motion.Skeleton, (anchor + frames) / (float)TimelineDocument.Fps, anchor + frames + 1)
         {
             SourceTracks = motion.SourceTracks, ReferenceFollowers = motion.ReferenceFollowers, BlendHint = motion.BlendHint, Loops = motion.Loops,
+            HipsOnHara = motion.HipsOnHara,
         };
         for (var sample = 0; sample < shown.Samples; sample++)
         {

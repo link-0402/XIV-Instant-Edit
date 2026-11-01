@@ -1071,9 +1071,10 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             current.Key(TimelineKey.Home);
         else if (keys.Pressed(ImGuiKey.End, VirtualKey.END))
             current.Key(TimelineKey.End);
-        else if (!ctrl && !alt && current.SelectedKey != null && keys.Pressed(ImGuiKey.S, VirtualKey.S, ctrl: false))
+        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.S, VirtualKey.S, ctrl: false))
         {
-            if (!readOnly)
+            // Asked about with no key picked too, so S never walks the character while the Timeline has the keyboard.
+            if (!readOnly && current.SelectedKey != null)
                 current.Key(TimelineKey.ScaleTiming);
         }
         else if (!ctrl && keys.Pressed(ImGuiKey.F, VirtualKey.F, ctrl: false))

@@ -97,6 +97,7 @@ internal static class ChangelogCatalog
             Entry("Scale picked keys about the playhead (S), duplicate them to it (Ctrl+D) or reverse them from the right-click menu.", 1),
             Entry("Key a whole pose from a .pose file (Anamnesis, Ktisis or Brio), your posed character or a frame of another animation.", 1),
             Entry("The pose browser shows your pose folders with their pictures. One click keys a pose at the playhead, and the next click swaps it.", 1),
+            Entry("A pose saved with the body turned round under the hips is keyed facing forward, so the character no longer spins when the animation starts.", 1),
             Entry("Save pose keeps the pose at the playhead as a .pose file that Anamnesis, Ktisis and Brio load.", 1),
             Entry("Saved layers stay editable: Edit again brings them back.", 1),
             Entry("Copy one layer or all of them and paste them into another animation, such as a variant of the same one.", 1),

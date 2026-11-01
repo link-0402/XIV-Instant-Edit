@@ -55,7 +55,7 @@ internal static class PartnerFixture
         check(PartnerNames.Problem("Aria Rose", [other], other.Id, null) == null, "partner problem: a preset keeps its own name");
         check(PartnerNames.Problem("Aria", [], id, null) == PartnerNames.FirstLast, "partner problem: one name asks for a first and last name");
         check(PartnerNames.Taken == "Name is taken" && PartnerNames.Yours == "Use a name other than your character's" &&
-              PartnerNames.FirstLast == "Use a first and last name, like Aria Rose",
+              PartnerNames.FirstLast == "Use a first and last name",
             "partner problem: the messages read as the spec says");
     }
 

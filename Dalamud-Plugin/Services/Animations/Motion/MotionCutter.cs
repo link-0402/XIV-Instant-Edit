@@ -43,6 +43,7 @@ internal static class MotionCutter
             source.TrackFloats == null ? null : new float[checked(samples * floatTracks)], floatTracks)
         {
             SourceTracks = source.SourceTracks, ReferenceFollowers = source.ReferenceFollowers, BlendHint = source.BlendHint, Loops = source.Loops,
+            HipsOnHara = source.HipsOnHara,
         };
         // Source frames each part plays per output frame: a join matches each side's speed at its own rate.
         var rates = new double[cuts.Parts.Length];

@@ -29,8 +29,12 @@ internal static class MotionEvaluator
     /// <summary>The most weight points a layer holds.</summary>
     public const int MaxWeights = 256;
 
-    /// <summary>Whether <paramref name="layer"/> changes anything when applied. Weight points all at 0 leave it out.</summary>
-    public static bool Active(MotionLayer layer) => layer.Enabled && (layer.Weights.IsEmpty || layer.Weights.Any(point => point.Value > 0)) && layer.Kind switch
+    /// <summary>
+    /// Whether <paramref name="layer"/> changes anything when applied. Weight points holding it at 0 all along leave it out: all at 0,
+    /// with one on its first frame and one on its last.
+    /// </summary>
+    public static bool Active(MotionLayer layer) => layer.Enabled && (layer.Weights.IsEmpty || layer.Weights.Any(point => point.Value > 0) ||
+                                                                      layer.Weights[0].Frame > layer.Start || layer.Weights[^1].Frame < layer.End) && layer.Kind switch
     {
         MotionLayerKind.Amplitude => Math.Abs(layer.Amount - 1) > 1e-6f &&
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
@@ -84,8 +88,10 @@ internal static class MotionEvaluator
     }
 
     /// <summary>
-    /// The layer's own weight at <paramref name="frame"/> from its points: 1 without any, the first point's value
-    /// before it and the last's after it, and between two points a smoothstep from one value to the next.
+    /// The layer's own weight at <paramref name="frame"/> from its points: 1 without any, and between two points a smoothstep
+    /// from one value to the next. The line starts at full weight on the layer's first frame and ends at full weight on its last
+    /// unless a point is there, so it eases from 1 to the first point and from the last point back to 1: a lone point dips the
+    /// weight around itself only.
     /// </summary>
     public static float WeightAt(MotionLayer layer, float frame)
     {
@@ -93,9 +99,9 @@ internal static class MotionEvaluator
         if (points.IsEmpty)
             return 1;
         if (!(frame > points[0].Frame))
-            return points[0].Value;
+            return points[0].Frame > layer.Start ? Ease(layer.Start, 1, points[0].Frame, points[0].Value, frame) : points[0].Value;
         if (frame >= points[^1].Frame)
-            return points[^1].Value;
+            return layer.End > points[^1].Frame ? Ease(points[^1].Frame, points[^1].Value, layer.End, 1, frame) : points[^1].Value;
         // points[low].Frame <= frame < points[high].Frame
         int low = 0, high = points.Length - 1;
         while (high - low > 1)
@@ -105,8 +111,15 @@ internal static class MotionEvaluator
             else high = middle;
         }
         var (from, to) = (points[low], points[high]);
-        var t = AnimationPoseRules.SmoothStep((frame - from.Frame) / (to.Frame - from.Frame));
-        return Math.Clamp(from.Value + (to.Value - from.Value) * t, 0, 1);
+        return Ease(from.Frame, from.Value, to.Frame, to.Value, frame);
+    }
+
+    /// <summary>From <paramref name="a"/> on frame <paramref name="from"/> to <paramref name="b"/> on a later frame <paramref name="to"/>, on a smoothstep; held outside them.</summary>
+    private static float Ease(float from, float a, float to, float b, float frame)
+    {
+        var t = (frame - from) / (to - from);
+        t = t > 0 ? Math.Min(t, 1) : 0;
+        return Math.Clamp(a + (b - a) * AnimationPoseRules.SmoothStep(t), 0, 1);
     }
 
     /// <summary>
@@ -316,7 +329,8 @@ internal static class MotionEvaluator
     /// Match startup to loop fixes apply after every other layer, in their own order, and never to a looping clip. Close loop
     /// fixes apply after those, in their own order, and only to a looping clip. On a looping clip,
     /// layers covering it wrap their keys round (<see cref="Wraps"/>), and layers reaching its end cover its
-    /// last samples (<see cref="ReachesEnd"/>).
+    /// last samples (<see cref="ReachesEnd"/>). On a clip whose hips' move goes onto <c>n_hara</c> (<see cref="MotionClip.HipsOnHara"/>),
+    /// what each layer moves the hips by moves <c>n_hara</c> instead, and the clip's own hips stay as they were.
     /// Throws for a layer naming a bone the clip's skeleton does not have.
     /// </summary>
     public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default)
@@ -325,6 +339,9 @@ internal static class MotionEvaluator
         var index = Index(clip.Skeleton);
         var end = clip.Frame(clip.Samples - 1);
         var loop = clip.Loops ? end : 0;
+        // On a clip whose hips' move goes onto n_hara, each layer's move of the hips does, before the next layer reads the pose.
+        (int Hara, int Hips) hips = clip.HipsOnHara ? HaraAndHips(clip.Skeleton, index) : (-1, -1);
+        var hipsBefore = hips.Hips >= 0 ? new Vector3[clip.Samples] : null;
         for (var at = 0; at < layers.Count; at++)
         {
             var layer = layers[at];
@@ -335,6 +352,8 @@ internal static class MotionEvaluator
             var mask = layer.Kind == MotionLayerKind.Pin ? null : Mask(layer, index);
             if (layer.Fix?.Kind is MotionFixKind.MatchLoop or MotionFixKind.CloseLoop)
                 continue;
+            if (hipsBefore != null)
+                HoldHips(clip, hips.Hips, hipsBefore);
             switch (layer.Kind)
             {
                 case MotionLayerKind.Offset:
@@ -377,17 +396,66 @@ internal static class MotionEvaluator
                     MotionSmoothing.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
                     break;
             }
+            if (hipsBefore != null)
+                CarryHips(clip, hips, hipsBefore);
         }
         // Matches land last, so no layer after them in the list can undo the landing. A looping clip has no loop to land on.
         foreach (var layer in layers)
             if (!clip.Loops && layer.Fix?.Kind == MotionFixKind.MatchLoop && Active(layer))
+            {
+                if (hipsBefore != null)
+                    HoldHips(clip, hips.Hips, hipsBefore);
                 MotionFixes.ApplyMatch(clip, layer, index, end, token);
+                if (hipsBefore != null)
+                    CarryHips(clip, hips, hipsBefore);
+            }
         // Close loops then join the loop's end to its start, on whatever every other layer left there. A clip the game
         // plays once has no seam to close.
         foreach (var layer in layers)
             if (clip.Loops && layer.Fix?.Kind == MotionFixKind.CloseLoop && Active(layer))
+            {
+                if (hipsBefore != null)
+                    HoldHips(clip, hips.Hips, hipsBefore);
                 MotionFixes.ApplyClose(clip, layer, index, end, token);
+                if (hipsBefore != null)
+                    CarryHips(clip, hips, hipsBefore);
+            }
         Continuity(clip);
+    }
+
+    /// <summary><c>n_hara</c> and the hips under it, for <see cref="MotionClip.HipsOnHara"/>; -1 for both when the skeleton lacks either or hangs the hips elsewhere.</summary>
+    private static (int Hara, int Hips) HaraAndHips(SkeletonDescription skeleton, Dictionary<string, int> index) =>
+        index.TryGetValue(PinChains.Body, out var hara) && index.TryGetValue(PinChains.Hips, out var hips) && skeleton.Bones[hips].Parent == hara
+            ? (hara, hips)
+            : (-1, -1);
+
+    private static void HoldHips(MotionClip clip, int hips, Vector3[] before)
+    {
+        for (var s = 0; s < clip.Samples; s++)
+            before[s] = clip.Get(s, hips).Position;
+    }
+
+    private static void CarryHips(MotionClip clip, (int Hara, int Hips) bones, Vector3[] before)
+    {
+        for (var s = 0; s < clip.Samples; s++)
+        {
+            var (hara, hips) = CarryHips(clip.Get(s, bones.Hara), clip.Get(s, bones.Hips), before[s]);
+            clip.Set(s, bones.Hara, hara);
+            clip.Set(s, bones.Hips, hips);
+        }
+    }
+
+    /// <summary>
+    /// The hips' move from <paramref name="before"/> taken onto <c>n_hara</c>: the hips go back there and <c>n_hara</c> moves as far,
+    /// turned by its own rotation, so the hips and every bone below them stay where they are in model space. <c>n_hara</c>'s other
+    /// children (the game's back) then go along, as they do when the game plays <c>n_hara</c>'s translation.
+    /// </summary>
+    private static (MotionTransform Hara, MotionTransform Hips) CarryHips(MotionTransform hara, MotionTransform hips, Vector3 before)
+    {
+        var move = hips.Position - before;
+        if (move == Vector3.Zero)
+            return (hara, hips);
+        return (hara with { Position = hara.Position + Vector3.Transform(move, Quaternion.Normalize(hara.Rotation)) }, hips with { Position = before });
     }
 
     /// <summary>Throws when a layer names a bone <paramref name="skeleton"/> does not have.</summary>
@@ -670,10 +738,11 @@ internal static class MotionEvaluator
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
     /// unknown. <paramref name="trackedBones"/> are the bones the clip has tracks for, as a decode gives them
     /// (<see cref="MotionClip.SourceTracks"/>), so symmetry layers skip the same pairs they do over the clip.
+    /// <paramref name="hipsOnHara"/> is the clip's <see cref="MotionClip.HipsOnHara"/>.
     /// Throws for a layer naming a bone the skeleton does not have.
     /// </summary>
     public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers,
-        float frame, float loop = 0, float end = 0, IReadOnlyCollection<short>? trackedBones = null)
+        float frame, float loop = 0, float end = 0, IReadOnlyCollection<short>? trackedBones = null, bool hipsOnHara = false)
     {
         if (local.Length != skeleton.Bones.Length)
             throw new InvalidDataException("The pose does not match the skeleton.");
@@ -681,8 +750,16 @@ internal static class MotionEvaluator
         var index = Index(skeleton);
         var model = new Quaternion[pose.Length];
         MotionTransform[]? rest = null;
+        (int Hara, int Hips) hips = hipsOnHara ? HaraAndHips(skeleton, index) : (-1, -1);
+        var hipsBefore = hips.Hips >= 0 ? pose[hips.Hips].Position : Vector3.Zero;
         for (var at = 0; at < layers.Count; at++)
         {
+            // The layer before's move of the hips goes onto n_hara before this one reads the pose.
+            if (hips.Hips >= 0)
+            {
+                (pose[hips.Hara], pose[hips.Hips]) = CarryHips(pose[hips.Hara], pose[hips.Hips], hipsBefore);
+                hipsBefore = pose[hips.Hips].Position;
+            }
             var layer = layers[at];
             if (!Active(layer))
                 continue;
@@ -777,6 +854,8 @@ internal static class MotionEvaluator
                 foreach (var (b, track) in Tracks(layer, index, mask, true))
                     pose[b] = pose[b] with { Position = Vector3.Lerp(pose[b].Position, Sample(track.Frames, track.Values, track.Curves, frame, wrap).Position, weight) };
         }
+        if (hips.Hips >= 0)
+            (pose[hips.Hara], pose[hips.Hips]) = CarryHips(pose[hips.Hara], pose[hips.Hips], hipsBefore);
         return pose;
     }
 

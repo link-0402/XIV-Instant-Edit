@@ -608,10 +608,14 @@ Saving:
   and lands at 14, while Toast holds summon 0 until 64. Fixed 2026-10-29: the summon is the one free where the prop
   lands (TimelineEdits.LandedSummon; TmbFileFixture.Props). (XIV Bridge 455, 2026-10-29, build with the fix: asked for
   at 66, the prop lands at 14 on summon 1, its animation targets summon 1, and Toast keeps summon 0.)
-- [ ] On a looping emote, add a prop: it starts at frame 1, lasts to the clip's end with no fade-out or hold, and still
+- [x] On a looping emote, add a prop: it starts at frame 1, lasts to the clip's end with no fade-out or hold, and still
   shows on the second and later loops. Stretch an older prop to the clip's end: its fade-out and hold go. Shorten one
   whose hold ran to the clip's end: the hold still ends there. (2026-10-30: a prop faded out at the clip's end stayed
   hidden after the first loop, and stretching moved the hold past the end.)
+  (XIV Bridge animations-pending/585, Release 2026-10-31 22:25, Dance: a prop added as the picker adds it starts at frame
+  1, ends at the clip's end with no fade-out or hold, and its draw object shows on at least 90 % of every loop's frames
+  over 3.3 loops; an older prop stretched to the end loses its fade-out and hold and shows on later loops too; shortened,
+  its hold still ends at the clip's end.)
 - [ ] Import a 44.1 kHz and a 48 kHz wav, a stereo wav, an ogg and an scd. Each plays
   once at full length and pitch; volume 50% is quieter. Import an .avfx whose
   textures sit in a sibling folder; the textures are packaged at their game paths.
@@ -954,6 +958,11 @@ Preview (GPose):
   a forced crash (by hand).
 - [ ] With a shared collection the window warns that others see the preview too.
   Lightless/PlayerSync do not upload preview files.
+  Partly checked (XIV Bridge animations-pending/586, Release 2026-10-31: the Preview's shared flag follows Penumbra's
+  answer for the player and the GPose actor, and shared, the status line warns "Others using this collection see the
+  preview too." until Stop; the shared case forced in memory). Not checked: Lightless/PlayerSync uploads (by hand, needs
+  a second client). Note: with Live on the warning is not shown (TimelinePreview.cs:189-198 returns before it), also over
+  a Preview.
 
 Window:
 - [ ] Edges, bodies, stacked markers and the length handle are easy to grab at normal
@@ -1207,22 +1216,42 @@ Moving (their own length). Offline: the face model, its timing in the timeline, 
 holds, the window's gates, the carrier and Live's layers are in the regression suite (FaceEditingFixture, TmbFileFixture,
 EditAgainFixture). Every vanilla expression times its face (0 to 1 over 150 frames, time control on).
 
-- [ ] An unedited face bake of Smile (a layer at Amount 0) passes the bake's validation and samples as the original (0.00°).
+- [x] An unedited face bake of Smile (a layer at Amount 0) passes the bake's validation and samples as the original (0.00°).
+  (XIV Bridge animations-pending/690, Release 2026-10-31 22:25: a layer at Amount 0 is no change, so nothing bakes; with
+  an offset layer keyed at 0 deg the face bakes, and the baked file samples as the original within 0.1 deg. The item
+  should say "a layer with a 0 deg key".)
 - [ ] Live on Smile's face: a jaw key shows on the face only (slot 2), the held-expression refill is paused, Stop
   brings back the held expression or the neutral face.
-- [ ] Gizmo dots on face bones line up with the face (open check: the face partial's model space against the body's).
-- [ ] A jaw key on Smile saved into a new mod shows in /smile; Undo last save takes it away.
+- [x] Gizmo dots on face bones line up with the face (open check: the face partial's model space against the body's).
+  (XIV Bridge animations-pending/692, Release 2026-10-31: in the overlay's own model space the face bones sit within 20
+  cm of j_kao and the jaw's dot within 150 px of the head on screen.)
+- [x] A jaw key on Smile saved into a new mod shows in /smile; Undo last save takes it away.
+  (XIV Bridge animations-pending/693, Release 2026-10-31: the face file is written, not the TMB; /smile on the player
+  shows the jaw at 25 deg, and after Undo last save the mod is off.)
 - [ ] A mod's smile saved in place; Undo last save restores the mod's file.
 - [ ] Smile made Moving (300 frames) and saved: /smile plays the whole face (the face event is retimed 0 to 300).
-- [ ] Keep on that moving face: it loops at 300 frames and ends neutral.
-- [ ] Neutral face on Smile, keyed and saved: the new face shows, additive like the game's.
-- [ ] Edit face from a body timeline's face event; Back returns with the body's unsaved edits.
+- [ ] Keep on a moving face of 330 frames: it loops at 330 frames and ends neutral. (Changed 2026-10-31, the user's call:
+  Keep writes at most 100 copies, so a face loops only from 328 frames on; the 300-frame face of the item above can't
+  loop by design, TmbFileFixture.)
+- [x] Neutral face on Smile, keyed and saved: the new face shows, additive like the game's.
+  (XIV Bridge animations-pending/697, Release 2026-10-31: the blend hint is kept and the other face bones stay within 2
+  deg of the idle face.)
+- [x] Edit face from a body timeline's face event; Back returns with the body's unsaved edits.
+  (XIV Bridge animations-pending/698, Release 2026-10-31, a real click: Back returns with the body's added event and neck
+  layer, still unsaved.)
 - [ ] Two faces saved one after the other into resident face.pap: reopening the first brings its layers back.
-- [ ] A face opened on its own plays through the carrier (facial/pose/f_umm) in Preview, and Live runs over it.
+- [x] A face opened on its own plays through the carrier (facial/pose/f_umm) in Preview, and Live runs over it.
+  (XIV Bridge animations-pending/700, Release 2026-10-31: the Preview plays the carrier's timeline and Live's jaw key
+  shows over it.)
 - [ ] An expression's face PAP is not size-checked against the character before Preview (PlayProblem runs on the
   .tmb only): try a face whose skeleton has more bones than the character's and note what the game does.
-- [ ] A body timeline holding Smile without time control, after Smile was made moving: note what the held face does
+  Partly (XIV Bridge animations-pending/701, Release 2026-10-31, read-only: it lists the other races' Smile face files
+  that don't fit the character's face skeleton, and PlayProblem returns nothing for /smile, as the item says). Playing
+  the oversized face (PlayOversizedFace = true) is left to run alone with the corruption probe: a crash risk.
+- [x] A body timeline holding Smile without time control, after Smile was made moving: note what the held face does
   once the moving face has run out.
+  (XIV Bridge animations-pending/702, Release 2026-10-31, an observation on a copy of Leena Grind: the jaw printed each
+  second for 25 s after the moving Smile ran out, with no error.)
 
 ## Motion editor live acceptance (pending)
 
@@ -2114,20 +2143,38 @@ only by default, the back leans at its length with the hips taking the rest, the
 the back stays straight (an even bend shortens it and lifts planted feet). Changed 2026-10-31 (user):
 Hold boxes replace choosing the held bones by selecting them and Ctrl+clicking the head.
 
-- [ ] 1 A standing dance frame, an offset layer, select the head, Gizmo: Drag. In GPose with Live on and
+- [x] 1 A standing dance frame, an offset layer, select the head, Gizmo: Drag. In GPose with Live on and
   paused, drag the head forward and down along an arc: the torso leans over from the waist, the feet
   stay put, the head keeps looking ahead. The layer keys the head, j_sebo_a (turn and position), the
   hips (position) and the legs.
-- [ ] 2 Drag the head straight down 20 cm: the character crouches, knees bending, back upright, feet
+  Not passing yet (XIV Bridge animations-pending/520, Release 2026-10-31 19:42, Idle pose 3): the head lands on the aim,
+  the back leans and Undo is one step, but with the arc turned 25 cm below the hips (so the hips take some of it) a foot
+  moves 5 cm. Test or solver: open. The real mouse drag on the gizmo didn't start it; by hand.
+  Rerun (XIV Bridge animations-pending/520, Release 2026-10-31 22:25): a 40 deg arc about j_sebo_a that sinks 6 cm leans
+  the back about j_sebo_a, the head lands on the aim keeping its facing, both feet hold, and the layer keys the head,
+  j_sebo_a, the hips' position and the legs. (The earlier fail was the test's arc, which put the aim beyond the back's
+  reach so the feet lifted, as item 3 means them to.)
+- [x] 2 Drag the head straight down 20 cm: the character crouches, knees bending, back upright, feet
   planted. Back up: it stands again.
-- [ ] 3 Drag the head straight up past the legs' reach: the legs straighten smoothly and the feet lift,
+  (XIV Bridge animations-pending/521, Release 2026-10-31: 20 cm down crouches with both knees bending more and forward,
+  the back upright and the feet planted, in the evaluator and in game; a second drag back up stands it within 5 mm at the
+  head and 1 cm at the hips.)
+- [x] 3 Drag the head straight up past the legs' reach: the legs straighten smoothly and the feet lift,
   nothing snaps; back down, the feet are back on the floor.
+  (XIV Bridge animations-pending/522, Release 2026-10-31: the legs straighten without a jump before the feet lift, and
+  back down in the same drag the feet are on the floor again. As two separate drags the feet stay where the first left
+  them: a drag holds its anchors at the pose it began on, HeadSolver.cs:88.)
 - [ ] 4 Select the head, Gizmo: Drag. Under Hold tick Left hand and untick both feet: drag the head
   forward: the hand holds, the arm and clavicle bend; the feet now ride with the body. Select the hips
   with Drag: their boxes are their own (all four ticked).
-- [ ] 5 The layer's amount at 50 %: the head still lands under the gizmo and the feet still hold.
-- [ ] 6 A pose layer with Position off: Drag on the head bends the neck as before, with the old tooltip.
-- [ ] 7 Undo once after a drag: the whole drag comes back in one step.
+  (Before the Hold boxes: XIV Bridge animations-pending/523, Release 2026-10-31: a selected hand holds, the arm and
+  clavicle bend and the feet ride with the body.)
+- [x] 5 The layer's amount at 50 %: the head still lands under the gizmo and the feet still hold.
+  (XIV Bridge animations-pending/524, Release 2026-10-31.)
+- [x] 6 A pose layer with Position off: Drag on the head bends the neck as before, with the old tooltip.
+  (XIV Bridge animations-pending/525, Release 2026-10-31: the neck bends as before, with the old tooltip.)
+- [x] 7 Undo once after a drag: the whole drag comes back in one step.
+  (XIV Bridge animations-pending/520, Release 2026-10-31: one Ctrl+Z takes the whole drag back.)
 
 ## Fix layer (pending)
 
@@ -2138,8 +2185,8 @@ then, after its cross-fade, Smooth jitter calms small shakes. Spec: docs/superpo
   clip's end, 8 frames long. In GPose play the startup, then the loop: no pop at the hand-off.
   (XIV Bridge exec, 2026-10-24, Ground Sitting Idle 1 startup j_pose01_start, 40 frames, loop from Caked Up
   - Groundsit: layer at 32-40; the last frame lands on the loop's frame 0 within 0.06 deg, from 90 deg;
-  earlier frames unchanged. Played in GPose as the game chains emotes, loop as base and startup as a
-  one-shot: no pop, but the unedited startup doesn't pop either, see 2.)
+    earlier frames unchanged. Played in GPose as the game chains emotes, loop as base and startup as a
+    one-shot: no pop, but the unedited startup doesn't pop either, see 2.)
 - [x] 2 Step frame by frame through the hand-off: no frame is held twice. (The spec assumes the game shows
   the loop's frame 0 right after the startup's last; if a frame holds, report it.)
   Found 2026-10-24 (XIV Bridge exec, Havok control times and weights per frame): no frame holds, but the
@@ -2613,17 +2660,40 @@ right swing opposite, a chain shares the angle. Smooth motion averages each fram
 Window, so sudden moves soften. The maths is covered offline (SwingLayerFixture, SmoothMotionFixture); these checks
 are the look and Live. Code: Services/Animations/Motion/MotionSwing.cs, MotionSmoothing.cs, Ui/Timeline/SwingFields.cs.
 
-- [ ] 1 On a dance, Add > Swing, limit it to the hips (j_kosi), Slide 5 cm, Tilt 5°, then Add > Pin feet after it:
+- [x] 1 On a dance, Add > Swing, limit it to the hips (j_kosi), Slide 5 cm, Tilt 5°, then Add > Pin feet after it:
   in Live the hips sway side to side and the feet stay planted.
-- [ ] 2 Add > Swing on both upper arms (j_ude_a_l, j_ude_a_r), Direction 90°, Tilt 30°, Twins opposite on: the arms
+  Fails in Live (XIV Bridge animations-pending/540, Release 2026-10-31, Flame Dance): the document slides the hips 5 cm
+  and leans them 5 deg with the feet planted, but Live moves the hips 0.07 cm and the feet 7.4 cm. Flame Dance is a c0101
+  clip on the c0801 character, and for another race's clip Live puts every translation but n_hara's back at rest
+  (LiveConversion.ToSource, LiveConversion.cs:50), so a Slide on j_kosi is dropped while Pin feet's leg turns, solved for
+  the slid hips, stay. Suspected bug; decide whether the Slide goes onto n_hara for such clips or the editor warns.
+  Fixed 2026-10-31 (ruled: onto n_hara): on a clip rebuilt for another race each layer's move of j_kosi goes onto n_hara
+  in the document, Live and the save, so the back goes along with the hips (SwingLayerFixture). Retest after a Release build.
+  Retest after the fix (XIV Bridge animations-pending/540, Release 2026-10-31 22:03): Live now slides the hips by the
+  Slide, but the feet still move 2.6 cm under Pin feet. Open.
+  Rerun (XIV Bridge animations-pending/540, Release 2026-10-31 22:25): Live slides the hips by the Slide and the feet are
+  where the evaluator's Pin feet holds them (within 1 cm). Pin feet holds each foot at its planted stretch's average
+  spot, which the swing moves, so the feet with the swing on and off differ by about 2.6 cm on Flame Dance by design
+  (Instant Edit's PinLayerFixture.SwungHips).
+- [x] 2 Add > Swing on both upper arms (j_ude_a_l, j_ude_a_r), Direction 90°, Tilt 30°, Twins opposite on: the arms
   swing forward and back in turn, like walking. Untick Twins opposite: they swing together.
-- [ ] 3 A swing on the spine chain (j_sebo_a, j_sebo_b, j_sebo_c) with Delay 3: the upper back follows the lower back,
+  (XIV Bridge animations-pending/541, Release 2026-10-31: each arm peaks at 29-31 deg; Twins opposite on they move
+  opposite (correlation under -0.95), off together (over 0.95); Live shows it. Like walking: by eye.)
+- [x] 3 A swing on the spine chain (j_sebo_a, j_sebo_b, j_sebo_c) with Delay 3: the upper back follows the lower back,
   and the chest leans no further than the Tilt set (Spread over chain on).
-- [ ] 4 A swing covering a whole looping emote: no jump where the loop starts over in game.
-- [ ] 5 Add > Smooth motion on a snappy emote with Window 10: the sharp moves soften without slowing the emote down.
+  (XIV Bridge animations-pending/542, Release 2026-10-31: each spine bone takes a third of the Tilt, j_sebo_b trails
+  j_sebo_a by 3 frames and j_sebo_c by 6, and the chest leans no further than the Tilt.)
+- [x] 4 A swing covering a whole looping emote: no jump where the loop starts over in game.
+  (XIV Bridge animations-pending/543, Release 2026-10-31, a looping idle: no bone's seam step gets more than 0.5 deg
+  worse and the hips' at most 1 mm; Live over three loops shows no jump at the wrap.)
+- [x] 5 Add > Smooth motion on a snappy emote with Window 10: the sharp moves soften without slowing the emote down.
   At Strength 0% it plays as before.
-- [ ] 6 Save both layers and play the saved animation: it matches Live. Edit again brings both layers back with their
+  (XIV Bridge animations-pending/544, Release 2026-10-31, Clap: the sharpest arm step drops by at least 15% with the
+  length and the speed peaks kept; at Strength 0% it is within 0.1 deg of the clip.)
+- [x] 6 Save both layers and play the saved animation: it matches Live. Edit again brings both layers back with their
   settings.
+  (XIV Bridge animations-pending/545, Release 2026-10-31: the saved file matches Live within 1 cm and 2 deg, the game
+  plays it, and Edit again brings both layers back with their settings.)
 
 ## Bones in use on the map (pending)
 
@@ -2674,41 +2744,87 @@ BonePosing.MapBones, PoseMap.Shows/Extras.
 
 ## Breakdowner (pending)
 
-- [ ] 1 Offset layer, an arm keyed at two frames: on a frame between, Tween at 50% keys it halfway, Live shows it; 0% and
+- [x] 1 Offset layer, an arm keyed at two frames: on a frame between, Tween at 50% keys it halfway, Live shows it; 0% and
   100% match the keys; 150% overshoots. One Ctrl+Z takes the key out.
-- [ ] 2 Key the arm on that frame and turn it further: Push / pull at 150% exaggerates it, 50% softens it, Relax at 100%
+  (XIV Bridge animations-pending/500, Release 2026-10-31 19:42, Idle pose 3, the arm keyed 0 and 40 deg at 10 and 50: at 30
+  Tween keys 0, 20, 40 and 60 deg for 0/50/100/150% (the 50% one with a real click on Apply), Live shows each within 2 deg,
+  and one Ctrl+Z takes the key out.)
+- [x] 2 Key the arm on that frame and turn it further: Push / pull at 150% exaggerates it, 50% softens it, Relax at 100%
   lands it on the in-between. Without a key there, the status says Key this frame first.
-- [ ] 3 Select a bone with no key on one side: Apply says No keys either side. With other bones that have both, only those key.
-- [ ] 4 Pose layer whose keys set the hips' position: Tween moves the hips too and the new key sets the position. A layer
+  (XIV Bridge animations-pending/501, Release 2026-10-31: on keys 0 / 30 / 40 deg Push / pull 150% and 50% move the middle
+  key away from and toward the in-between, Relax 100% lands it on it, Live shows each, and with no key there the status
+  says "Key this frame first.")
+- [x] 3 Select a bone with no key on one side: Apply says No keys either side. With other bones that have both, only those key.
+  (XIV Bridge animations-pending/501, Release 2026-10-31: "No keys either side."; with a second bone keyed both sides,
+  only that one keys.)
+- [x] 4 Pose layer whose keys set the hips' position: Tween moves the hips too and the new key sets the position. A layer
   without Scale ticked keeps the key's scale.
-- [ ] 5 Select an amplitude or pin layer: the row is greyed with its hint. Ctrl+click the slider to type a value.
+  (XIV Bridge animations-pending/502, Release 2026-10-31: Tween 50% moves the hips halfway and the key sets the position;
+  with Scale unticked the key keeps its scale, ticked the scale tweens.)
+- [x] 5 Select an amplitude or pin layer: there is no breakdown row (it shows under offset and pose layers only, as UI
+  redesign stage 5 item 14 says). Ctrl+click the slider to type a value. (Reworded 2026-10-31, the user's call: the row
+  stays hidden on other kinds rather than greyed with a hint.)
+  (XIV Bridge animations-pending/503, Release 2026-10-31: an offset layer draws Tween, the slider and Apply; an amplitude
+  and a pin layer draw no row; a real Ctrl+click turns the slider into a field and 75 typed sets it.)
 
 ## Key timing (pending)
 
 - [ ] 1 Pick three keys of a pose layer, put the playhead on the first and press S: moving the mouse right spreads them, left
   draws them together, and the toolbar shows the percent. A click applies it (one Ctrl+Z puts it back); Escape or a right
   click during it changes nothing. Preview plays the scaled keys.
-- [ ] 2 Right-click a picked key, Scale timing, type 50 and Enter: the keys close in on the playhead. A percent that would
+  Partly checked (XIV Bridge animations-pending/504, Release 2026-10-31, real S, mouse moves and clicks: right spreads to
+  180% (keys 20, 38, 56), left draws to 59% (20, 26, 32), the toolbar shows the percent, a click applies it as one undo
+  step, Escape and a right click change nothing, and Live plays the scaled keys. Not checked: Preview.)
+- [x] 2 Right-click a picked key, Scale timing, type 50 and Enter: the keys close in on the playhead. A percent that would
   put two keys on one frame shows a reason in the toolbar and changes nothing.
-- [ ] 3 Move the playhead past the keys and press Ctrl+D: copies land from the playhead on with the same spacing and are
+  (XIV Bridge animations-pending/505, Release 2026-10-31, a real right-click and typing: 20, 30, 40 become 20, 25, 30 in
+  one undo step; 10% shows its reason in the toolbar and changes nothing.)
+- [x] 3 Move the playhead past the keys and press Ctrl+D: copies land from the playhead on with the same spacing and are
   picked. On a key, the toolbar says why nothing happened. With no key picked, Ctrl+D still copies the layer.
-- [ ] 4 Reverse timing on three keys with different eases: the motion plays backwards between the first and last key, each
+  (XIV Bridge animations-pending/506, Release 2026-10-31.)
+- [x] 4 Reverse timing on three keys with different eases: the motion plays backwards between the first and last key, each
   key keeping its ease.
-- [ ] 5 S in the Timeline doesn't walk the character back, and outside the Timeline S walks as usual.
+  (XIV Bridge animations-pending/507, Release 2026-10-31: keys at 10 / 20 / 40 move to 40 / 30 / 10, each with its value
+  and ease, and Live plays the values backwards at the key frames, one undo step.)
+- [x] 5 S in the Timeline doesn't walk the character back, and outside the Timeline S walks as usual.
+  Also with no key picked (fixed 2026-10-31, the user's call: S was taken from the game only once a key had been picked,
+  so a fresh Timeline let S walk the character; TimelineCanvas now asks about S whatever is picked).
+  (XIV Bridge animations-pending/508, Release 2026-10-31 22:03 with the fix, real S presses with FFXIV in front: with the
+  Timeline focused and no key picked S doesn't walk the player, with a key picked it starts the scale drag, and with no
+  ImGui window focused S walks the player back as usual.)
 
 ## Layer weight (pending)
 
 The maths and edits are covered offline (LayerWeightFixture); these checks are the canvas and Live.
 
-- [ ] 1 Key an offset layer, tick Weight in the layer panel: its row shows a line at the top. Click low in the middle of
+- [x] 1 Key an offset layer, tick Weight in the layer panel: its row shows a line at the top. Click low in the middle of
   the bar: a point lands there, the line dips, and Live shows the offset weaker around it. Undo takes the point out.
+  Partly checked (XIV Bridge animations-pending/509, Release 2026-10-31, the real Weight tick and click: the line shows at
+  the top along the layer, the click adds a point at about 20 % that the line passes through, and Undo takes it out). To
+  decide: one point weighs the whole layer (MotionEvaluator.WeightAt holds the first point's value before it and the last
+  one's after), so with one point at 22 % Live shows 22 % at every frame (8.8 of 40 deg), not "weaker around it".
+  Fixed 2026-10-31 (ruled: full weight elsewhere): the line starts at 100 % on the layer's first frame and ends at 100 % on
+  its last unless a point is there, so a lone point dips it around itself only (LayerWeightFixture). Retest after a Release build.
+  Retest after the fix (XIV Bridge animations-pending/509, Release 2026-10-31 22:03): passes with the new rule; the
+  weight is 100 % at the layer's ends and dips to the lone point.
 - [ ] 2 Drag a point up, down and sideways: it follows, stops before its neighbours, snaps to keys and the playhead, and
   moves freely with Alt. Hover it: "Frame N, 60 %". Right-click it: it goes.
-- [ ] 3 While Weight is on, the row's keys and fade handles don't take clicks; the panel's Starts and Ends still work and
+  Partly checked (XIV Bridge animations-pending/510, Release 2026-10-31, real drags: it follows within a pixel's worth,
+  stops before both neighbours, snaps to the key at 42 and the playhead at 28, the hover says "Frame 35, 60 %" and a
+  right-click deletes it. Alt: by hand, a script can't hold it through a drag.)
+- [x] 3 While Weight is on, the row's keys and fade handles don't take clicks; the panel's Starts and Ends still work and
   drop points left outside. Untick Weight: the line stays faint and the keys work again. Clear weight empties it.
-- [ ] 4 An amplitude layer with a point at 0 over its first half changes nothing there in Live and the save.
-- [ ] 5 Move the layer and duplicate it: the points go with it. Save and reopen with Edit again: the points are back.
-- [ ] 6 Dragging points on a long clip makes no hitch in dalamud.log.
+  (XIV Bridge animations-pending/511, Release 2026-10-31: with Weight on only the bar and its points take clicks (the
+  layer's end edges still answer just outside it, for resizing); Starts 20 and Ends 50 drop the points outside; unticked
+  the line stays at alpha 0.35 (0.95 while editing) and the keys work; Clear weight empties it.)
+- [x] 4 An amplitude layer with a point at 0 over its first half changes nothing there in Live and the save.
+  (XIV Bridge animations-pending/512, Release 2026-10-31, Idle pose 3 at 200 %: in the document, Live and the saved file
+  the first half is within 0.1 deg of the unedited motion and the second half still changes.)
+- [x] 5 Move the layer and duplicate it: the points go with it. Save and reopen with Edit again: the points are back.
+  (XIV Bridge animations-pending/513, Release 2026-10-31.)
+- [x] 6 Dragging points on a long clip makes no hitch in dalamud.log.
+  (XIV Bridge animations-pending/514, Release 2026-10-31, Flame Dance with Live playing: no frame over 100 ms and no new
+  "[HITCH]" line for Instant Edit while three points are dragged.)
 
 ## Motion paths (pending)
 
@@ -2730,30 +2846,53 @@ positions over the frames around the playhead. The frames and the cache are cove
 
 The wobble's maths is covered offline (NoiseLayerFixture); these checks are the panel and Live.
 
-- [ ] 1 Add a Noise layer over a looping idle, add the tail bones: Live shows the tail wobbling at random, and the loop's
+- [x] 1 Add a Noise layer over a looping idle, add the tail bones: Live shows the tail wobbling at random, and the loop's
   seam doesn't jump.
-- [ ] 2 Raise Tilt, Twist and Slide: the wobble grows; untick Turn or Move and that part stops. Slide moves only the top
+  (XIV Bridge animations-pending/546, Release 2026-10-31: each tail bone wobbles within the Tilt, differently per bone
+  and over time, and the seam gets no worse; Live checked on the arm, as the tail's physics overrides it in Live. The
+  tail in Live: by eye.)
+- [x] 2 Raise Tilt, Twist and Slide: the wobble grows; untick Turn or Move and that part stops. Slide moves only the top
   tail bone.
-- [ ] 3 Drag Speed from 0.1 to 10: the wobble goes from slow drifts to a tremble. New picks another seed and another
+  (XIV Bridge animations-pending/547, Release 2026-10-31: Tilt 5 to 15 makes the wobble about three times larger, Twist
+  adds a turn about the up axis, Slide moves only the top tail bone, and unticking Turn or Move stops just that part.)
+- [x] 3 Drag Speed from 0.1 to 10: the wobble goes from slow drifts to a tremble. New picks another seed and another
   wobble; Ctrl+Z puts the old one back.
-- [ ] 4 A noise over part of a clip starts and ends at rest. The Bones window shows the same pose as Live.
-- [ ] 5 Save and reopen with Edit again: the wobble is the same. Dragging its sliders makes no hitch in dalamud.log.
+  (XIV Bridge animations-pending/548, Release 2026-10-31: Speed 0.1 to 10 is one undo step and the wobble changes at
+  least 4 times faster; New picks another seed and another wobble, and Ctrl+Z puts both back.)
+- [x] 4 A noise over part of a clip starts and ends at rest. The Bones window shows the same pose as Live.
+  (XIV Bridge animations-pending/549, Release 2026-10-31: over frames 20-50 the tail is the clip's own outside the range
+  and eases in; the Bones window matches Live within 2 deg, checked on the arm.)
+- [x] 5 Save and reopen with Edit again: the wobble is the same. Dragging its sliders makes no hitch in dalamud.log.
+  (XIV Bridge animations-pending/550, Release 2026-10-31: real drags on Tilt and Speed make no frame over the limit and
+  no new Instant Edit [HITCH] line; after a save Edit again gives the same wobble.)
 
 ## Curve view (pending)
 
-- [ ] 1 Body emote, Curves on: the strip shows under the lanes; with no bone selected it says Select a bone. Pick the
+- [x] 1 Body emote, Curves on: the strip shows under the lanes; with no bone selected it says Select a bone. Pick the
   left upper arm: Turn X, Y and Z draw in red, green and blue, keys line up with the rows above while scrolling and zooming
   (wheel and Ctrl+wheel in the strip too). Drag the splitter: the strip and the lanes resize.
-- [ ] 2 Motion: with no layer the faint and solid lines are one; add an offset turn on the arm: "Reading" shows briefly,
+  (XIV Bridge animations-pending/580, Release 2026-10-31 22:25: Curves shows the strip under the lanes, "Select a bone"
+  with none, Turn X, Y and Z in red, green and blue for the left upper arm, the key ticks lining up through zoom and
+  scroll, and the splitter resizing the strip and the lanes.)
+- [x] 2 Motion: with no layer the faint and solid lines are one; add an offset turn on the arm: "Reading" shows briefly,
   then the solid line follows the layer and the faint one stays the clip's own. A spinning or flipping bone draws no jumps
   at 180 degrees. Move X / Y / Z switches add the moves in cm.
+  (XIV Bridge animations-pending/581, Release 2026-10-31: with no layer one line per turn; an offset turn shows Reading,
+  then the solid line follows the layer; a spinning arm draws no 180 deg jumps; the Move switches add the moves.)
 - [ ] 3 Layer, the offset layer selected: a dot per key, eased between them as Live plays. Drag a dot up: that one value
   changes, Live and the Bones window's Turn fields follow; one Ctrl+Z undoes the whole drag. Ctrl+click a dot, type a value
   and Enter: the key takes it.
-- [ ] 4 Layer on a pose layer whose keys set the hips' position on some keys: Move dots show only on those keys. On an
+  Partly checked (XIV Bridge animations-pending/582, Release 2026-10-31: a dot per key, Live between keys as the curve, a
+  dot drag changes that value and the Bones window follows, one Ctrl+Z). Ctrl+click on a dot opened no field in the run;
+  open.
+- [x] 4 Layer on a pose layer whose keys set the hips' position on some keys: Move dots show only on those keys. On an
   amplitude layer the strip says This layer has no keys to show.
-- [ ] 5 Click or drag on the graph: the playhead follows. Dragging a key on the canvas meanwhile holds the after curve
+  (XIV Bridge animations-pending/583, Release 2026-10-31: on a pose layer Move dots show only on the keys that set the
+  hips' position; an amplitude layer's strip says it has no keys to show.)
+- [x] 5 Click or drag on the graph: the playhead follows. Dragging a key on the canvas meanwhile holds the after curve
   until the drop. No hitch in dalamud.log while the strip is open during playback.
+  (XIV Bridge animations-pending/584, Release 2026-10-31: a click and a drag on the graph move the playhead, a canvas key
+  drag holds the after curve until the drop and rebuilds it after, and no hitch while the strip is open during playback.)
 
 ## IK limits and Bend (pending)
 
@@ -2761,31 +2900,74 @@ Knees and elbows bend only forward, at most 150 degrees, wherever a pin or a dra
 limb about the line from its upper bone to the hand or foot. The solver is covered offline in PinLayerFixture (Limits).
 The offline skeleton's rest knees and elbows are bent; item 1 checks that the game's rest pose bends them forward too.
 
-- [ ] 1 An offset layer, select the left foot, Gizmo: Drag. Raise the foot to the side, above the hip, then in front
+- [x] 1 An offset layer, select the left foot, Gizmo: Drag. Raise the foot to the side, above the hip, then in front
   and behind: the knee always bends forward, never backwards. The same for a hand reached behind the back: the elbow
   never bends backwards.
-- [ ] 2 Drag the foot up toward the hip: the knee folds to about 150 degrees and the foot stops short, without a snap.
-- [ ] 3 With the foot selected and Drag chosen, set Bend to 90 and drag: the knee points to the side and the layer keys
+  Fails (XIV Bridge animations-pending/526, Release 2026-10-31): the knee always bends forward on its own hinge, but at
+  one frame of the sweep from the side to behind the whole leg turns half a turn about the hip (the knee jumps 70 cm in
+  one frame, twice the thigh). Suspected: PinSolver.cs:231-241 picks the bend plane, its mirror or a roll afresh every
+  frame from the drag's start pose, so the side can switch in a single frame.
+  Fixed 2026-10-31: each frame of a drag still solves from the start pose but bends on the plane the frame before left
+  (PinSolver's LimbSide), so the knee moves round with the aim; offline the largest knee step on a 1 deg sweep fell from
+  53 cm to 0.6 cm (PinLayerFixture). Retest after a Release build.
+  Retest after the fix (XIV Bridge animations-pending/526, Release 2026-10-31 22:03, the drag carrying its bend side as
+  Instant Edit's own drag does): no leg bone moves over 60 mm in a frame on the sweep from the side to behind, and the
+  knee and the elbow bend forward on every frame.
+- [x] 2 Drag the foot up toward the hip: the knee folds to about 150 degrees and the foot stops short, without a snap.
+  Partly checked (XIV Bridge animations-pending/527, Release 2026-10-31): the knee folds to about 150 deg and the foot
+  stops short of the aim, but the last frame steps 3.3 cm (the check allows 2 x the gizmo's step + 2 mm). Open: test or
+  solver.
+  Rerun (XIV Bridge animations-pending/527, Release 2026-10-31 22:25): the knee folds to about 150 deg, the foot stops at
+  the folded distance, and no frame jumps (the earlier fail was the first step from a near-straight knee, which moves
+  several times the gizmo's step without snapping).
+- [x] 3 With the foot selected and Drag chosen, set Bend to 90 and drag: the knee points to the side and the layer keys
   that pose. Bend back to 0: the next drag bends the knee forward again. The Bend field shows only for hands and feet.
-- [ ] 4 A pin layer with a keyed hand pin: the pin's Bend row turns the elbow on Live; one slider drag is one undo step.
+  To decide (XIV Bridge animations-pending/528, Release 2026-10-31): Bend 90 points the knee 90 deg to the side and keys
+  it, and Bend goes back to 0 by itself after every drag (TimelineWindow.Overlay.cs:662-664); but the next Bend 0 drag
+  keeps the knee 90 deg to the side, as Bend works from the pose the drag starts on (PinSolver.cs:177-179). Either the
+  item says the knee stays where the keyed pose has it, or Bend becomes a side measured from the rest pose and stops
+  resetting.
+  Ruled 2026-10-31 (the user's call): Bend is relative to the pose the drag starts on, so after a Bend 90 drag the next
+  drag keeps the knee where the keyed pose has it; Undo or removing the key brings it forward. Checked as ruled: Bend 90
+  keys the knee 90 deg to the side, Bend goes back to 0 after the drag, and the next Bend 0 drag keeps the keyed side
+  (XIV Bridge 528).
+- [x] 4 A pin layer with a keyed hand pin: the pin's Bend row turns the elbow on Live; one slider drag is one undo step.
   The row shows only for hand and foot pins.
-- [ ] 5 Hip drag on the seated pose and a head drag: the knees and elbows still bend forward, as before.
-- [ ] 6 Save (replace) and Edit again: the pin's Bend is back and the clip plays the same.
+  (XIV Bridge animations-pending/529, Release 2026-10-31: the pin's Bend row turns the elbow in Live, one slider drag is
+  one undo step, and the row shows only for hand and foot pins.)
+- [x] 5 Hip drag on the seated pose and a head drag: the knees and elbows still bend forward, as before.
+  (XIV Bridge animations-pending/530, Release 2026-10-31, Ground sit: a hip drag and a head drag keep the knees and
+  elbows bending forward.)
+- [x] 6 Save (replace) and Edit again: the pin's Bend is back and the clip plays the same.
+  (XIV Bridge animations-pending/531, Release 2026-10-31: a hand pin with Bend 60 saved in place into a test mod comes
+  back with Edit again and plays the same.)
 
 ## Look at (pending)
 
 The turn's maths is covered offline (LookAtFixture); these checks are the panel, the overlay and Live.
 
-- [ ] 1 Add a Look at layer over an idle with Live on and paused: a dot shows in front of the face with a faint line
+- [x] 1 Add a Look at layer over an idle with Live on and paused: a dot shows in front of the face with a faint line
   from the head. Drag it with the gizmo to one side: the head, some of the neck and a little of the upper back turn
   toward it, and a key appears at the playhead. Ctrl+Z puts the dot back.
-- [ ] 2 Key another spot later on and play: the head goes from one spot to the next, the way the layer eases.
-- [ ] 3 Move the dot behind the character: the head turns as far as Limit allows, level, never over the top. Lower
+  (XIV Bridge animations-pending/551, Release 2026-10-31: the spot starts 1 m in front of the head; moved 80 cm aside it
+  keys at the playhead in one undo step and the head ends within 1.5 deg of it, the neck turning less and the upper back
+  least; Ctrl+Z puts it back. The dot and its line: by eye.)
+- [x] 2 Key another spot later on and play: the head goes from one spot to the next, the way the layer eases.
+  (XIV Bridge animations-pending/552, Release 2026-10-31.)
+- [x] 3 Move the dot behind the character: the head turns as far as Limit allows, level, never over the top. Lower
   Limit: the turn gets smaller, without a snap near the limit.
-- [ ] 4 Looks at, pick Right Hand (j_te_r) on an emote that moves the hand: the keys go, the line runs to the hand and
+  (XIV Bridge animations-pending/553, Release 2026-10-31: behind the character the head turns 72-80.5 deg at Limit 80 and
+  36-40.5 deg at Limit 40, level, with no snap as the Limit and the spot sweep.)
+- [x] 4 Looks at, pick Right Hand (j_te_r) on an emote that moves the hand: the keys go, the line runs to the hand and
   the head follows it. Pick Spot again: the gizmo comes back.
-- [ ] 5 Untick Upper back and Neck: only the head turns, and the same angle. The Bones window shows the same pose as Live.
-- [ ] 6 Save and reopen with Edit again: the look is the same. Moving the dot makes no hitch in dalamud.log.
+  (XIV Bridge animations-pending/554, Release 2026-10-31: following Right Hand the keys go and the head looks at the hand
+  within 5 deg where it can reach; Spot again brings the gizmo back.)
+- [x] 5 Untick Upper back and Neck: only the head turns, and the same angle. The Bones window shows the same pose as Live.
+  (XIV Bridge animations-pending/555, Release 2026-10-31: the neck and upper back stay the clip's own, the head looks the
+  same way, and the Bones window matches Live.)
+- [x] 6 Save and reopen with Edit again: the look is the same. Moving the dot makes no hitch in dalamud.log.
+  (XIV Bridge animations-pending/556, Release 2026-10-31: moving the dot makes no hitch; Edit again brings back the same
+  spots, Limit, bones and motion.)
 
 ## UI redesign stage 1 (pending)
 
@@ -2822,10 +3004,10 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   window keep running. Back returns to the same view and playhead.
 - [ ] 12 With an unfinished edit, Start reads "Start (1)" in the warning colour.
 - [ ] 13 Select an event, then click the clip's name in the header: the selection clears.
-- [ ] 14 Above the lanes there are two rows, the menu bar (Animation, Edit, Add, View, Help) and the action bar
-  (Undo, Redo, Add, the play bar, the length, Bones), then the status line when it has a note. Snap, Scale events,
+- [ ] 14 Above the lanes are the menu bar (Animation, Edit, Add, View, Help), the header (Start and the clip's name) and
+  the action bar (Undo, Redo, Add, the play bar, Bones), then the status line when it has a note. Snap, Scale events,
   Fit, Curves, Blender, Load, Follow and the help tip are gone from the bars. (The length moved to the clip view in
-  stage 4.)
+  stage 4. Reworded 2026-10-31, the user's call: the header row sits between the menu bar and the action bar.)
 - [ ] 15 Animation: Start page and Load another (on Game animations) open the start page; Reload reads the clip again
   and asks "Reload it and lose them?" with unsaved edits; Open startup (or Open loop from a startup) opens the other
   clip. Send motion to Blender, Motion from Blender and Still pose work as before. After Still pose, Use the clip's
@@ -2835,7 +3017,9 @@ The turn's maths is covered offline (LookAtFixture); these checks are the panel,
   loop seam the clip row's items at the playhead; with nothing "Nothing selected".
 - [ ] 17 Add opens the same items as the action bar's Add. View: Fit (F), then Snap, Scale events with length and
   Follow as ticks, then Curves and Bones window as ticks. Each one works, and Help, Mouse and keys shows the help text.
-- [ ] 18 While a save runs, Reload, Add, Undo and the Blender items are greyed out, each with its reason as a tooltip.
+- [ ] 18 While a save runs, Reload, Add, Undo and the Blender items are greyed out. The menu items give their reason as a
+  tooltip ("Wait for the timeline to finish."); the action bar's Add and Undo keep their usual tooltips. (Reworded
+  2026-10-31, the user's call.)
 - [ ] 19 On an expression's timeline without its face: no Curves, Bones window or Blender items. On a face (Edit face):
   no Blender items, no Reload, and Neutral face instead of Still pose.
 - [ ] 20 The start page has no menu bar, and neither does a timeline that can't be edited. Its banner offers
@@ -2990,18 +3174,19 @@ The Timeline start page's Partners page spawns a second GPose actor from a prese
 Glamourer design and a Customize+ profile. Spec: docs/superpowers/specs/2026-10-30-partner-spawner-design.md (local
 only).
 
-- [ ] 1 Make a preset "Aria Rose" with a collection, a design and a C+ profile; in GPose Spawn: the partner stands on
+- [x] 1 Make a preset "Aria Rose" with a collection, a design and a C+ profile; in GPose Spawn: the partner stands on
   your spot facing your way, wearing the design with the profile's proportions and the collection's mods.
-- [ ] 2 While spawned, Penumbra's Individual Assignments list "Aria Rose" with that collection; after Despawn the entry
+- [x] 2 While spawned, Penumbra's Individual Assignments list "Aria Rose" with that collection; after Despawn the entry
   is gone.
-- [ ] 3 Leave GPose with the partner spawned: it disappears and the Individual entry is gone.
-- [ ] 4 Delete the preset's design in Glamourer: the row shows it missing; Spawn still works and lists "Design <name>
+- [x] &#x20;
+- [x] 3 Leave GPose with the partner spawned: it disappears and the Individual entry is gone.
+- [x] 4 Delete the preset's design in Glamourer: the row shows it missing; Spawn still works and lists "Design <name>
   no longer exists" with the name of the design you deleted.
-- [ ] 5 A Glamourer automation set for "Aria Rose" doesn't change the spawned look.
-- [ ] 6 "Aria" alone and your own name are refused with their messages.
-- [ ] 7 Reload Instant Edit with a partner spawned: the partner is gone and Penumbra lists no "Aria Rose".
-- [ ] 8 The Partners page: right-click a row (its name or links) for Edit and Delete; Edit opens the editor with the
+- [x] 5 A Glamourer automation set for "Aria Rose" doesn't change the spawned look.
+- [x] 6 "Aria" alone and your own name are refused with their messages.
+- [x] 7 Reload Instant Edit with a partner spawned: the partner is gone and Penumbra lists no "Aria Rose".
+- [x] 8 The Partners page: right-click a row (its name or links) for Edit and Delete; Edit opens the editor with the
   preset's values; the name box takes 21 characters; delete a linked design in Glamourer and the row marks it
   (missing) within 5 seconds.
-- [ ] 9 In Penumbra, give "Aria Rose" its own Individual assignment to None; Spawn the preset (its collection applies
+- [x] 9 In Penumbra, give "Aria Rose" its own Individual assignment to None; Spawn the preset (its collection applies
   while spawned), then Despawn: the Individual entry for "Aria Rose" is None again, not removed.

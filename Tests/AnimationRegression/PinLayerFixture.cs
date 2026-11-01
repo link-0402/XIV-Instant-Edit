@@ -22,6 +22,7 @@ internal static class PinLayerFixture
         Chains(check, reject);
         Solver(check);
         Limits(check);
+        SwungHips(check);
         Planting(check);
         Clips(check, reject);
         Edits(check);
@@ -1025,6 +1026,48 @@ internal static class PinLayerFixture
         PinSolver.Pin(body, pl, pm, leg, new MotionPin(PinChains.FootL, HoldTurn: false, Bend: 90), -1, new MotionTransform(lifted, Quaternion.Identity, Vector3.One), 1, legNormal);
         check(pl.SequenceEqual(nl), "a pin's bend turns its limb as the solver's does");
 
+        // A foot dragged round the hip from in front, past the side, to behind, every frame solved from the pose the drag began on:
+        // where the aim passes the knee's hinge axis, a fresh pick of the bend side swapped the whole leg over in one frame (XIV Bridge 526).
+        // The side carried from frame to frame keeps the knee moving with the aim, and a bend stays the angle asked all the way round.
+        // The same for a hand reached from in front, down past the elbow's hinge axis, to behind the back.
+        var handChain = PinChains.Chain(body, new("j_te_l"));
+        foreach (var (limb, limbNormal, name) in new[] { (leg, legNormal, "foot"), (handChain, PinSolver.RestNormal(body, handChain), "hand") })
+            foreach (var offset in new[] { -.3f, -.05f, 0, .05f, .3f, .8f })
+            {
+                LimbSide plain = new(), bent = new();
+                Vector3? lastMid = null;
+                var worst = 0f;
+                var swept = true;
+                var steady = true;
+                for (var step = 0; step <= 180; step++)
+                {
+                    var angle = step * MathF.PI / 180;
+                    var (wl, wm) = Pose();
+                    var (tl, tm) = Pose();
+                    var aim = wm[limb.Root].Position + (name == "foot"
+                        ? Vector3.Normalize(new Vector3(MathF.Sin(angle), offset, MathF.Cos(angle))) * .6f
+                        : Vector3.Normalize(new Vector3(offset, -MathF.Sin(angle), MathF.Cos(angle))) * .4f);
+                    PinSolver.Reach(body, wl, wm, limb, aim, limbNormal, side: plain);
+                    PinSolver.Reach(body, tl, tm, limb, aim, limbNormal, 1, 60, bent);
+                    swept &= Forward(wm, limb, limbNormal) && Vector3.Distance(wm[limb.End].Position, aim) < 1e-4f &&
+                             Forward(tm, limb, limbNormal) && Vector3.Distance(tm[limb.End].Position, aim) < 1e-4f;
+                    if (lastMid is { } mid)
+                        worst = Math.Max(worst, Vector3.Distance(wm[limb.Mid].Position, mid));
+                    lastMid = wm[limb.Mid].Position;
+                    var toAim = Vector3.Normalize(aim - wm[limb.Root].Position);
+                    var (plainSide, bentSide) = (KneeSide(wm, limb), KneeSide(tm, limb));
+                    steady &= MathF.Abs(MathF.Atan2(Vector3.Dot(Vector3.Cross(plainSide, bentSide), toAim), Vector3.Dot(plainSide, bentSide)) * 180 / MathF.PI - 60) < .5f;
+                }
+                check(swept && worst < .03f,
+                    $"a {name} dragged round at {offset} keeps its knee or elbow's side (largest step {worst * 100:0.0} cm), bends it forward and reaches");
+                check(steady, $"a {name} dragged round at {offset} with Bend 60 keeps the knee or elbow 60 degrees round from the plain drag's");
+            }
+        var (fl0, fm0) = Pose();
+        var (fl1, fm1) = Pose();
+        PinSolver.Reach(body, fl0, fm0, leg, lifted, legNormal);
+        PinSolver.Reach(body, fl1, fm1, leg, lifted, legNormal, side: new LimbSide());
+        check(fl0.SequenceEqual(fl1), "a drag's first frame solves as a single solve does");
+
         // A drag with a bend lands the hand and turns the elbow about the line to the aim.
         var before = Rest();
         before[UpperArmL] = before[UpperArmL] with { Rotation = Q(Vector3.UnitZ, -20) };
@@ -1044,6 +1087,55 @@ internal static class PinLayerFixture
         check(Vector3.Distance(turned[HandL].Position, near) < .001f &&
               MathF.Abs(MathF.Atan2(Vector3.Dot(Vector3.Cross(from, to), elbowAxis), Vector3.Dot(from, to)) * 180 / MathF.PI - 60) < .5f,
             "a drag with a bend lands the hand and turns the elbow about the line to the aim");
+    }
+
+    /// <summary>
+    /// Pin feet after a swing that slides the hips (XIV Bridge 540): on a clip whose hips' move goes onto n_hara the feet land where they
+    /// do on any other clip. Each foot holds the average of where the motion under the pin has it over a stretch, so the swing, which
+    /// carries the feet with the hips, moves that spot: with the swing on and off the held feet differ by the spots' difference.
+    /// </summary>
+    private static void SwungHips(Action<bool, string> check)
+    {
+        var body = Body();
+        MotionClip Still(bool onHara)
+        {
+            var made = MotionClip.FromPoses(body, 2, [.. Enumerable.Range(0, 61).Select(_ => body.Bones.Select(bone => bone.Reference).ToArray())]);
+            var clip = new MotionClip(body, made.Duration, made.Samples) { HipsOnHara = onHara };
+            clip.CopyFrom(made);
+            return clip;
+        }
+        var swing = new MotionLayer("m1", MotionLayerKind.Swing, "Swing 1", 0, 60, 0, 0, 1, PoseComponents.Rotation | PoseComponents.Position,
+            MotionInterpolation.Smooth, Bones: [PinChains.Hips], Swing: new MotionSwing(Count: 1, Tilt: 5, Slide: .05f, Delay: 0));
+        var feet = PinLayer([new(PinChains.FootL, Planted: true), new(PinChains.FootR, Planted: true)], end: 60, key: "m2");
+        MotionClip Applied(bool onHara, params MotionLayer[] layers)
+        {
+            var clip = Still(onHara);
+            MotionEvaluator.Apply(clip, layers);
+            return clip;
+        }
+        var (plain, onHara) = (Applied(false, swing, feet), Applied(true, swing, feet));
+        var same = All(plain, s => new[] { FootL, FootR, Kosi }.All(b =>
+            Vector3.Distance(MotionEvaluator.ModelSpace(body, Row(plain, s))[b].Position, MotionEvaluator.ModelSpace(body, Row(onHara, s))[b].Position) < 1e-5f));
+        check(same && onHara.Get(15, Kosi).Position == Vector3.Zero && plain.Get(15, Kosi).Position != Vector3.Zero,
+            "Pin feet after a hip slide holds the feet where it does when the slide goes onto n_hara");
+
+        var swungOnly = Applied(true, swing);
+        var unswung = Applied(true, swing with { Enabled = false }, feet);
+        var heldOn = MotionEvaluator.Planted(swungOnly, feet);
+        var heldOff = MotionEvaluator.Planted(Still(true), feet);
+        var explained = true;
+        var (held, shift) = (0, 0f);
+        foreach (var (bone, foot) in new[] { (PinChains.FootL, FootL), (PinChains.FootR, FootR) })
+            for (var s = 0; s < plain.Samples; s++)
+                if (heldOn[bone].Hold(s) == 1 && heldOff[bone].Hold(s) == 1 && heldOn[bone].Target(s) is { } on && heldOff[bone].Target(s) is { } off)
+                {
+                    held++;
+                    shift = Math.Max(shift, Vector3.Distance(on.Position, off.Position));
+                    explained &= MathF.Abs(Vector3.Distance(MotionEvaluator.ModelSpace(body, Row(onHara, s))[foot].Position,
+                        MotionEvaluator.ModelSpace(body, Row(unswung, s))[foot].Position) - Vector3.Distance(on.Position, off.Position)) < 1e-3f;
+                }
+        check(explained && held > 0 && shift > .005f,
+            $"with the swing on and off the held feet differ by as much as the spots Pin feet finds on the motion under it ({held} held samples, up to {shift * 100:0.0} cm)");
     }
 
     // A small body: both legs from the hips, the spine up to the left arm, and a tail. Each leg's knee

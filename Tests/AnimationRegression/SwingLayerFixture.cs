@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Ui.Timeline;
 
@@ -32,6 +33,57 @@ internal static class SwingLayerFixture
         Live(check);
         Animated(check);
         Shaped(check);
+        OnHara(check);
+    }
+
+    // XIV Bridge 540: on a clip from another race Live keeps n_hara's translation only, so a slide of the hips moves n_hara instead,
+    // in the document, Live and the save alike. The game's back hangs from n_hara beside the hips, and goes along.
+    private static void OnHara(Action<bool, string> check)
+    {
+        var rig = new SkeletonDescription("hara-rig", "hara-rig-fingerprint",
+        [
+            new("n_root", -1, 0, T(Vector3.Zero)), new("n_hara", 0, 0, T(Vector3.UnitY, Q(Vector3.UnitY, 30))), new(Hips, 1, 0, T(Vector3.Zero)),
+            new(Waist, 1, 0, T(new Vector3(0, .1f, 0))), new("j_asi_a_l", 2, 0, T(new Vector3(.1f, -.1f, 0))),
+        ], [], [], []);
+        var index = MotionEvaluator.Index(rig);
+        MotionClip Made(bool onHara)
+        {
+            var made = MotionClip.FromPoses(rig, 30f / TimelineDocument.Fps, [.. Enumerable.Range(0, 31).Select(_ => rig.Bones.Select(bone => bone.Reference).ToArray())]);
+            var clip = new MotionClip(rig, made.Duration, made.Samples) { HipsOnHara = onHara };
+            clip.CopyFrom(made);
+            return clip;
+        }
+        MotionTransform At(MotionClip clip, int sample, string bone) =>
+            MotionEvaluator.ModelSpace(rig, Enumerable.Range(0, clip.Bones).Select(b => clip.Get(sample, b)).ToArray())[index[bone]];
+        var slide = Swing(new MotionSwing(Count: 1, Tilt: 0, Slide: .05f, Delay: 0), Hips) with { End = 30 };
+        var move = new MotionLayer("m2", MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1, PoseComponents.Position, MotionInterpolation.Linear,
+            Keys: [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add(Hips, T(new Vector3(0, 0, .03f))))]);
+        var (plain, onHara) = (Made(false), Made(true));
+        MotionEvaluator.Apply(plain, [slide, move]);
+        MotionEvaluator.Apply(onHara, [slide, move]);
+        var hipsMove = At(plain, 7, Hips).Position - Vector3.UnitY;
+        check(hipsMove.Length() > .04f && Vector3.Distance(At(plain, 7, Waist).Position, At(Made(false), 7, Waist).Position) < 1e-5f &&
+              At(plain, 7, "n_hara").Position == Vector3.UnitY,
+            "on a clip of the character's own race a slide and a move of the hips move the hips alone");
+        check(Enumerable.Range(0, 31).All(s => onHara.Get(s, index[Hips]).Position == Vector3.Zero &&
+                  Vector3.Distance(At(onHara, s, Hips).Position, At(plain, s, Hips).Position) < 1e-5f &&
+                  Vector3.Distance(At(onHara, s, "j_asi_a_l").Position, At(plain, s, "j_asi_a_l").Position) < 1e-5f) &&
+              Vector3.Distance(At(onHara, 7, "n_hara").Position - Vector3.UnitY, hipsMove) < 1e-5f &&
+              Vector3.Distance(At(onHara, 7, Waist).Position - At(Made(true), 7, Waist).Position, hipsMove) < 1e-5f,
+            "on a clip from another race the hips' slide and move go onto n_hara: the hips and legs land where they did, and the back goes along");
+        var local = Enumerable.Range(0, rig.Bones.Length).Select(b => Made(true).Get(7, b)).ToArray();
+        var one = MotionEvaluator.ApplyAt(rig, local, [slide, move], onHara.Frame(7), 0, 30, hipsOnHara: true);
+        check(Enumerable.Range(0, rig.Bones.Length).All(b => NearValue(one[b], onHara.Get(7, b), 1e-5f)), "one pose moves n_hara as the clip does");
+        check(onHara.Clone().HipsOnHara && MotionCutter.Apply(onHara, MotionCuts.WholeOf(30), 30).HipsOnHara &&
+              AnimationBakeRules.LayerClip(rig, 1, 31, false, [], true).HipsOnHara && !Made(false).Clone().HipsOnHara,
+            "copies, cuts and the save's layer clip keep whether the hips' move goes onto n_hara");
+
+        // Live hands the motion back to the clip's own race, whose n_hara the game scales by the rests' heights: the move comes through.
+        var source = rig with { Name = "source", Fingerprint = "source-fingerprint", Bones = rig.Bones.SetItem(1, rig.Bones[1] with { Reference = T(new Vector3(0, .9f, 0), Q(Vector3.UnitY, 30)) }) };
+        var back = LiveConversion.ToSource(onHara, source, []);
+        check(Vector3.Distance(back.Get(7, 1).Position * LiveConversion.HipsRatio(rig, source), onHara.Get(7, 1).Position) < 1e-5f &&
+              back.Get(7, index[Hips]).Position == Vector3.Zero,
+            "Live keeps the hips' move on n_hara through the game's race conversion");
     }
 
     // Review: a shaped wave must still end at rest, past the clip's end and round a loop, and leave rest without a snap.

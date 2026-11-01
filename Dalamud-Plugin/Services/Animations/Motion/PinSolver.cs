@@ -65,17 +65,18 @@ internal static class PinSolver
     /// the limb's reach, then bends on the motion's own plane (<paramref name="restNormal"/> decides for a
     /// straight limb), easing short of an aim beyond its reach or so near that it would bend past <see cref="MaxBend"/>.
     /// A limb then turns whole about the line from its upper bone to the aim by <paramref name="bend"/> degrees,
-    /// times <paramref name="weight"/>. Other chains use damped CCD.
+    /// times <paramref name="weight"/>. Other chains use damped CCD. A run of solves of one limb (a drag's frames) passes one
+    /// <paramref name="side"/>: each then bends on the plane the one before left, so the limb keeps its side as the aim moves.
     /// </summary>
     public static void Reach(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, PinChain chain, Vector3 aim, Vector3 restNormal,
-        float weight = 1, float bend = 0)
+        float weight = 1, float bend = 0, LimbSide? side = null)
     {
         if (!Finite(aim))
             return;
         switch (chain.Shape)
         {
             case PinChainShape.Limb:
-                ReachLimb(skeleton, local, model, chain, aim, restNormal, weight, float.IsFinite(bend) ? bend : 0);
+                ReachLimb(skeleton, local, model, chain, aim, restNormal, weight, float.IsFinite(bend) ? bend : 0, side);
                 break;
             case PinChainShape.Chain:
                 ReachChain(skeleton, local, model, chain.Bones.AsSpan(), chain.End, aim);
@@ -167,7 +168,7 @@ internal static class PinSolver
     }
 
     private static void ReachLimb(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, PinChain chain, Vector3 aim, Vector3 restNormal,
-        float weight, float bend)
+        float weight, float bend, LimbSide? side)
     {
         var l1 = Vector3.Distance(model[chain.Mid].Position, model[chain.Root].Position);
         var l2 = Vector3.Distance(model[chain.End].Position, model[chain.Mid].Position);
@@ -228,17 +229,33 @@ internal static class PinSolver
             }
             return Bend(skeleton, local, model, chain, a, direction, target, plane, hinge, bent, roll, bendNormal);
         }
-        Try(normal, 0, false);
-        if (Backward(model, chain, bendNormal, l1, l2))
+        if (side is { Normal: var carried } && carried != Vector3.Zero)
         {
-            Try(-normal, 0, true);
+            // A run of solves bends on the plane the one before left. A pick made afresh each time swaps the mid joint over to the
+            // limb's other side in one solve where the aim passes the plane's normal, and the mirrored plane is that swap: only the roll.
+            Try(carried, 0, false);
+            if (Backward(model, chain, bendNormal, l1, l2))
+                Try(carried, keep, true);
+        }
+        else
+        {
+            Try(normal, 0, false);
             if (Backward(model, chain, bendNormal, l1, l2))
             {
-                var mirrored = Try(-normal, keep, true);
-                if (Try(normal, keep, true) > mirrored)
-                    Try(-normal, keep, true);
+                Try(-normal, 0, true);
+                if (Backward(model, chain, bendNormal, l1, l2))
+                {
+                    var mirrored = Try(-normal, keep, true);
+                    if (Try(normal, keep, true) > mirrored)
+                        Try(-normal, keep, true);
+                }
             }
         }
+        // Kept before the bend angle turns it, so a run's bend stays the angle asked rather than building up; a limb about straight
+        // keeps the plane it had.
+        var solved = Vector3.Cross(model[chain.Mid].Position - a, model[chain.End].Position - model[chain.Mid].Position);
+        if (side != null && solved.Length() > SteadyBend * l1 * l2)
+            side.Normal = Vector3.Normalize(solved);
         // The bend angle turns the whole limb about the line to the aim, the end staying on it; the mid joint bends as before.
         var turn = bend * Math.Clamp(weight, 0, 1);
         if (MathF.Abs(turn) > 1e-4f)
@@ -550,4 +567,14 @@ internal static class PinSolver
     }
 
     private static bool Finite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+}
+
+/// <summary>
+/// The side a limb bent to, carried from one <see cref="PinSolver.Reach"/> to the next of a run (a drag's frames, each solved
+/// from the pose the drag began on), so the knee or elbow moves round with the aim rather than swapping sides.
+/// </summary>
+internal sealed class LimbSide
+{
+    /// <summary>The bend plane's unit normal the last solve left, in model space, before its bend angle turned it; zero before the first.</summary>
+    public Vector3 Normal { get; set; }
 }

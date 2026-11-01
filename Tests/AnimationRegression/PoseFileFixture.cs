@@ -128,6 +128,23 @@ internal static class PoseFileFixture
         check(PoseImports.FromModel(body, File(body, reached), Rest(body)).Moved.SetEquals(["n_hara", "j_te_l"]),
             "a moved body bone counts as moved, a tail node elsewhere doesn't");
 
+        // The body saved half round with the hips turned back under it: it faces with the hips again, nothing else moves.
+        var flipped = File(body, posed);
+        flipped["n_hara"] = flipped["n_hara"] with { Rotation = Quaternion.Normalize(Q(Vector3.UnitY, 171) * flipped["n_hara"].Rotation) };
+        var facing = PoseImports.FromModel(body, flipped, Rest(body));
+        var back = MotionEvaluator.ModelSpace(body, [.. body.Bones.Select(bone => facing.Local[bone.Name])]);
+        check(Degrees(facing.Local["n_hara"].Rotation, posed[1].Rotation) < 1e-2f &&
+              body.Bones.Select((bone, i) => (bone.Name, i)).Skip(2).All(pair => Degrees(back[pair.i].Rotation, flipped[pair.Name].Rotation) < 1e-2f &&
+                  Near(back[pair.i].Position, flipped[pair.Name].Position)),
+            "a body bone saved facing away from its hips faces with them, and the bones below stay where the file puts them");
+        var whole = File(body, posed).ToDictionary(pair => pair.Key, pair => pair.Key == "n_root" ? pair.Value : pair.Value with
+        {
+            Position = Vector3.Transform(pair.Value.Position, Q(Vector3.UnitY, 171)),
+            Rotation = Quaternion.Normalize(Q(Vector3.UnitY, 171) * pair.Value.Rotation),
+        });
+        check(Degrees(PoseImports.FromModel(body, whole, Rest(body)).Local["n_hara"].Rotation, Q(Vector3.UnitY, 171) * posed[1].Rotation) < 1e-2f,
+            "a pose turned round as a whole keeps its turn on the body");
+
         // Saved on a body a quarter larger: every bone sits elsewhere, so the pose's positions don't fit.
         var larger = Body(1.25f);
         check(PoseImports.FromModel(body, File(larger, Posed(larger)), Rest(body)).OtherProportions &&

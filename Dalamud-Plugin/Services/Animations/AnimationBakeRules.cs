@@ -79,8 +79,8 @@ internal static class AnimationBakeRules
     /// the bones the clip has tracks for (<paramref name="tracks"/>, on that skeleton) as Live's decoded
     /// clip does, so symmetry layers leave the same trackless bones to physics in both.
     /// </summary>
-    public static MotionClip LayerClip(SkeletonDescription skeleton, float duration, int frames, bool loops, IEnumerable<short> tracks) =>
-        new(skeleton, duration, frames) { Loops = loops, SourceTracks = [.. tracks] };
+    public static MotionClip LayerClip(SkeletonDescription skeleton, float duration, int frames, bool loops, IEnumerable<short> tracks, bool hipsOnHara = false) =>
+        new(skeleton, duration, frames) { Loops = loops, SourceTracks = [.. tracks], HipsOnHara = hipsOnHara };
 
     /// <summary>
     /// Whether the bake retargets onto a standard skeleton: a skeleton repair, or a timeline save

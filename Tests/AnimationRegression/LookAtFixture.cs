@@ -219,7 +219,7 @@ internal static class LookAtFixture
         var rest = Rest();
         var target = HeadAt(rest) + Way(40) * 20;
         var half = MotionEvaluator.ApplyAt(Rig(), rest, [Look(new MotionLook(), Spot(0, target)) with { Amount = .5f }], 10);
-        var faded = MotionEvaluator.ApplyAt(Rig(), rest, [Look(new MotionLook(), Spot(0, target)) with { Weights = [new MotionWeight(0, .25f)] }], 10);
+        var faded = MotionEvaluator.ApplyAt(Rig(), rest, [Look(new MotionLook(), Spot(0, target)) with { Weights = [new MotionWeight(0, .25f), new MotionWeight(60, .25f)] }], 10);
         check(MathF.Abs(Turned(rest, half) - 20) < .3f && MathF.Abs(Turned(rest, faded) - 10) < .3f,
             $"a look at half strength turns half way, and its weight scales it too ({Turned(rest, half):0.##}, {Turned(rest, faded):0.##})");
     }

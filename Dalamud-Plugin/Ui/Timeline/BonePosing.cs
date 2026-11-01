@@ -356,8 +356,11 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     /// </summary>
     public sealed class BoneFrames(SkeletonDescription skeleton, Dictionary<string, int> index, MotionTransform[] before,
         MotionTransform[] beforeModel, MotionTransform[] through, MotionTransform[] throughModel, MotionTransform[] model, bool offset,
-        MotionLayer? pins = null)
+        MotionLayer? pins = null, bool hipsOnHara = false)
     {
+        /// <summary>Whether the layers' moves of the hips go onto n_hara, which carries the back with them (<see cref="MotionClip.HipsOnHara"/>).</summary>
+        public bool HipsOnHara => hipsOnHara;
+
         /// <summary>Every bone's local transform as the layers before this one leave it.</summary>
         public MotionTransform[] Before => before;
 
@@ -416,11 +419,11 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             // the bake, so the panels and the gizmo key the bone where Live has it.
             before = TakesWholeClip(earlier) && OutputClip(loaded) is { } output
                 ? BakedBefore(output, earlier).Pose(frame)
-                : MotionEvaluator.ApplyAt(skeleton, own.Local, earlier, frame, loop, end, clip.SourceTracks);
+                : MotionEvaluator.ApplyAt(skeleton, own.Local, earlier, frame, loop, end, clip.SourceTracks, clip.HipsOnHara);
             // Alone is enough: the layer posed here is never a symmetry, the one kind that reads the layers before it.
-            through = MotionEvaluator.ApplyAt(skeleton, before, [layer], frame, loop, end, clip.SourceTracks);
+            through = MotionEvaluator.ApplyAt(skeleton, before, [layer], frame, loop, end, clip.SourceTracks, clip.HipsOnHara);
             // shortcut: after leaves out whole-clip layers, so Space's parent turn may be off by them; bake it if a second bake per frame is cheap.
-            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end, clip.SourceTracks);
+            after = MotionEvaluator.ApplyAt(skeleton, own.Local, doc.Motion, frame, loop, end, clip.SourceTracks, clip.HipsOnHara);
         }
         catch (InvalidDataException)
         {
@@ -429,7 +432,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         }
         var frames = new BoneFrames(skeleton, BoneTree(skeleton).Index, before, MotionEvaluator.ModelSpace(skeleton, before), through,
             MotionEvaluator.ModelSpace(skeleton, through), MotionEvaluator.ModelSpace(skeleton, after), layer.Kind == MotionLayerKind.Offset,
-            layer.Kind == MotionLayerKind.Pin ? layer : null);
+            layer.Kind == MotionLayerKind.Pin ? layer : null, clip.HipsOnHara);
         boneFrames = (doc, layer.Key, frame, clip, frames);
         return frames;
     }
@@ -496,7 +499,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             string? problem = null;
             try
             {
-                baked = new MotionClip(clip.Skeleton, clip.Duration, clip.Samples) { Loops = clip.Loops, SourceTracks = clip.SourceTracks };
+                baked = new MotionClip(clip.Skeleton, clip.Duration, clip.Samples) { Loops = clip.Loops, SourceTracks = clip.SourceTracks, HipsOnHara = clip.HipsOnHara };
                 baked.CopyFrom(clip);
                 MotionEvaluator.Apply(baked, before);
             }
@@ -641,7 +644,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         var own = clip.Pose(frame);
         try
         {
-            return MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, frame, loop, end, clip.SourceTracks);
+            return MotionEvaluator.ApplyAt(clip.Skeleton, own, doc.Motion, frame, loop, end, clip.SourceTracks, clip.HipsOnHara);
         }
         catch (InvalidDataException)
         {

@@ -47,7 +47,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private string? rebuildFailed;
     // The rebuild's line naming the other races that play the file, for the clip path and race it was made for.
     private (string Path, string Model, string? Note)? borrowNote;
-    // Whether the clip's file can be written over in place.
+    // Whether the edit can be written over in place (see CanReplace).
     private bool canReplace;
     // The widths last frame of Skeleton with its choice and of Save with what follows it, to fit the mod name; 0 before drawn.
     private float skeletonWidth;
@@ -75,7 +75,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// </summary>
     public void Loaded(AnimationTimelineSource loaded, bool sameClip, bool editAgain)
     {
-        canReplace = AnimationResources.CanReplace(loaded.Resource);
+        canReplace = CanReplace(loaded, loaded.Document);
         if (!sameClip)
         {
             modName = TimelineWindowViews.DefaultModName(AnimationPresentation.DefaultModName(loaded.Capture));
@@ -139,9 +139,11 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var skeleton = !loaded.Standalone && doc.Face == null;
         var repair = skeleton ? RepairTarget : null;
         var inPlace = destination == AnimationDestination.InPlace;
+        // A face session writes the face's file, not the expression's timeline it was opened from, unless that changes too.
+        canReplace = CanReplace(session.Fresh(loaded), doc);
         var faceInPlace = inPlace ? FaceInPlaceProblem(loaded, doc) : null;
         var problem = faceInPlace ?? TimelineWindowViews.SaveProblem(loaded.Document != null, loaded.ReadOnlyReason,
-                          inPlace, canReplace || AnimationEditService.FaceChanged(doc), doc.LengthChanged, clip.Resolution,
+                          inPlace, canReplace, doc.LengthChanged, clip.Resolution,
                           AnimationBakeRules.ChangesMotion(doc, repair))
                       ?? (loaded.MotionTarget.Standalone ? null : TimelineWindowViews.BonesProblem(doc, clip, session.EditingSkeleton(loaded), repair, session.Rebuild?.Model));
         var (warning, colour) = problem != null ? (problem, Theme.Warning)
@@ -280,13 +282,29 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private static string DestinationName(AnimationDestination place) => place == AnimationDestination.NewMod ? "New mod" : "In place";
 
     /// <summary>
-    /// Why a face's save can't go in place: the face's file, and an expression's timeline when its events changed too, must
+    /// Why a face's save can't go in place: the face's file, and an expression's timeline when it changes too (<see cref="TimelineChanged"/>), must
     /// come from a mod (see <see cref="AnimationEditService.FaceInPlaceProblem"/>). Null when it can, and when no face is written.
     /// </summary>
     private string? FaceInPlaceProblem(AnimationTimelineSource loaded, TimelineDocument doc) =>
-        AnimationEditService.FaceChanged(doc)
-            ? AnimationEditService.FaceInPlaceProblem(session.Fresh(loaded), loaded.Standalone && loaded.Document is { } opened && doc.Events != opened.Events)
-            : null;
+        AnimationEditService.FaceChanged(doc) ? AnimationEditService.FaceInPlaceProblem(session.Fresh(loaded), TimelineChanged(loaded, doc)) : null;
+
+    /// <summary>
+    /// Whether saving <paramref name="doc"/> can go in place: a changed face needs the face's file, and an expression's own
+    /// timeline too when that changes as well (<see cref="AnimationEditService.FaceInPlaceProblem"/>); anything else needs
+    /// the file it edits.
+    /// </summary>
+    internal static bool CanReplace(AnimationTimelineSource loaded, TimelineDocument? doc) =>
+        doc != null && AnimationEditService.FaceChanged(doc)
+            ? AnimationEditService.FaceInPlaceProblem(loaded, TimelineChanged(loaded, doc)) == null
+            : AnimationResources.CanReplace(loaded.Resource);
+
+    /// <summary>
+    /// Whether saving <paramref name="doc"/>'s face writes its expression's own timeline as well: its events or face library
+    /// changed, or the face's length, which retimes its face events.
+    /// </summary>
+    internal static bool TimelineChanged(AnimationTimelineSource loaded, TimelineDocument doc) =>
+        loaded.Face != null && loaded.Document is { } opened &&
+        (doc.Events != opened.Events || doc.FacePack != opened.FacePack || doc.Face is { LengthChanged: true });
 
     /// <summary> Why Save is unavailable now, shown on the button; null when it can run. </summary>
     private string? SaveMissing(TimelineEditor current, string? problem)

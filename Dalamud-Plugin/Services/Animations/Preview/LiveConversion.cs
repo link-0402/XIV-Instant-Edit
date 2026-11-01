@@ -27,6 +27,7 @@ internal static class LiveConversion
     /// rotations and scales copied by bone name, <c>n_hara</c>'s translation divided by <see cref="HipsRatio"/>, every other
     /// translation at the source's rest. Bones <paramref name="rebuilt"/> lacks sit at the source's rest. A clip repaired onto a
     /// standard of its own race isn't converted by the game (<paramref name="sameRace"/>): every translation is copied too.
+    /// The layers' moves of the hips are on <c>n_hara</c> already (<see cref="MotionClip.HipsOnHara"/>), so they come through.
     /// </summary>
     public static MotionClip ToSource(MotionClip rebuilt, SkeletonDescription source, ImmutableArray<short> playedTracks, bool sameRace = false)
     {

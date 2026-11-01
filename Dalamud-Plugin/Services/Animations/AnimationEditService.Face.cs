@@ -50,7 +50,7 @@ internal sealed partial class AnimationEditService
     {
         try
         {
-            var face = await LoadTimelineAsync(capture with { ExpressionTimeline = null }, false, token);
+            var face = await LoadTimelineAsync(ExpressionFaceCapture(capture), false, token);
             if (face.Document == null)
                 return (null, face.ReadOnlyReason);
             if (FaceEntryProblem(new AnimationPap(face.Pap), face.Clip.Name) is { } problem)
@@ -63,6 +63,14 @@ internal sealed partial class AnimationEditService
             return (null, e.Message);
         }
     }
+
+    /// <summary>
+    /// The capture an expression's face is read with: the expression's clip without its timeline, played once. The game's
+    /// expression rows loop, but a face plays from its first frame to its last (Keep's loop starts it again), as a face
+    /// opened on its own does: its bone layers hold their last keys at its end instead of wrapping round to the first.
+    /// </summary>
+    internal static AnimationCapture ExpressionFaceCapture(AnimationCapture capture) =>
+        capture with { ExpressionTimeline = null, Clip = capture.Clip with { IsLoop = false } };
 
     /// <summary>Where <paramref name="motion"/> starts on an expression's timeline: its first face event, else frame 0.</summary>
     internal static int FaceAnchor(TimelineDocument document, string motion) =>
@@ -125,8 +133,8 @@ internal sealed partial class AnimationEditService
 
     /// <summary>
     /// Writes <paramref name="session"/>'s face into <paramref name="pap"/>, the face's file as the collection gives it: its
-    /// layers, length and left-out bones baked on the face skeleton like a clip's, the face's own embedded timeline byte
-    /// for byte, and every other face in the file as it was.
+    /// layers, length and left-out bones baked on the face skeleton like a clip's, the face's own embedded timeline as it
+    /// was (at the face's new length when that changed, see <see cref="FaceTimeline"/>), and every other face in the file as it was.
     /// </summary>
     private async Task<AnimationTimelineBuild> BuildFaceAsync(AnimationBakeRequest request, AnimationTimelineSource face, byte[] pap,
         TimelineDocument session, string workDirectory, CancellationToken token)
@@ -146,8 +154,9 @@ internal sealed partial class AnimationEditService
             motion = await baker.BakeAsync(face.BaseMotion ?? pap, skeleton, face.MotionClip, request,
                 workDirectory, message => Status = message, token, () => CheckIdentityOnFramework(request.Capture, true));
         }
-        var result = new AnimationPap(motion).WithTimeline(face.EntryIndex, face.Tmb);
-        CheckTimelineOutput(pap, result, face.EntryIndex, face.Tmb, !baked && face.BaseMotion == null);
+        var timeline = session.Face is { LengthChanged: true } edited ? FaceTimeline(face.Tmb, edited.SourceFrames, edited.Frames) : face.Tmb;
+        var result = new AnimationPap(motion).WithTimeline(face.EntryIndex, timeline);
+        CheckTimelineOutput(pap, result, face.EntryIndex, timeline, !baked && face.BaseMotion == null);
         var fingerprint = face.MotionClip.BindingFingerprint;
         if (baked || face.BaseMotion != null)
         {
@@ -158,6 +167,28 @@ internal sealed partial class AnimationEditService
             fingerprint = built.GetValueOrDefault(clip.BindingIndex, "");
         }
         return new AnimationTimelineBuild(face.Resource.GamePath, result, fingerprint);
+    }
+
+    /// <summary>
+    /// A face entry's own timeline (<paramref name="tmb"/>) for a face loaded <paramref name="sourceFrames"/> long and now
+    /// <paramref name="frames"/>: its length, and the motion entry (C009) that lasted the whole face, become the new length.
+    /// Mods' moving faces say their length there (a vanilla pose says 1 frame); a moving face saved with its timeline still
+    /// at 1 frame stayed at its start in game (2026-10-31). Everything else stays; the timeline itself when nothing changes.
+    /// </summary>
+    internal static byte[] FaceTimeline(byte[] tmb, int sourceFrames, int frames)
+    {
+        var file = TmbFile.Parse(tmb);
+        var loaded = file.Length;
+        foreach (var entry in file.Entries.Where(e => e.Magic == "C009" && e.Int32(12) != frames &&
+                     (TimelineDocument.SameLength(e.Int32(12), loaded) || TimelineDocument.SameLength(e.Int32(12), sourceFrames))).ToArray())
+            file.SetInt32(entry.Id, 12, frames);
+        if (loaded != frames)
+            file.SetLength(frames);
+        if (!file.Edited)
+            return tmb;
+        var output = file.ToArray(out _);
+        _ = TmbFile.Parse(output);
+        return output;
     }
 
     /// <summary>

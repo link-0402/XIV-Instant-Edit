@@ -56,6 +56,10 @@ internal static class PoseImports
             else
                 models[b] = parent < 0 ? fill[b] : MotionEvaluator.Compose(models[parent], fill[b]);
         }
+        if (FaceWithHips(skeleton, models, given))
+            for (var b = 0; b < count; b++)
+                if (!given[b] && skeleton.Bones[b].Parent is >= 0 and var parent)
+                    models[b] = MotionEvaluator.Compose(models[parent], fill[b]);
         var local = ImmutableDictionary.CreateBuilder<string, MotionTransform>(StringComparer.Ordinal);
         var moved = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
         int measured = 0, elsewhere = 0;
@@ -79,6 +83,34 @@ internal static class PoseImports
         var names = MotionEvaluator.Index(skeleton);
         return new PoseImport(local.ToImmutable(), moved.ToImmutable(), Other(measured, elsewhere), model.Keys.Count(name => !names.ContainsKey(name)));
     }
+
+    /// <summary>
+    /// Turns the body bone (n_hara) about the up axis to face where the hips face, when a pose file has it facing more
+    /// than a quarter turn away from them (some poses keep the body half round with the hips turned back under it).
+    /// The given bones keep their places in model space, so the pose looks the same, but its locals then blend with
+    /// a clip's without a turn: kept, the body's half turn swings the whole character round in every cross-fade.
+    /// </summary>
+    private static bool FaceWithHips(SkeletonDescription skeleton, MotionTransform[] models, bool[] given)
+    {
+        var index = MotionEvaluator.Index(skeleton);
+        if (!index.TryGetValue(MotionHold.Body, out var body) || !given[body])
+            return false;
+        int[] hips = [.. HipBones.Where(index.ContainsKey).Select(name => index[name]).Where(b => given[b] && skeleton.Bones[b].Parent == body)];
+        if (hips.Length == 0)
+            return false;
+        var rest = MotionEvaluator.ModelSpace(skeleton, [.. skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference))]);
+        Quaternion Facing(int b) =>
+            MotionFixes.Twist(Quaternion.Normalize(models[b].Rotation * Quaternion.Inverse(rest[b].Rotation)), Vector3.UnitY);
+        var hipsFacing = Facing(hips[0]);
+        var turn = Quaternion.Normalize(hipsFacing * Quaternion.Inverse(Facing(body)));
+        if (MathF.Abs(turn.W) >= MathF.Cos(MathF.PI / 4))
+            return false;
+        models[body] = models[body] with { Rotation = Quaternion.Normalize(turn * models[body].Rotation) };
+        return true;
+    }
+
+    // The bones whose turn about the up axis, in character space, is where the body faces.
+    private static readonly string[] HipBones = ["j_kosi", "j_sebo_a"];
 
     /// <summary>
     /// Local transforms of another skeleton's bones (a frame of another clip, the GPose character's live

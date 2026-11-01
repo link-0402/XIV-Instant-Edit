@@ -618,7 +618,7 @@ internal static class MotionFixes
     };
 
     /// <summary>The part of <paramref name="q"/> that turns about <paramref name="axis"/>; none when q only swings the axis half round.</summary>
-    private static Quaternion Twist(Quaternion q, Vector3 axis)
+    internal static Quaternion Twist(Quaternion q, Vector3 axis)
     {
         var along = Vector3.Dot(new Vector3(q.X, q.Y, q.Z), axis) * axis;
         var twist = new Quaternion(along, q.W);
