@@ -36,6 +36,7 @@ internal sealed class ModWindow : Window
 
     private readonly ResourceActions _actions;
     private readonly HandoffActions _handoffs;
+    private readonly PasteActions _paste;
     private readonly ContentsPane _contents;
     private readonly ResourceTreeView _tree;
     private readonly OverviewView _overview;
@@ -85,8 +86,9 @@ internal sealed class ModWindow : Window
         var textures = new TextureSlotEditor(_session, thumbnails);
         _actions   = new ResourceActions(host, _session);
         _handoffs  = new HandoffActions(editor, $"mod:{_windowId}");
-        _contents  = new ContentsPane(editor, _session, thumbnails, _actions);
-        _tree      = new ResourceTreeView(editor, _session, thumbnails, textures, _actions, _handoffs);
+        _paste     = new PasteActions(editor, _session);
+        _contents  = new ContentsPane(editor, _session, thumbnails, _actions, _paste);
+        _tree      = new ResourceTreeView(editor, _session, thumbnails, textures, _actions, _handoffs, _paste);
         _overview  = new OverviewView(editor, _session, thumbnails, _actions);
         _browse    = new ModBrowseView(host, _session);
         _status    = new SyncStatus(host, _session, _sync);
@@ -127,6 +129,7 @@ internal sealed class ModWindow : Window
         DrawStatusBar();
 
         _actions.DrawPopups();
+        _paste.DrawPopups();
         _handoffs.DrawDialogs();
         IssueList.DrawPopup(_session.Issues, _session.Focus);
     }

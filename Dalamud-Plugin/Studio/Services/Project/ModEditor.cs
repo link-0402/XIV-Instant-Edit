@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using InstantEdit.Studio.Models;
@@ -28,6 +29,9 @@ internal sealed class ModEditor : IDisposable
 
     private Task? _copying;
     private string _copyFolder = string.Empty;
+
+    private Task<IReadOnlyList<string>>? _pasting;
+    private PastePlan? _pastePlan;
 
     public StudioHost Host { get; }
     public ModSession Session { get; }
@@ -91,7 +95,7 @@ internal sealed class ModEditor : IDisposable
     public bool IsOpen => Session.Project != null;
 
     /// <summary>Closed, with nothing left to write into the mod (a repair or clean-up included): the host can let go of it.</summary>
-    public bool Finished => !IsOpen && !Sync.Busy && _copying == null && !Check.Busy;
+    public bool Finished => !IsOpen && !Sync.Busy && _copying == null && _pasting == null && !Check.Busy;
 
     /// <summary>The mod's name, or its folder's when it has none.</summary>
     public string Name => string.IsNullOrWhiteSpace(Project.Meta.Name) ? Project.FolderName : Project.Meta.Name;
@@ -107,6 +111,7 @@ internal sealed class ModEditor : IDisposable
         Settings.Update(open);
         FollowFolder();
         FinishCopy();
+        FinishPaste();
 
         // meta.json written from here (the mod's name or description edited): let Penumbra read it again.
         if (open != null && open.TakeMetaWritten() && Host.PenumbraIpc.IsAvailable)
@@ -185,6 +190,20 @@ internal sealed class ModEditor : IDisposable
         // A repair or clean-up under way is given a moment to finish what it changed (and record it in the backups).
         Check.Cancel();
         Check.WaitForOperation(TimeSpan.FromSeconds(5));
+        // A paste's files that meta.json never got to point at are taken out again.
+        if (_pasting != null)
+        {
+            try
+            {
+                _pasting.Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (AggregateException)
+            {
+                // It deleted what it wrote.
+            }
+            if (_pasting.IsCompletedSuccessfully)
+                ModPaste.Delete(_pasting.Result);
+        }
         Sync.Dispose();
         Graphs.Dispose();
         _watcher.Dispose();
@@ -319,6 +338,64 @@ internal sealed class ModEditor : IDisposable
             }
             throw;
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Copying out of the mod, pasting into it
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Whether files, options or groups can be copied out of the mod now (every change written into it), and if not, why.</summary>
+    public bool CanCopy(out string reason)
+    {
+        reason = !IsOpen     ? "The mod is closed."
+               : Sync.Busy   ? "Wait a moment, until every change is written into the mod."
+               : Check.Busy  ? "Wait until the repair or clean-up is done."
+               : string.Empty;
+        return reason.Length == 0;
+    }
+
+    /// <summary>Whether a copy can be pasted into the mod now, and if not, why.</summary>
+    public bool CanPaste(out string reason)
+    {
+        reason = !IsOpen          ? "The mod is closed."
+               : _pasting != null ? "A paste is under way."
+               : Sync.Busy        ? "Wait a moment, until every change is written into the mod."
+               : Check.Busy       ? "Wait until the repair or clean-up is done."
+               : string.Empty;
+        return reason.Length == 0;
+    }
+
+    /// <summary>
+    /// Pastes <paramref name="plan"/> (see <see cref="ModPaste.Plan"/>): its files are copied into the
+    /// mod folder on a worker, then meta.json is pointed at them in one write.
+    /// </summary>
+    public void Paste(PastePlan plan)
+    {
+        if (!CanPaste(out var reason))
+        {
+            Session.Notify(reason, Severity.Warning);
+            return;
+        }
+        var folder = Project.FolderPath;
+        _pastePlan = plan;
+        _pasting = Task.Run(() => ModPaste.Write(folder, plan));
+        Session.Notify(plan.Files.Count > 0 ? $"Copying {plan.Files.Count} file(s) into the mod." : $"Pasting {plan.Clip.Name}.", Severity.Info);
+    }
+
+    private void FinishPaste()
+    {
+        if (_pasting is not { IsCompleted: true } pasting || _pastePlan is not { } plan)
+            return;
+
+        _pasting = null;
+        _pastePlan = null;
+        if (!pasting.IsCompletedSuccessfully)
+        {
+            Session.Notify($"Nothing was pasted: {pasting.Exception?.GetBaseException().Message}", Severity.Error);
+            return;
+        }
+        // Closed meanwhile, or meta.json can't take it: the copied files are deleted again.
+        Session.ApplyPaste(plan, pasting.Result);
     }
 
     /// <summary>A folder name next to an existing mod for a copy of it ("Name (copy)", "Name (copy 2)", and so on).</summary>

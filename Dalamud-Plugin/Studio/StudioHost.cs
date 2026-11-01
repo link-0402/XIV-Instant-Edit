@@ -71,6 +71,9 @@ internal sealed class StudioHost : IDisposable
 
     public TextureThumbnailCache Thumbnails { get; }
 
+    /// <summary>What was last copied in a mod window (files, an option or a group), for pasting into any open mod.</summary>
+    public ModClip? Clipboard { get; set; }
+
     /// <summary>Instant Edit's hand-offs (Blender, the texture editor) for the files of an open mod; set by the main window.</summary>
     public IModHandoff? Handoff { get; set; }
 

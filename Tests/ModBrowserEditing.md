@@ -35,6 +35,13 @@ interactive checks have not been performed by the implementation agent.
 - Rename the mod's folder in Penumbra: its window follows. Delete it in Penumbra:
   its window closes.
 - Duplicate the mod from the window's menu: the copy opens in a window of its own.
+- (pending) Copy and paste between mods: open a ring mod with texture toggle groups and a
+  leg mod a mashup made from it. Right-click a toggle group of the ring mod, Copy the
+  group, then right-click the leg mod's tile and paste it with Move to on the leg model.
+  The dialog says the files land on paths the leg mod uses; the group appears with its
+  options, picking one changes the leg item's texture in game, and the ring mod is
+  unchanged. A group of Atr toggles can't be copied. Paste a file into an option and an
+  option into a group too.
 
 ## Instant Edit hand-offs
 

@@ -26,6 +26,7 @@ internal static class ChangelogCatalog
             Highlight("Mod Browser: every Penumbra mod is a tile now. Click one to open it in a window of its own."),
             Entry("See what a mod is made of: its options, models with their materials and textures, animations, effects and sounds.", 1),
             Entry("Drop your own files on anything to replace it, add files, and make groups and options. Changes go straight into the mod.", 1),
+            Entry("Copy files, options and groups from one mod and paste them into another. A pasted group can move to the new mod's item.", 1),
             Entry("Edit a model in Blender, a texture in your image editor or send an animation to Blender from the mod window. Exports go back into the option you picked it from.", 1),
             Entry("Build a new mod from gear ported from another game, Sims 4 packages included, and build it into Penumbra.", 1),
             Entry("Import package opens Sims 4 and Unity packages and folders of loose files. Drag their models and textures onto your mod from the list.", 1),

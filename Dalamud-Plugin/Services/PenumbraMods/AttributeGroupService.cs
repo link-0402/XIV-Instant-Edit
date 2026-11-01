@@ -20,7 +20,7 @@ internal sealed class AttributeGroupService
 
     private sealed record AttributeGroupWrite(string Path, JsonObject Document);
 
-    private const string AttributeGroupDescriptionPrefix = "Managed by XIV Instant Edit attribute group v1: ";
+    internal const string AttributeGroupDescriptionPrefix ="Managed by XIV Instant Edit attribute group v1: ";
 
     private static readonly string[] AttributeGroupFamilies =
         ["mv", "tv", "gv", "dv", "sv", "ev", "nv", "wv", "rv"];

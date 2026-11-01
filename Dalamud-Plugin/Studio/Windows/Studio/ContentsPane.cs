@@ -22,6 +22,7 @@ namespace InstantEdit.Studio.Windows.Studio;
 /// </summary>
 internal sealed class ContentsPane
 {
+    private const string ModMenuId    = "##contentsmodmenu";
     private const string GroupMenuId  = "##contentsgroupmenu";
     private const string OptionMenuId = "##contentsoptionmenu";
 
@@ -30,6 +31,7 @@ internal sealed class ContentsPane
     private readonly ModSession _session;
     private readonly TextureThumbnailCache _thumbs;
     private readonly ResourceActions _actions;
+    private readonly PasteActions _paste;
 
     private string _filter = string.Empty;
     private readonly HashSet<ResourceSection> _folded = new();
@@ -55,13 +57,14 @@ internal sealed class ContentsPane
     private ModGroupView? _menuGroup;
     private OptionRef _menuOption;
 
-    public ContentsPane(ModEditor editor, ModSession session, TextureThumbnailCache thumbs, ResourceActions actions)
+    public ContentsPane(ModEditor editor, ModSession session, TextureThumbnailCache thumbs, ResourceActions actions, PasteActions paste)
     {
         _host  = editor.Host;
         _editor = editor;
         _session = session;
         _thumbs  = thumbs;
         _actions = actions;
+        _paste   = paste;
     }
 
     public void Draw()
@@ -202,6 +205,8 @@ internal sealed class ContentsPane
 
         if (result.Clicked)
             _session.Focus(new Target(TargetKind.Project));
+        if (result.RightClicked)
+            _openMenu = ModMenuId;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -580,7 +585,6 @@ internal sealed class ContentsPane
         var title = option.IsDefault ? "Default files" : meta.OptionName(option);
         bool isSelected = selectedGroup == null && selected == option;
         var worst = WorstIn(new[] { option });
-        bool canName = !option.IsDefault && group is { Type: ModGroupType.Single or ModGroupType.Multi };
 
         var result = Tile.Draw(new TileSpec
         {
@@ -603,7 +607,7 @@ internal sealed class ContentsPane
 
         if (result.Clicked)
             _session.FocusOption(option);
-        if (result.RightClicked && canName)
+        if (result.RightClicked)
         {
             _menuOption = option;
             _menuGroup = group;
@@ -640,6 +644,14 @@ internal sealed class ContentsPane
             _openMenu = null;
         }
 
+        if (ImGui.BeginPopup(ModMenuId))
+        {
+            ImGui.TextColored(Theme.Muted, _editor.Name);
+            ImGui.Separator();
+            _paste.PasteItem(PasteTarget.NewGroup);
+            ImGui.EndPopup();
+        }
+
         if (ImGui.BeginPopup(GroupMenuId))
         {
             if (_menuGroup is { } group)
@@ -656,6 +668,10 @@ internal sealed class ContentsPane
                 if (ImGui.MenuItem("Rename"))
                     _actions.BeginRenameGroup(group.Id);
                 ImGui.Separator();
+                _paste.CopyGroupItem(group);
+                // A copied group goes into the mod beside this one; anything else into this group.
+                _paste.PasteItem(_paste.Clip?.Kind == ModClipKind.Group ? PasteTarget.NewGroup : PasteTarget.NewOptionIn(group.Id));
+                ImGui.Separator();
                 ImGui.PushStyleColor(ImGuiCol.Text, Theme.Bad);
                 if (ImGui.MenuItem("Remove the group"))
                     _actions.AskRemoveGroup(group.Id);
@@ -667,17 +683,24 @@ internal sealed class ContentsPane
         if (ImGui.BeginPopup(OptionMenuId))
         {
             var option = _menuOption;
+            bool canName = !option.IsDefault && meta.FindGroupView(option.Group) is { Type: ModGroupType.Single or ModGroupType.Multi };
             ImGui.TextColored(Theme.Muted, meta.OptionLabel(option));
             ImGui.Separator();
             if (ImGui.MenuItem("Add files to it"))
                 _actions.BrowseAdd(_session.Graph.OptionRoot(option), option);
-            if (ImGui.MenuItem("Rename"))
+            if (canName && ImGui.MenuItem("Rename"))
                 _actions.BeginRenameOption(option);
             ImGui.Separator();
-            ImGui.PushStyleColor(ImGuiCol.Text, Theme.Bad);
-            if (ImGui.MenuItem("Remove the option"))
-                _actions.AskRemoveOption(option);
-            ImGui.PopStyleColor();
+            _paste.CopyOptionItem(option);
+            _paste.PasteItem(PasteTarget.Into(option));
+            if (canName)
+            {
+                ImGui.Separator();
+                ImGui.PushStyleColor(ImGuiCol.Text, Theme.Bad);
+                if (ImGui.MenuItem("Remove the option"))
+                    _actions.AskRemoveOption(option);
+                ImGui.PopStyleColor();
+            }
             ImGui.EndPopup();
         }
     }

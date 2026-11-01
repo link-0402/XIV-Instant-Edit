@@ -35,6 +35,7 @@ internal sealed class ResourceTreeView
     private readonly TextureSlotEditor _textures;
     private readonly ResourceActions _actions;
     private readonly HandoffActions _handoffs;
+    private readonly PasteActions _paste;
 
     /// <summary>Rows folded away, by their path through the tree (a shared node folds per place it is listed).</summary>
     private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
@@ -72,7 +73,7 @@ internal sealed class ResourceTreeView
     private int _keyboardTo = -1;
 
     public ResourceTreeView(ModEditor editor, ModSession session, TextureThumbnailCache thumbs,
-        TextureSlotEditor textures, ResourceActions actions, HandoffActions handoffs)
+        TextureSlotEditor textures, ResourceActions actions, HandoffActions handoffs, PasteActions paste)
     {
         _host   = editor.Host;
         _editor = editor;
@@ -81,6 +82,7 @@ internal sealed class ResourceTreeView
         _textures = textures;
         _actions  = actions;
         _handoffs = handoffs;
+        _paste    = paste;
     }
 
     private bool ShowThumbs => _host.Configuration.ShowThumbnails;
@@ -881,6 +883,7 @@ internal sealed class ResourceTreeView
         ImGui.Separator();
         if (ImGui.MenuItem("Copy game path"))
             ImGui.SetClipboardText(node.GamePath);
+        _paste.CopyFileItems(node);
 
         if (_handoffs.For(node) is { } handoff)
         {

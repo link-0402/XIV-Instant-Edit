@@ -550,6 +550,31 @@ internal sealed class PenumbraModMeta
         return true;
     }
 
+    /// <summary>Redirects <paramref name="gamePath"/> to another game path in an option. Throws if the option no longer exists.</summary>
+    public void SetSwap(OptionRef option, string gamePath, string targetGamePath)
+    {
+        var carrier = Carrier(option, create: true) ?? throw new InvalidOperationException($"Option {option} does not exist in this mod.");
+        var swaps = carrier["FileSwaps"] as JObject;
+        if (swaps == null)
+        {
+            swaps = new JObject();
+            SetOrInsert(carrier, "FileSwaps", swaps, "Manipulations");
+        }
+
+        var existing = FindProperty(swaps, gamePath);
+        if (existing != null)
+        {
+            if (existing.Value.Type == JTokenType.String && (string?)existing.Value == targetGamePath)
+                return;
+            existing.Value = targetGamePath;
+        }
+        else
+        {
+            swaps.Add(gamePath, targetGamePath);
+        }
+        Touch();
+    }
+
     /// <summary>Every rel path any option points at, as comparison keys — what a file on disk must not be deleted under.</summary>
     public HashSet<string> ReferencedRelKeys()
         => AllFiles().Where(f => !f.IsAbsolute).Select(f => PathNormalizer.RelKey(f.RelPath)).ToHashSet(StringComparer.Ordinal);
@@ -659,7 +684,14 @@ internal sealed class PenumbraModMeta
     /// is gone or has no room. It gets an id of its own when the group's options have ids (as Penumbra
     /// gives them since meta.json version 4); otherwise it is addressed by position like the others.
     /// </summary>
-    public OptionRef? AddOption(string groupId, string name)
+    public OptionRef? AddOption(string groupId, string name) => AddOptionObject(groupId, new JObject { ["Name"] = name });
+
+    /// <summary>
+    /// Adds <paramref name="option"/> (an option as meta.json has one, named) at the end of a Single or
+    /// Multi group, as <see cref="AddOption"/> does: with an id of its own when the group's options have
+    /// ids, else none. Null when the group is gone or has no room.
+    /// </summary>
+    public OptionRef? AddOptionObject(string groupId, JObject option)
     {
         if (FindGroupObject(groupId) is not { } group || FindGroupView(groupId) is not { } view || !TakesOptions(view))
             return null;
@@ -670,14 +702,19 @@ internal sealed class PenumbraModMeta
         }
 
         bool ids = options.Count > 0 ? options.OfType<JObject>().Any(o => o["Id"] != null) : group["Id"] != null;
-        var option = new JObject();
+        option.Remove("Id");
         if (ids)
-            option["Id"] = Guid.NewGuid().ToString();
-        option["Name"] = name;
+            option.AddFirst(new JProperty("Id", Guid.NewGuid().ToString()));
         options.Add(option);
         Touch();
         return new OptionRef(view.Id, OptionId(option, options.Count - 1));
     }
+
+    /// <summary>A copy of what an option (a Combining container, or the default files) holds, as meta.json has it; null when it is gone.</summary>
+    public JObject? CopyCarrier(OptionRef option) => Carrier(option, create: false)?.DeepClone() as JObject;
+
+    /// <summary>A copy of a group as meta.json has it; null when it is gone.</summary>
+    public JObject? CopyGroup(string groupId) => FindGroupObject(groupId)?.DeepClone() as JObject;
 
     public bool RenameGroup(string groupId, string name)
     {

@@ -1186,6 +1186,43 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
     }
 
     /// <summary>
+    /// Points the mod at what a paste copied into its folder (<paramref name="written"/>, see
+    /// <see cref="ModPaste"/>) in one write of meta.json, and opens what it made. False when the mod
+    /// is closed or meta.json can't take it: the copied files are deleted again then.
+    /// </summary>
+    public bool ApplyPaste(PastePlan plan, IReadOnlyList<string> written)
+    {
+        if (Project is not { } project)
+        {
+            ModPaste.Delete(written);
+            return false;
+        }
+
+        PasteResult? result = null;
+        if (!TryEditStructure(project, meta => result = ModPaste.Apply(meta, plan)) || result == null)
+        {
+            ModPaste.Delete(written);
+            return false;
+        }
+        Revision++;
+
+        var what = plan.Target.Kind switch
+        {
+            PasteKind.NewGroup  => $"the group {result.Name}",
+            PasteKind.NewOption => $"{result.Name} into {project.Meta.FindGroupView(result.GroupId ?? string.Empty)?.Name}",
+            _                   => $"{plan.Clip.Name} into {project.Meta.OptionLabel(plan.Target.Option)}",
+        };
+        var missing = plan.Missing.Count > 0 ? $" {plan.Missing.Count} file(s) missing in {plan.Clip.SourceName} were left out." : string.Empty;
+        Notify($"Pasted {what}.{missing}", plan.Missing.Count > 0 ? Severity.Warning : Severity.Info);
+
+        if (result.Option is { } option)
+            FocusOption(option);
+        else if (result.GroupId is { } group)
+            FocusGroup(group);
+        return true;
+    }
+
+    /// <summary>
     /// Takes the entry <paramref name="option"/> / <paramref name="gamePath"/> out of <paramref name="meta"/>
     /// when it still points at <paramref name="expectedRel"/>; returns the file it pointed at, or null.
     /// <paramref name="changed"/> says it points at another file now (left as it is).

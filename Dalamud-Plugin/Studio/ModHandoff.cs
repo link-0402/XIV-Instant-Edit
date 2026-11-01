@@ -267,7 +267,7 @@ internal static class ModHandoffCopies
         return plan;
     }
 
-    private static string Beside(string rel, string suffix)
+    internal static string Beside(string rel, string suffix)
     {
         var folder = Path.GetDirectoryName(rel) ?? string.Empty;
         var name = $"{Path.GetFileNameWithoutExtension(rel)}{suffix}{Path.GetExtension(rel)}";
