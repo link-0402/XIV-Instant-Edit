@@ -62,6 +62,15 @@ internal interface ITimelineHost
     /// </summary>
     IReadOnlyList<LinkView> LinkPartners(WorkspaceKey self);
 
+    /// <summary>
+    /// <paramref name="key"/>'s ready link view as the last framework update found it, null when it wasn't read. Asks for nothing, so
+    /// what draws every frame can call it.
+    /// </summary>
+    LinkView? LinkView(WorkspaceKey key);
+
+    /// <summary>The other workspaces with an editable body clip to link to, as the last framework update found them; reads no motion.</summary>
+    IReadOnlyList<LinkCandidate> LinkCandidates(WorkspaceKey self);
+
     /// <summary>Whether another workspace has an editable body clip to link to, for the Add menu; reads no motion.</summary>
     bool HasLinkPartner(WorkspaceKey self);
 
@@ -332,7 +341,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             loaded.MotionTarget.Standalone)
             return null;
         return new LinkCandidate(Key, session.ActorName(), loaded.Clip.GamePath, loaded.Clip.BindingIndex, editor.Document, session.Busy,
-            session.EditingSkeleton(loaded));
+            session.EditingSkeleton(loaded), decode.FailedFor(loaded));
     }
 
     /// <summary>
@@ -351,7 +360,8 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     /// <summary>
     /// A partner's link back: adds <paramref name="link"/> as a link layer named <paramref name="name"/> through this workspace's own
     /// editor, so this document gives it its key and it is one undo step here. True when it is done or can't be (no editable body
-    /// clip, no room); false while an edit runs here, to try again on the next update.
+    /// clip, no room, the same link already here, a bone that can't be linked or no skeleton to tell); false while an edit runs here,
+    /// to try again on the next update.
     /// </summary>
     internal bool AddLinkLayer(MotionLink link, string name)
     {
@@ -360,6 +370,14 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         // A read or save running, or a drag, here: Commit would end the drag, and the clip may still change.
         if (session.Busy || editor.Gesture != TimelineGesture.None || editor.History.InGesture)
             return false;
+        // A second link of the same bones would move the bone twice as far.
+        if (MotionLinks.HasLink(editor.Document.Motion, link))
+            return true;
+        if (session.EditingSkeleton(source) is not { } skeleton)
+            return true;
+        var index = MotionEvaluator.Index(skeleton);
+        if (!index.TryGetValue(link.Bone, out var bone) || !LinkPicker.Linkable(skeleton, index, bone))
+            return true;
         editor.Commit(MotionEdits.AddLink(editor.Document, link, name, out _));
         return true;
     }
@@ -674,6 +692,11 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         // Edit again: the file holds the links as that save baked them.
         if (again != null)
             session.SavedPrints = TimelineSession.SavedPrintsOf(again);
+        // After an undo (or kept edits on a layered save's base) the file is again what an earlier edit saved, whose layers came
+        // back: the links are saved as that edit baked them, or not known without one.
+        else if (afterUndo)
+            session.SavedPrints = animations != null && AnimationEditService.SavedLayersJournal(animations.Recovery, loaded) is { } back
+                ? TimelineSession.SavedPrintsOf(back) : MotionLinks.NoPrints;
         if (restore != null && !TimelineAutosaver.Fits(loaded, restore))
         {
             autosaver.Error = "The animation changed since its edits were kept, so they can't come back onto it.";
@@ -868,7 +891,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         footerHeight = Math.Max(1, ImGui.GetCursorPosY() - footerStart);
 
         pickers.Draw(editor);
-        linkPicker.Draw(editor);
+        linkPicker.Draw(editor, false);
         var playhead = editor.Playhead;
         canvas.HandleKeys(editor, timelinePreview.PlayKey);
         if (editor.Playhead != playhead)

@@ -9,7 +9,8 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The Link layer picker: a bone of this clip, a partner workspace's open clip and its bone, and whether the partner links back.
-/// A menu asks for it (<see cref="Request"/>) and it opens on the next draw at the window's own level, as the event pickers do.
+/// A menu asks for it (<see cref="Request"/>) and it opens on the next draw at the own level of the window that asked, as the event
+/// pickers do.
 /// Link adds the layer here as one undo step, and asks the host to add the link back to the partner's clip on the next framework
 /// update, as one undo step there. It also gives the link panel (<see cref="LinkFields"/>) the partners and the link back.
 /// </summary>
@@ -21,6 +22,8 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
     public const string Waiting = "Reading the partner's clip";
 
     private bool requested;
+    // Whether the Bones window asked, not the Timeline window: popups are per window, so only that one opens and draws it.
+    private bool inBones;
     private string? bone;
     private WorkspaceKey? partner;
     private string? partnerBone;
@@ -44,6 +47,9 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
 
     /// <summary>The ready view of the workspace <paramref name="preset"/> names (null for You); null while it isn't ready.</summary>
     public LinkView? Partner(Guid? preset) => Partners().FirstOrDefault(view => view.Key.Preset == preset);
+
+    /// <summary>The ready view of the workspace <paramref name="preset"/> names (null for You), without asking for it: what a link reads anyway.</summary>
+    public LinkView? Linked(Guid? preset) => host.LinkView(new WorkspaceKey(preset));
 
     /// <summary>
     /// Asks <paramref name="view"/>'s workspace to link back to <paramref name="link"/> of this clip, on the next framework update, if its
@@ -89,26 +95,50 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
         return bones;
     }
 
+    /// <summary>
+    /// Why the partner of <paramref name="view"/> can't link back to a link from <paramref name="bone"/> to its <paramref name="partnerBone"/>
+    /// (<paramref name="index"/> its skeleton's bone index), the link back pointing at this workspace's <paramref name="self"/> preset and
+    /// clip <paramref name="path"/> at <paramref name="binding"/>: its clip is read-only, it already links back so, or nothing can bend its
+    /// bone. Null when it can, or while a bone isn't picked. Linking one way to such a bone stays allowed.
+    /// </summary>
+    public static string? BackRefused(LinkView view, string? bone, string? partnerBone, Dictionary<string, int> index, Guid? self, string path,
+        int binding)
+    {
+        if (view.ReadOnly)
+            return TimelineWindowViews.LinkReadOnly(view.Name);
+        if (bone == null || partnerBone == null)
+            return null;
+        if (MotionLinks.HasLink(view.Document.Motion, Back(new MotionLink(bone, view.Key.Preset, partnerBone, view.GamePath, view.Binding), self, path, binding)))
+            return TimelineWindowViews.LinkAlreadyBack(view.Name);
+        if (!index.TryGetValue(partnerBone, out var at) || !Linkable(view.Played.Skeleton, index, at))
+            return Refused(partnerBone);
+        return null;
+    }
+
     /// <summary>Why a bone can't be linked: the pin's words for a bone nothing can bend to hold.</summary>
     public static string Refused(string bone) => $"{AnimationPresentation.BoneName(bone)} sits right under the body, so nothing can bend to hold it.";
 
     /// <summary>
-    /// The Add menus' Link layer item, <paramref name="label"/> with <paramref name="hint"/> as its hover: opens the picker; greyed, saying
-    /// why, while no other workspace has a clip open.
+    /// The Add menus' Link layer item, <paramref name="label"/> with <paramref name="hint"/> as its hover: opens the picker, in the Bones
+    /// window with <paramref name="bones"/>; greyed, saying why, while no other workspace has a clip open.
     /// </summary>
-    public void DrawAddItem(string label, bool readOnly, string hint)
+    public void DrawAddItem(string label, bool readOnly, string hint, bool bones = false)
     {
         var available = Available;
         if (ImGui.MenuItem(label, "", false, !readOnly && available))
-            Request();
+            Request(bones);
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(available ? hint : TimelineWindowViews.LinkNoPartner);
     }
 
-    /// <summary>Opens the picker on the next draw, on the primary selected bone when it can be linked, and starts reading the partners' motion.</summary>
-    public void Request()
+    /// <summary>
+    /// Opens the picker on the next draw of the window that asks (the Bones window with <paramref name="bones"/>), on the primary selected
+    /// bone when it can be linked, and starts reading the partners' motion.
+    /// </summary>
+    public void Request(bool bones = false)
     {
         requested = true;
+        inBones = bones;
         var skeleton = session.EditingSkeleton();
         bone = posing.Selection.Primary is { } primary && skeleton != null && MotionEvaluator.Index(skeleton).TryGetValue(primary, out var at) &&
                Linkable(skeleton)[at] ? primary : null;
@@ -120,9 +150,14 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
         Partners();
     }
 
-    /// <summary>The picker, while it is open; drawn at the window's own level.</summary>
-    public void Draw(TimelineEditor current)
+    /// <summary>
+    /// The picker, while it is open; drawn at the window's own level by the window that asked for it: the Bones window with
+    /// <paramref name="bones"/>, else the Timeline window.
+    /// </summary>
+    public void Draw(TimelineEditor current, bool bones)
     {
+        if (bones != inBones)
+            return;
         if (requested)
         {
             ImGui.OpenPopup(Popup);
@@ -139,10 +174,22 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
         {
             if (Available)
             {
-                Widgets.Spinner();
-                ImGui.SameLine(0, Theme.Gap);
-                ImGui.AlignTextToFramePadding();
-                ImGui.TextColored(Theme.Muted, Waiting);
+                // A partner whose motion couldn't be read never gets a view: say so instead of waiting for it.
+                var reading = false;
+                foreach (var candidate in host.LinkCandidates(key))
+                {
+                    if (candidate.ReadFailed)
+                        ImGui.TextColored(Theme.Warning, TimelineWindowViews.LinkUnreadable(candidate.Name));
+                    else
+                        reading = true;
+                }
+                if (reading)
+                {
+                    Widgets.Spinner();
+                    ImGui.SameLine(0, Theme.Gap);
+                    ImGui.AlignTextToFramePadding();
+                    ImGui.TextColored(Theme.Muted, Waiting);
+                }
             }
             else
                 ImGui.TextColored(Theme.Hint, TimelineWindowViews.LinkNoPartner);
@@ -203,19 +250,23 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
             }
         }
 
-        using (ImRaii.Disabled(view.ReadOnly))
+        var backRefused = BackRefused(view, bone, partnerBone, made.Index, key.Preset, source.Clip.GamePath, source.Clip.BindingIndex);
+        using (ImRaii.Disabled(backRefused != null))
         {
-            var back = linkBack && !view.ReadOnly;
+            var back = linkBack && backRefused == null;
             if (ImGui.Checkbox("Link back##link-pick-back", ref back))
                 linkBack = back;
         }
-        if (view.ReadOnly && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(TimelineWindowViews.LinkReadOnly(view.Name));
+        if (backRefused != null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(backRefused);
 
         ImGui.Spacing();
-        using (ImRaii.Disabled(session.ReadOnly || bone == null || partnerBone == null))
+        // A second link of the same bones would move the bone twice as far.
+        var there = bone != null && partnerBone != null &&
+                    MotionLinks.HasLink(current.Document.Motion, new MotionLink(bone, view.Key.Preset, partnerBone, view.GamePath, view.Binding));
+        using (ImRaii.Disabled(session.ReadOnly || bone == null || partnerBone == null || there))
         {
-            if (ImGui.Button("Link##link-pick-link") && bone != null && partnerBone != null)
+            if (ImGui.Button("Link##link-pick-link") && bone != null && partnerBone != null && !there)
             {
                 var link = new MotionLink(bone, view.Key.Preset, partnerBone, view.GamePath, view.Binding);
                 var next = MotionEdits.AddLink(current.Document, link, TimelineWindowViews.LinkName(view.Name), out var added);
@@ -224,12 +275,14 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
                 else if (current.Commit(next))
                 {
                     current.SelectLayer(added);
-                    if (linkBack && !view.ReadOnly)
+                    if (linkBack && backRefused == null)
                         AddLinkBack(view, link);
                     ImGui.CloseCurrentPopup();
                 }
             }
         }
+        if (there && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(TimelineWindowViews.LinkAlreadyThere);
         if (error != null)
             ImGui.TextColored(Theme.Error, error);
     }

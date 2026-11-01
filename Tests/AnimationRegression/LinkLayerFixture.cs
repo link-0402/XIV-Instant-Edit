@@ -62,6 +62,38 @@ internal static class LinkLayerFixture
         check(back.Bone == "j_te_l" && back.PartnerBone == "j_te_r" && back.Partner == null && back.PartnerClip == "chara/self.pap" && back.PartnerBinding == 2 &&
               back.HoldTurn && back.Top == null && back.Holds.IsEmpty, "picker: a link back swaps the bones and points at this clip");
         check(MotionLinks.LinkBack([Layer(back)], Hand(), null) != null, "picker: the partner finds the link back it asked for");
+
+        // No duplicates: the same bones to the same partner are one link, whatever its settings or whether it is on.
+        ImmutableArray<MotionLayer> linked = [Offset("m1", "j_te_l", Vector3.Zero), Layer(Hand(), key: "m2") with { Enabled = false }];
+        check(MotionLinks.HasLink(linked, Hand()) && MotionLinks.HasLink(linked, Hand() with { Bend = 10, Top = null, PartnerClip = "chara/other.pap", PartnerBinding = 3 }),
+            "picker: HasLink finds a link of the same bones and partner, on or off, whatever its settings");
+        check(!MotionLinks.HasLink(linked, Hand() with { PartnerBone = "j_te_r" }) && !MotionLinks.HasLink(linked, Hand() with { Bone = "j_te_l" }) &&
+              !MotionLinks.HasLink(linked, Hand() with { Partner = null }) && !MotionLinks.HasLink([], Hand()),
+            "picker: HasLink tells another bone, partner bone or partner apart");
+        var linkedDoc = new TimelineDocument(30, 30, null, [], 1) { Motion = linked, NextMotionKey = 3 };
+        check(ReferenceEquals(MotionEdits.AddLink(linkedDoc, Hand() with { Bend = 10 }, "Link: Aria Rose", out var twiceKey), linkedDoc) && twiceKey == "" &&
+              MotionEdits.AddLink(linkedDoc, Hand() with { PartnerBone = "j_te_r" }, "Link: Aria Rose", out var otherKey).Motion.Length == 3 && otherKey == "m3",
+            "picker: AddLink refuses a link the document already has, and adds another one");
+        check(TimelineWindowViews.LinkAlreadyThere == "This link is already there.", "picker: the Link button says the link is already there");
+
+        // Link back: refused while the partner's clip is read-only, it already links back so, or nothing can bend its bone.
+        var aria = new WorkspaceKey(Partner);
+        var played = Reaching();
+        var theirIndex = MotionEvaluator.Index(played.Skeleton);
+        var plain = View(aria, new TimelineDocument(30, 30, null, [], 1), played, 1);
+        string? Refused(LinkView view, string? bone = "j_te_r", string? partnerBone = "j_te_l") =>
+            LinkPicker.BackRefused(view, bone, partnerBone, theirIndex, null, "chara/self.pap", 2);
+        var already = plain with { Document = plain.Document with { Motion = [Layer(LinkPicker.Back(new MotionLink("j_te_r", Partner, "j_te_l", Hug, 1), null, "chara/old.pap", 0))] } };
+        check(Refused(plain) == null && Refused(plain, bone: null) == null && Refused(plain, partnerBone: null) == null,
+            "picker: a partner that can link back may, and nothing is refused before both bones are picked");
+        check(Refused(already) == "Aria Rose already links back." && Refused(already, partnerBone: "j_te_r") == null &&
+              Refused(View(WorkspaceKey.Self, already.Document, played, 1)) == "You already link back.",
+            "picker: a partner already linking back the same bones can't link back again");
+        check(Refused(plain with { ReadOnly = true }) == "Aria Rose's clip is read-only." && Refused(already with { ReadOnly = true }) == "Aria Rose's clip is read-only.",
+            "picker: a read-only partner can't link back, first");
+        check(Refused(plain, partnerBone: PinChains.Body) == LinkPicker.Refused(PinChains.Body) && Refused(plain, partnerBone: "j_sebo_a") == LinkPicker.Refused("j_sebo_a") &&
+              Refused(plain, partnerBone: PinChains.Hips) == null,
+            "picker: a partner bone nothing can bend can't link back, though one may still link to it");
     }
 
     /// <summary>A link layer's name, look and texts, and how the edits, the Bones window and the views treat the kind.</summary>
@@ -92,7 +124,7 @@ internal static class LinkLayerFixture
             "views: a link's summary names both bones and the partner");
         check(TimelineWindowViews.LayerContent(Layer(hand), Names) == "Follows Aria Rose's j_te_l" && TimelineWindowViews.LayerContent(Layer(mine), Names) == "Follows your j_te_l",
             "views: a link's tooltip says whose bone it follows");
-        string? State(LinkState? state, MotionLink link) => TimelineWindowViews.LinkStateText(state, link, Names);
+        string? State(LinkState? state, MotionLink link, string own = "You") => TimelineWindowViews.LinkStateText(state, link, Names, own);
         check(State(LinkState.On, hand) == "Moves with Aria Rose's j_te_l." && State(LinkState.On, mine) == "Moves with your j_te_l." &&
               State(LinkState.NotOpen, hand) == "Aria Rose's clip isn't open." && State(LinkState.NotOpen, mine) == "Your clip isn't open." &&
               State(LinkState.OtherClip, hand) == "Aria Rose has another clip open." && State(LinkState.OtherClip, mine) == "You have another clip open." &&
@@ -104,6 +136,15 @@ internal static class LinkLayerFixture
             "views: each link state says why, for a partner and for you");
         check(State(null, hand) == null && State(LinkState.NotOpen, gone) == "That partner no longer exists.",
             "views: a link that is off itself has no state line, and one to a deleted preset says it is gone");
+        check(State(LinkState.Reading, hand) == "Reading this clip." && State(LinkState.Reading, mine, "Aria Rose") == "Reading this clip." &&
+              State(LinkState.SelfDespawned, hand) == "You aren't spawned." && State(LinkState.SelfDespawned, mine, "Aria Rose") == "Aria Rose isn't spawned." &&
+              State(LinkState.ItsOwnClip, hand) == "This link points at its own clip." && State(LinkState.ItsOwnClip, mine, "Aria Rose") == "This link points at its own clip." &&
+              State(LinkState.SelfDespawned, gone) == "You aren't spawned." &&
+              State(LinkState.SelfUnreadable, hand) == "This clip can't be read." && State(LinkState.SelfUnreadable, mine, "Aria Rose") == "This clip can't be read.",
+            "views: this side's states name this clip's actor, for you and for a partner, whatever the partner");
+        check(TimelineWindowViews.LinkAlreadyBack("Aria Rose") == "Aria Rose already links back." && TimelineWindowViews.LinkAlreadyBack("You") == "You already link back." &&
+              TimelineWindowViews.LinkUnreadable("Aria Rose") == "Aria Rose's clip can't be read." && TimelineWindowViews.LinkUnreadable("You") == "Your clip can't be read.",
+            "views: the picker says who already links back and whose clip can't be read");
         check(TimelineWindowViews.LinkBackHover("Aria Rose") == "Aria Rose doesn't follow your edits yet." &&
               TimelineWindowViews.LinkBackHover("You") == "You don't follow these edits yet.", "views: Link back says who doesn't follow yet");
         check(TimelineWindowViews.LinkPullLabel == "Pull" && TimelineWindowViews.LinkPullTip == "How far the bone follows the partner. Ctrl+click to type.",
@@ -251,6 +292,12 @@ internal static class LinkLayerFixture
             "wiring: LinksUnsaved: a same-content rebuild of the track stays saved");
         check(MotionLinks.Unsaved(doc.Motion, Set(("m1", movedMore)), savedPrints), "wiring: LinksUnsaved: a track of other content is unsaved");
         check(MotionLinks.Unsaved(doc.Motion, saved, MotionLinks.NoPrints), "wiring: LinksUnsaved: a link that was off when saved and is on now is unsaved");
+        var oneMove = new LinkTrack(moving.Before, [.. moving.Before.Select((t, i) => i == 3 ? moving.After[i] : t)], moving.Duration);
+        check(moving.Carries && oneMove.Carries && !Still().Carries && !new LinkTrack(moving.Before, moving.Before, moving.Duration).Carries,
+            "wiring: a track carries something when the partner's edits move the bone at some sample");
+        check(!MotionLinks.Unsaved(doc.Motion, Set(("m1", Still())), MotionLinks.NoPrints) && MotionLinks.Unsaved(doc.Motion, Set(("m1", oneMove)), MotionLinks.NoPrints) &&
+              MotionLinks.Unsaved(doc.Motion, Set(("m1", Still())), savedPrints),
+            "wiring: LinksUnsaved: a link off when saved that carries nothing now stays saved; a saved print still compares");
         check(!MotionLinks.Unsaved([layer with { Enabled = false }], Set(("m1", movedMore)), savedPrints) &&
               !MotionLinks.Unsaved(doc.Motion, MotionLinkSet.Empty, savedPrints), "wiring: LinksUnsaved: a link that is off now is never unsaved");
         var session = new TimelineSession(null, null!, null!, null!, null, null!, null!, null!) { Links = Set(("m1", movedMore)), SavedPrints = savedPrints };
@@ -313,11 +360,25 @@ internal static class LinkLayerFixture
             PartnerLinks.Plan(you, layer, from, to, gposing, exists).State;
 
         check(State(me, null) == LinkState.NotOpen, "planner: a partner without a ready clip leaves the link off as not open");
+        check(State(null, partner) == LinkState.Reading && State(null, null) == LinkState.Reading && State(null, partner with { Size = null }) == LinkState.Reading,
+            "planner: this clip's motion still read says so, before the partner's states");
+        check(State(me with { Size = null }, null) == LinkState.SelfDespawned && State(me with { Size = null }, partner with { GamePath = "chara/other.pap" }) == LinkState.SelfDespawned &&
+              State(me with { Size = null }, partner with { Size = null }) == LinkState.SelfDespawned,
+            "planner: this actor not drawn says so, before the partner's states");
+        check(State(null, null, gposing: false) == LinkState.OutOfGPose && State(me with { Size = null }, partner, exists: false) == LinkState.PartnerGone,
+            "planner: out of GPose and a deleted preset still come before this side's states");
+        LinkState Failed(LinkView? from, LinkView? to, bool self, bool other) => PartnerLinks.Plan(you, layer, from, to, true, true, self, other).State;
+        check(Failed(null, partner, true, false) == LinkState.SelfUnreadable && Failed(null, null, true, true) == LinkState.SelfUnreadable &&
+              Failed(me, partner, true, false) == LinkState.On,
+            "planner: this clip's failed read says it can't be read, only while its view is missing");
+        check(Failed(me, null, false, true) == LinkState.Unreadable && Failed(me, null, false, false) == LinkState.NotOpen &&
+              Failed(me with { Size = null }, null, false, true) == LinkState.SelfDespawned && Failed(me, partner, false, true) == LinkState.On,
+            "planner: the partner's failed read says its clip can't be read, after this side's states and only while its view is missing");
         check(State(me, partner with { GamePath = "chara/human/c0101/animation/a0001/bt_common/emote/dance.pap" }) == LinkState.OtherClip &&
               State(me, partner with { Binding = 2 }) == LinkState.OtherClip, "planner: a partner on another clip or binding leaves it off");
         check(State(me, partner with { GamePath = Hug.ToUpperInvariant() }) == LinkState.On, "planner: game paths compare without case");
-        check(State(me, partner with { Size = null }) == LinkState.Despawned && State(me with { Size = null }, partner) == LinkState.Despawned,
-            "planner: a partner or actor that isn't drawn leaves it off as despawned");
+        check(State(me, partner with { Size = null }) == LinkState.Despawned && State(me with { Size = null }, partner) == LinkState.SelfDespawned,
+            "planner: a partner that isn't drawn leaves it off as despawned, this actor as itself despawned");
         check(State(me, partner, gposing: false) == LinkState.OutOfGPose && State(me, partner with { Size = null }, gposing: false) == LinkState.OutOfGPose,
             "planner: out of GPose the link is off, before the sizes are asked");
         check(State(me, null, exists: false) == LinkState.PartnerGone && State(me, partner, gposing: false, exists: false) == LinkState.PartnerGone,
@@ -344,10 +405,11 @@ internal static class LinkLayerFixture
         check(backState == LinkState.On && backInputs is { Self: { } self } && self == Partner && ReferenceEquals(backInputs.PartnerDocument, mine) &&
               backInputs.Ratio == 1 / 1.1f, "planner: a partner's link to you is on, built for that partner");
 
-        // A link to its own workspace is never on.
-        check(PartnerLinks.Plan(you, Layer(Hand() with { Partner = null }), me, me, true, true).State == LinkState.NotOpen &&
-              PartnerLinks.Plan(aria, layer, partner, partner, true, true).State == LinkState.NotOpen,
-            "planner: a link to its own workspace stays off as not open");
+        // A link to its own workspace (pasted from another one) is never on.
+        check(PartnerLinks.Plan(you, Layer(Hand() with { Partner = null }), me, me, true, true).State == LinkState.ItsOwnClip &&
+              PartnerLinks.Plan(aria, layer, partner, partner, true, true).State == LinkState.ItsOwnClip &&
+              PartnerLinks.Plan(aria, layer, null, null, false, true).State == LinkState.ItsOwnClip,
+            "planner: a link to its own workspace stays off as pointing at its own clip, first");
     }
 
     /// <summary>The service: tracks built on a worker and handed out, the same set while nothing changed, and off links dropped.</summary>
@@ -428,13 +490,36 @@ internal static class LinkLayerFixture
         check(ReferenceEquals(mySession.Links, set) && ReferenceEquals(mySession.LinkStates, states) && !mySession.LinksBuilding,
             "service: SameInputs_KeepsSet: new views of the same document and clip keep the set and the states");
 
-        // The partner edits: the last track stands while the new one builds, then a new set comes.
-        var edited = Targets(mine, theirs with { });
-        links.UpdateViews(edited, true, _ => true);
+        // A partner revision that doesn't move the bone: rebuilt, but the same content keeps the track and the set.
+        var revised = Targets(mine, theirs with { });
+        links.UpdateViews(revised, true, _ => true);
         check(mySession.LinksBuilding && ReferenceEquals(mySession.Links, set), "service: the last track stands while a newer one builds");
+        Settle(revised);
+        check(ReferenceEquals(mySession.Links, set) && ReferenceEquals(mySession.Links.For("m1"), built) && ReferenceEquals(mySession.LinkStates, states),
+            "service: a rebuild to the same content keeps the track and the set");
+
+        // The partner edits: the last track stands while the new one builds, then a new set comes.
+        var edited = Targets(mine, theirs with { Motion = [Offset("m1", "j_te_l", new Vector3(.08f, 0, 0))] });
+        links.UpdateViews(edited, true, _ => true);
+        check(mySession.LinksBuilding && ReferenceEquals(mySession.Links, set), "service: the last track stands while a newer one of other content builds");
         Settle(edited);
-        check(!ReferenceEquals(mySession.Links, set) && mySession.Links.For("m1") is { } rebuilt && !ReferenceEquals(rebuilt, built) &&
-              ReferenceEquals(mySession.LinkStates, states), "service: a new partner revision gives a new set, the states unchanged");
+        var rebuilt = mySession.Links.For("m1");
+        check(!ReferenceEquals(mySession.Links, set) && rebuilt != null && !ReferenceEquals(rebuilt, built) && rebuilt.Print != built!.Print &&
+              ReferenceEquals(mySession.LinkStates, states), "service: a partner edit that moves the bone gives a new set, the states unchanged");
+
+        // The link's own settings change: the last track stands while it rebuilds. Another bone or partner bone: it goes at once.
+        var bent = Targets(mine with { Motion = [Layer(Hand() with { Bend = 10 })] }, edited[1].Candidate!.Document);
+        links.UpdateViews(bent, true, _ => true);
+        check(mySession.LinksBuilding && ReferenceEquals(mySession.Links.For("m1"), rebuilt), "service: a new bend keeps the last track while it rebuilds");
+        Settle(bent);
+        var retargeted = Targets(mine with { Motion = [Layer(Hand() with { PartnerBone = "j_te_r" })] }, edited[1].Candidate!.Document);
+        links.UpdateViews(retargeted, true, _ => true);
+        check(mySession.Links.For("m1") == null && mySession.LinkStates.GetValueOrDefault("m1") == LinkState.On && mySession.LinksBuilding,
+            "service: another partner bone drops the stale track at once and builds its own");
+        Settle(retargeted);
+        var expectedRight = MotionLinks.Track(theirPlayed, edited[1].Candidate!.Document.Motion, "j_te_r", 1, default);
+        check(mySession.Links.For("m1") is { } right && right.After.SequenceEqual(expectedRight.After), "service: the new partner bone's track comes once built");
+        Settle(Targets(mine, theirs));
 
         // Off: the track goes at once.
         links.UpdateViews(Targets(mine, theirs, theirSize: null), true, _ => true);
@@ -446,6 +531,16 @@ internal static class LinkLayerFixture
         links.UpdateViews([Target(you, null, played, 1, mySession), Target(aria, theirs, theirPlayed, 1, theirSession)], true, _ => true);
         check(ReferenceEquals(mySession.Links, MotionLinkSet.Empty) && ReferenceEquals(mySession.LinkStates, PartnerLinks.NoStates) &&
               links.Views.Count == 0 && !links.HasPartner(aria), "service: a workspace without an editable clip has no links and isn't offered");
+        links.UpdateViews([new LinkTarget(you, new LinkCandidate(you, "You", Hug, 1, mine, false, null), () => null, mySession),
+            Target(aria, theirs, theirPlayed, 1, theirSession)], true, _ => true);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.Reading && mySession.Links.For("m1") == null,
+            "service: with its partner open, a link whose own clip is still read says so");
+        links.UpdateViews([new LinkTarget(you, new LinkCandidate(you, "You", Hug, 1, mine, false, null, true), () => null, mySession),
+            Target(aria, theirs, theirPlayed, 1, theirSession)], true, _ => true);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.SelfUnreadable, "service: a link whose own clip couldn't be read says so");
+        links.UpdateViews([Target(you, mine, played, 1, mySession),
+            new LinkTarget(aria, new LinkCandidate(aria, "Aria Rose", Hug, 1, theirs, false, null, true), () => null, theirSession)], true, _ => true);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.Unreadable, "service: a link whose partner's clip couldn't be read says so");
 
         // A partner bone the skeleton lacks, and a build that fails otherwise, logged once.
         var noBone = Targets(mine with { Motion = [Layer(Hand() with { PartnerBone = "j_nothing" })] }, theirs);
@@ -476,7 +571,7 @@ internal static class LinkLayerFixture
         var hand = MotionEdits.AddLink(added, Hand(), "Link: You", out var handKey);
         check(handKey == "m7" && hand.Motion[^1].Link is { Bone: "j_te_r", PartnerBone: "j_te_l", Holds.IsEmpty: true },
             "add link: a hand link holds nothing");
-        check(MotionEdits.AddLink(added, Hips() with { Holds = [PinChains.FootL] }, "Link", out _).Motion[^1].Link!.Holds.SequenceEqual([PinChains.FootL]),
+        check(MotionEdits.AddLink(doc, Hips() with { Holds = [PinChains.FootL] }, "Link", out _).Motion[^1].Link!.Holds.SequenceEqual([PinChains.FootL]),
             "add link: a hips link keeps the holds it was given");
     }
 

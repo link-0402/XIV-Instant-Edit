@@ -264,6 +264,10 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         return [.. links.Views.Where(view => view.Key != self)];
     }
 
+    LinkView? ITimelineHost.LinkView(WorkspaceKey key) => links.Views.FirstOrDefault(view => view.Key == key);
+
+    IReadOnlyList<LinkCandidate> ITimelineHost.LinkCandidates(WorkspaceKey self) => [.. links.Candidates.Where(candidate => candidate.Key != self)];
+
     bool ITimelineHost.HasLinkPartner(WorkspaceKey self) => links.HasPartner(self);
 
     // From the presets, not the workspaces' services, which a preset without a workspace would build.

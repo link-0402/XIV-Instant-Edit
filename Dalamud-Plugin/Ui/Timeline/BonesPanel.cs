@@ -109,6 +109,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 DrawBonesPanel(current, loaded, layer, skeleton);
         }
         HandleBonesKeys(current);
+        // The link picker this window's Add layer menu asked for, at the window's own level.
+        session.LinkPicker?.Draw(current, true);
     }
 
     /// <summary>
@@ -680,10 +682,10 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             return;
         foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
         {
-            // A link needs its partner: the item opens the link picker, in the Timeline window.
+            // A link needs its partner: the item opens the link picker, in this window.
             if (kind == MotionLayerKind.Link)
             {
-                session.LinkPicker?.DrawAddItem($"{MotionEdits.KindName(kind)} layer", readOnly, TimelineWindowViews.LayerKindHint(kind));
+                session.LinkPicker?.DrawAddItem($"{MotionEdits.KindName(kind)} layer", readOnly, TimelineWindowViews.LayerKindHint(kind), true);
                 continue;
             }
             if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer", "", false, !readOnly))

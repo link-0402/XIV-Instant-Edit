@@ -20,7 +20,12 @@ internal sealed class LinkTrack
         After = after;
         Duration = float.IsFinite(duration) && duration > 0 ? duration : 0;
         Print = Fingerprint(before, after, Duration);
+        for (var i = 0; i < before.Length && !Carries; i++)
+            Carries = before[i] != after[i];
     }
+
+    /// <summary>Whether the partner's edits move the bone at some sample: a track that carries nothing changes nothing.</summary>
+    public bool Carries { get; }
 
     public ImmutableArray<MotionTransform> Before { get; }
     public ImmutableArray<MotionTransform> After { get; }
@@ -123,16 +128,29 @@ internal static class MotionLinks
 
     /// <summary>
     /// Whether an active link layer of <paramref name="motion"/> follows a track in <paramref name="links"/> whose content isn't the
-    /// print <paramref name="saved"/> holds for it, or has no saved print (it was off when saved): the partner changed since. A link that
-    /// is off now counts for nothing.
+    /// print <paramref name="saved"/> holds for it, or has no saved print (it was off when saved) and carries something: the partner
+    /// changed since. A link that is off now counts for nothing.
     /// </summary>
     public static bool Unsaved(IReadOnlyList<MotionLayer> motion, MotionLinkSet links, IReadOnlyDictionary<string, string> saved)
     {
         if (links.Tracks.IsEmpty)
             return false;
         foreach (var layer in motion)
-            if (layer.Kind == MotionLayerKind.Link && MotionEvaluator.Active(layer, links) &&
-                (!saved.TryGetValue(layer.Key, out var print) || print != links.For(layer.Key)!.Print))
+            if (layer.Kind == MotionLayerKind.Link && MotionEvaluator.Active(layer, links) && links.For(layer.Key)! is var track &&
+                (saved.TryGetValue(layer.Key, out var print) ? print != track.Print : track.Carries))
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="motion"/> already has a link layer joining <paramref name="link"/>'s bone to the same partner's same bone,
+    /// on or off: a second one would move the bone twice as far.
+    /// </summary>
+    public static bool HasLink(IReadOnlyList<MotionLayer> motion, MotionLink link)
+    {
+        foreach (var layer in motion)
+            if (layer is { Kind: MotionLayerKind.Link, Link: { } known } && known.Partner == link.Partner && known.Bone == link.Bone &&
+                known.PartnerBone == link.PartnerBone)
                 return true;
         return false;
     }

@@ -137,6 +137,15 @@ internal static partial class TimelineWindowViews
     /// <summary>The Link back button's hover: the partner, <paramref name="name"/>, doesn't link back yet.</summary>
     public static string LinkBackHover(string name) => name == You ? "You don't follow these edits yet." : $"{name} doesn't follow your edits yet.";
 
+    /// <summary>The picker's Link back hover while the partner, <paramref name="name"/>, already links back the same way.</summary>
+    public static string LinkAlreadyBack(string name) => name == You ? "You already link back." : $"{name} already links back.";
+
+    /// <summary>The picker's Link button hover while this clip already has the link it would add.</summary>
+    public const string LinkAlreadyThere = "This link is already there.";
+
+    /// <summary>Why a link to <paramref name="name"/> is off, or the picker can't offer that partner: its clip's motion can't be read.</summary>
+    public static string LinkUnreadable(string name) => $"{Possessive(name, true)} clip can't be read.";
+
     /// <summary>A link's summary: "j_te_r with Aria Rose's j_te_l", or "j_te_r with your j_te_l" for a link to you.</summary>
     public static string LinkSummary(MotionLink link, Func<Guid?, string?> nameOf) =>
         $"{link.Bone} with {Possessive(PartnerName(link, nameOf), false)} {link.PartnerBone}";
@@ -144,12 +153,23 @@ internal static partial class TimelineWindowViews
     /// <summary>
     /// A link layer's state line: that it follows its partner, or why not. Null without a <paramref name="state"/>: the layer is off
     /// itself (disabled, at 0% or weighted out), which its bar already says. A partner <paramref name="nameOf"/> can't name, its preset
-    /// deleted, is gone whatever the state.
+    /// deleted, is gone whatever the partner's state. <paramref name="ownName"/> is this clip's actor, for the states of this side.
     /// </summary>
-    public static string? LinkStateText(LinkState? state, MotionLink link, Func<Guid?, string?> nameOf)
+    public static string? LinkStateText(LinkState? state, MotionLink link, Func<Guid?, string?> nameOf, string ownName)
     {
         if (state is not { } known)
             return null;
+        switch (known)
+        {
+            case LinkState.Reading:
+                return "Reading this clip.";
+            case LinkState.SelfUnreadable:
+                return "This clip can't be read.";
+            case LinkState.SelfDespawned:
+                return ownName == You ? "You aren't spawned." : $"{ownName} isn't spawned.";
+            case LinkState.ItsOwnClip:
+                return "This link points at its own clip.";
+        }
         var name = PartnerName(link, nameOf);
         if (known == LinkState.PartnerGone || name == null)
             return "That partner no longer exists.";
@@ -162,7 +182,7 @@ internal static partial class TimelineWindowViews
             LinkState.Despawned => you ? "You aren't spawned." : $"{name} isn't spawned.",
             LinkState.OutOfGPose => "Links work in GPose.",
             LinkState.NoBone => $"{Possessive(name, true)} skeleton has no {link.PartnerBone}.",
-            _ => $"{Possessive(name, true)} clip can't be read.",
+            _ => LinkUnreadable(name),
         };
     }
 

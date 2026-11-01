@@ -151,12 +151,13 @@ internal static class MotionEdits
     /// <summary>
     /// Adds a link layer named <paramref name="name"/> over the whole clip after the others, at full pull, joining a bone to a
     /// partner's by <paramref name="link"/>; a hips link holding nothing holds both feet. Its key is this document's own next one.
-    /// Unchanged, with an empty key, on a face or when the document has no room for another layer.
+    /// Unchanged, with an empty key, on a face, when the document has no room for another layer, or when it already has that link
+    /// (<see cref="MotionLinks.HasLink"/>), which a second one would move twice as far.
     /// </summary>
     public static TimelineDocument AddLink(TimelineDocument doc, MotionLink link, string name, out string key)
     {
         key = string.Empty;
-        if (doc.Motion.Length >= MotionEvaluator.MaxLayers || doc.Face != null)
+        if (doc.Motion.Length >= MotionEvaluator.MaxLayers || doc.Face != null || MotionLinks.HasLink(doc.Motion, link))
             return doc;
         if (link.Bone == PinChains.Hips && link.Holds.IsEmpty)
             link = link with { Holds = [PinChains.FootL, PinChains.FootR] };

@@ -17,7 +17,7 @@ internal static class LinkFields
 {
     // The open bone list's search; only one combo is open at a time.
     private static string filter = string.Empty;
-    // The link back last asked for: its layer and the partner's document then, so the button waits until that document changes.
+    // The link back last asked for: its layer and the partner's document then, so the button waits while that document stays.
     private static (string Layer, TimelineDocument Partner)? asked;
 
     /// <summary>The link's state line: hint coloured while it follows the partner, warning coloured when it doesn't; nothing while it is off itself.</summary>
@@ -26,7 +26,7 @@ internal static class LinkFields
         if (layer.Link is not { } link)
             return;
         var state = session.LinkStates.TryGetValue(layer.Key, out var known) ? known : (LinkState?)null;
-        if (TimelineWindowViews.LinkStateText(state, link, session.PartnerName) is not { } line)
+        if (TimelineWindowViews.LinkStateText(state, link, session.PartnerName, session.ActorName()) is not { } line)
             return;
         using var wrap = ImRaii.TextWrapPos(0f);
         ImGui.TextColored(state == LinkState.On ? Theme.Hint : Theme.Warning, line);
@@ -43,10 +43,12 @@ internal static class LinkFields
             return;
         DrawState(layer, session);
         var picker = session.LinkPicker;
-        // The partner's view is ready on the clip the link names only while the link is on.
-        if (picker != null && session.LinkStates.GetValueOrDefault(layer.Key, LinkState.NotOpen) == LinkState.On && picker.Partner(link.Partner) is { } view &&
-            MotionLinks.LinkBack(view.Document.Motion, link, picker.Key.Preset) == null &&
-            !(asked is { } waiting && waiting.Layer == layer.Key && ReferenceEquals(waiting.Partner, view.Document)))
+        // The partner's view is ready on the clip the link names only while the link is on; the link reads it, so it isn't asked for.
+        var view = picker != null && session.LinkStates.GetValueOrDefault(layer.Key, LinkState.NotOpen) == LinkState.On ? picker.Linked(link.Partner) : null;
+        // The partner's document changed since the click (the link back came, or an undo took it away): the button may show again.
+        if (view != null && asked is { } waiting && waiting.Layer == layer.Key && !ReferenceEquals(waiting.Partner, view.Document))
+            asked = null;
+        if (picker != null && view != null && MotionLinks.LinkBack(view.Document.Motion, link, picker.Key.Preset) == null && asked?.Layer != layer.Key)
         {
             using (ImRaii.Disabled(view.ReadOnly))
             {

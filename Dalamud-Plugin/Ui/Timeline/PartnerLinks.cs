@@ -12,11 +12,11 @@ internal enum LinkState : byte
 {
     /// <summary>It follows the partner's bone.</summary>
     On,
-    /// <summary>The partner's workspace has no clip ready, or the link points at its own workspace.</summary>
+    /// <summary>The partner's workspace has no clip ready.</summary>
     NotOpen,
     /// <summary>The partner's workspace has another clip open than the one the link names.</summary>
     OtherClip,
-    /// <summary>The partner (or this actor) isn't drawn: despawned or still spawning.</summary>
+    /// <summary>The partner isn't drawn: despawned or still spawning.</summary>
     Despawned,
     /// <summary>Links only work in GPose, where the actors' sizes can be read.</summary>
     OutOfGPose,
@@ -26,6 +26,14 @@ internal enum LinkState : byte
     NoBone,
     /// <summary>The partner's clip couldn't be read for the link.</summary>
     Unreadable,
+    /// <summary>This clip's own motion is still being read.</summary>
+    Reading,
+    /// <summary>This actor isn't drawn: despawned or still spawning.</summary>
+    SelfDespawned,
+    /// <summary>The link points at its own workspace, as a layer pasted from another workspace can.</summary>
+    ItsOwnClip,
+    /// <summary>This clip's own motion couldn't be read.</summary>
+    SelfUnreadable,
 }
 
 /// <summary>
@@ -52,16 +60,23 @@ internal sealed record LinkInputs(TimelineDocument PartnerDocument, MotionClip P
 
     /// <summary>The links field by field, holds by sequence (a record compares the holds' arrays by reference).</summary>
     private static bool SameLink(MotionLink a, MotionLink b) => ReferenceEquals(a, b) ||
-        a.Bone == b.Bone && a.Partner == b.Partner && a.PartnerBone == b.PartnerBone && a.PartnerClip == b.PartnerClip &&
-        a.PartnerBinding == b.PartnerBinding && a.HoldTurn == b.HoldTurn && a.Top == b.Top && a.Bend.Equals(b.Bend) && a.Holds.SequenceEqual(b.Holds);
+        SameJoin(a, b) && a.HoldTurn == b.HoldTurn && a.Top == b.Top && a.Bend.Equals(b.Bend) && a.Holds.SequenceEqual(b.Holds);
+
+    /// <summary>
+    /// Whether two links join the same bone to the same partner's bone on the same clip: a track built for one is the other's too,
+    /// up to how it bends.
+    /// </summary>
+    public static bool SameJoin(MotionLink a, MotionLink b) =>
+        a.Bone == b.Bone && a.Partner == b.Partner && a.PartnerBone == b.PartnerBone && a.PartnerClip == b.PartnerClip && a.PartnerBinding == b.PartnerBinding;
 }
 
 /// <summary>
 /// What a workspace shows before its motion is read: its key, its actor's name, the open clip's game path and binding, the document,
-/// whether edits wait now, and the skeleton it is edited on when that is known. Null without an editable body clip. Reads nothing.
+/// whether edits wait now, the skeleton it is edited on when that is known, and whether reading its motion failed. Null without an
+/// editable body clip. Reads nothing.
 /// </summary>
 internal sealed record LinkCandidate(WorkspaceKey Key, string Name, string GamePath, int Binding, TimelineDocument Document, bool ReadOnly,
-    SkeletonDescription? Skeleton);
+    SkeletonDescription? Skeleton, bool ReadFailed = false);
 
 /// <summary>
 /// A workspace as <see cref="PartnerLinks"/> sees it: its key, its <see cref="LinkCandidate"/> (null without an editable body clip),
@@ -119,26 +134,32 @@ internal sealed class PartnerLinks : IDisposable
     /// <summary>
     /// How link layer <paramref name="layer"/> of workspace <paramref name="self"/> (whose view is <paramref name="me"/>) stands with
     /// its partner's view <paramref name="partner"/>, and the track's inputs when it is on. A link to its own workspace is never on.
-    /// <paramref name="presetExists"/> says whether the partner's preset still exists (always true for You). Pure.
+    /// <paramref name="presetExists"/> says whether the partner's preset still exists (always true for You). <paramref name="selfFailed"/>
+    /// and <paramref name="partnerFailed"/> say that reading this clip's or the partner's motion failed (<see cref="LinkCandidate.ReadFailed"/>),
+    /// so a missing view won't come. This side's states come before the partner's. Pure.
     /// </summary>
     public static (LinkState State, LinkInputs? Inputs) Plan(WorkspaceKey self, MotionLayer layer, LinkView? me, LinkView? partner, bool gposing,
-        bool presetExists)
+        bool presetExists, bool selfFailed = false, bool partnerFailed = false)
     {
         if (layer.Link is not { } link)
             return (LinkState.NotOpen, null);
         var partnerKey = new WorkspaceKey(link.Partner);
         if (partnerKey == self)
-            return (LinkState.NotOpen, null);
+            return (LinkState.ItsOwnClip, null);
         if (!partnerKey.IsSelf && !presetExists)
             return (LinkState.PartnerGone, null);
         // Outside GPose no actor's size can be read, so this comes before the sizes.
         if (!gposing)
             return (LinkState.OutOfGPose, null);
-        if (me == null || partner == null || partner.Key != partnerKey)
-            return (LinkState.NotOpen, null);
+        if (me == null)
+            return (selfFailed ? LinkState.SelfUnreadable : LinkState.Reading, null);
+        if (me.Size is not { } mine)
+            return (LinkState.SelfDespawned, null);
+        if (partner == null || partner.Key != partnerKey)
+            return (partnerFailed ? LinkState.Unreadable : LinkState.NotOpen, null);
         if (!string.Equals(partner.GamePath, link.PartnerClip, StringComparison.OrdinalIgnoreCase) || partner.Binding != link.PartnerBinding)
             return (LinkState.OtherClip, null);
-        if (partner.Size is not { } theirs || me.Size is not { } mine)
+        if (partner.Size is not { } theirs)
             return (LinkState.Despawned, null);
         return (LinkState.On, new LinkInputs(partner.Document, partner.Played, link, theirs / mine, self.Preset));
     }
@@ -213,6 +234,8 @@ internal sealed class PartnerLinks : IDisposable
             if (target.Candidate != null && wanted.Contains(target.Key) && target.View() is { } view)
                 views[target.Key] = view;
         Views = [.. views.Values];
+        // The workspaces whose motion couldn't be read: their views won't come.
+        var failed = Candidates.Where(candidate => candidate.ReadFailed).Select(candidate => candidate.Key).ToHashSet();
         foreach (var entry in entries.Values)
             entry.Seen = false;
 
@@ -229,7 +252,10 @@ internal sealed class PartnerLinks : IDisposable
                         continue;
                     var partnerKey = new WorkspaceKey(layer.Link!.Partner);
                     var (state, inputs) = Plan(target.Key, layer, views.GetValueOrDefault(target.Key), views.GetValueOrDefault(partnerKey), gposing,
-                        partnerKey.Preset is not { } preset || presetExists(preset));
+                        partnerKey.Preset is not { } preset || presetExists(preset), candidate.ReadFailed, failed.Contains(partnerKey));
+                    // A view nobody asked for (alone, no partner to link to) isn't being read: the partner's clip isn't open.
+                    if (state == LinkState.Reading && !wanted.Contains(target.Key))
+                        state = LinkState.NotOpen;
                     // An off link has no track; its entry goes below, with any build of it.
                     if (inputs != null)
                     {
@@ -241,6 +267,14 @@ internal sealed class PartnerLinks : IDisposable
                             state = entry.FailedState;
                         else
                         {
+                            // Another bone or partner: the last track is another bone's, so it goes now, with a build for it.
+                            if (entry.Built is { } built && !LinkInputs.SameJoin(built.Link, inputs.Link))
+                            {
+                                entry.Built = null;
+                                entry.Track = null;
+                            }
+                            if (entry.Running is { } running && !LinkInputs.SameJoin(running.Link, inputs.Link))
+                                entry.Cancel?.Cancel();
                             if (!inputs.Equals(entry.Built))
                             {
                                 if (entry.Task == null && now - entry.EndedAt >= MotionLiveDisplay.BuildInterval(entry.Bytes))
@@ -310,7 +344,9 @@ internal sealed class PartnerLinks : IDisposable
                 continue;
             }
             entry.Built = inputs;
-            entry.Track = done.Result;
+            // A rebuild to the same content keeps the instance, so the set stays and Live and the Bones window redo nothing.
+            if (entry.Track?.Print != done.Result.Print)
+                entry.Track = done.Result;
             entry.Failed = null;
         }
     }
