@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 import re
 
@@ -56,9 +57,12 @@ class GameSkeleton:
     race: str = ""
     skeletons: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    # The hair rig of a custom hair skeleton among them (see hair_rig): {"race": "c0801", "chains":
+    # [{"kind": "back", "bones": [...], "tip": [x, y, z]}]}, the tips in the game's model space.
+    hair_rig: dict | None = None
 
     def to_payload(self) -> dict:
-        return {
+        payload = {
             "schema": SCHEMA,
             "version": VERSION,
             "source": self.source,
@@ -70,6 +74,9 @@ class GameSkeleton:
                 for name, parent, values in zip(self.bones, self.parents, self.reference)
             ],
         }
+        if self.hair_rig is not None:
+            payload["hairRig"] = self.hair_rig
+        return payload
 
 
 @dataclass
@@ -121,6 +128,38 @@ def _text(value, name: str, max_length: int) -> str:
     return value
 
 
+_RACE = re.compile(r"c\d{4}")
+
+
+def _finite(value) -> bool:
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _hair_rig(value, names: set[str]) -> dict | None:
+    """The skeleton's hair rig, its chains over the skeleton's own bones. Raises BridgeRequestError for bad input."""
+    if value is None:
+        return None
+    chains = value.get("chains") if isinstance(value, dict) else None
+    race = value.get("race") if isinstance(value, dict) else None
+    if not isinstance(race, str) or not _RACE.fullmatch(race) or not isinstance(chains, list) or len(chains) > MAX_BONES:
+        _reject("invalid_skeleton", "The skeleton's hair rig is invalid.")
+    parsed = []
+    for chain in chains:
+        kind = chain.get("kind") if isinstance(chain, dict) else None
+        bones = chain.get("bones") if isinstance(chain, dict) else None
+        tip = chain.get("tip") if isinstance(chain, dict) else None
+        if (not isinstance(kind, str) or len(kind) > 16 or not isinstance(bones, list) or not bones
+                or not all(isinstance(bone, str) and bone in names for bone in bones)
+                or not isinstance(tip, list) or len(tip) != 3
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and _finite(v) for v in tip)):
+            _reject("invalid_skeleton", "A chain of the skeleton's hair rig is invalid.")
+        parsed.append({"kind": kind, "bones": list(bones), "tip": [float(v) for v in tip]})
+    return {"race": race, "chains": parsed}
+
+
 def parse_skeleton(value) -> GameSkeleton:
     """Validate a skeleton sent by the plugin. Raises BridgeRequestError for bad input."""
     if not isinstance(value, dict):
@@ -167,6 +206,7 @@ def parse_skeleton(value) -> GameSkeleton:
         race=_text(value.get("race"), "race", 16),
         skeletons=_strings(value.get("skeletons"), "skeleton files", 256),
         warnings=_strings(value.get("warnings"), "warnings", 512),
+        hair_rig=_hair_rig(value.get("hairRig"), set(names)),
     )
 
 
@@ -326,7 +366,8 @@ def create_armature(context, collection, name: str, bone_names, mesh_objects,
     that the skeleton lacks are placed at their vertices in ``mesh_objects``. Without it, every
     model bone sits at the origin without a parent. The armature object is left at identity and
     becomes the active, selected object; it is added to ``created_objects`` as soon as it exists,
-    so a failed import can remove it."""
+    so a failed import can remove it. A skeleton with a hair rig gives the armature that rig, its bones
+    turned as Quick Export reads them (`hair_rig.rig_bone_rests`), so it sends the hair skeleton again."""
     import bpy
     from mathutils import Matrix
 
@@ -343,8 +384,14 @@ def create_armature(context, collection, name: str, bone_names, mesh_objects,
 
     placements = {}
     rests = {}
+    lengths = {}
     if skeleton is not None:
         rests = dict(zip(skeleton.bones, rest_matrices(skeleton)))
+        if skeleton.hair_rig is not None:
+            from .hair_rig import rig_bone_rests
+            for bone_name, (rest, length) in rig_bone_rests(skeleton, rests).items():
+                rests[bone_name] = rest
+                lengths[bone_name] = length
         known = set(skeleton.bones)
         report.added = [bone for bone in dict.fromkeys(bone_names) if bone not in known]
         if report.added:
@@ -365,7 +412,7 @@ def create_armature(context, collection, name: str, bone_names, mesh_objects,
                 edit_bone = bones.new(bone_name)
                 # A bone without length ignores its matrix.
                 edit_bone.head = (0.0, 0.0, 0.0)
-                edit_bone.tail = (0.0, BONE_LENGTH, 0.0)
+                edit_bone.tail = (0.0, lengths.get(bone_name, BONE_LENGTH), 0.0)
                 edit_bone.matrix = Matrix(rest.tolist())
                 return edit_bone
 
@@ -381,6 +428,9 @@ def create_armature(context, collection, name: str, bone_names, mesh_objects,
                     edit_bone.parent = bones[parent]
     finally:
         bpy.ops.object.mode_set(mode="OBJECT")
+    if skeleton is not None and skeleton.hair_rig is not None:
+        from .hair_rig import write_rig
+        write_rig(armature, skeleton.hair_rig)
     return armature, report
 
 

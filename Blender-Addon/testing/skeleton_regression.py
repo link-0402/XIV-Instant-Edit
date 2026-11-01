@@ -218,6 +218,71 @@ def check_armature(context):
     return armature, body, collection
 
 
+def check_hair_rig(context):
+    """A custom hair skeleton sent again: the armature carries its rig, and Quick Export reads back the
+    bones' model-space rests and the chain's tip the plugin sent."""
+    skeleton = module("instant_edit.skeleton")
+    hair_rig = module("instant_edit.hair_rig")
+    # Chain 01 runs along its bones' X axes, as an exported rig's bones point; 02_a is in no chain.
+    bones = SKELETON[:4] + [
+        ("j_ex_hair_01_a", 3, transform((0.02, -0.03, -0.08), quat((0.2, 1, 0.4), 70))),
+        ("j_ex_hair_01_b", 4, transform((0.06, 0.0, 0.0), quat((0, 0, 1), 20))),
+        ("j_ex_hair_02_a", 3, transform((-0.02, -0.03, -0.07), quat((0, 1, 0), 110))),
+    ]
+    model = rigid_model(bones)
+    to_game = K.inverted()
+    end_b = model["j_ex_hair_01_b"] @ Vector((0.07, 0, 0))
+    tip = list(to_game @ end_b)
+    rig = {"race": "c0801", "chains": [{"kind": "ponytail", "bones": ["j_ex_hair_01_a", "j_ex_hair_01_b"], "tip": tip}]}
+    game = skeleton.parse_skeleton(payload(bones, hairRig=rig))
+    require(game.hair_rig == rig and skeleton.parse_skeleton(game.to_payload()).hair_rig == rig
+            and skeleton.parse_skeleton(payload(bones)).hair_rig is None,
+            "a skeleton carries the hair rig of its custom hair skeleton, and none without one")
+    rejects(skeleton.parse_skeleton, payload(bones, hairRig={**rig, "race": "Miqote"}), "invalid_skeleton",
+            "a hair rig for no race is refused")
+    rejects(skeleton.parse_skeleton,
+            payload(bones, hairRig={"race": "c0801", "chains": [{**rig["chains"][0], "bones": ["j_ex_hair_09_a"]}]}),
+            "invalid_skeleton", "a hair rig chain over a bone the skeleton lacks is refused")
+    rejects(skeleton.parse_skeleton,
+            payload(bones, hairRig={"race": "c0801", "chains": [{**rig["chains"][0], "tip": [0, 10 ** 400, 0]}]}),
+            "invalid_skeleton", "a hair rig chain whose tip is not finite is refused")
+
+    collection = bpy.data.collections.new("Hair Import")
+    context.scene.collection.children.link(collection)
+    hair = mesh_object("0.0 Hair", [model["j_ex_hair_01_a"].translation, model["j_ex_hair_01_b"].translation,
+                                    model["j_ex_hair_02_a"].translation],
+                       {"j_ex_hair_01_a": [(0, 1.0)], "j_ex_hair_01_b": [(1, 1.0)], "j_ex_hair_02_a": [(2, 1.0)]}, collection)
+    armature, report = skeleton.create_armature(
+        context, collection, "InstantEditArmature", ["j_ex_hair_01_a", "j_ex_hair_01_b", "j_ex_hair_02_a"], [hair], game)
+    hair.modifiers.new("Armature", "ARMATURE").object = armature
+    require(json.loads(armature[hair_rig.RIG_PROPERTY]) == {
+        "race": "c0801", "chains": [{"kind": "ponytail", "bones": ["j_ex_hair_01_a", "j_ex_hair_01_b"]}]}
+            and report.added == [],
+            "the armature built from it carries the hair rig")
+    data_bones = armature.data.bones
+    require(max_difference(data_bones["j_kao"].matrix_local, model["j_kao"]) < 1e-5
+            and (data_bones["j_ex_hair_01_a"].tail_local - model["j_ex_hair_01_b"].translation).length < 1e-5
+            and (data_bones["j_ex_hair_01_b"].tail_local - end_b).length < 1e-5,
+            "a rig bone reaches the next bone of its chain, its last bone the chain's tip")
+
+    sent, issue = hair_rig.hair_skeleton_payload([hair])
+    require(issue == "" and sent is not None and sent["race"] == "c0801"
+            and [bone["name"] for bone in sent["bones"]] == ["j_ex_hair_01_a", "j_ex_hair_01_b", "j_ex_hair_02_a"]
+            and [bone["parent"] for bone in sent["bones"]] == ["j_kao", "j_ex_hair_01_a", "j_kao"],
+            f"Quick Export sends the rig of the armature an import built ({issue or 'no issue'})")
+    worst = 0.0
+    for bone in sent["bones"]:
+        x, y, z, w = bone["model"][3:7]
+        want = to_game @ model[bone["name"]]
+        got = Matrix.Translation(Vector(bone["model"][:3])) @ Quaternion((w, x, y, z)).to_matrix().to_4x4()
+        worst = max(worst, max_difference(got, want))
+    require(worst < 1e-5, f"each rig bone goes back with the model-space rest the plugin sent ({worst:.1e})")
+    chain = sent["chains"][0]
+    require(chain["kind"] == "ponytail" and chain["bones"] == ["j_ex_hair_01_a", "j_ex_hair_01_b"]
+            and max(abs(got - want) for got, want in zip(chain["tip"], tip)) < 1e-5,
+            "the chain goes back with its kind and tip")
+
+
 def check_placeholders(context, body, collection):
     skeleton = module("instant_edit.skeleton")
     armature, report = skeleton.create_armature(context, collection, "Placeholder", ["j_kao", "iv_extra"], [body])
@@ -531,6 +596,8 @@ def run():
             check_placeholders(context, body, collection)
             pose_bone = check_posing(context, armature, body)
             check_export(addon, armature, body, pose_bone)
+        with temporary_scene_data():
+            check_hair_rig(context)
         with temporary_scene_data():
             check_yas_groups_kept(addon, context)
         with temporary_scene_data():

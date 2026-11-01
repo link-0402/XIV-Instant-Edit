@@ -10,6 +10,7 @@ using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.CharacterSend;
 using InstantEdit.Services.PenumbraMods;
+using InstantEdit.Services.Physics;
 
 namespace InstantEdit.Services.Skeletons;
 
@@ -21,10 +22,11 @@ internal sealed record ModelSkeletonResult(ModelSkeleton? Skeleton, string? Prob
 /// of the on-screen character the model belongs to, when the character is of the model's race, else
 /// the skeleton files the game would load for it: the race's body and the face, hair, headgear or top
 /// skeleton its EST table picks, each resolved through the character's Penumbra collection, so
-/// skeleton mods apply.
+/// skeleton mods apply. A custom hair skeleton an export made comes with its hair rig, read from the
+/// hair physics beside it and the chain kinds <paramref name="hairSkeletons"/> recorded.
 /// </summary>
 internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModService animationMods, IDataManager data, IFramework framework,
-    IObjectTable objects, IPluginLog log)
+    IObjectTable objects, IPluginLog log, HairSkeletonStore? hairSkeletons = null)
 {
     private const int MaximumPartials = 16;
     private const int MaximumCachedSkeletons = 64;
@@ -48,7 +50,7 @@ internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModSe
             if (characterAddress != 0 && key.Human)
             {
                 var live = await framework.RunOnFrameworkThread(() => ReadCharacter(key.GenderRace, objectIndex, characterAddress, warnings));
-                if (live != null) return new(live, null);
+                if (live != null) return new(await WithHairRigAsync(live, objectIndex, token), null);
                 warnings.Clear();
             }
             return new(await ReadFilesAsync(key, objectIndex, warnings, token), null);
@@ -73,7 +75,7 @@ internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModSe
         try
         {
             var live = await framework.RunOnFrameworkThread(() => ReadCharacter(null, objectIndex, characterAddress, warnings));
-            if (live != null) return new(live, null);
+            if (live != null) return new(await WithHairRigAsync(live, objectIndex, token), null);
             var race = await framework.RunOnFrameworkThread(() => CharacterRace(objectIndex, characterAddress));
             if (race is null) return new(null, "The character has no human skeleton to read.");
             warnings.Clear();
@@ -215,6 +217,9 @@ internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModSe
             if (havok == null)
             {
                 if (p == 0) return null;
+                // A partial without a file is an empty slot; one with a file is a skeleton the armature lacks.
+                if (partial->SkeletonResourceHandle != null)
+                    warnings.Add($"{Path.GetFileName(path)} was left out: the game has not loaded its bones yet.");
                 continue;
             }
             SkeletonDescription description;
@@ -266,8 +271,55 @@ internal sealed class ModelSkeletonResolver(PenumbraIpc penumbra, AnimationModSe
             }
             parts.Add(new SkeletonPart(path, description, parts.Count == 0 ? -1 : SkeletonFileHeader.ConnectBone(bytes) ?? -1));
         }
-        return new ModelSkeleton(ModelSkeleton.FilesSource, key.Id, parts.Select(part => part.Path).ToImmutableArray(),
+        var skeleton = new ModelSkeleton(ModelSkeleton.FilesSource, key.Id, parts.Select(part => part.Path).ToImmutableArray(),
             ModelSkeletonMerge.Merge(parts, warnings), warnings.ToImmutableArray());
+        return await WithHairRigAsync(skeleton, collection?.Id, token);
+    }
+
+    private async Task<ModelSkeleton> WithHairRigAsync(ModelSkeleton skeleton, int objectIndex, CancellationToken token)
+    {
+        if (HairSkeletonRigs.Custom(skeleton) is null)
+            return skeleton;
+        var collection = objectIndex is >= 0 and <= ushort.MaxValue ? await penumbra.GetCollectionTargetAsync(objectIndex) : null;
+        return await WithHairRigAsync(skeleton, collection?.Id, token);
+    }
+
+    /// <summary>
+    /// <paramref name="skeleton"/> with the hair rig of a custom hair skeleton among its files, so Blender can
+    /// export the hair with it again. The rig's chains come from the hair physics the collection loads beside
+    /// the skeleton; without that file there is no rig, with a warning, since exporting the hair without its
+    /// chains would turn its physics off.
+    /// </summary>
+    private async Task<ModelSkeleton> WithHairRigAsync(ModelSkeleton skeleton, Guid? collection, CancellationToken token)
+    {
+        if (HairSkeletonRigs.Custom(skeleton) is not { } custom)
+            return skeleton;
+        var warnings = skeleton.Warnings.ToList();
+        try
+        {
+            var physics = PhybFile.Parse(await ReadAsync(collection, custom.PhysicsPath, token));
+            var rig = HairSkeletonRigs.Read(skeleton, custom.Race, physics, ChainKinds(custom.Id), warnings);
+            return skeleton with { HairRig = rig, Warnings = [.. warnings] };
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+        {
+            log.Warning(e, $"Could not read the hair physics {custom.PhysicsPath}.");
+            warnings.Add($"{Path.GetFileName(custom.PhysicsPath)} could not be read, so the hair rig wasn't restored: {e.Message}");
+            return skeleton with { Warnings = [.. warnings] };
+        }
+    }
+
+    // Every skeleton ID belongs to one (mod, model), so the ID finds the chain kinds its last export recorded.
+    private IReadOnlyDictionary<string, string>? ChainKinds(int skeletonId)
+    {
+        if (hairSkeletons is null)
+            return null;
+        try { return hairSkeletons.Load().LastOrDefault(record => record.SkeletonId == skeletonId)?.ChainKinds; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            log.Debug(e, "Could not read the hair skeleton records; chain kinds come from the physics groups.");
+            return null;
+        }
     }
 
     private async Task<int> EstEntryAsync(EstRequest request, ushort genderRace, int objectIndex, CancellationToken token)

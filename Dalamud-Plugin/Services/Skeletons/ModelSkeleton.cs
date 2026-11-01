@@ -278,9 +278,12 @@ internal static class SkeletonFileHeader
 /// </summary>
 internal sealed record SkeletonPart(string Path, SkeletonDescription Skeleton, int ConnectedParent = -1);
 
-/// <summary>A model's game skeleton, as Blender builds its armature from it.</summary>
+/// <summary>
+/// A model's game skeleton, as Blender builds its armature from it, with the hair rig of a custom hair
+/// skeleton among its files.
+/// </summary>
 internal sealed record ModelSkeleton(string Source, string Race, ImmutableArray<string> Skeletons,
-    ImmutableArray<AnimationTakeBone> Bones, ImmutableArray<string> Warnings)
+    ImmutableArray<AnimationTakeBone> Bones, ImmutableArray<string> Warnings, HairSkeletonRig? HairRig = null)
 {
     public const string Schema = "instant-edit.skeleton";
     public const int Version = 1;
@@ -295,13 +298,14 @@ internal sealed record ModelSkeleton(string Source, string Race, ImmutableArray<
             if (reference.Any(value => !float.IsFinite(value)))
                 throw new InvalidDataException($"Bone {bone.Name} has a reference pose that is not finite.");
             return new ModelSkeletonPayloadBone(bone.Name, bone.Parent, reference);
-        }).ToArray());
+        }).ToArray(), HairRig?.ToPayload());
 }
 
 /// <summary>
 /// The <c>skeleton</c> field of an import request: bones in hierarchy order with their parent index
 /// (-1 for roots) and reference transform relative to it (translation, rotation x/y/z/w, scale),
-/// in the game's Y-up model space, as in an animation take. See Blender-Addon/instant_edit/skeleton.py.
+/// in the game's Y-up model space, as in an animation take, and the hair rig of a custom hair
+/// skeleton among them, left out without one. See Blender-Addon/instant_edit/skeleton.py.
 /// </summary>
 public sealed record ModelSkeletonPayload(
     [property: JsonPropertyName("schema")] string Schema,
@@ -310,7 +314,9 @@ public sealed record ModelSkeletonPayload(
     [property: JsonPropertyName("race")] string Race,
     [property: JsonPropertyName("skeletons")] IReadOnlyList<string> Skeletons,
     [property: JsonPropertyName("warnings")] IReadOnlyList<string> Warnings,
-    [property: JsonPropertyName("bones")] IReadOnlyList<ModelSkeletonPayloadBone> Bones);
+    [property: JsonPropertyName("bones")] IReadOnlyList<ModelSkeletonPayloadBone> Bones,
+    [property: JsonPropertyName("hairRig"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    HairSkeletonRigPayload? HairRig = null);
 
 public sealed record ModelSkeletonPayloadBone(
     [property: JsonPropertyName("name")] string Name,

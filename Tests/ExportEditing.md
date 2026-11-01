@@ -65,6 +65,20 @@ Apply Racial Scaling (Blender Tools):
   bones' matrices, so the test's mesh is weighted to both, and it toggles IVCS both ways (off to on, on
   to off). Largest difference from the reference: 1.9e-9 m.
 
+## Custom hair skeleton sent again 2026-10-31 (pending)
+
+The headless suites cover the rig coming back with the skeleton. This needs the game and Blender:
+- [x] Send a hair whose custom skeleton an export made (Magic Fit rig, for example DOUX Maeve's h7480)
+  with the pen on your character's row. Quick Export takes it without the "no armature of theirs
+  carries a hair rig" refusal, keeps the same skeleton ID, and the export notes say your physics
+  settings were kept for every chain.
+  (XIV Bridge exports/16, Release 2026-10-31 22:25, a test copy of DOUX Maeve (h7480) and a headless Blender with the
+  add-on from the repo, the send called as the pen calls it: Quick Export takes the hair without the hair rig refusal
+  both times, the second export keeps the skeleton ID, the notes say "Kept your physics settings for N of N chains." and
+  a dampening set between the rounds survives. The real pen click and Blender's button: by hand.)
+- [x] The same from the Mod Browser, and with Send my character.
+  (XIV Bridge exports/17 (Mod Browser) and 18 (Send my character), Release 2026-10-31: the same checks pass.)
+
 ## Split by Material 2026-10-27 (pending)
 
 The headless Blender suites cover Split by Material. This needs Blender's own window:

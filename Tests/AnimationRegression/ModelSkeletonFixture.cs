@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Physics;
 using InstantEdit.Services.Skeletons;
 
 /// <summary>
@@ -260,8 +261,68 @@ internal static class ModelSkeletonFixture
               payload.GetProperty("source").GetString() == "files" && payload.GetProperty("race").GetString() == "c0101" &&
               payload.GetProperty("bones").GetArrayLength() == 10 && first.GetProperty("name").GetString() == "j_kosi" &&
               first.GetProperty("parent").GetInt32() == 0 && first.GetProperty("reference").GetArrayLength() == AnimationTake.Stride &&
-              Math.Abs(first.GetProperty("reference")[1].GetSingle() - 1.02f) < 1e-6,
-            "the skeleton reaches Blender as bones with parent indices and reference transforms");
+              Math.Abs(first.GetProperty("reference")[1].GetSingle() - 1.02f) < 1e-6 && !payload.TryGetProperty("hairRig", out _),
+            "the skeleton reaches Blender as bones with parent indices and reference transforms, without a hair rig");
+
+        HairRig(check);
+    }
+
+    /// <summary>A hair skeleton an export made, merged into a character's, and the rig read back from its physics.</summary>
+    private static void HairRig(Action<bool, string> check)
+    {
+        const string HairPath = "chara/human/c0801/skeleton/hair/h7480/skl_c0801h7480.sklb";
+        var body = Body();
+        var bodyModel = Model(body.Bones, b => b.Parent, b => b.Reference);
+        Matrix4x4.Decompose(bodyModel[4], out _, out var kaoRotation, out var kaoPosition);
+        // The hair skeleton's j_kao is its template's, a little off the body's; its bones keep their own model space.
+        var hairKao = new BoneTransform(kaoPosition + new Vector3(0, 0.01f, 0), kaoRotation, Vector3.One);
+        var hair = Skeleton("hair",
+            B("j_kao", -1, hairKao),
+            B("j_ex_hair_01_a", 0, T(0.02f, -0.03f, -0.08f, Q(0.2f, 1, 0.4f, 70))),
+            B("j_ex_hair_01_b", 1, T(0.06f, 0, 0, Q(0, 0, 1, 20))),
+            B("j_ex_hair_02_a", 0, T(-0.02f, -0.03f, -0.07f, Q(0, 1, 0, 110))));
+        var hairModel = Model(hair.Bones, b => b.Parent, b => b.Reference);
+        var skeleton = new ModelSkeleton(ModelSkeleton.CharacterSource, "c0801",
+            ["chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", HairPath],
+            ModelSkeletonMerge.Merge([new("body.sklb", body), new(HairPath, hair, 4)], new List<string>()), []);
+        check(HairSkeletonRigs.Custom(skeleton) == ("c0801", 7480, "chara/human/c0801/skeleton/hair/h7480/phy_c0801h7480.phyb") &&
+              HairSkeletonRigs.Custom(Sample()) is null &&
+              HairSkeletonRigs.Custom(skeleton with { Skeletons = ["chara/human/c0801/skeleton/hair/h0182/skl_c0801h0182.sklb"] })?.Id == 182 &&
+              HairSkeletonRigs.Custom(skeleton with { Skeletons = [skeleton.Skeletons[0]] }) is null,
+            "a skeleton has a custom hair skeleton when a hair skeleton file brings rig bones");
+
+        static PhybChain Chain(Vector3 offset, params string[] bones) => new()
+        {
+            LastBoneOffset = offset,
+            Nodes = [.. bones.Select(bone => new PhybNode { Bone = PhybName.From(bone) }), new PhybNode()],
+        };
+        var physics = new PhybFile
+        {
+            Simulators =
+            [
+                new PhybSimulator { Group = 23, Chains = [Chain(new(0.07f, 0, 0), "j_ex_hair_01_a", "j_ex_hair_01_b")] },
+                new PhybSimulator { Group = 3, Chains = [Chain(new(0.05f, 0.01f, 0), "j_ex_hair_02_a"), Chain(new(0.05f, 0, 0), "j_kami_a")] },
+            ],
+        };
+        var warnings = new List<string>();
+        var rig = HairSkeletonRigs.Read(skeleton, "c0801", physics, new Dictionary<string, string> { ["j_ex_hair_01_a"] = "ponytail" }, warnings);
+        var fromGroups = HairSkeletonRigs.Read(skeleton, "c0801", physics, null, new List<string>());
+        check(rig.Race == "c0801" && rig.Chains.Select(chain => (chain.Kind, string.Join(",", chain.Bones))).SequenceEqual(
+                  [("ponytail", "j_ex_hair_01_a,j_ex_hair_01_b"), ("bangs", "j_ex_hair_02_a")]) &&
+              fromGroups.Chains.Select(chain => chain.Kind).SequenceEqual(["back", "bangs"]) && warnings.Count == 1,
+            "the rig's chains are the physics chains over rig bones, with their recorded kinds, else their groups'");
+        var lastB = Matrix4x4.CreateTranslation(0.07f, 0, 0) * hairModel[2];
+        var lastA = Matrix4x4.CreateTranslation(0.05f, 0.01f, 0) * hairModel[3];
+        check(Vector3.Distance(rig.Chains[0].Tip, lastB.Translation) < 1e-5f && Vector3.Distance(rig.Chains[1].Tip, lastA.Translation) < 1e-5f,
+            "a chain's tip is its last bone offset from its last bone, in the hair skeleton's model space");
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize((skeleton with { HairRig = rig }).ToPayload()));
+        var sent = document.RootElement.GetProperty("hairRig");
+        var chain = sent.GetProperty("chains")[0];
+        check(sent.GetProperty("race").GetString() == "c0801" && sent.GetProperty("chains").GetArrayLength() == 2 &&
+              chain.GetProperty("kind").GetString() == "ponytail" && chain.GetProperty("bones").GetArrayLength() == 2 &&
+              Math.Abs(chain.GetProperty("tip")[1].GetSingle() - lastB.Translation.Y) < 1e-6,
+            "the hair rig reaches Blender with the skeleton");
     }
 
     /// <summary>The sample skeleton as the import request carries it.</summary>

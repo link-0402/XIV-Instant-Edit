@@ -244,7 +244,7 @@ public sealed class Plugin : IDalamudPlugin
         _timelineWindow.AttachPlayingNow(_window.DrawPlayingNow, () => _window.PlayingCount, _window.DrawTimelineDialogs);
         _window.AttachPainter(_painterJobs);
         // Game skeletons for Blender's armatures: sent with imports, and asked for by the add-on.
-        var skeletons = new ModelSkeletonResolver(_penumbra.Ipc, _penumbra.Animations, data, framework, objects, log);
+        var skeletons = new ModelSkeletonResolver(_penumbra.Ipc, _penumbra.Animations, data, framework, objects, log, hairSkeletons);
         _window.AttachSkeletons(skeletons);
         _exportServer.Skeletons = skeletons;
         // What your character draws right now, for Send my character.

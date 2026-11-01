@@ -6,13 +6,16 @@ bones form chains, as JSON: {"race": "c0801", "chains": [{"kind": "back", "bones
 The hair meshes are weighted to those bones and deformed by the armature through an Armature
 modifier. Quick Export sends the bones in the game's Y-up model space as ``hairSkeleton``, and the
 plugin builds the skeleton file and points the hair's EST entry at it. Each bone is turned so its
-game X axis runs from head to tail, as the vanilla hair bones point.
+game X axis runs from head to tail, as the vanilla hair bones point. When the plugin later sends that
+hair again, its skeleton carries the rig (read back from the hair's physics file), and the armature
+built for it becomes the rig again (`rig_bone_rests`, `write_rig`).
 """
 
 import json
 import re
 
 from mathutils import Matrix
+import numpy as np
 
 from ..materials import _EST_RACE_PATTERN, group_mesh_objects
 from .animation import GAME_TO_BLENDER
@@ -179,6 +182,44 @@ def _chains_issue(chains, armature, matrix) -> str:
                     "Move it at least 1 mm away."
                 )
     return ""
+
+
+def rig_bone_rests(skeleton, rests) -> dict:
+    """{bone: (rest, length)} for the BONE_PREFIX bones of a game skeleton with a hair rig, whose ``rests``
+    (armature space) are the game's bind pose: each turned so its Y axis is the game bone's X, which
+    `_rig_bones` turns back, and as long as the way to the next bone of its chain, or to the chain's tip
+    for its last bone (`hair_skeleton_payload` reads the tip off its tail). A bone in no chain reaches its
+    first rig child, else keeps the skeleton's bone length."""
+    from .skeleton import BONE_LENGTH
+
+    turn = np.array([list(row) for row in _ALONG_X], dtype=np.float64).T
+    ends = {}
+    for chain in skeleton.hair_rig["chains"]:
+        bones = chain["bones"]
+        for bone, after in zip(bones, bones[1:]):
+            ends[bone] = rests[after][:3, 3]
+        ends[bones[-1]] = (GAME_TO_BLENDER @ np.array([*chain["tip"], 1.0]))[:3]
+    children = {}
+    for name, parent in zip(skeleton.bones, skeleton.parents):
+        if parent >= 0 and name.startswith(BONE_PREFIX):
+            children.setdefault(skeleton.bones[parent], name)
+    result = {}
+    for name in skeleton.bones:
+        if not name.startswith(BONE_PREFIX):
+            continue
+        rest = rests[name]
+        end = ends.get(name)
+        if end is None and name in children:
+            end = rests[children[name]][:3, 3]
+        length = float(np.linalg.norm(end - rest[:3, 3])) if end is not None else 0.0
+        result[name] = (rest @ turn, length if length > 1e-6 else BONE_LENGTH)
+    return result
+
+
+def write_rig(armature, rig: dict) -> None:
+    """Give ``armature`` the hair rig of a game skeleton (`skeleton.GameSkeleton.hair_rig`) as RIG_PROPERTY."""
+    armature[RIG_PROPERTY] = json.dumps({"race": rig["race"], "chains": [
+        {"kind": chain["kind"], "bones": list(chain["bones"])} for chain in rig["chains"]]})
 
 
 def hair_skeleton_payload(objects, reset_scaling: bool = False) -> tuple[dict | None, str]:
