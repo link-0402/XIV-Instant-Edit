@@ -1116,7 +1116,18 @@ def refresh_variant_targets(
         props.variant_targets.clear()
         props.variant_targets_context_id = ref.context_id
         return 0
-    groups = _request_variant_targets(ref)
+    try:
+        groups = _request_variant_targets(ref)
+    except PluginResponseError as error:
+        # A plugin reload or an expired context: reattach and ask once more, as exports do.
+        if error.status != 410 and not (error.status == 401 and error.code == "plugin_instance_mismatch"):
+            raise
+        from .recovery import reattach_collection
+
+        if not reattach_collection(ref.collection, context.scene):
+            raise ValueError(f"plugin returned HTTP {error.status} ({error.code}); context recovery failed") from error
+        ref = export_destination_context(context)
+        groups = _request_variant_targets(ref)
     previous_targets_context_id = props.variant_targets_context_id
     props.variant_targets.clear()
     for group in groups:

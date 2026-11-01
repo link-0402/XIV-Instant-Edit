@@ -2021,6 +2021,30 @@ def run_staging_isolation_regression(addon) -> None:
                 refresh_contexts == ["explicit-context"],
                 "post-operation target refresh reloads the selected Context",
             )
+            recovery_module = importlib.import_module(f"{package_name}.instant_edit.recovery")
+            original_reattach = recovery_module.reattach_collection
+            reattached = []
+            stale_answers = {"left": 1}
+
+            def stale_then_fresh(ref):
+                if stale_answers["left"]:
+                    stale_answers["left"] -= 1
+                    raise ops.PluginResponseError(401, "plugin_instance_mismatch", "export context was rejected")
+                return fake_variant_request(ref)
+
+            ops._request_variant_targets = stale_then_fresh
+            recovery_module.reattach_collection = lambda collection, _scene: reattached.append(collection.name) or True
+            refresh_contexts.clear()
+            try:
+                recovered_count = ops.refresh_variant_targets(bpy.context)
+            finally:
+                recovery_module.reattach_collection = original_reattach
+                ops._request_variant_targets = fake_variant_request
+            _require(
+                recovered_count == 3 and reattached == [explicit_context_collection.name] and
+                refresh_contexts == ["explicit-context"],
+                "a target refresh the reloaded plugin rejects reattaches the Context and asks again",
+            )
             selected_ref = ops.export_destination_context(bpy.context)
             _require(
                 ops.export_objects_for_scope(selected_ref, "CURRENT_COLLECTION") == [explicit_context_mesh],
