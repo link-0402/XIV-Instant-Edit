@@ -371,9 +371,10 @@ internal sealed class PenumbraIpc : IDisposable
         {
             try
             {
-                return resolve.Invoke(collection, gamePath, out var resolved) == PenumbraApiEc.Success && !string.IsNullOrWhiteSpace(resolved)
-                    ? resolved
-                    : null;
+                var result = resolve.Invoke(collection, gamePath, out var resolved);
+                if (result == PenumbraApiEc.CollectionMissing)
+                    return ResolveThroughObject(collection, gamePath);
+                return result == PenumbraApiEc.Success && !string.IsNullOrWhiteSpace(resolved) ? resolved : null;
             }
             catch (Exception e)
             {
