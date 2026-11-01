@@ -46,7 +46,7 @@ internal sealed unsafe class MotionLiveDisplay : IDisposable
     // Edits that keep changing (a drag) build a new copy at most this often, in milliseconds after the
     // last build ended; the latest edits always build in the end. A short clip builds about every frame,
     // a long one less often, so the copies a drag replaces stay at a few tens of MB.
-    private static long BuildInterval(long copyBytes) => Math.Clamp(copyBytes / 100_000, 16, 100);
+    internal static long BuildInterval(long copyBytes) => Math.Clamp(copyBytes / 100_000, 16, 100);
     // The message when a copy has a track for a bone the actor's skeleton lacks.
     private const string SkeletonMismatch = "Your character's skeleton doesn't have every bone these layers move.";
 

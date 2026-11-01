@@ -143,6 +143,27 @@ internal static class MotionEdits
     }
 
     /// <summary>
+    /// Adds a link layer named <paramref name="name"/> over the whole clip after the others, at full pull, joining a bone to a
+    /// partner's by <paramref name="link"/>; a hips link holding nothing holds both feet. Its key is this document's own next one.
+    /// Unchanged, with an empty key, on a face or when the document has no room for another layer.
+    /// </summary>
+    public static TimelineDocument AddLink(TimelineDocument doc, MotionLink link, string name, out string key)
+    {
+        key = string.Empty;
+        if (doc.Motion.Length >= MotionEvaluator.MaxLayers || doc.Face != null)
+            return doc;
+        if (link.Bone == PinChains.Hips && link.Holds.IsEmpty)
+            link = link with { Holds = [PinChains.FootL, PinChains.FootR] };
+        var keys = doc.Motion.Select(layer => layer.Key).ToHashSet(StringComparer.Ordinal);
+        var next = Math.Max(1, doc.NextMotionKey);
+        do key = "m" + (next++).ToString(CultureInfo.InvariantCulture);
+        while (!keys.Add(key));
+        var added = new MotionLayer(key, MotionLayerKind.Link, name.Length > MaxName ? name[..MaxName] : name,
+            0, Math.Max(TimelineDocument.MinLength, doc.Length), 0, 0, 1, PoseComponents.None, MotionInterpolation.Smooth, Link: link);
+        return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
+    }
+
+    /// <summary>
     /// Adds a symmetry layer over the whole clip copying <paramref name="from"/> onto the other side for
     /// <paramref name="bones"/> and everything below them: what Make symmetrical adds. Unchanged with an
     /// error when no bone is given or the document has no room for another layer.

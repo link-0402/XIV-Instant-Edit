@@ -3,6 +3,7 @@ using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.Audio;
@@ -108,6 +109,18 @@ internal sealed class TimelineSession
 
     /// <summary>The open clip's rebuild for the character's race, chosen in the save footer; null keeps its race.</summary>
     public RaceRebuild? Rebuild { get; set; }
+
+    /// <summary>
+    /// The partner tracks of the document's link layers, set by <see cref="PartnerLinks"/> on the framework update: the same
+    /// instance while no track was added, replaced or removed, as the views and Live compare it by reference.
+    /// </summary>
+    public MotionLinkSet Links { get; set; } = MotionLinkSet.Empty;
+
+    /// <summary>Each planned link layer's state, by layer key; replaced only when a state changed, so views can key on it.</summary>
+    public ImmutableDictionary<string, LinkState> LinkStates { get; set; } = PartnerLinks.NoStates;
+
+    /// <summary>A link track of this workspace is being built or waits to be: a save or Preview start waits for it.</summary>
+    public bool LinksBuilding { get; set; }
 
     /// <summary>
     /// The skeleton <paramref name="loaded"/>'s motion is edited on: its rebuild's, else the one it was made for;

@@ -211,6 +211,22 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         return names;
     }
 
+    /// <summary>
+    /// The drawn size of the workspace's GPose actor: its skeleton's scale, uniform, with its height and its race's own factor in it,
+    /// so only the ratio of two actors' sizes means anything. Null outside GPose or while the actor isn't drawn.
+    /// </summary>
+    public float? ActorScale()
+    {
+        RequireFrameworkThread();
+        if (GPoseActor() is not { } actor)
+            return null;
+        var drawn = ((Character*)actor.Address)->GetCharacterBase();
+        if (drawn == null || drawn->Skeleton == null)
+            return null;
+        var scale = drawn->Skeleton->Transform.Scale.Y;
+        return float.IsFinite(scale) && scale > 0 ? scale : null;
+    }
+
     // The names ActorBoneNames read last, with the Havok skeleton and bone array they came from: identities only, never followed.
     private (nint Skeleton, nint Bones, string[] Names)? _boneNames;
 

@@ -7,6 +7,7 @@ using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services.Actors;
 using InstantEdit.Services.Animations;
+using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
 using InstantEdit.Services.Audio;
@@ -55,6 +56,10 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private readonly Dictionary<WorkspaceKey, int> tied = [];
     // Presets deleted since the last framework update, whose workspaces go then.
     private readonly List<Guid> deleted = [];
+    // Link backs asked for since the last framework update, added to their workspaces then.
+    private readonly List<(WorkspaceKey Partner, MotionLink Link, string Name, string Path, int Binding)> linkBacks = [];
+    // The partner tracks of every workspace's link layers, built after the workspaces' own update.
+    private readonly PartnerLinks links;
     // The window's close waits for the question about unsaved changes; Discard confirms it.
     private bool closeAsked;
     private bool closeConfirmed;
@@ -71,6 +76,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         this.clientState = clientState;
         this.targets = targets;
         selfServices = services.For(WorkspaceKey.Self);
+        links = new PartnerLinks((error, message) => selfServices.Log.Warning(error, message));
         bonesWindow = new BonesWindow(this);
         overlayWindow = new BonesOverlay(this);
         poseBrowserWindow = new PoseBrowserWindow(this);
@@ -242,8 +248,46 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         TellShown(Shown.Key.IsSelf ? null : NameOf(Shown.Key));
         foreach (var workspace in workspaces.Values)
             workspace.Tick();
+        // The links read each clip as this frame's update left it.
+        AddLinkBacks();
+        links.Update(workspaces.Values, clientState.IsGPosing, PresetExists);
         // After every workspace's own update, so every clip it plays again starts on this framework frame.
         selfServices.Group.Update();
+    }
+
+    /// <summary>Whether the partner preset still exists.</summary>
+    private bool PresetExists(Guid preset) => partners?.Store.Presets.Any(known => known.Id == preset) == true;
+
+    IReadOnlyList<LinkView> ITimelineHost.LinkPartners(WorkspaceKey self)
+    {
+        links.Want(self);
+        return [.. links.Views.Where(view => view.Key != self)];
+    }
+
+    bool ITimelineHost.HasLinkPartner(WorkspaceKey self) => links.HasPartner(self);
+
+    void ITimelineHost.AddLinkBack(WorkspaceKey partner, MotionLink link, string name, string expectedPath, int expectedBinding) =>
+        linkBacks.Add((partner, link, name, expectedPath, expectedBinding));
+
+    /// <summary>
+    /// The link backs asked for since the last update, outside any draw: each through its workspace's own editor while that clip is
+    /// still the one the link names; one waiting on an edit there tries again on the next update.
+    /// </summary>
+    private void AddLinkBacks()
+    {
+        if (linkBacks.Count == 0)
+            return;
+        var waiting = new List<(WorkspaceKey, MotionLink, string, string, int)>();
+        foreach (var back in linkBacks)
+        {
+            if (!workspaces.TryGetValue(back.Partner, out var workspace) || workspace.Session.Source?.Clip is not { } clip ||
+                !string.Equals(clip.GamePath, back.Path, StringComparison.OrdinalIgnoreCase) || clip.BindingIndex != back.Binding)
+                continue;
+            if (!workspace.AddLinkLayer(back.Link, back.Name))
+                waiting.Add(back);
+        }
+        linkBacks.Clear();
+        linkBacks.AddRange(waiting);
     }
 
     /// <summary>Tells the main window which partner shows, null for you: Playing now names it and the recorder records it.</summary>
@@ -444,6 +488,9 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         // Every Preview and Live ends, and every workspace's clip closes.
         foreach (var workspace in workspaces.Values)
             workspace.Close();
+        // So does every link, with its builds.
+        linkBacks.Clear();
+        links.Forget();
         // The main window's recorder and Playing now are yours again.
         TellShown(null);
         // The listener stays on while the Send character card still waits on it.
@@ -457,6 +504,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
             return;
         disposed = true;
         framework.Update -= OnUpdate;
+        links.Dispose();
         foreach (var workspace in workspaces.Values)
             workspace.Dispose();
         keys.Dispose();

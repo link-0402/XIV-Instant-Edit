@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+﻿using System.Collections.Immutable;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
@@ -54,6 +55,22 @@ internal interface ITimelineHost
 
     /// <summary>Why <paramref name="key"/>'s actor can't be acted on yet ("Partner One is still spawning."); null when it can.</summary>
     string? Waiting(WorkspaceKey key);
+
+    /// <summary>
+    /// The other workspaces' ready link views, as the last framework update found them: what a link can join. Asking keeps their
+    /// motion read for a couple of seconds, so call it only while the picker is open.
+    /// </summary>
+    IReadOnlyList<LinkView> LinkPartners(WorkspaceKey self);
+
+    /// <summary>Whether another workspace has an editable body clip to link to, for the Add menu; reads no motion.</summary>
+    bool HasLinkPartner(WorkspaceKey self);
+
+    /// <summary>
+    /// Adds <paramref name="link"/> as a link layer named <paramref name="name"/> to <paramref name="partner"/>'s document on the next
+    /// framework update, through that workspace's own editor (its own key and undo step), if its clip is still
+    /// <paramref name="expectedPath"/> at <paramref name="expectedBinding"/>; dropped otherwise.
+    /// </summary>
+    void AddLinkBack(WorkspaceKey partner, MotionLink link, string name, string expectedPath, int expectedBinding);
 }
 
 /// <summary>
@@ -291,6 +308,54 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     DragHolds IBonesOverlay.Holds => dragHolds;
     string? IBonesOverlay.GizmoWaits(MotionLayer layer, int frame, SkeletonDescription skeleton) =>
         GizmoOperation(layer, frame, skeleton, out var reason) == null ? reason : null;
+
+    /// <summary>The partner tracks of this clip's link layers (<see cref="PartnerLinks"/>); the same instance while none changed.</summary>
+    internal MotionLinkSet Links => session.Links;
+
+    /// <summary>Each planned link layer's state, by layer key.</summary>
+    internal ImmutableDictionary<string, LinkState> LinkStates => session.LinkStates;
+
+    /// <summary>
+    /// What a link or the picker sees of this workspace before its motion is read, on the framework thread with no ImGui: null
+    /// without an editable body clip (none open, a face, an expression on its own). Reads nothing and starts no read.
+    /// </summary>
+    internal LinkCandidate? LinkCandidate()
+    {
+        if (animations == null || source is not { Document: not null } loaded || editor == null || editor.Document.Face != null ||
+            loaded.MotionTarget.Standalone)
+            return null;
+        return new LinkCandidate(Key, session.ActorName(), loaded.Clip.GamePath, loaded.Clip.BindingIndex, editor.Document, session.Busy,
+            session.EditingSkeleton(loaded));
+    }
+
+    /// <summary>
+    /// What the other workspaces' links see of this one, on the framework thread with no ImGui: the <see cref="LinkCandidate"/> with
+    /// the clip as it plays and the actor's size. Starts reading the motion, so only a workspace a link or the picker wants is asked;
+    /// null without an editable body clip or while the motion is still read.
+    /// </summary>
+    internal LinkView? LinkView()
+    {
+        if (LinkCandidate() is not { } candidate || decode.DecodedPose(source!) is not { } decoded)
+            return null;
+        return new LinkView(Key, candidate.Name, candidate.GamePath, candidate.Binding, decode.OutputMotion(editor!, decoded),
+            candidate.Document, candidate.ReadOnly, playback.ActorScale());
+    }
+
+    /// <summary>
+    /// A partner's link back: adds <paramref name="link"/> as a link layer named <paramref name="name"/> through this workspace's own
+    /// editor, so this document gives it its key and it is one undo step here. True when it is done or can't be (no editable body
+    /// clip, no room); false while an edit runs here, to try again on the next update.
+    /// </summary>
+    internal bool AddLinkLayer(MotionLink link, string name)
+    {
+        if (source?.Document == null || editor == null)
+            return true;
+        // A read or save running, or a drag, here: Commit would end the drag, and the clip may still change.
+        if (session.Busy || editor.Gesture != TimelineGesture.None || editor.History.InGesture)
+            return false;
+        editor.Commit(MotionEdits.AddLink(editor.Document, link, name, out _));
+        return true;
+    }
 
     /// <summary> Unsaved edits of an editable timeline. </summary>
     // The edits of the timeline Edit face left count too: opening another clip would lose them.

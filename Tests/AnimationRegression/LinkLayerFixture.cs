@@ -21,7 +21,196 @@ internal static class LinkLayerFixture
         Solving(check);
         Hips(check);
         Partners(check, reject);
+        Planner(check);
+        Service(check);
+        AddLinks(check);
     }
+
+    /// <summary>How a link stands with its partner's view, and the inputs its track is built from.</summary>
+    private static void Planner(Action<bool, string> check)
+    {
+        var you = WorkspaceKey.Self;
+        var aria = new WorkspaceKey(Partner);
+        var played = Reaching();
+        var theirPlayed = Reaching();
+        var layer = Layer(Hand());
+        var mine = new TimelineDocument(30, 30, null, [], 1) { Motion = [layer] };
+        var theirs = new TimelineDocument(30, 30, null, [], 1) { Motion = [Offset("m1", "j_te_l", new Vector3(.05f, 0, 0))] };
+        var me = View(you, mine, played, 1);
+        var partner = View(aria, theirs, theirPlayed, 1.1f);
+        LinkState State(LinkView? from, LinkView? to, bool gposing = true, bool exists = true) =>
+            PartnerLinks.Plan(you, layer, from, to, gposing, exists).State;
+
+        check(State(me, null) == LinkState.NotOpen, "planner: a partner without a ready clip leaves the link off as not open");
+        check(State(me, partner with { GamePath = "chara/human/c0101/animation/a0001/bt_common/emote/dance.pap" }) == LinkState.OtherClip &&
+              State(me, partner with { Binding = 2 }) == LinkState.OtherClip, "planner: a partner on another clip or binding leaves it off");
+        check(State(me, partner with { GamePath = Hug.ToUpperInvariant() }) == LinkState.On, "planner: game paths compare without case");
+        check(State(me, partner with { Size = null }) == LinkState.Despawned && State(me with { Size = null }, partner) == LinkState.Despawned,
+            "planner: a partner or actor that isn't drawn leaves it off as despawned");
+        check(State(me, partner, gposing: false) == LinkState.OutOfGPose && State(me, partner with { Size = null }, gposing: false) == LinkState.OutOfGPose,
+            "planner: out of GPose the link is off, before the sizes are asked");
+        check(State(me, null, exists: false) == LinkState.PartnerGone && State(me, partner, gposing: false, exists: false) == LinkState.PartnerGone,
+            "planner: a deleted preset leaves it off as gone, before anything else");
+        check(PartnerLinks.Plan(you, layer, me, partner with { Key = new WorkspaceKey(Guid.NewGuid()) }, true, true).State == LinkState.NotOpen,
+            "planner: another workspace's view isn't the partner's");
+
+        var (state, inputs) = PartnerLinks.Plan(you, layer, me, partner, true, true);
+        check(state == LinkState.On && inputs is { Self: null } ready && ReferenceEquals(ready.PartnerDocument, theirs) &&
+              ReferenceEquals(ready.Played, theirPlayed) && ReferenceEquals(ready.Link, layer.Link) && ready.Ratio == 1.1f,
+            "planner: a ready partner turns the link on, with its document, played clip and the size ratio 1.1");
+        check(PartnerLinks.Plan(you, layer, me, partner, true, true).Inputs is { } again && !ReferenceEquals(again, inputs) &&
+              again.Equals(inputs) && again.GetHashCode() == inputs!.GetHashCode(), "planner: SameInputs_KeepsSet: the same references give equal inputs");
+        check(!inputs!.Equals(PartnerLinks.Plan(you, layer, me, partner with { Document = theirs with { } }, true, true).Inputs) &&
+              !inputs.Equals(PartnerLinks.Plan(you, layer, me, partner with { Played = theirPlayed.Clone() }, true, true).Inputs),
+            "planner: a new document or played clip reference gives other inputs");
+        check(inputs.Equals(inputs with { Link = inputs.Link with { Holds = [.. inputs.Link.Holds] } }) &&
+              !inputs.Equals(inputs with { Link = inputs.Link with { Bend = 10 } }) && !inputs.Equals(inputs with { Ratio = 1.2f }),
+            "planner: the link and the ratio compare by value");
+
+        // The partner's side: its link to You names no preset, so a deleted preset doesn't matter, and its inputs name its own.
+        var back = Layer(new MotionLink("j_te_l", null, "j_te_r", Hug, 1));
+        var (backState, backInputs) = PartnerLinks.Plan(aria, back, partner, me, true, false);
+        check(backState == LinkState.On && backInputs is { Self: { } self } && self == Partner && ReferenceEquals(backInputs.PartnerDocument, mine) &&
+              backInputs.Ratio == 1 / 1.1f, "planner: a partner's link to you is on, built for that partner");
+
+        // A link to its own workspace is never on.
+        check(PartnerLinks.Plan(you, Layer(Hand() with { Partner = null }), me, me, true, true).State == LinkState.NotOpen &&
+              PartnerLinks.Plan(aria, layer, partner, partner, true, true).State == LinkState.NotOpen,
+            "planner: a link to its own workspace stays off as not open");
+    }
+
+    /// <summary>The service: tracks built on a worker and handed out, the same set while nothing changed, and off links dropped.</summary>
+    private static void Service(Action<bool, string> check)
+    {
+        var you = WorkspaceKey.Self;
+        var aria = new WorkspaceKey(Partner);
+        var warned = new List<string>();
+        long later = 0;
+        using var links = new PartnerLinks((_, message) => warned.Add(message), () => Environment.TickCount64 + later);
+        var mySession = new TimelineSession(null, null!, null!, null!, null, null!, null!, null!);
+        var theirSession = new TimelineSession(null, null!, null!, null!, null, null!, null!, null!);
+        var played = Reaching();
+        var theirPlayed = Reaching();
+        var nudge = Offset("m1", "j_te_l", new Vector3(.05f, 0, 0));
+        var mine = new TimelineDocument(30, 30, null, [], 1) { Motion = [Layer(Hand())] };
+        var theirs = new TimelineDocument(30, 30, null, [], 1) { Motion = [nudge] };
+        // How often each workspace's full view was asked for, which reads its motion.
+        var asked = new Dictionary<WorkspaceKey, int>();
+        LinkTarget Target(WorkspaceKey key, TimelineDocument? doc, MotionClip clip, float? size, TimelineSession session) =>
+            new(key, doc == null ? null : new LinkCandidate(key, key.IsSelf ? "You" : "Aria Rose", Hug, 1, doc, false, null), () =>
+            {
+                asked[key] = asked.GetValueOrDefault(key) + 1;
+                return doc == null ? null : View(key, doc, clip, size);
+            }, session);
+        LinkTarget[] Targets(TimelineDocument my, TimelineDocument their, float? mySize = 1, float? theirSize = 1) =>
+            [Target(you, my, played, mySize, mySession), Target(aria, their, theirPlayed, theirSize, theirSession)];
+
+        // Nobody links and no picker asks: no motion is read. Alone, a link reads none either and says why it's off.
+        var plain = new TimelineDocument(30, 30, null, [], 1) { Motion = [nudge] };
+        links.UpdateViews(Targets(plain, theirs), true, _ => true);
+        check(asked.Count == 0 && links.Views.Count == 0 && links.HasPartner(you) && links.HasPartner(aria),
+            "service: without links or a picker no workspace's motion is read, and the partner is still offered");
+        links.UpdateViews([Target(you, mine, played, 1, mySession)], true, _ => true);
+        check(asked.Count == 0 && mySession.LinkStates.GetValueOrDefault("m1") == LinkState.NotOpen && !links.HasPartner(you),
+            "service: a workspace alone reads no motion, its link off as not open");
+        links.UpdateViews([Target(you, mine, played, 1, mySession)], true, _ => false);
+        check(asked.Count == 0 && mySession.LinkStates.GetValueOrDefault("m1") == LinkState.PartnerGone,
+            "service: alone, a link to a deleted preset says so");
+
+        // A picker asks: the other workspaces are read for a while, then no more.
+        links.Want(you);
+        links.UpdateViews(Targets(plain, theirs), true, _ => true);
+        check(asked.GetValueOrDefault(aria) == 1 && !asked.ContainsKey(you) && links.Views.Single().Key == aria,
+            "service: an open picker reads the other workspaces");
+        later += PartnerLinks.WantFor;
+        links.UpdateViews(Targets(plain, theirs), true, _ => true);
+        check(asked.GetValueOrDefault(aria) == 1 && links.Views.Count == 0, "service: a picker that stopped asking reads nothing more");
+        later = 0;
+        asked.Clear();
+        void Settle(LinkTarget[] targets)
+        {
+            links.UpdateViews(targets, true, _ => true);
+            for (var until = Environment.TickCount64 + 10_000; mySession.LinksBuilding && Environment.TickCount64 < until;)
+            {
+                Thread.Sleep(5);
+                links.UpdateViews(targets, true, _ => true);
+            }
+        }
+
+        check(mySession.Links == MotionLinkSet.Empty && mySession.LinkStates.IsEmpty && !mySession.LinksBuilding, "service: a session starts without links");
+        var first = Targets(mine, theirs);
+        links.UpdateViews(first, true, _ => true);
+        check(mySession.LinksBuilding && mySession.LinkStates.GetValueOrDefault("m1") == LinkState.On, "service: a new link builds its track on a worker");
+        check(asked.GetValueOrDefault(aria) == 1 && asked.GetValueOrDefault(you) == 1, "service: a link reads the partner it names and its own workspace");
+        Settle(first);
+        var expected = MotionLinks.Track(theirPlayed, [nudge], "j_te_l", 1, default);
+        var built = mySession.Links.For("m1");
+        check(!mySession.LinksBuilding && built != null && built.Before.SequenceEqual(expected.Before) && built.After.SequenceEqual(expected.After),
+            "service: the track is built from the partner's own edits");
+        check(ReferenceEquals(theirSession.Links, MotionLinkSet.Empty) && ReferenceEquals(theirSession.LinkStates, PartnerLinks.NoStates),
+            "service: a workspace without links keeps the empty set and states");
+        check(links.Views.Count == 2, "service: every view read is offered to the picker");
+
+        var set = mySession.Links;
+        var states = mySession.LinkStates;
+        links.UpdateViews(Targets(mine, theirs), true, _ => true);
+        check(ReferenceEquals(mySession.Links, set) && ReferenceEquals(mySession.LinkStates, states) && !mySession.LinksBuilding,
+            "service: SameInputs_KeepsSet: new views of the same document and clip keep the set and the states");
+
+        // The partner edits: the last track stands while the new one builds, then a new set comes.
+        var edited = Targets(mine, theirs with { });
+        links.UpdateViews(edited, true, _ => true);
+        check(mySession.LinksBuilding && ReferenceEquals(mySession.Links, set), "service: the last track stands while a newer one builds");
+        Settle(edited);
+        check(!ReferenceEquals(mySession.Links, set) && mySession.Links.For("m1") is { } rebuilt && !ReferenceEquals(rebuilt, built) &&
+              ReferenceEquals(mySession.LinkStates, states), "service: a new partner revision gives a new set, the states unchanged");
+
+        // Off: the track goes at once.
+        links.UpdateViews(Targets(mine, theirs, theirSize: null), true, _ => true);
+        check(ReferenceEquals(mySession.Links, MotionLinkSet.Empty) && mySession.LinkStates.GetValueOrDefault("m1") == LinkState.Despawned &&
+              !mySession.LinksBuilding, "service: a despawned partner drops the track");
+        links.UpdateViews(Targets(mine with { Motion = [Layer(Hand()) with { Enabled = false }] }, theirs), true, _ => true);
+        check(ReferenceEquals(mySession.Links, MotionLinkSet.Empty) && ReferenceEquals(mySession.LinkStates, PartnerLinks.NoStates),
+            "service: a link layer that is off isn't planned");
+        links.UpdateViews([Target(you, null, played, 1, mySession), Target(aria, theirs, theirPlayed, 1, theirSession)], true, _ => true);
+        check(ReferenceEquals(mySession.Links, MotionLinkSet.Empty) && ReferenceEquals(mySession.LinkStates, PartnerLinks.NoStates) &&
+              links.Views.Count == 0 && !links.HasPartner(aria), "service: a workspace without an editable clip has no links and isn't offered");
+
+        // A partner bone the skeleton lacks, and a build that fails otherwise, logged once.
+        var noBone = Targets(mine with { Motion = [Layer(Hand() with { PartnerBone = "j_nothing" })] }, theirs);
+        Settle(noBone);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.NoBone && mySession.Links.For("m1") == null && warned.Count == 0,
+            "service: a partner skeleton without the bone leaves the link off, unlogged");
+        var unreadable = Targets(mine, theirs, mySize: float.PositiveInfinity);
+        Settle(unreadable);
+        links.UpdateViews(unreadable, true, _ => true);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.Unreadable && mySession.Links.For("m1") == null && !mySession.LinksBuilding &&
+              warned.Count == 1, "service: a track that can't be built leaves the link off, logged once");
+    }
+
+    /// <summary>A link layer added to a document, as a link back is: the document's own next key, and both feet for the hips.</summary>
+    private static void AddLinks(Action<bool, string> check)
+    {
+        var doc = new TimelineDocument(40, 40, null, [], 1)
+        {
+            Motion = [Offset("m1", "j_te_l", Vector3.Zero), Offset("m5", "j_te_r", Vector3.Zero)], NextMotionKey = 5,
+        };
+        var added = MotionEdits.AddLink(doc, Hips() with { Holds = [] }, "Link: Aria Rose", out var key);
+        check(key == "m6" && added.NextMotionKey == 7 && added.Motion.Length == 3 &&
+              added.Motion[^1] is { Kind: MotionLayerKind.Link, Key: "m6", Name: "Link: Aria Rose", Start: 0, End: 40, FadeIn: 0, FadeOut: 0, Amount: 1,
+                  Components: PoseComponents.None, Link: { } hips } &&
+              hips.Holds.SequenceEqual([PinChains.FootL, PinChains.FootR]),
+            "add link: a link layer over the whole clip, keyed from the document, the hips holding both feet");
+        MotionEvaluator.Validate(added.Motion[^1]);
+        var hand = MotionEdits.AddLink(added, Hand(), "Link: You", out var handKey);
+        check(handKey == "m7" && hand.Motion[^1].Link is { Bone: "j_te_r", PartnerBone: "j_te_l", Holds.IsEmpty: true },
+            "add link: a hand link holds nothing");
+        check(MotionEdits.AddLink(added, Hips() with { Holds = [PinChains.FootL] }, "Link", out _).Motion[^1].Link!.Holds.SequenceEqual([PinChains.FootL]),
+            "add link: a hips link keeps the holds it was given");
+    }
+
+    private static LinkView View(WorkspaceKey key, TimelineDocument doc, MotionClip played, float? size) =>
+        new(key, key.IsSelf ? "You" : "Aria Rose", Hug, 1, played, doc, false, size);
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
     {
