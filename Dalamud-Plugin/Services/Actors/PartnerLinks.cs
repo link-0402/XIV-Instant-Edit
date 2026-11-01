@@ -93,3 +93,16 @@ internal interface IPartnerProfiles
 
     void Remove(Guid temporary);
 }
+
+/// <summary>
+/// What a recording asks of a spawned partner: its preset's Customize+ profile off before it starts, so the bones record
+/// unscaled, and back on from the preset's link once it ends. Framework thread.
+/// </summary>
+internal interface IRecordingProfiles
+{
+    /// <summary>Takes the profile off the partner at <paramref name="objectIndex"/>; false when that is no partner or it has none on.</summary>
+    bool Lift(ushort objectIndex);
+
+    /// <summary>Puts a lifted partner's profile back on; one that can't go back on is listed with the partner's problems.</summary>
+    void PutBack(ushort objectIndex);
+}

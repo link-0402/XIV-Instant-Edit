@@ -22,7 +22,7 @@ internal sealed record PartnerView(Guid PresetId, string Name, ushort ObjectInde
 /// it changed (the collection assignment, the look, the temporary profile) the moment it applies, and the despawn undoes
 /// only that.
 /// </summary>
-internal sealed class PartnerService : IDisposable
+internal sealed class PartnerService : IDisposable, IRecordingProfiles
 {
     public const string NotInGPose = "Enter GPose to spawn a partner.";
     public const string TreatedAsYou = "Penumbra would treat it as you";
@@ -54,6 +54,8 @@ internal sealed class PartnerService : IDisposable
         public bool Assigned;
         public Guid? Previous;
         public bool Looked;
+        // The profile is off for a recording and goes back on when it ends.
+        public bool Lifted;
         public PartnerView View = new(preset.Id, name, actor.ObjectIndex, PartnerStage.Waiting, [], null, spawn);
 
         public void Problem(string text) => View = View with { Problems = View.Problems.Add(text) };
@@ -82,14 +84,42 @@ internal sealed class PartnerService : IDisposable
     /// <summary>The spawned partner of this preset, or null.</summary>
     public PartnerView? Find(Guid presetId) => Tracked(presetId)?.View;
 
-    /// <summary>The preset of the partner spawned at this object index, whatever its stage; null for any other actor.</summary>
-    public Guid? PresetAt(ushort objectIndex)
+    public bool Lift(ushort objectIndex)
+    {
+        if (TrackedAt(objectIndex) is not { View: { Stage: PartnerStage.Ready, TemporaryProfile: { } temporary } } partner)
+            return false;
+        Guarded(partner, "the profile removal for a recording", () => profiles.Remove(temporary));
+        partner.View = partner.View with { TemporaryProfile = null };
+        partner.Lifted = true;
+        return true;
+    }
+
+    public void PutBack(ushort objectIndex)
+    {
+        if (TrackedAt(objectIndex) is not { Lifted: true } partner)
+            return;
+        partner.Lifted = false;
+        if (partner.Preset.Profile is not { } profile)
+            return;
+        Guarded(partner, "the profile after a recording", () =>
+        {
+            var (outcome, temporary) = profiles.Apply(objectIndex, profile.Id);
+            partner.View = partner.View with { TemporaryProfile = temporary };
+            if (outcome.Status != LinkStatus.Applied)
+                partner.Problem(ProblemText("Profile", "Customize+", profile, outcome));
+        });
+    }
+
+    private Partner? TrackedAt(ushort objectIndex)
     {
         foreach (var partner in partners)
             if (partner.Actor.ObjectIndex == objectIndex)
-                return partner.Preset.Id;
+                return partner;
         return null;
     }
+
+    /// <summary>The preset of the partner spawned at this object index, whatever its stage; null for any other actor.</summary>
+    public Guid? PresetAt(ushort objectIndex) => TrackedAt(objectIndex)?.Preset.Id;
 
     /// <summary>
     /// Makes the preset's actor and sets its collection; the next frames draw it and apply the look and profile. Why it

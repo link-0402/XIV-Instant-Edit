@@ -22,6 +22,12 @@ internal sealed class RecorderPanel
     private readonly AnimationDelivery _delivery;
     private readonly CancellationToken _lifetime;
     private RecordingSubject recordingSubject = RecordingSubject.Self;
+
+    /// <summary>
+    /// A partner's name while the Timeline shows that partner's workspace: the recording is of the GPose target, the partner,
+    /// in place of the You and Target choice. Null for the choice.
+    /// </summary>
+    internal string? RecordsTarget { get; set; }
     private CancellationTokenSource? recordingCancellation;
     private volatile AnimationTake? lastRecording;
     private volatile RecorderMessage? recorderMessage;
@@ -54,15 +60,23 @@ internal sealed class RecorderPanel
         var sending = Volatile.Read(ref recorderSending) != 0;
         using (ImRaii.Disabled(progress != null || sending))
         {
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextUnformatted("Character");
-            ImGui.SameLine();
-            if (ImGui.RadioButton("You", recordingSubject == RecordingSubject.Self)) recordingSubject = RecordingSubject.Self;
-            ImGui.SameLine();
-            if (ImGui.RadioButton("Target", recordingSubject == RecordingSubject.Target)) recordingSubject = RecordingSubject.Target;
-            ImGui.SameLine();
-            Widgets.HelpTip("In GPose, You is your posed copy and Target is the GPose target, " +
-                            "such as an actor that Brio plays a walk on.");
+            if (RecordsTarget is { } partner)
+            {
+                ImGui.AlignTextToFramePadding();
+                ImGui.TextUnformatted($"Records {partner}.");
+            }
+            else
+            {
+                ImGui.AlignTextToFramePadding();
+                ImGui.TextUnformatted("Character");
+                ImGui.SameLine();
+                if (ImGui.RadioButton("You", recordingSubject == RecordingSubject.Self)) recordingSubject = RecordingSubject.Self;
+                ImGui.SameLine();
+                if (ImGui.RadioButton("Target", recordingSubject == RecordingSubject.Target)) recordingSubject = RecordingSubject.Target;
+                ImGui.SameLine();
+                Widgets.HelpTip("In GPose, You is your posed copy and Target is the GPose target, " +
+                                "such as an actor that Brio plays a walk on.");
+            }
 
             var seconds = _config.RecordingSeconds;
             ImGui.SetNextItemWidth(Theme.Scaled(150));
@@ -131,7 +145,7 @@ internal sealed class RecorderPanel
         recordingCancellation?.Dispose();
         recordingCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
         var token = recordingCancellation.Token;
-        var subject = recordingSubject;
+        var subject = RecordsTarget != null ? RecordingSubject.Target : recordingSubject;
         var seconds = _config.RecordingSeconds;
         var delay = _config.RecordingDelaySeconds;
         recorderMessage = null;

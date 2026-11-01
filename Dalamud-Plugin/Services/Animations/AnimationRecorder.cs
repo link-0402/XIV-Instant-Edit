@@ -56,6 +56,9 @@ internal sealed class AnimationRecorder : IDisposable
         this.customizePlus = customizePlus;
     }
 
+    /// <summary>The spawned partners: a recording of one takes its preset's profile off and puts it back after; set once they exist.</summary>
+    internal Actors.IRecordingProfiles? Partners { get; set; }
+
     public bool Active { get { lock (sync) return session != null; } }
 
     public RecordingProgress? Progress
@@ -123,6 +126,12 @@ internal sealed class AnimationRecorder : IDisposable
     private void ResumeCustomizePlus(Session ended)
     {
         if (ended.TakePause() is { } pause) customizePlus?.Resume(pause);
+        // After the pause's own resume, queued on the same thread: a partner's preset profile goes back on.
+        if (ended.TakeLift() is { } index && Partners is { } partners)
+        {
+            try { _ = framework.RunOnFrameworkThread(() => partners.PutBack(index)); }
+            catch (InvalidOperationException) { }
+        }
     }
 
     private void OnUpdate(IFramework _)
@@ -270,6 +279,8 @@ internal sealed class AnimationRecorder : IDisposable
         private volatile bool stopRequested;
         // The boxed Guid of the Customize+ pause until it is resumed.
         private object? pause;
+        // The partner whose preset profile came off for the recording until it goes back on; -1 for none.
+        private int lifted = -1;
         private string? customizePlus;
         private int settleUpdates;
         public TaskCompletionSource<Recording> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -284,6 +295,9 @@ internal sealed class AnimationRecorder : IDisposable
 
         /// <summary>The Customize+ pause to resume, or null when there is none or it was already taken.</summary>
         public Guid? TakePause() => Interlocked.Exchange(ref pause, null) as Guid?;
+
+        /// <summary>The partner whose profile to put back, or null when there is none or it was already taken.</summary>
+        public ushort? TakeLift() => Interlocked.Exchange(ref lifted, -1) is >= 0 and var index ? (ushort)index : null;
 
         /// <summary>Records one frame. Returns true once the recording is complete.</summary>
         public unsafe bool Tick(AnimationRecorder owner)
@@ -304,16 +318,23 @@ internal sealed class AnimationRecorder : IDisposable
                     gameObjectId = subjectObject.GameObjectId; address = subjectObject.Address; objectIndex = subjectObject.ObjectIndex;
                     Character = subjectObject.Name.TextValue;
                     string? problem = null;
+                    // A partner's preset profile comes off first; the pause then handles any profile C+ gives its name.
+                    var partner = owner.Partners?.Lift(objectIndex) == true;
+                    // A full fence: the store must land before the check below.
+                    if (partner) Interlocked.Exchange(ref lifted, objectIndex);
                     if (owner.customizePlus?.Pause(objectIndex, out problem) is { } paused)
                     {
-                        // A full fence: the store must land before the check below.
                         Interlocked.Exchange(ref pause, paused);
                         customizePlus = CustomizePlusPaused;
                         settleUpdates = CustomizePlusSettleUpdates;
-                        // A cancellation that ended the recording meanwhile has already looked for a pause.
-                        if (Result.Task.IsCompleted) owner.ResumeCustomizePlus(this);
                     }
-                    else customizePlus = problem;
+                    else
+                    {
+                        customizePlus = problem ?? (partner ? CustomizePlusPaused : null);
+                        if (partner) settleUpdates = CustomizePlusSettleUpdates;
+                    }
+                    // A cancellation that ended the recording meanwhile has already looked for a pause.
+                    if (Result.Task.IsCompleted) owner.ResumeCustomizePlus(this);
                 }
                 if (settleUpdates > 0)
                 {

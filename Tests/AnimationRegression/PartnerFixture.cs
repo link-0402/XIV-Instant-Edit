@@ -161,6 +161,68 @@ internal static class PartnerFixture
         Spawn_NoCollectionLink(check);
         Spawn_CountsSpawns(check);
         PresetAt_TracksIndex(check);
+        Lift_RemovesTemp(check);
+        PutBack_AppliesAgain(check);
+        PutBack_Missing(check);
+        Lift_NoProfile(check);
+        Lift_NotPartner(check);
+    }
+
+    private static void Lift_RemovesTemp(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        var before = rig.Calls.Count;
+        var lifted = rig.Service.Lift(202);
+        check(lifted && rig.Since(before).SequenceEqual(["remove T"]) && rig.Service.Find(preset.Id)?.TemporaryProfile == null,
+            "partner recording: the preset's profile comes off for the recording", rig.Log);
+    }
+
+    private static void PutBack_AppliesAgain(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Service.Lift(202);
+        var before = rig.Calls.Count;
+        rig.Service.PutBack(202);
+        var back = rig.Service.Find(preset.Id)?.TemporaryProfile;
+        var put = rig.Since(before);
+        before = rig.Calls.Count;
+        rig.Service.Despawn(preset.Id);
+        check(put.SequenceEqual(["profile 202 P"]) && back == TemporaryId && rig.Since(before).Contains("remove T"),
+            "partner recording: the profile goes back on from its link afterwards, and Despawn removes that one", rig.Log);
+    }
+
+    private static void PutBack_Missing(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria();
+        rig.SpawnReady(preset);
+        rig.Service.Lift(202);
+        rig.Profiles.Outcome = new LinkOutcome(LinkStatus.Missing);
+        rig.Service.PutBack(202);
+        var view = rig.Service.Find(preset.Id);
+        check(view is { TemporaryProfile: null } && view.Problems.Contains("Profile Tall no longer exists"),
+            "partner recording: a profile that can't go back on is listed on the partner's row", rig.Log);
+    }
+
+    private static void Lift_NoProfile(Check check)
+    {
+        var rig = new Rig();
+        var preset = Aria() with { Profile = null };
+        rig.SpawnReady(preset);
+        var before = rig.Calls.Count;
+        check(!rig.Service.Lift(202) && rig.Calls.Count == before, "partner recording: a partner without a profile records with today's pause", rig.Log);
+    }
+
+    private static void Lift_NotPartner(Check check)
+    {
+        var rig = new Rig();
+        rig.SpawnReady(Aria());
+        var before = rig.Calls.Count;
+        check(!rig.Service.Lift(201) && rig.Calls.Count == before, "partner recording: your own character is left to today's pause", rig.Log);
     }
 
     private static void Spawn_CountsSpawns(Check check)

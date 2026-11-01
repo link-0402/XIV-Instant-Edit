@@ -302,6 +302,8 @@ public sealed class Plugin : IDalamudPlugin
         _partners = new PartnerService(partnerStore, _actorSpawner, new PartnerCollections(_penumbra.Ipc, () => _penumbra.Ipc.Available),
             new GlamourerIpc(pi, log), new CustomizePlusProfiles(pi, log), warn: message => log.Warning("{Message}", message));
         _timelineWindow.AttachPartners(new Ui.Timeline.PartnersPage(_partners).Draw);
+        // Recording a partner takes its preset's profile off for the recording and puts it back after.
+        _recorder.Partners = _partners;
         // A partner workspace's preview left by a crash goes now, whether or not that workspace is opened again.
         foreach (var preset in Services.Animations.Preview.AnimationPreviewService.PartnerRecords(configDirectory))
             _workspaceServices.For(new Ui.Timeline.WorkspaceKey(preset));
