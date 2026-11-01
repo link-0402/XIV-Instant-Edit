@@ -75,6 +75,7 @@ Scenarios.Run(() => PropCopyCommitFixture.Run(Check, Reject));
 Scenarios.Run(() => TimelineChromeFixture.Run(Check, Reject));
 Scenarios.Run(() => PartnerFixture.Run(Check, Reject));
 Scenarios.Run(() => PartnerTimelineFixture.Run(Check, Reject));
+Scenarios.Run(() => PlayGroupFixture.Run(Check, Reject));
 // Writes the fixture take as the plugin sends it, for reading back in Blender.
 if (args is ["--write-sample-take", var takePath])
     File.WriteAllBytes(takePath, AnimationTakeFormat.Write(AnimationExportFixture.SampleTake(), "Skeleton", false, "1.2.4"));
