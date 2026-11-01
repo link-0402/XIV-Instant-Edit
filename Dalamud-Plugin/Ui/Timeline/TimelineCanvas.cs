@@ -403,10 +403,11 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             var x = TimelineUi.Crisp(trackLeft + view.X(guide));
             drawList.AddLine(new Vector2(x, min.Y), new Vector2(x, max.Y), TimelineUi.U32(Theme.SnapGuide), line);
         }
-        var playheadX = TimelineUi.Crisp(trackLeft + view.X(current.Playhead));
+        // Past this clip's end the shared frame's playhead runs on, faded, while this clip stands on its last frame.
+        var playheadX = TimelineUi.Crisp(trackLeft + view.X(current.GroupFrame ?? current.Playhead));
         if (playheadX >= trackLeft - 1 && playheadX <= max.X + 1)
         {
-            var playhead = TimelineUi.U32(Theme.Playhead);
+            var playhead = TimelineUi.U32(current.PastEnd ? Theme.WithAlpha(Theme.Playhead, .5f) : Theme.Playhead);
             var size = Theme.Scaled(6);
             drawList.AddLine(new Vector2(playheadX, min.Y), new Vector2(playheadX, max.Y), playhead, line);
             drawList.AddTriangleFilled(new Vector2(playheadX - size, min.Y), new Vector2(playheadX + size, min.Y),
@@ -448,6 +449,22 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         var grip = Theme.Scaled(3);
         drawList.AddRectFilled(new Vector2(endX - grip, min.Y + geometry.Ruler * .15f), new Vector2(endX + grip, rowsTop),
             TimelineUi.U32(handleHot ? Theme.Accent : Theme.Muted), Theme.Scaled(2));
+        // Another actor's longer clip plays on the same playhead: the ruler goes on, greyed, to its end, with a mark where
+        // each other shorter clip ends.
+        if (current.GroupEnd is { } groupEnd)
+        {
+            var groupX = TimelineUi.Crisp(trackLeft + view.X(groupEnd));
+            drawList.AddLine(new Vector2(groupX, min.Y), new Vector2(groupX, rowsTop), TimelineUi.U32(Theme.WithAlpha(Theme.Muted, .6f)), line);
+        }
+        var mark = Theme.Scaled(5);
+        foreach (var (frame, actor) in current.GroupEnds)
+        {
+            var x = TimelineUi.Crisp(trackLeft + view.X(frame));
+            drawList.AddTriangleFilled(new Vector2(x - mark, rowsTop), new Vector2(x + mark, rowsTop), new Vector2(x, rowsTop - mark * 1.4f),
+                TimelineUi.U32(Theme.Hint));
+            if (ImGui.IsMouseHoveringRect(new Vector2(x - mark * 1.5f, min.Y), new Vector2(x + mark * 1.5f, rowsTop)))
+                ImGui.SetTooltip($"{actor} ends here");
+        }
         drawList.PopClipRect();
     }
 

@@ -31,8 +31,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private float? memberLength;
     // It started again by itself since the group last looked (a new Preview, Live, a look or sound reload).
     private bool memberStarted;
-    // The frame the editor's playhead was last set to from the group's, so a step or scrub is told from it.
+    // The frame the editor's playhead was last set to from the group's, so a step or scrub is told from it; and the shared
+    // frame past this clip's end it was last set to.
     private int lastMirror = -1;
+    private int? lastGroupFrame;
+
+    /// <summary>Why key edits and gizmo drags wait while the shared frame is past this clip's end.</summary>
+    internal const string PastEnd = "Past this clip's end.";
     private volatile string? previewFingerprint;
     private volatile int previewGeneration;
     private ushort previewTimeline;
@@ -257,6 +262,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     {
         var available = PlaybackAvailable(out var reason);
         return !available ? reason
+            : session.Editor?.PastEnd == true ? PastEnd
             : session.ReadOnly ? "Wait for the save to finish."
             : previewJob ? "The preview is being built."
             : session.Animations!.Busy ? "Another edit is running. Wait for it to end."
@@ -301,6 +307,10 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             notes.Add(new StatusNote("preview-error", StatusKind.Error, error));
         else if (FirstText(active ? session.Playback.Status : null, session.Preview.Active ? session.Preview.Status : null, available ? null : reason) is { } status)
             notes.Add(new StatusNote("playback", StatusKind.Notice, status));
+
+        // The shared frame is past this clip's end: it stands on its last frame, and its keys wait.
+        if (current.PastEnd)
+            notes.Add(new StatusNote("past-end", StatusKind.Notice, PastEnd));
 
         var needed = PreviewNeeded(current, loaded, repair);
         if (liveWanted)
@@ -703,7 +713,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 MirrorGroup(current, group);
                 return;
             }
-            lastMirror = -1;
+            LeaveGroup(current);
             if (session.Playback.Active && previewFingerprint is { } fingerprint)
             {
                 if (session.Playback.Paused || current.Gesture == TimelineGesture.Scrub)
@@ -759,17 +769,38 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// </summary>
     private void MirrorGroup(TimelineEditor current, TimelinePlayGroup group)
     {
-        if (lastMirror >= 0 && current.Playhead != lastMirror)
-            group.SetFrame(current.Playhead / (float)TimelineDocument.Fps);
-        var frame = Math.Min(TimelineWindowViews.Frames(group.SharedSeconds), Math.Max(0, current.Document.Length - 1));
+        var length = current.Document.Length;
+        // A step or scrub since: past this clip's end it moved the shared frame, inside it the playhead.
+        if (lastMirror >= 0 && (current.Playhead != lastMirror || current.GroupFrame != lastGroupFrame))
+            group.SetFrame((current.GroupFrame ?? current.Playhead) / (float)TimelineDocument.Fps);
+        var shared = TimelineWindowViews.Frames(group.SharedSeconds);
+        var end = TimelineWindowViews.Frames(group.EndSeconds);
+        // The ruler goes on to the longest clip's end, with a mark where each other shorter clip ends.
+        current.GroupEnd = end > length ? end : null;
+        var own = session.ActorName();
+        current.GroupEnds = [.. group.ShorterEnds.Where(shorter => shorter.Actor != own).Select(shorter => (TimelineWindowViews.Frames(shorter.End), shorter.Actor))];
+        current.GroupFrame = shared > length && current.GroupEnd != null ? Math.Min(shared, end) : null;
+        var frame = Math.Min(shared, length);
         current.Playhead = frame;
         lastMirror = frame;
+        lastGroupFrame = current.GroupFrame;
         lastSeekFrame = frame;
         if (group.Playing)
         {
-            current.Reveal(frame);
+            current.Reveal(current.GroupFrame ?? frame);
             session.PlayheadFollows = true;
         }
+    }
+
+    /// <summary>Out of the play group: the ruler ends with this clip again, and the playhead is its own.</summary>
+    private void LeaveGroup(TimelineEditor current)
+    {
+        lastMirror = -1;
+        lastGroupFrame = null;
+        current.GroupEnd = null;
+        current.GroupFrame = null;
+        if (!current.GroupEnds.IsEmpty)
+            current.GroupEnds = [];
     }
 
     /// <summary>

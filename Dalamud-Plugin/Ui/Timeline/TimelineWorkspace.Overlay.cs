@@ -519,6 +519,12 @@ internal sealed partial class TimelineWorkspace
     private ImGuizmoOperation? GizmoOperation(MotionLayer layer, int frame, SkeletonDescription skeleton, out string? reason)
     {
         reason = null;
+        // Past this clip's end in the play group it stands on its last frame, which a drag can't key.
+        if (editor?.PastEnd == true)
+        {
+            reason = TimelinePreview.PastEnd;
+            return null;
+        }
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
                 MotionLayerKind.Smooth or MotionLayerKind.Noise || ReadOnly)
             return null;

@@ -93,7 +93,8 @@ internal sealed class TimelineSession
     }
 
     /// <summary> Whether the document must not change now: nothing to edit, or a save, undo or reload is running. </summary>
-    public bool ReadOnly => Source?.Document == null || busy();
+    // Past this clip's end in the play group, it stands on its last frame and its edits wait.
+    public bool ReadOnly => Source?.Document == null || busy() || Editor?.PastEnd == true;
 
     /// <summary> What else keeps the document read-only: a read, save or undo running, set once the window has built its parts. </summary>
     public void KeepReadOnlyWhile(Func<bool> running) => busy = running;

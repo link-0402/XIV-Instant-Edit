@@ -440,6 +440,40 @@ internal sealed class TimelineEditor
         }
     }
 
+    /// <summary>
+    /// The play group's end in frames while another actor's clip, longer than this one, plays on the same playhead: the ruler
+    /// goes on to it. Null otherwise.
+    /// </summary>
+    public int? GroupEnd { get; set; }
+
+    /// <summary>The shared frame while it is past this clip's end (the playhead stands on its last frame then); null otherwise.</summary>
+    public int? GroupFrame { get; set; }
+
+    /// <summary>Where each shorter clip of the play group ends, by its actor, for the ruler's marks.</summary>
+    public ImmutableArray<(int Frame, string Actor)> GroupEnds { get; set; } = [];
+
+    /// <summary>The shared frame is past this clip's end: its key edits and gizmo drags wait.</summary>
+    public bool PastEnd => GroupFrame != null;
+
+    /// <summary>How far the view may go: the clip and its events, and the play group's end.</summary>
+    internal int ViewExtent => Math.Max(TimelineEdits.Extent(Document), GroupEnd ?? 0);
+
+    /// <summary>
+    /// Moves the playhead to <paramref name="frame"/>, as a step or a scrub does. Past this clip's end, while a longer clip
+    /// plays with it, the shared frame goes on to the group's end and the playhead stands on this clip's last frame.
+    /// </summary>
+    internal void MoveTo(int frame)
+    {
+        if (GroupEnd is { } end && frame > Document.Length)
+        {
+            GroupFrame = Math.Min(frame, end);
+            Playhead = Document.Length;
+            return;
+        }
+        GroupFrame = null;
+        Playhead = frame;
+    }
+
     /// <summary>Raised with the new frame whenever the playhead moves, so a preview can follow.</summary>
     public event Action<int>? PlayheadChanged;
 
@@ -1024,10 +1058,11 @@ internal sealed class TimelineEditor
                 if (alt)
                     return Nudge(step);
                 var before = playhead;
-                Playhead = playhead + step;
-                return playhead != before;
+                var beforeShared = GroupFrame;
+                MoveTo((GroupFrame ?? playhead) + step);
+                return playhead != before || GroupFrame != beforeShared;
             case TimelineKey.Home:
-                Playhead = 0;
+                MoveTo(0);
                 return true;
             case TimelineKey.End:
                 Playhead = Document.Length;
@@ -2099,16 +2134,16 @@ internal sealed class TimelineEditor
 
     /// <summary>Zooms around <paramref name="x"/> (track pixels) within the zoom limits.</summary>
     public void Zoom(float x, float factor) =>
-        View = View.ZoomAt(x, factor, MinPixelsPerFrame, MaxPixelsPerFrame).Clamp(TimelineEdits.Extent(Document));
+        View = View.ZoomAt(x, factor, MinPixelsPerFrame, MaxPixelsPerFrame).Clamp(ViewExtent);
 
-    public void Pan(float dx) => View = View.Pan(dx).Clamp(TimelineEdits.Extent(Document));
+    public void Pan(float dx) => View = View.Pan(dx).Clamp(ViewExtent);
 
     /// <summary>Shows the whole timeline, within the zoom limits.</summary>
     public void Fit()
     {
         var fit = TimelineView.Fit(Document.Length, View.Width);
         View = (fit with { PixelsPerFrame = Math.Clamp(fit.PixelsPerFrame, MinPixelsPerFrame, Math.Max(MinPixelsPerFrame, MaxPixelsPerFrame)) })
-            .Clamp(TimelineEdits.Extent(Document));
+            .Clamp(ViewExtent);
         fitted = View.Width > 0;
     }
 
@@ -2136,7 +2171,7 @@ internal sealed class TimelineEditor
             return;
         var margin = view.Width * .1f / view.Scale;
         View = (frame < view.First ? view with { First = frame - margin } : view with { First = frame + margin - view.Width / view.Scale })
-            .Clamp(TimelineEdits.Extent(Document));
+            .Clamp(ViewExtent);
     }
 
     /// <summary>
@@ -2190,7 +2225,7 @@ internal sealed class TimelineEditor
     private void ClampView()
     {
         if (View.Width > 0)
-            View = View.Clamp(TimelineEdits.Extent(Document));
+            View = View.Clamp(ViewExtent);
     }
 
     private void BeginEdit(TimelineGesture kind, ImmutableArray<string> keys, int[] edgeAnchors, int[] snapTargets)
@@ -2225,7 +2260,7 @@ internal sealed class TimelineEditor
     private void Scrub(float frame, bool alt)
     {
         var snapped = TimelineSnap.Snap(frame, targets, SnapTolerance, View.Scale, Snap && !alt, out var guide);
-        Playhead = snapped;
+        MoveTo(snapped);
         SnapGuide = guide == playhead ? guide : null;
     }
 

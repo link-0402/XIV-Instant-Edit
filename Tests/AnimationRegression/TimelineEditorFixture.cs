@@ -116,6 +116,7 @@ internal static class TimelineEditorFixture
         History(check);
         Gestures(check);
         Keys(check);
+        GroupEnd(check);
         Panel(check);
         Holding(check);
         PropGroups(check);
@@ -864,6 +865,33 @@ internal static class TimelineEditorFixture
         props.Release();
         check(props.Selected.SetEquals(["p1", "p2"]) && Event(props, "p1").Start == 15 && Event(props, "p2").Start == 35,
             "events added together select and move together");
+    }
+
+    /// <summary>
+    /// Another actor's longer clip plays on one playhead with this one: the ruler goes on to the group's end, and a step or
+    /// scrub past this clip's end moves the shared frame while this clip stands on its last frame.
+    /// </summary>
+    private static void GroupEnd(Action<bool, string> check)
+    {
+        var editor = new TimelineEditor(Sample());
+        var own = editor.ViewExtent;
+        editor.GroupEnd = 220;
+        check(editor.ViewExtent == 220 && own == TimelineEdits.Extent(editor.Document), "group end: the view reaches the longest clip's end");
+        editor.MoveTo(150);
+        check(editor.Playhead == 100 && editor.GroupFrame == 150 && editor.PastEnd, "group end: past this clip's end the playhead stands on its last frame");
+        editor.MoveTo(300);
+        check(editor.GroupFrame == 220, "group end: the shared frame stops at the group's end");
+        editor.MoveTo(40);
+        check(editor.Playhead == 40 && editor.GroupFrame == null && !editor.PastEnd, "group end: back inside the clip the playhead is its own again");
+        editor.Playhead = 100;
+        check(editor.Key(TimelineKey.Right) && editor.Playhead == 100 && editor.GroupFrame == 101 &&
+              editor.Key(TimelineKey.Right, shift: true) && editor.GroupFrame == 111 &&
+              editor.Key(TimelineKey.Left, shift: true) && editor.GroupFrame == 101 && editor.Key(TimelineKey.Left) && editor.GroupFrame == null &&
+              editor.Playhead == 100,
+            "group end: steps past the end move the shared frame by the usual amounts");
+        editor.GroupEnd = null;
+        editor.MoveTo(150);
+        check(editor.Playhead == 100 && editor.GroupFrame == null, "group end: alone a clip's playhead stops at its end, as before");
     }
 
     private static void Keys(Action<bool, string> check)
