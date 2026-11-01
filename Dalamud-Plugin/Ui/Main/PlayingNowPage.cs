@@ -13,7 +13,7 @@ namespace InstantEdit.Ui.Main;
 /// <summary>
 /// The start page's Playing now entry: what your character plays, listed like On Screen with the mod each
 /// animation comes from. A click on a row opens its timeline, the pen sends it to Blender, and the row menu
-/// holds the mod actions and Make startup instant, whose result shows on the start page's last line.
+/// holds the mod actions and Make wind-up, whose result shows on the start page's last line.
 /// </summary>
 internal sealed class PlayingNowPage
 {
@@ -30,6 +30,11 @@ internal sealed class PlayingNowPage
     private ImmutableArray<AnimationRow> animationRows = [];
     private ActorView animationActor = new(null, "Your character", string.Empty, [], 0);
     private Action<AnimationCapture, bool>? openTimeline;
+    // Make wind-up: the loop it is for and its frames, asked in a popup opened outside the row menu.
+    private const string WindUpPopup = "##wind-up";
+    private AnimationCapture? windUpFor;
+    private int windUpFrames = AnimationEditService.DefaultWindUp;
+    private bool openWindUp;
 
     /// <summary>Builds the page over the listener, the send dialog and the row menu it shares with On Screen.</summary>
     public PlayingNowPage(OnScreenService onScreen, AnimationIntegration animations, AnimationSendDialog animationSend,
@@ -91,6 +96,39 @@ internal sealed class PlayingNowPage
             if (list.Success)
                 DrawAnimationList(animations.Observer.Status, rows, shown);
         }
+        DrawWindUpPopup(animations);
+    }
+
+    /// <summary>Make wind-up's popup: how many frames the move into the loop takes, and Save.</summary>
+    private void DrawWindUpPopup(AnimationEditService service)
+    {
+        if (openWindUp)
+        {
+            openWindUp = false;
+            windUpFrames = AnimationEditService.DefaultWindUp;
+            ImGui.OpenPopup(WindUpPopup);
+        }
+        using var popup = ImRaii.Popup(WindUpPopup);
+        if (!popup.Success || windUpFor is not { } capture)
+            return;
+        ImGui.TextColored(Theme.Label, "Frames");
+        ImGui.SetNextItemWidth(Theme.Scaled(120));
+        if (ImGui.IsWindowAppearing())
+            ImGui.SetKeyboardFocusHere();
+        var enter = ImGui.InputInt("##wind-up-frames", ref windUpFrames, 1, 10, default, ImGuiInputTextFlags.EnterReturnsTrue);
+        windUpFrames = Math.Clamp(windUpFrames, AnimationEditService.MinWindUp, AnimationEditService.MostWindUp);
+        ImGui.TextColored(Theme.Muted, $"{windUpFrames / (float)TimelineDocument.Fps:0.0} seconds.");
+        var blocked = service.Busy ? "Another animation edit is running." : AnimationEditService.InstantStartupBlock(capture);
+        using (ImRaii.Disabled(blocked is not null))
+        {
+            if ((ImGui.Button("Save##wind-up-save") || enter) && blocked is null)
+            {
+                service.MakeInstantStartup(capture, windUpFrames);
+                ImGui.CloseCurrentPopup();
+            }
+        }
+        if (blocked is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(blocked);
     }
 
     /// <summary> The list's rows, rebuilt only when the listener's history or the On Screen snapshot changes. </summary>
@@ -237,7 +275,7 @@ internal sealed class PlayingNowPage
         _rows.DrawRowMenu(animationActor, view, row.Startup || row.Capture.Startup is null ? null : () => DrawInstantStartupItem(row.Capture));
     }
 
-    /// <summary>A loop's menu item that gives it an instant startup (see <see cref="AnimationEditService.MakeInstantStartup"/>).</summary>
+    /// <summary>A loop's menu item that gives it a wind-up startup (see <see cref="AnimationEditService.MakeInstantStartup"/>), asking its frames first.</summary>
     private void DrawInstantStartupItem(AnimationCapture capture)
     {
         var service = _animations.Service;
@@ -245,11 +283,14 @@ internal sealed class PlayingNowPage
             : service.Busy ? "Another animation edit is running."
             : AnimationEditService.InstantStartupBlock(capture);
         using (ImRaii.Disabled(blocked is not null))
-            if (ImGui.MenuItem("Make startup instant") && service is not null)
-                service.MakeInstantStartup(capture);
+            if (ImGui.MenuItem("Make wind-up") && service is not null)
+            {
+                windUpFor = capture;
+                openWindUp = true;
+            }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(blocked ?? $"Replace the startup with the game's idle, {TimelineDocument.MinLength} frames long,\n" +
-                $"so the loop starts at once. Saved in {UiText.Safe(capture.Sources.FirstOrDefault(s => s.GamePath == capture.Clip.GamePath)?.ModName, "the loop's mod")}.\n" +
+            ImGui.SetTooltip(blocked ?? "Replace the startup with a smooth move into the loop.\n" +
+                $"Saved in {UiText.Safe(capture.Sources.FirstOrDefault(s => s.GamePath == capture.Clip.GamePath)?.ModName, "the loop's mod")}.\n" +
                 "Undo it in Saved edits.");
     }
 

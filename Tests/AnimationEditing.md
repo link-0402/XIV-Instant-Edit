@@ -3234,3 +3234,17 @@ Drag a bone layer's name up or down to change the order layers apply in; Space p
 - [ ] 2 Drag with a layer's bone rows shown: over a bone row the layer takes that layer's place; Escape mid-drag puts it back.
 - [ ] 3 With a preview shown, Space in the Timeline and in the Bones window pauses and resumes it, and the character doesn't
   jump. Typing a space in a field still types it.
+
+## Wind-up startup (pending)
+
+Make wind-up in a loop's row menu under Playing now replaces its startup with a move from the game's idle into the loop,
+over the frames typed in its popup. Spec: docs/superpowers/specs/2026-11-01-instant-startup-wind-up-design.md (local only).
+
+- [ ] 1 On a loop whose first pose is far from the idle (arms raised or bent), the arms rise into it without rolling round.
+- [ ] 2 No step or pop where the loop takes over.
+- [ ] 3 A 60-frame wind-up keeps breathing during the move.
+- [ ] 4 On an IVCS or NFLB body, the extra bones move with the body and don't jump at the hand-off.
+- [ ] 5 Undo in Saved edits brings the previous startup back.
+- [ ] 6 A startup made instant before this (the held idle) still plays.
+- [ ] 7 A loop whose file names another race than its path (a Midlander loop under a Miqo'te path): the character doesn't rise
+  or grow during the wind-up or as the loop takes over.

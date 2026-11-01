@@ -35,6 +35,20 @@ internal static class MotionHold
         if (pose.Length != playing.Bones)
             throw new InvalidDataException("The pose is for another skeleton.");
         var samples = frames + 1;
+        var still = Held(playing, frame, frames);
+        for (var k = 0; k < samples; k++)
+            for (var b = 0; b < pose.Length; b++)
+                still.Set(k, b, pose[b]);
+        return still;
+    }
+
+    /// <summary>
+    /// An empty clip of <paramref name="frames"/> frames on <paramref name="playing"/>'s skeleton, one sample a frame, with its
+    /// tracks, blend hint and loop flag, and its float tracks held at timeline frame <paramref name="frame"/>.
+    /// </summary>
+    internal static MotionClip Held(MotionClip playing, float frame, int frames)
+    {
+        var samples = frames + 1;
         var tracks = playing.FloatTracks;
         float[]? floats = null;
         if (playing.TrackFloats is { } source)
@@ -45,17 +59,13 @@ internal static class MotionHold
             for (var k = 0; k < samples; k++)
                 Array.Copy(source, (long)at * tracks, floats, (long)k * tracks, tracks);
         }
-        var still = new MotionClip(playing.Skeleton, frames / (float)TimelineDocument.Fps, samples, floats, tracks)
+        return new MotionClip(playing.Skeleton, frames / (float)TimelineDocument.Fps, samples, floats, tracks)
         {
             SourceTracks = playing.SourceTracks,
             ReferenceFollowers = playing.ReferenceFollowers,
             BlendHint = playing.BlendHint,
             Loops = playing.Loops,
         };
-        for (var k = 0; k < samples; k++)
-            for (var b = 0; b < pose.Length; b++)
-                still.Set(k, b, pose[b]);
-        return still;
     }
 
     /// <summary>

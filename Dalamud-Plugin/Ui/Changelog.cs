@@ -57,6 +57,7 @@ internal static class ChangelogCatalog
             Entry("Import your own sounds (wav, ogg or scd) and effects (avfx). They are saved into the mod with the animation.", 1),
             Entry("Save as a new mod or replace the original. Undo works like the other animation edits.", 1),
             Entry("A new mod takes the loop's startup along, or the startup's loop, when both come from the same mod.", 1),
+            Entry("Make wind-up replaces a loop's startup with a smooth move from the idle into it, as many frames as you choose.", 1),
             Entry("In GPose, preview the result on your character, then pause and scrub through it. The preview doesn't change your mods.", 1),
             Entry("Fix broken effect and sound loops on any animation and keep them going with one click.", 1),
             Entry("Change how an effect looks: VFX tint, size, position, its colours one by one or all at once, glow, opacity and light range. Preview and Live show it in GPose as you go. The changes go into a copy, so the original stays as it is.", 1),

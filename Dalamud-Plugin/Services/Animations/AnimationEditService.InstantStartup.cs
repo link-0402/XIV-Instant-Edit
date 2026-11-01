@@ -9,8 +9,14 @@ namespace InstantEdit.Services.Animations;
 
 internal sealed partial class AnimationEditService
 {
-    /// <summary>What an instant startup's motion is: the game's idle, held.</summary>
-    internal const string InstantStartupAction = "vanilla idle";
+    /// <summary>What an instant startup's motion is: a wind-up from the game's idle into the loop.</summary>
+    internal const string InstantStartupAction = "wind-up";
+
+    /// <summary>The shortest and longest wind-up, in frames.</summary>
+    public const int MinWindUp = TimelineDocument.MinLength, MostWindUp = 300;
+
+    /// <summary>The wind-up's length until another is typed, in frames.</summary>
+    public const int DefaultWindUp = 20;
 
     /// <summary>
     /// Why <paramref name="capture"/>'s loop can't get an instant startup (see <see cref="MakeInstantStartup"/>);
@@ -31,7 +37,7 @@ internal sealed partial class AnimationEditService
         ($"chara/human/{race}/animation/a0001/bt_common/resident/idle.pap", $"chara/human/{race}/skeleton/base/b0001/skl_{race}b0001.sklb");
 
     /// <summary>
-    /// The startup's timeline as an instant startup: <paramref name="still"/>'s motion over its few frames, the
+    /// The startup's timeline as a wind-up: <paramref name="still"/>'s motion over its frames, the
     /// events the startup starts with and those the editor can't delete, squeezed into that length. The sounds,
     /// effects and faces it plays later never get to play, so they go.
     /// </summary>
@@ -48,19 +54,22 @@ internal sealed partial class AnimationEditService
     }
 
     /// <summary>
-    /// Gives <paramref name="capture"/>'s loop an instant startup: the startup's file with the game's idle (for the
-    /// startup's race) held for <see cref="TimelineDocument.MinLength"/> frames as its motion, so the game fades from
-    /// the idle straight into the loop. It is saved in the loop's mod, journaled for Undo: over the startup when that
-    /// mod already provides it, else as a new file mapped wherever the mod maps the loop.
+    /// Gives <paramref name="capture"/>'s loop a wind-up startup: the startup's file with a move of <paramref name="frames"/>
+    /// frames from the game's idle (for the startup's race) into the loop, then the loop's first frames for the game's
+    /// measured fade (<see cref="MotionWindUp.Build"/>), so the fade shows the same pose on both sides. It is saved in the
+    /// loop's mod, journaled for Undo: over the startup when that mod already provides it, else as a new file mapped
+    /// wherever the mod maps the loop.
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
-    public Guid? MakeInstantStartup(AnimationCapture capture)
+    public Guid? MakeInstantStartup(AnimationCapture capture, int frames)
     {
         if (Busy) return null;
         var id = Guid.NewGuid();
         Launch(async token =>
         {
             if (InstantStartupBlock(capture) is { } blocked) throw new InvalidOperationException(blocked);
+            if (frames is < MinWindUp or > MostWindUp)
+                throw new InvalidOperationException($"The wind-up must be {MinWindUp} to {MostWindUp} frames.");
             native.EnsureAvailable();
             await CheckActorAsync(capture, false);
             var loopPath = capture.Clip.GamePath;
@@ -80,9 +89,14 @@ internal sealed partial class AnimationEditService
 
             var playing = await DecodeMotionAsync(source, message => Status = message, token);
             var idle = await DecodeVanillaIdleAsync(source, message => Status = message, token);
-            Status = "Holding the idle";
-            var still = MotionHold.Still(playing, MotionHold.Borrowed(playing, idle), 0, TimelineDocument.MinLength);
-            var replacement = await ReplaceMotionAsync(source, selected, still, InstantStartupAction, "", null, message => Status = message, token);
+            Status = "Reading the loop";
+            var loopSource = await LoadTimelineAsync(capture, false, token);
+            var looping = await DecodeMotionAsync(loopSource with { Rebuild = WindUpLoopRebuild(loopSource, StartupRace(source)) },
+                message => Status = message, token);
+            Status = "Building the wind-up";
+            var fade = Math.Clamp(Observer.LoopFades.Measured(capture.Startup!.Timeline, capture.Clip.Timeline) ?? LoopFades.Default, 0, LoopFades.Most);
+            var windUp = MotionWindUp.Build(playing, MotionHold.Borrowed(playing, idle), looping, frames, fade);
+            var replacement = await ReplaceMotionAsync(source, selected, windUp, InstantStartupAction, "", null, message => Status = message, token);
             var edited = source.WithReplacement(replacement);
             var document = InstantStartupDocument(source.Document, replacement);
             var request = TimelineRequest(edited, document, AnimationDestination.InPlace, "") with { Id = id };
@@ -118,7 +132,7 @@ internal sealed partial class AnimationEditService
                 : s).ToImmutableArray();
             await framework.RunOnFrameworkThread(() => Observer.UpdateSources(capture.Id, updated));
             journal.State = "Completed";
-            journal.Message = $"Instant startup saved in {loop.ModName ?? loop.ModDirectory}.";
+            journal.Message = $"Wind-up saved in {loop.ModName ?? loop.ModDirectory}.";
             journals.Save(journal); Status = journal.Message;
         }, id, capture.Startup);
         return id;
@@ -128,10 +142,28 @@ internal sealed partial class AnimationEditService
     /// Decodes the game's own idle for the race <paramref name="startup"/> was made for (its PAP header's, else its
     /// skeleton's) on that race's game skeleton, whatever mods replace either. Nothing in game changes.
     /// </summary>
-    private Task<MotionClip> DecodeVanillaIdleAsync(AnimationTimelineSource startup, Action<string> status, CancellationToken token)
+    private Task<MotionClip> DecodeVanillaIdleAsync(AnimationTimelineSource startup, Action<string> status, CancellationToken token) =>
+        DecodeGameFileAsync(VanillaIdlePaths(StartupRace(startup)).Idle, StandingIdleEntry, startup.Capture, status, token);
+
+    /// <summary>The race <paramref name="startup"/> was made for: its PAP header's, else its skeleton's.</summary>
+    private static string StartupRace(AnimationTimelineSource startup) =>
+        startup.FileModel ?? AnimationSkeletonIndex.ModelFromPath(startup.Clip.SkeletonPath)
+        ?? throw new InvalidOperationException("The startup isn't made for a playable race.");
+
+    /// <summary>
+    /// The rebuild the wind-up reads <paramref name="loop"/> with: a loop whose file is another race's (its PAP header's) is
+    /// rebuilt for <paramref name="race"/>, the startup's, as the game converts it when it plays, so the wind-up lands on the loop
+    /// the game shows. Read as it is, a Midlander loop's longer bones would go into a Miqo'te startup, and the character would
+    /// grow until the loop takes over. Null for a loop of that race already, or one whose header names no race; null too while
+    /// the loop's skeleton isn't matched, which reading the loop then reports.
+    /// </summary>
+    internal static RaceRebuild? WindUpLoopRebuild(AnimationTimelineSource loop, string race)
     {
-        var race = startup.FileModel ?? AnimationSkeletonIndex.ModelFromPath(startup.Clip.SkeletonPath)
-            ?? throw new InvalidOperationException("The startup isn't made for a playable race.");
-        return DecodeGameFileAsync(VanillaIdlePaths(race).Idle, StandingIdleEntry, startup.Capture, status, token);
+        if (loop.FileModel is not { } model || model == race || loop.Clip.Resolution is not { State: SkeletonResolutionState.Matched })
+            return null;
+        return AnimationBones.AutomaticRebuild(loop.Clip, model, [], loop.HoldsOthers) is { } rebuild && rebuild.Model == race
+            ? rebuild
+            : throw new InvalidOperationException(
+                $"The loop is made for {AnimationBones.RaceName(model)} and can't be read for {AnimationBones.RaceName(race)}, the startup's race.");
     }
 }
