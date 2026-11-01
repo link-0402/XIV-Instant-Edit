@@ -123,21 +123,23 @@ internal sealed class AnimationJournalStore
         var dir = DirectoryFor(record.Id); Directory.CreateDirectory(dir);
         WriteAtomic(Path.Combine(dir, "journal.json"), JsonSerializer.SerializeToUtf8Bytes(record, Json));
     }
-    private string AutosavePath => Path.Combine(root, "timeline-autosave.json");
-    /// <summary>The Timeline window's kept unsaved edits; null when there are none.</summary>
-    public TimelineAutosave? LoadAutosave()
+    /// <summary>A Timeline workspace's kept edits file: yours with no <paramref name="key"/>, a partner's by its preset's Id.</summary>
+    internal static string AutosaveName(string? key) => key == null ? "timeline-autosave.json" : $"timeline-autosave-{key}.json";
+    private string AutosavePath(string? key) => Path.Combine(root, AutosaveName(key));
+    /// <summary>The Timeline workspace's kept unsaved edits (yours with no <paramref name="key"/>); null when there are none.</summary>
+    public TimelineAutosave? LoadAutosave(string? key = null)
     {
-        var path = AutosavePath;
+        var path = AutosavePath(key);
         if (!File.Exists(path)) return null;
         TextureFiles.EnsureLocalPath(path);
         // It may carry a motion from Blender and imported sounds.
         if (new FileInfo(path).Length > 512L * 1024 * 1024) throw new InvalidDataException("The kept timeline edits exceed 512 MiB.");
         return JsonSerializer.Deserialize<TimelineAutosave>(File.ReadAllText(path), Json);
     }
-    public void SaveAutosave(TimelineAutosave kept) => WriteAtomic(AutosavePath, JsonSerializer.SerializeToUtf8Bytes(kept, Json));
-    public void ClearAutosave()
+    public void SaveAutosave(TimelineAutosave kept, string? key = null) => WriteAtomic(AutosavePath(key), JsonSerializer.SerializeToUtf8Bytes(kept, Json));
+    public void ClearAutosave(string? key = null)
     {
-        var path = AutosavePath;
+        var path = AutosavePath(key);
         TextureFiles.EnsureLocalPath(path);
         if (File.Exists(path)) File.Delete(path);
     }

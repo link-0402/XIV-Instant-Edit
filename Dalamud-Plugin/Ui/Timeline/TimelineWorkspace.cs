@@ -189,7 +189,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             poseBrowser.FocusSave();
         });
         session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy || blenderMotion.Working);
-        autosaver = new TimelineAutosaver(session, Restore);
+        autosaver = new TimelineAutosaver(session, Restore, key.IsSelf ? null : key.Id);
     }
 
     internal WorkspaceKey Key { get; }

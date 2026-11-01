@@ -11,7 +11,8 @@ namespace InstantEdit.Ui.Timeline;
 /// edits go once this window edits another clip, saves, or the edits are discarded.
 /// </summary>
 /// <param name="restore">Opens the kept edits' clip with them.</param>
-internal sealed class TimelineAutosaver(TimelineSession session, Action<TimelineAutosave> restore)
+/// <param name="key">The workspace's kept edits file: null for yours, a partner preset's Id for its own.</param>
+internal sealed class TimelineAutosaver(TimelineSession session, Action<TimelineAutosave> restore, string? key = null)
 {
     private static readonly TimeSpan Every = TimeSpan.FromMinutes(1);
 
@@ -123,7 +124,7 @@ internal sealed class TimelineAutosaver(TimelineSession session, Action<Timeline
 
     private TimelineAutosave? Read(AnimationJournalStore store)
     {
-        try { return store.LoadAutosave(); }
+        try { return store.LoadAutosave(key); }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             session.Log.Warning(e, "Could not read the kept timeline edits.");
@@ -133,14 +134,14 @@ internal sealed class TimelineAutosaver(TimelineSession session, Action<Timeline
 
     private void Write(AnimationJournalStore store, TimelineAutosave snapshot)
     {
-        try { store.SaveAutosave(snapshot); }
+        try { store.SaveAutosave(snapshot, key); }
         catch (Exception e) when (e is not OutOfMemoryException) { session.Log.Warning(e, "Could not keep the timeline's unsaved edits."); }
     }
 
     private void Forget(AnimationJournalStore store)
     {
         kept = null;
-        try { store.ClearAutosave(); }
+        try { store.ClearAutosave(key); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { session.Log.Warning(e, "Could not remove the kept timeline edits."); }
     }
 }

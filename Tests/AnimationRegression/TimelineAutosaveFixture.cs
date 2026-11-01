@@ -72,6 +72,20 @@ internal static class TimelineAutosaveFixture
 
             store.ClearAutosave();
             check(store.LoadAutosave() == null && !File.Exists(file), "forgetting the kept edits removes them");
+
+            // A partner's workspace keeps its edits in a file of its own.
+            var partner = Guid.NewGuid().ToString("N");
+            check(AnimationJournalStore.AutosaveName(null) == "timeline-autosave.json" &&
+                  AnimationJournalStore.AutosaveName(partner) == $"timeline-autosave-{partner}.json",
+                "a partner workspace's kept edits are named by its preset, yours stay timeline-autosave.json");
+            store.SaveAutosave(kept, partner);
+            check(!File.Exists(file) && File.Exists(Path.Combine(dir, "AnimationEdits", AnimationJournalStore.AutosaveName(partner))),
+                "a partner's kept edits leave yours alone");
+            store.SaveAutosave(kept);
+            store.ClearAutosave(partner);
+            check(store.LoadAutosave(partner) == null && store.LoadAutosave() != null, "forgetting a partner's kept edits leaves yours");
+            store.SaveAutosave(kept with { FileHash = "partner" }, partner);
+            check(store.LoadAutosave(partner)?.FileHash == "partner" && store.LoadAutosave()?.FileHash == "file", "each workspace reads its own kept edits");
         }
         finally { Directory.Delete(dir, recursive: true); }
     }
