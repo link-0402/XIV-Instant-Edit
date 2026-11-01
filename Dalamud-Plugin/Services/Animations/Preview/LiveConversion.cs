@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations.Motion;
 
@@ -6,9 +7,10 @@ namespace InstantEdit.Services.Animations.Preview;
 
 /// <summary>
 /// The game's conversion of a clip borrowed from another race, undone, so Live can show a motion rebuilt for the
-/// character's race while the game still plays the clip's own binding. As measured in game on 2026-10-25, the game
-/// copies the clip's rotations unchanged, scales <c>n_hara</c>'s translation by the actor's <c>n_hara</c> rest height
-/// over the clip's, and takes every other translation from the actor's own rest.
+/// character's race while the game still plays the clip's own binding. As measured in game on 2026-10-25 and 2026-11-02, the
+/// game copies the clip's rotations unchanged and maps each translation as the actor's rest plus the clip's move off the clip's
+/// rest, times the actor's rest length over the clip's: <c>actorRest + (clip - clipRest) * |actorRest| / |clipRest|</c>. A bone
+/// left at the clip's rest lands on the actor's.
 /// </summary>
 internal static class LiveConversion
 {
@@ -24,14 +26,14 @@ internal static class LiveConversion
 
     /// <summary>
     /// <paramref name="rebuilt"/>'s motion on the clip's own skeleton <paramref name="source"/>, which the game turns back into it:
-    /// rotations and scales copied by bone name, <c>n_hara</c>'s translation divided by <see cref="HipsRatio"/>, every other
-    /// translation at the source's rest. Bones <paramref name="rebuilt"/> lacks sit at the source's rest. A clip repaired onto a
-    /// standard of its own race isn't converted by the game (<paramref name="sameRace"/>): every translation is copied too.
-    /// The layers' moves of the hips are on <c>n_hara</c> already (<see cref="MotionClip.HipsOnHara"/>), so they come through.
+    /// rotations and scales copied by bone name, translations through the game's mapping undone (<see cref="Unmapped"/>), so
+    /// <c>n_hara</c>'s comes out divided by <see cref="HipsRatio"/>. Bones <paramref name="rebuilt"/> lacks sit at the source's
+    /// rest. A clip repaired onto a standard of its own race isn't converted by the game (<paramref name="sameRace"/>): every
+    /// translation is copied too. The layers' moves of the hips are on <c>n_hara</c> already (<see cref="MotionClip.HipsOnHara"/>),
+    /// so they come through.
     /// </summary>
     public static MotionClip ToSource(MotionClip rebuilt, SkeletonDescription source, ImmutableArray<short> playedTracks, bool sameRace = false)
     {
-        var ratio = HipsRatio(rebuilt.Skeleton, source);
         var index = MotionEvaluator.Index(rebuilt.Skeleton);
         var back = new MotionClip(source, rebuilt.Duration, rebuilt.Samples, rebuilt.TrackFloats, rebuilt.FloatTracks)
             { SourceTracks = playedTracks, BlendHint = rebuilt.BlendHint, Loops = rebuilt.Loops };
@@ -40,6 +42,7 @@ internal static class LiveConversion
             var bone = source.Bones[b];
             var rest = MotionTransform.From(bone.Reference);
             var from = index.TryGetValue(bone.Name, out var found) ? found : -1;
+            var actorRest = from < 0 ? Vector3.Zero : rebuilt.Skeleton.Bones[from].Reference.Position;
             for (var s = 0; s < rebuilt.Samples; s++)
             {
                 if (from < 0)
@@ -48,10 +51,20 @@ internal static class LiveConversion
                     continue;
                 }
                 var value = rebuilt.Get(s, from);
-                back.Set(s, b, sameRace ? value : value with { Position = bone.Name == Hips ? value.Position / ratio : rest.Position });
+                back.Set(s, b, sameRace ? value : value with { Position = Unmapped(value.Position, actorRest, rest.Position) });
             }
         }
         return back;
+    }
+
+    /// <summary>
+    /// The clip translation the game maps onto <paramref name="position"/>: <paramref name="clipRest"/> plus the move off
+    /// <paramref name="actorRest"/>, times the clip's rest length over the actor's. Unscaled when either rest is about 0 long.
+    /// </summary>
+    private static Vector3 Unmapped(Vector3 position, Vector3 actorRest, Vector3 clipRest)
+    {
+        var (actor, clip) = (actorRest.Length(), clipRest.Length());
+        return clipRest + (position - actorRest) * (actor < 1e-5f || clip < 1e-5f ? 1 : clip / actor);
     }
 
     /// <summary>

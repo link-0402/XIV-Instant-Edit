@@ -320,7 +320,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     /// <summary>
     /// The status line's notes for the preview and Live: work running, else an error, else the playback status or why
-    /// playback is unavailable; then bones Live can't show, the rebuilt-positions note, the shared collection and what the
+    /// playback is unavailable; then bones Live can't show, the shared collection and what the
     /// preview still needs. <paramref name="repair"/> is the standard skeleton a preview repairs the clip onto.
     /// </summary>
     internal IEnumerable<StatusNote> Notes(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
@@ -350,8 +350,6 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         {
             if (session.MotionDisplay?.Unshown is > 0 and var unshown)
                 notes.Add(new StatusNote("live-unshown", StatusKind.Warning, TimelineWindowViews.LiveUnshown(unshown)));
-            if (livePreview == null && session.Fresh(loaded).Rebuild is { Model: not null } && TimelineWindowViews.LiveRebuiltPositions(current.Document))
-                notes.Add(new StatusNote("rebuilt-positions", StatusKind.Notice, TimelineWindowViews.LiveRebuiltPositionsNote));
             // Live without a preview shows the bone layers itself, so nothing waits (PreviewNeeded is null then).
             if (livePreview != null && needed != null)
                 notes.Add(new StatusNote("preview-needs", StatusKind.Notice, needed));

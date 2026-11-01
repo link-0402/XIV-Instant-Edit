@@ -234,11 +234,6 @@ internal static class LinkLayerFixture
         check(BonePosing.LayerBones(Layer(Hips()), body).Pinned.SetEquals([PinChains.Hips]), "views: a hips link marks the hips");
         check(!TimelineLayout.Unfolds(keyed), "views: a link layer has no bone rows");
 
-        // Live on a rebuilt clip: a limb link moves no lengths, a hips link moves the hips.
-        check(!TimelineWindowViews.LiveRebuiltPositions(doc) && TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Layer(Hips())] }) &&
-              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Layer(Hips()) with { Enabled = false }] }),
-            "views: LiveRebuiltPositions is false for a limb link and true for a hips link");
-
         // A link that bends bones outside the standard skeletons warns as a pin does.
         var kosi = MotionEvaluator.Index(body)[PinChains.Hips];
         var tail = body with

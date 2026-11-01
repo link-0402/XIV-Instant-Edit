@@ -92,9 +92,11 @@ internal static class RaceRebuildFixture
                 motion.Set(s, b, MotionTransform.From(standard.Bones[b].Reference));
             motion.Set(s, 2, motion.Get(s, 2) with { Position = new(0, .2f, .05f) });
         }
-        var back = LiveConversion.ToSource(motion, own, [1, 2], sameRace: true);
-        var converted = LiveConversion.ToSource(motion, own, [1, 2]);
-        check(back.Get(0, 2).Position == new Vector3(0, .2f, .05f) && converted.Get(0, 2).Position == new Vector3(0, .1f, 0),
+        // A shorter j_kosi on the played skeleton, so a conversion would scale the move.
+        var shorter = own with { Bones = own.Bones.SetItem(2, B("j_kosi", 1, new(0, .05f, 0))) };
+        var back = LiveConversion.ToSource(motion, shorter, [1, 2], sameRace: true);
+        var converted = LiveConversion.ToSource(motion, shorter, [1, 2]);
+        check(back.Get(0, 2).Position == new Vector3(0, .2f, .05f) && Vector3.Distance(converted.Get(0, 2).Position, new Vector3(0, .1f, .025f)) < 1e-6f,
             "Live keeps a repaired clip's translations, as the game plays it unconverted");
     }
 
@@ -161,27 +163,6 @@ internal static class RaceRebuildFixture
               LoopPoseReader.LoopRebuild(loop with { FileModel = "c0801" }, rebuild) == null &&
               LoopPoseReader.LoopRebuild(loop with { Clip = clip with { Resolution = clip.Resolution! with { ActorStandards = [] } } }, rebuild) == null,
             "the loop is read rebuilt only when the game plays it borrowed the same way");
-
-        var doc = new TimelineDocument(30, 30, null, [], 1);
-        var pose = new MotionLayer("m2", MotionLayerKind.Pose, "Pose 1", 0, 30, 0, 0, 1, PoseComponents.All, MotionInterpolation.Smooth, [],
-            [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_kosi", new BoneTransform(Vector3.One, Quaternion.Identity, Vector3.One)), ["j_kosi"])]);
-        check(TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.UnitY)] }) &&
-              TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [pose] }) &&
-              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [pose with { Keys = [pose.Keys[0] with { Moved = [] }] }] }) &&
-              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("n_hara", Vector3.UnitY)] }) &&
-              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.Zero)] }) &&
-              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Offset("j_kosi", Vector3.UnitY, enabled: false)] }) &&
-              !TimelineWindowViews.LiveRebuiltPositions(doc),
-            "Live says when a rebuilt clip's moves on bones other than the hips show only after the save");
-        // Review: a swing that only turns moves nothing.
-        var swing = new MotionLayer("m3", MotionLayerKind.Swing, "Swing 1", 0, 30, 0, 0, 1, PoseComponents.Rotation | PoseComponents.Position,
-            MotionInterpolation.Smooth, Bones: ["j_kosi"], Swing: new MotionSwing());
-        check(!TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [swing] }) &&
-              TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [swing with { Swing = new MotionSwing(Slide: .05f) }] }) &&
-              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [swing with { Bones = ["n_hara"], Swing = new MotionSwing(Slide: .05f) }] }),
-            "a swing counts for Live's move line only when it slides a bone other than the hips");
-        check(TimelineWindowViews.LiveRebuiltPositionsNote == "Live shows position changes only on the hips while rebuilt. Preview, then Live, shows them all.",
-            "the Live line for moves it can't show");
     }
 
     private static void BorrowedBy(Action<bool, string> check)
@@ -209,11 +190,12 @@ internal static class RaceRebuildFixture
     {
         static SkeletonBone B(string name, short parent, Vector3 position, Quaternion? rotation = null) =>
             new(name, parent, 0, new(position, rotation ?? Quaternion.Identity, Vector3.One));
+        // j_kosi has no length on the clip's skeleton; j_sako_r's rests point different ways, as the game's do.
         var source = new SkeletonDescription("skeleton", "c0101", [B("n_root", -1, Vector3.Zero), B("n_hara", 0, new(0, 1.07677f, 0)),
-            B("j_kosi", 1, Vector3.Zero), B("j_asi_a_l", 2, new(0.1f, 0, 0))], [], [], []);
+            B("j_kosi", 1, Vector3.Zero), B("j_asi_a_l", 2, new(0.1f, 0, 0)), B("j_sako_r", 2, new(0.1f, 0.05f, 0))], [], [], []);
         var rebuilt = new SkeletonDescription("skeleton", "c0801", [B("n_root", -1, Vector3.Zero), B("n_hara", 0, new(0, 0.99885f, 0)),
-            B("j_kosi", 1, Vector3.Zero), B("j_asi_a_l", 2, new(0.09f, 0, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 7.2f * MathF.PI / 180)),
-            B("iv_ko_c_l", 2, Vector3.Zero)], [], [], []);
+            B("j_kosi", 1, new(0, 0.02f, 0)), B("j_asi_a_l", 2, new(0.09f, 0, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 7.2f * MathF.PI / 180)),
+            B("iv_ko_c_l", 2, Vector3.Zero), B("j_sako_r", 2, new(0.09f, 0.02f, 0.01f))], [], [], []);
         var clip = new MotionClip(rebuilt, 1f / 30, 2) { SourceTracks = [1, 3, 4], BlendHint = 0, Loops = true };
         for (var s = 0; s < clip.Samples; s++)
         {
@@ -222,13 +204,34 @@ internal static class RaceRebuildFixture
             clip.Set(s, 1, clip.Get(s, 1) with { Position = new(0.01f, 0.95f, 0.02f) });
             clip.Set(s, 3, clip.Get(s, 3) with { Rotation = Quaternion.CreateFromAxisAngle(Vector3.UnitX, MathF.PI / 6) });
         }
+        // Sample 1 moves j_kosi, j_asi_a_l and j_sako_r; sample 0 leaves them at the rebuilt rest.
+        clip.Set(1, 2, clip.Get(1, 2) with { Position = new(0.01f, 0.05f, 0) });
+        clip.Set(1, 3, clip.Get(1, 3) with { Position = new(0.12f, 0.01f, 0) });
+        clip.Set(1, 5, clip.Get(1, 5) with { Position = new(0.11f, 0.06f, -0.02f) });
+        // The game's mapping of a clip translation onto the actor, as measured on 2026-11-02.
+        static Vector3 Game(Vector3 input, Vector3 clipRest, Vector3 actorRest) =>
+            actorRest + (input - clipRest) * (clipRest.Length() < 1e-5f || actorRest.Length() < 1e-5f ? 1 : actorRest.Length() / clipRest.Length());
 
         check(Math.Abs(LiveConversion.HipsRatio(rebuilt, source) - 0.92764f) < 1e-5f, "the hips ratio is the race's n_hara rest height over the clip's");
         var back = LiveConversion.ToSource(clip, source, [1, 3]);
-        check(Vector3.Distance(back.Get(0, 1).Position, new Vector3(0.01f, 0.95f, 0.02f) / 0.92764f) < 1e-5f,
-            "the hips are divided by the ratio, so the game's scaling gives the rebuilt value");
-        check(back.Get(0, 3).Rotation == clip.Get(0, 3).Rotation && back.Get(0, 3).Position == new Vector3(0.1f, 0, 0),
-            "rotations are copied, other translations sit at the clip's own rest");
+        check(Vector3.Distance(back.Get(0, 1).Position, new Vector3(0.01f, 0.95f, 0.02f) / 0.92764f) < 1e-5f &&
+              Vector3.Distance(back.Get(1, 1).Position, new Vector3(0.01f, 0.95f, 0.02f) / LiveConversion.HipsRatio(rebuilt, source)) < 1e-5f,
+            "the hips are divided by the ratio, as before the other bones were mapped too");
+        check(back.Get(0, 3).Rotation == clip.Get(0, 3).Rotation && back.Get(0, 3).Position == new Vector3(0.1f, 0, 0) &&
+              back.Get(0, 4).Position == new Vector3(0.1f, 0.05f, 0) && back.Get(0, 2).Position == Vector3.Zero,
+            "rotations are copied, unedited translations sit at the clip's own rest");
+        var sakoClip = new Vector3(0.1f, 0.05f, 0);
+        var sakoActor = new Vector3(0.09f, 0.02f, 0.01f);
+        check(Vector3.Distance(back.Get(1, 3).Position, new Vector3(0.1f, 0, 0) + new Vector3(0.03f, 0.01f, 0) * (0.1f / 0.09f)) < 1e-6f &&
+              Vector3.Distance(back.Get(1, 4).Position, sakoClip + (new Vector3(0.11f, 0.06f, -0.02f) - sakoActor) * (sakoClip.Length() / sakoActor.Length())) < 1e-6f,
+            "an edited translation is the move off the rebuilt rest, scaled by the rests' lengths, off the clip's rest");
+        check(Vector3.Distance(back.Get(1, 2).Position, new Vector3(0.01f, 0.03f, 0)) < 1e-6f,
+            "a rest about 0 long moves the translation unscaled");
+        check(Vector3.Distance(Game(back.Get(1, 3).Position, new(0.1f, 0, 0), new(0.09f, 0, 0)), clip.Get(1, 3).Position) < 1e-5f &&
+              Vector3.Distance(Game(back.Get(1, 4).Position, sakoClip, sakoActor), clip.Get(1, 5).Position) < 1e-5f &&
+              Vector3.Distance(Game(back.Get(1, 2).Position, Vector3.Zero, new(0, 0.02f, 0)), clip.Get(1, 2).Position) < 1e-5f &&
+              Vector3.Distance(Game(back.Get(1, 1).Position, new(0, 1.07677f, 0), new(0, 0.99885f, 0)), clip.Get(1, 1).Position) < 1e-5f,
+            "the game's mapping turns the copy back into the edited translations");
         check(back.Skeleton == source && back.SourceTracks.SequenceEqual([(short)1, (short)3]) && back.Loops && back.Duration == clip.Duration &&
               back.Samples == clip.Samples, "the copy is on the clip's skeleton with its playing tracks");
         var (tracks, sources, missing) = LiveConversion.Tracks(rebuilt, source, [3, 1, 4], [1, 3]);

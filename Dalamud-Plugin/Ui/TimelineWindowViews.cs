@@ -1181,9 +1181,6 @@ internal static partial class TimelineWindowViews
     public static string LiveUnshown(int bones) =>
         bones == 1 ? "Live can't show 1 bone until you save." : $"Live can't show {bones} bones until you save.";
 
-    /// <summary>The line while Live plays a rebuilt clip whose layers move bones other than the hips (<see cref="LiveRebuiltPositions"/>).</summary>
-    public const string LiveRebuiltPositionsNote = "Live shows position changes only on the hips while rebuilt. Preview, then Live, shows them all.";
-
     /// <summary>The Live button's tooltip, last line, while Live runs over a built preview that still shows the document.</summary>
     public const string LiveOnPreviewHint = "Live shows your bone layers over the preview.";
 
@@ -1192,25 +1189,6 @@ internal static partial class TimelineWindowViews
 
     /// <summary>The status line's note when edits or a rebuild show on the character only once built.</summary>
     public const string PreviewNeeded = "Press Preview to see your changes.";
-
-    /// <summary>
-    /// Whether <paramref name="document"/>'s layers may move a bone other than n_hara, which Live on a rebuilt clip can't
-    /// show: the game takes those lengths from the character. Offset and pose layers count by their keys, a swing or a noise
-    /// when it slides, a link on the hips; any other layer that changes positions counts.
-    /// </summary>
-    public static bool LiveRebuiltPositions(TimelineDocument document) =>
-        document.Motion.Any(layer => layer.Kind == MotionLayerKind.Link
-            // A link on a limb or a chain only turns bones; on the hips it moves them.
-            ? MotionLinks.MayChange(layer) && layer.Link!.Bone == PinChains.Hips
-            : MotionEvaluator.Active(layer) && layer.Components.HasFlag(PoseComponents.Position) && layer.Kind switch
-            {
-                MotionLayerKind.Offset => layer.Keys.Any(key => key.Bones.Any(bone => bone.Key != "n_hara" && bone.Value.Position != Vector3.Zero)),
-                MotionLayerKind.Pose => layer.Keys.Any(key => key.Moved.Any(bone => bone != "n_hara")),
-                MotionLayerKind.Swing => layer.Swing is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
-                MotionLayerKind.Noise => layer.Noise is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
-                MotionLayerKind.LookAt => false,
-                _ => true,
-            });
 
     /// <summary>A loop that slows to a stop at its end: over how many frames.</summary>
     public static string StallText(int frames) => $"The motion holds still before the loop starts again (last {frames} frames).";

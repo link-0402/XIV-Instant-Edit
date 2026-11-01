@@ -292,7 +292,6 @@ internal static class LookAtFixture
         check(PoseEdits.Changes(looking, "j_kubi") && !PoseEdits.Changes(looking, "j_te_r") &&
               BonePosing.StateOf("j_kao", looking, 10, null) == BoneState.Changed && MotionPaths.KeyFrames(looking, "j_kao", 0).Count == 0,
             "the head chain shows as changed by a look, never as keyed: its keys are spots");
-        check(!TimelineWindowViews.LiveRebuiltPositions(keyed), "a look only turns bones");
     }
 
     private static SkeletonDescription Rig() => new("look-rig", "look-rig-fingerprint",

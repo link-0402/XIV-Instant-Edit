@@ -2664,8 +2664,9 @@ are the look and Live. Code: Services/Animations/Motion/MotionSwing.cs, MotionSm
   in Live the hips sway side to side and the feet stay planted.
   Fails in Live (XIV Bridge animations-pending/540, Release 2026-10-31, Flame Dance): the document slides the hips 5 cm
   and leans them 5 deg with the feet planted, but Live moves the hips 0.07 cm and the feet 7.4 cm. Flame Dance is a c0101
-  clip on the c0801 character, and for another race's clip Live puts every translation but n_hara's back at rest
-  (LiveConversion.ToSource, LiveConversion.cs:50), so a Slide on j_kosi is dropped while Pin feet's leg turns, solved for
+  clip on the c0801 character, and for another race's clip Live then put every translation but n_hara's back at rest
+  (LiveConversion.ToSource; since 2026-11-02 Live shows position changes on every bone while rebuilt), so a Slide on
+  j_kosi was dropped while Pin feet's leg turns, solved for
   the slid hips, stay. Suspected bug; decide whether the Slide goes onto n_hara for such clips or the editor warns.
   Fixed 2026-10-31 (ruled: onto n_hara): on a clip rebuilt for another race each layer's move of j_kosi goes onto n_hara
   in the document, Live and the save, so the back goes along with the hips (SwingLayerFixture). Retest after a Release build.

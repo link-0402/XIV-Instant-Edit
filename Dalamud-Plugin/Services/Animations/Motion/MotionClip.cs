@@ -75,8 +75,8 @@ internal sealed class MotionClip
 
     /// <summary>
     /// Whether a layer's move of the hips (<c>j_kosi</c>) goes onto <c>n_hara</c>: a clip borrowed from another race and rebuilt for
-    /// the character's, which Live shows through the game's race conversion, and that keeps <c>n_hara</c>'s translation only.
-    /// The document, Live and the save then all move the hips the one way the game can show (<see cref="MotionEvaluator.Apply"/>).
+    /// the character's, which Live shows through the game's race conversion. The document, Live and the save then all move the
+    /// hips the same way, with the back along (<see cref="MotionEvaluator.Apply"/>).
     /// </summary>
     public bool HipsOnHara { get; init; }
 

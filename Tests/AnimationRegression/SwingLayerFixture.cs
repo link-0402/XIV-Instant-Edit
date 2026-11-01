@@ -36,7 +36,7 @@ internal static class SwingLayerFixture
         OnHara(check);
     }
 
-    // XIV Bridge 540: on a clip from another race Live keeps n_hara's translation only, so a slide of the hips moves n_hara instead,
+    // XIV Bridge 540: on a clip from another race Live once kept n_hara's translation only, so a slide of the hips moves n_hara instead,
     // in the document, Live and the save alike. The game's back hangs from n_hara beside the hips, and goes along.
     private static void OnHara(Action<bool, string> check)
     {
