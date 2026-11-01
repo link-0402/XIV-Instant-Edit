@@ -916,8 +916,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     internal static ImmutableArray<MotionLayer> LiveLayers(TimelineDocument doc) =>
         doc.Face is { } face ? TimelineFace.ToFace(doc.Motion, face.Anchor) : doc.Motion;
 
-    /// <summary>The partner tracks Live and the preview apply <paramref name="doc"/>'s link layers with: none for a face, whose links are never on.</summary>
-    internal static MotionLinkSet? LiveLinks(TimelineDocument doc, MotionLinkSet links) => doc.Face != null ? null : links;
+    /// <summary>
+    /// The partner tracks Live and the preview apply <paramref name="doc"/>'s link layers with: none for a face, whose links are never
+    /// on, and none for a set without tracks, so a clip without links shows as it did before links (callers that ask
+    /// <see cref="MotionLiveDisplay.Shows"/> without links still match).
+    /// </summary>
+    internal static MotionLinkSet? LiveLinks(TimelineDocument doc, MotionLinkSet links) => doc.Face != null || links.Tracks.IsEmpty ? null : links;
 
     /// <summary>
     /// Whether a preview built with the link prints <paramref name="built"/> no longer shows <paramref name="doc"/>'s links as

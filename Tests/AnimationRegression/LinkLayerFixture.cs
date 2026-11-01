@@ -220,6 +220,8 @@ internal static class LinkLayerFixture
         check(TimelinePreview.LiveLinks(doc, set) == set &&
               TimelinePreview.LiveLinks(TimelineFace.Open(new TimelineDocument(150, 150, null, [], 1), 0, 1, 150) with { Motion = [layer] }, set) == null,
             "wiring: a face's Live and preview get no partner tracks");
+        check(TimelinePreview.LiveLinks(doc, MotionLinkSet.Empty) == null && TimelinePreview.LiveLinks(doc, new MotionLinkSet(MotionLinkSet.Empty.Tracks)) == null,
+            "wiring: a clip without partner tracks shows as one without links, so a caller asking Live without links still matches");
 
         // The Bones window's onion skins and paths pose a frame as Apply bakes it, with the same tracks.
         var fine = Reaching(61);
