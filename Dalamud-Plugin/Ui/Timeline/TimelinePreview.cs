@@ -494,6 +494,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         StopTemporaryMod(redraw);
     }
 
+    /// <summary>The actor despawned: the preview and Live end as <see cref="Stop"/> ends them, with no redraw of an actor that is gone.</summary>
+    public void ActorGone()
+    {
+        previewRedrawn = false;
+        Stop();
+    }
+
     /// <summary>
     /// Removes the preview's temporary mod on a task, then redraws <paramref name="redraw"/>, the character
     /// a preview redrew, so it drops the previewed files and loads its own again.

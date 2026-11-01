@@ -221,6 +221,16 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>How many animations play now, for the start page's sidebar.</summary>
     internal int PlayingCount => _playingNow.Playing;
 
+    /// <summary>
+    /// The partner the Timeline window shows, or null for you: Playing now names it, and the recorder records it (the GPose
+    /// target) in place of the You and Target choice.
+    /// </summary>
+    internal void ShowingPartner(string? name)
+    {
+        _playingNow.ActorName = name;
+        _recorder.RecordsTarget = name;
+    }
+
     /// <summary>The dialogs the Timeline window's rows open, such as Send animation to Blender from Playing now.</summary>
     internal void DrawTimelineDialogs() => _animationSend.Draw(AnimationSendDialog.TimelineOwner);
 

@@ -10,7 +10,9 @@ namespace InstantEdit.Ui.Timeline;
 /// The start page's Partners page: one row per preset with its links and Spawn or Despawn, and the editor New preset and
 /// Edit open. The plugins' lists are read when the page first draws and again every 5 seconds while it shows.
 /// </summary>
-internal sealed class PartnersPage(PartnerService partners)
+/// <param name="unsaved">Whether a preset's Timeline workspace has unsaved edits, which its Delete question names.</param>
+/// <param name="deleted">A preset was deleted: its Timeline workspace and kept edits go.</param>
+internal sealed class PartnersPage(PartnerService partners, Func<Guid, bool>? unsaved = null, Action<Guid>? deleted = null)
 {
     private const string EditPopup = "##partner-edit";
     private const int MaxName = 21;
@@ -132,13 +134,14 @@ internal sealed class PartnersPage(PartnerService partners)
         if (confirming == preset.Id)
         {
             ImGui.AlignTextToFramePadding();
-            ImGui.TextUnformatted($"Delete {preset.Name}?");
+            ImGui.TextUnformatted(TimelineWindowViews.DeleteQuestion(preset.Name, unsaved?.Invoke(preset.Id) == true));
             ImGui.SameLine(0, Theme.Gap);
             if (ImGui.Button("Delete###partner-delete-go"))
             {
                 confirming = null;
                 refused.Remove(preset.Id);
                 partners.Delete(preset.Id);
+                deleted?.Invoke(preset.Id);
             }
             ImGui.SameLine(0, Theme.Gap);
             if (ImGui.Button("Keep###partner-delete-keep"))

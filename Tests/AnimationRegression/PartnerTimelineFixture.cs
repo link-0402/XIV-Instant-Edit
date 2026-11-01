@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using InstantEdit.Models;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Preview;
+using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
@@ -16,6 +17,23 @@ internal static class PartnerTimelineFixture
         SameFile(check);
         Histories(check);
         Retarget(check);
+        Questions(check);
+    }
+
+    /// <summary>The inline questions that cover a partner's workspace: deleting its preset and closing the window.</summary>
+    private static void Questions(Action<bool, string> check)
+    {
+        check(TimelineWindowViews.DeleteQuestion("Aria Rose", true) == "Delete Aria Rose? Its unsaved edits go too." &&
+              TimelineWindowViews.DeleteQuestion("Aria Rose", false) == "Delete Aria Rose?",
+            "delete: a preset whose workspace has unsaved edits says they go too");
+        check(TimelineWindowViews.CloseQuestion(["You"]) == "This timeline has unsaved changes. Close it and lose them?" &&
+              TimelineWindowViews.CloseQuestion(["Aria Rose"]) == "This timeline has unsaved changes. Close it and lose them?",
+            "close: one workspace with unsaved changes asks as today");
+        check(TimelineWindowViews.CloseQuestion(["You", "Aria Rose"]) == "You and Aria Rose have unsaved changes. Close and lose them?",
+            "close: two workspaces are named in one question");
+        check(TimelineWindowViews.CloseQuestion(["You", "Aria Rose", "Mio Kai"]) == "You, Aria Rose and Mio Kai have unsaved changes. Close and lose them?",
+            "close: three are listed with commas");
+        check(TimelineWindowViews.Spawning("Aria Rose") == "Aria Rose is still spawning.", "spawning: a partner not ready yet says so");
     }
 
     /// <summary>A respawned partner is a new actor: the open clip's capture is pointed at it, so the save checks the actor there now.</summary>

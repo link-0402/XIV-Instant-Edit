@@ -46,8 +46,14 @@ internal interface ITimelineHost
     /// <summary>Opens the window and brings it to the front.</summary>
     void Show();
 
-    /// <summary>Closes the window, once the question about unsaved changes was answered.</summary>
-    void Close();
+    /// <summary>
+    /// Draws the actor's name ("You", "Aria Rose") that lists the workspaces to switch to, and returns true, while partners are
+    /// spawned; draws nothing and returns false otherwise.
+    /// </summary>
+    bool DrawActorSwitch();
+
+    /// <summary>Why <paramref name="key"/>'s actor can't be acted on yet ("Aria Rose is still spawning."); null when it can.</summary>
+    string? Waiting(WorkspaceKey key);
 }
 
 /// <summary>
@@ -61,7 +67,7 @@ internal interface ITimelineHost
 /// </summary>
 internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
 {
-    private enum PendingAction : byte { None, Close, Switch }
+    private enum PendingAction : byte { None, Switch }
 
     private readonly ITimelineHost host;
     private readonly TimelineSession session;
@@ -118,7 +124,6 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     // The timeline Edit face left (Back returns to it) and its unsaved edits, which come back with it; null for none.
     private (AnimationCapture Capture, bool Startup)? parkedClip;
     private TimelineAutosave? parkedEdits;
-    private bool closeConfirmed;
     // The start page shows over the open clip, which keeps running behind it (Start; Back to the clip ends it).
     private bool startShown;
     private float footerHeight;
@@ -423,18 +428,11 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     }
 
     /// <summary>
-    /// The window closes: with unsaved changes it asks first and returns false, and the window stays open until Discard.
-    /// Otherwise everything this workspace runs ends, its clip closes, and it returns true.
+    /// The window closes (the window asked about unsaved changes first) or the preset went: everything this workspace runs
+    /// ends and its clip closes.
     /// </summary>
-    internal bool Close()
+    internal void Close()
     {
-        if (!closeConfirmed && HasUnsavedChanges)
-        {
-            pending = PendingAction.Close;
-            pendingOpen = null;
-            return false;
-        }
-        closeConfirmed = false;
         pending = PendingAction.None;
         pendingOpen = null;
         pendingAgain = null;
@@ -462,8 +460,23 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         ForgetSounds();
         // A sound played to listen to stops being served with the window.
         _ = soundPlayer?.StopAsync();
-        return true;
     }
+
+    /// <summary>Another workspace shows now: a gizmo drag on this one's actor ends.</summary>
+    internal void Hidden() => EndGizmo(true);
+
+    /// <summary>
+    /// The partner despawned (Despawn, GPose end, a zone change or a lost actor): Preview and Live stop and its temporary mod
+    /// goes without a redraw, the actor being gone. The clip and its unsaved edits stay.
+    /// </summary>
+    internal void ActorGone()
+    {
+        EndGizmo(true);
+        timelinePreview.ActorGone();
+    }
+
+    /// <summary>The preset spawned again: the open clip points at the new actor, so saves check it; Preview and Live stay off.</summary>
+    internal void ActorBack(ushort index, ulong actorId, long address) => session.Retarget(index, actorId, address);
 
     public void Dispose()
     {
@@ -806,7 +819,10 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
                 ImGui.Spacing();
             }
         }
-        startPage.Draw(ImGui.GetContentRegionAvail().Y, backTo, BackToClip);
+        // Whose start page: "You" or the partner, which switches the GPose target.
+        if (host.DrawActorSwitch())
+            ImGui.Spacing();
+        startPage.Draw(ImGui.GetContentRegionAvail().Y, backTo, BackToClip, host.Waiting(Key));
     }
 
     /// <summary>Back from Edit face to the timeline it left; <paramref name="open"/> is the face open, null when it couldn't be read.</summary>
@@ -852,6 +868,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             DrawBack(current);
             ImGui.SameLine(0, Theme.Gap);
         }
+        // Whose clip: "You" or the partner, which switches the GPose target.
+        if (host.DrawActorSwitch())
+            ImGui.SameLine(0, Theme.Gap);
         Widgets.Icon(current.Standalone || current.Document?.Face != null ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running, Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
@@ -883,9 +902,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     {
         if (pending == PendingAction.None)
             return;
-        var text = pending == PendingAction.Close || pendingOpen is not { } next
-            ? "This timeline has unsaved changes. Close it and lose them?"
-            : pendingAgain == null && source != null && next.Capture.Id == source.Capture.Id && next.Startup == source.Startup
+        if (pendingOpen is not { } next)
+            return;
+        var text = pendingAgain == null && source != null && next.Capture.Id == source.Capture.Id && next.Startup == source.Startup
                 ? "This timeline has unsaved changes. Reload it and lose them?"
             : $"This timeline has unsaved changes. Open {AnimationPresentation.AnimationName(next.Capture, next.Startup)} and lose them?";
         Widgets.Banner("##timeline-unsaved", FeedbackSeverity.Warning, text);
@@ -903,11 +922,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
 
     private void Discard()
     {
-        if (pending == PendingAction.Close || pendingOpen is not { } next)
+        if (pendingOpen is not { } next)
         {
             pending = PendingAction.None;
-            closeConfirmed = true;
-            host.Close();
             return;
         }
         Load(next.Capture, next.Startup, false, pendingAgain);

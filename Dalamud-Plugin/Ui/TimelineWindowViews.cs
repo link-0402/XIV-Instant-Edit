@@ -1137,6 +1137,20 @@ internal static partial class TimelineWindowViews
     /// <summary>The mod name a timeline save suggests.</summary>
     public static string DefaultModName(string clipModName) => clipModName + " Timeline";
 
+    /// <summary>The Partners page's inline question before a preset goes; its workspace's unsaved edits go with it.</summary>
+    public static string DeleteQuestion(string name, bool unsaved) => unsaved ? $"Delete {name}? Its unsaved edits go too." : $"Delete {name}?";
+
+    /// <summary>
+    /// The inline question before the window closes over unsaved changes: today's for one workspace, else every workspace
+    /// with some named ("You", then the partners).
+    /// </summary>
+    public static string CloseQuestion(IReadOnlyList<string> names) => names.Count <= 1
+        ? "This timeline has unsaved changes. Close it and lose them?"
+        : $"{string.Join(", ", names.Take(names.Count - 1))} and {names[^1]} have unsaved changes. Close and lose them?";
+
+    /// <summary>A partner targeted while it still spawns: its start page waits.</summary>
+    public static string Spawning(string name) => $"{name} is still spawning.";
+
     private static string? SafeRoot(string? modRoot)
     {
         if (string.IsNullOrWhiteSpace(modRoot))

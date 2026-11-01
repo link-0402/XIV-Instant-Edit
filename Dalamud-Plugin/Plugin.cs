@@ -217,7 +217,7 @@ public sealed class Plugin : IDalamudPlugin
             return new Ui.Timeline.WorkspaceServices(_animations, _timelineCatalog, preview, playback, display, _recorder, data, framework, textureProvider, log,
                 _soundPlayer, previewFiles, () => partners.Find(preset)?.Name ?? partners.Store.Presets.FirstOrDefault(p => p.Id == preset)?.Name ?? "Partner");
         });
-        _timelineWindow = new TimelineWindow(_workspaceServices, animationError, framework, textureProvider, keyState);
+        _timelineWindow = new TimelineWindow(_workspaceServices, animationError, framework, textureProvider, keyState, objects, clientState, targets);
         _exportServer = new ExportServer(_config, _penumbra.ModelExports, _penumbra.RaceExports, _penumbra.SizesExports,
             _penumbra.ModelBackups, _penumbra.Mashups, _penumbra.Scanner, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
@@ -301,7 +301,9 @@ public sealed class Plugin : IDalamudPlugin
         _actorSpawner = new ActorSpawner(framework, clientState, objects, log);
         _partners = new PartnerService(partnerStore, _actorSpawner, new PartnerCollections(_penumbra.Ipc, () => _penumbra.Ipc.Available),
             new GlamourerIpc(pi, log), new CustomizePlusProfiles(pi, log), warn: message => log.Warning("{Message}", message));
-        _timelineWindow.AttachPartners(new Ui.Timeline.PartnersPage(_partners).Draw);
+        // Each spawned preset gets a Timeline workspace of its own, shown while it is the GPose target.
+        _timelineWindow.AttachPartnerService(_partners, _window.ShowingPartner);
+        _timelineWindow.AttachPartners(new Ui.Timeline.PartnersPage(_partners, _timelineWindow.HasUnsaved, _timelineWindow.PresetDeleted).Draw);
         // Recording a partner takes its preset's profile off for the recording and puts it back after.
         _recorder.Partners = _partners;
         // A partner workspace's preview left by a crash goes now, whether or not that workspace is opened again.

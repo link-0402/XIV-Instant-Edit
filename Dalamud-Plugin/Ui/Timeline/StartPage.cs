@@ -96,7 +96,7 @@ internal sealed class StartPage(TimelineSession session, TimelineLoader loader, 
     /// The page, <paramref name="height"/> tall. With a clip open behind it, <paramref name="backTo"/> names the clip and a
     /// Back to button above the page calls <paramref name="back"/>; null for none.
     /// </summary>
-    public void Draw(float height, string? backTo, Action back)
+    public void Draw(float height, string? backTo, Action back, string? waiting = null)
     {
         var start = ImGui.GetCursorPosY();
         if (backTo != null)
@@ -105,6 +105,9 @@ internal sealed class StartPage(TimelineSession session, TimelineLoader loader, 
                 back();
             ImGui.Spacing();
         }
+        // A partner still spawning: its pages wait for its actor, the Partners page doesn't.
+        if (waiting != null)
+            Widgets.HintWrapped(waiting);
         var record = recorder();
         var entries = Entries(drawPartners != null, record != null);
         // An entry that went away, such as Record without the recorder, gives way to the first one.
@@ -119,6 +122,7 @@ internal sealed class StartPage(TimelineSession session, TimelineLoader loader, 
         }
         ImGui.SameLine(0, Theme.Gap);
         using (var page = ImRaii.Child("##start-page", new Vector2(0, bodyHeight), false))
+        using (ImRaii.Disabled(waiting != null && Current != StartEntry.Partners))
         {
             if (page.Success)
                 DrawPage(Current, record);

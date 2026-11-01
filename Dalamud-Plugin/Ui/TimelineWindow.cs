@@ -1,9 +1,11 @@
 ﻿using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
+using InstantEdit.Services.Actors;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
@@ -41,14 +43,31 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private Action? partnersPage;
     private (Configuration Config, Action Save)? poseFolders;
     private Func<ushort?, CancellationToken, Task<HandTipFacts>>? handTips;
+    private readonly IObjectTable objects;
+    private readonly IClientState clientState;
+    private readonly ITargetManager targets;
+    // The spawned partners, whose presets get workspaces of their own; null until the plugin attaches them.
+    private PartnerService? partners;
+    // Tells the main window which partner shows (null for you): Playing now names it and the recorder records it.
+    private Action<string?>? showingPartner;
+    private string? shownPartner;
+    // Each partner workspace's spawn its clip is tied to; none while the partner is despawned.
+    private readonly Dictionary<WorkspaceKey, int> tied = [];
+    // The window's close waits for the question about unsaved changes; Discard confirms it.
+    private bool closeAsked;
+    private bool closeConfirmed;
     private bool disposed;
 
-    internal TimelineWindow(WorkspaceServiceFactory services, string? animationError, IFramework framework, ITextureProvider textures, IKeyState keyState)
+    internal TimelineWindow(WorkspaceServiceFactory services, string? animationError, IFramework framework, ITextureProvider textures, IKeyState keyState,
+        IObjectTable objects, IClientState clientState, ITargetManager targets)
         : base("Timeline (Beta)###XIVInstantEditTimeline")
     {
         this.services = services;
         this.framework = framework;
         this.animationError = animationError;
+        this.objects = objects;
+        this.clientState = clientState;
+        this.targets = targets;
         selfServices = services.For(WorkspaceKey.Self);
         bonesWindow = new BonesWindow(this);
         overlayWindow = new BonesOverlay(this);
@@ -81,7 +100,121 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     ShortcutKeys ITimelineHost.Keys => keys;
     PoseThumbnails ITimelineHost.Thumbnails => poseThumbnails;
     string? ITimelineHost.AnimationError => animationError;
-    void ITimelineHost.Close() => IsOpen = false;
+
+    /// <summary>The actor as the window names it: "You", or the partner's name.</summary>
+    private string NameOf(WorkspaceKey key) => services.For(key).ActorName();
+
+    /// <summary>The workspace the GPose target shows: a spawned partner's own, else yours.</summary>
+    private WorkspaceKey ShownKey()
+    {
+        if (partners == null)
+            return WorkspaceKey.Self;
+        var target = targets.GPoseTarget is ICharacter { Address: not 0 } character ? character.ObjectIndex : (ushort?)null;
+        return WorkspaceChoice.Shown(clientState.IsGPosing, target, partners.PresetAt);
+    }
+
+    /// <summary>
+    /// Ties each partner workspace to its actor: a despawn ends its Preview and Live, a spawn again points its clip at the new
+    /// actor. Its clip and unsaved edits stay either way.
+    /// </summary>
+    private void TieActors()
+    {
+        if (partners == null)
+            return;
+        foreach (var (key, workspace) in workspaces)
+        {
+            if (key.Preset is not { } preset)
+                continue;
+            var view = partners.Find(preset);
+            var spawn = view is { Stage: PartnerStage.Ready } ? view.Spawn : (int?)null;
+            if (tied.TryGetValue(key, out var was) && spawn != was)
+            {
+                workspace.ActorGone();
+                tied.Remove(key);
+            }
+            if (spawn is { } now && !tied.ContainsKey(key))
+            {
+                if (AnimationRuntime.Identity(objects[view!.ObjectIndex]) is { } actor)
+                    workspace.ActorBack(actor.Index, actor.ActorId, actor.Address);
+                tied[key] = now;
+            }
+        }
+    }
+
+    bool ITimelineHost.DrawActorSwitch()
+    {
+        if (partners == null || !clientState.IsGPosing)
+            return false;
+        var tracked = partners.Store.Presets.Select(preset => partners.Find(preset.Id)).OfType<PartnerView>().ToArray();
+        if (tracked.Length == 0 && Shown.Key.IsSelf)
+            return false;
+        var name = NameOf(Shown.Key);
+        ImGui.AlignTextToFramePadding();
+        bool open;
+        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Label))
+            open = ImGui.Selectable(name + "##timeline-actor", false, ImGuiSelectableFlags.None, new Vector2(ImGui.CalcTextSize(name).X, 0));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Whose clip this is. Click to edit another actor's; it becomes the GPose target.");
+        if (open)
+            ImGui.OpenPopup("##timeline-actors");
+        using var popup = ImRaii.Popup("##timeline-actors");
+        if (!popup.Success)
+            return true;
+        if (ImGui.Selectable("You##timeline-actor-you", Shown.Key.IsSelf))
+            Target(AnimationPlayback.GPosePlayerIndex);
+        foreach (var view in tracked)
+        {
+            var ready = view.Stage == PartnerStage.Ready;
+            using (ImRaii.Disabled(!ready))
+            {
+                if (ImGui.Selectable($"{view.Name}##timeline-actor-{view.PresetId:N}", Shown.Key.Preset == view.PresetId))
+                    Target(view.ObjectIndex);
+            }
+            if (!ready && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(TimelineWindowViews.Spawning(view.Name));
+        }
+        return true;
+    }
+
+    /// <summary>Makes the GPose character at <paramref name="index"/> the GPose target, which shows its workspace.</summary>
+    private void Target(int index)
+    {
+        if (objects[index] is { Address: not 0 } actor)
+            targets.GPoseTarget = actor;
+    }
+
+    string? ITimelineHost.Waiting(WorkspaceKey key) =>
+        key.Preset is { } preset && partners?.Find(preset) is { Stage: not PartnerStage.Ready } view ? TimelineWindowViews.Spawning(view.Name) : null;
+
+    /// <summary>
+    /// The spawned partners, whose presets get workspaces of their own, and how the main window learns which partner shows
+    /// (null for you).
+    /// </summary>
+    internal void AttachPartnerService(PartnerService service, Action<string?> showing)
+    {
+        partners = service;
+        showingPartner = showing;
+    }
+
+    /// <summary>Whether the preset's workspace has unsaved edits, for the Partners page's Delete question.</summary>
+    internal bool HasUnsaved(Guid preset) => workspaces.TryGetValue(new WorkspaceKey(preset), out var workspace) && workspace.HasUnsavedChanges;
+
+    /// <summary>The preset was deleted: its workspace, its kept edits and its services go.</summary>
+    internal void PresetDeleted(Guid preset)
+    {
+        var key = new WorkspaceKey(preset);
+        if (workspaces.Remove(key, out var workspace))
+        {
+            if (ReferenceEquals(Shown, workspace))
+                Shown = Workspace(WorkspaceKey.Self);
+            workspace.Close();
+            workspace.Dispose();
+        }
+        tied.Remove(key);
+        try { Animations?.Journals.ClearAutosave(key.Id); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { selfServices.Log.Warning(e, "Could not remove a partner's kept timeline edits."); }
+        services.Release(key);
+    }
 
     /// <summary>The workspace of <paramref name="key"/>, made with what the plugin attached the first time it is asked for.</summary>
     private TimelineWorkspace Workspace(WorkspaceKey key)
@@ -111,8 +244,22 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
             return;
         // The listener runs while this window is open: the loader and the clip's skeleton choice read it.
         animations.StartObservation();
+        TieActors();
+        SyncShown();
         foreach (var workspace in workspaces.Values)
             workspace.Tick();
+    }
+
+    /// <summary>Shows the GPose target's workspace, made the first time that partner is the target.</summary>
+    private TimelineWorkspace SyncShown()
+    {
+        var shown = Workspace(ShownKey());
+        if (!ReferenceEquals(shown, Shown))
+        {
+            Shown.Hidden();
+            Shown = shown;
+        }
+        return shown;
     }
 
     public void DrawFileDialog()
@@ -173,7 +320,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     internal static bool CanGoBack(AnimationTimelineSource? open, bool dirty, bool busy) => !busy && !(dirty && open?.Document != null);
 
     /// <summary>Shows the start page of the shown workspace, on <paramref name="entry"/> or on the last entry shown.</summary>
-    internal void ShowStart(StartEntry? entry) => Shown.ShowStart(entry);
+    internal void ShowStart(StartEntry? entry) => SyncShown().ShowStart(entry);
 
     internal BonesWindow Bones => bonesWindow;
 
@@ -239,20 +386,30 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
 
     void ITimelineHost.Show() => Show();
 
-    /// <summary>Shows the timeline of <paramref name="capture"/>'s clip in the shown workspace.</summary>
-    internal void Open(AnimationCapture capture, bool startup) => Shown.Open(capture, startup);
+    /// <summary>Shows the timeline of <paramref name="capture"/>'s clip in the GPose target's workspace.</summary>
+    internal void Open(AnimationCapture capture, bool startup) => SyncShown().Open(capture, startup);
 
-    /// <summary>Opens the clip <paramref name="journal"/>'s edit saved in the shown workspace (Edit again).</summary>
-    internal void EditAgain(AnimationEditJournal journal) => Shown.EditAgain(journal);
+    /// <summary>Opens the clip <paramref name="journal"/>'s edit saved in the GPose target's workspace (Edit again).</summary>
+    internal void EditAgain(AnimationEditJournal journal) => SyncShown().EditAgain(journal);
+
+    /// <summary>The actors whose workspaces have unsaved changes, you first: what the close question names.</summary>
+    private List<string> UnsavedNames() =>
+        workspaces.Where(pair => pair.Value.HasUnsavedChanges).OrderBy(pair => pair.Key.IsSelf ? 0 : 1).Select(pair => NameOf(pair.Key)).ToList();
 
     public override void OnClose()
     {
-        // Closing with unsaved changes asks first; the window stays open until Discard.
-        if (!Shown.Close())
+        // Closing with unsaved changes in any workspace asks first; the window stays open until Discard.
+        if (!closeConfirmed && UnsavedNames().Count > 0)
         {
+            closeAsked = true;
             IsOpen = true;
             return;
         }
+        closeConfirmed = false;
+        closeAsked = false;
+        // Every Preview and Live ends, and every workspace's clip closes.
+        foreach (var workspace in workspaces.Values)
+            workspace.Close();
         // The listener stays on while the Send character card still waits on it.
         if (mainListens?.Invoke() != true)
             Animations?.StopObservation();
@@ -285,9 +442,38 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         // At the window's own level, so a dialog opened from a page inside a child keeps its popup.
         if (Animations != null)
             drawDialogs?.Invoke();
+        var partner = Shown.Key.IsSelf ? null : NameOf(Shown.Key);
+        if (partner != shownPartner)
+        {
+            shownPartner = partner;
+            showingPartner?.Invoke(partner);
+        }
+        if (closeAsked)
+            DrawCloseQuestion();
         using (ImRaii.PushId(Shown.Key.Id))
             Shown.Draw();
         // Escape cancels a drag; it must not also close the window.
         RespectCloseHotkey = !Shown.HoldsEscape;
+    }
+
+    /// <summary> The inline question before every workspace's unsaved changes are lost: Discard or Keep editing, never a modal. </summary>
+    private void DrawCloseQuestion()
+    {
+        var names = UnsavedNames();
+        if (names.Count == 0)
+        {
+            closeAsked = false;
+            return;
+        }
+        Widgets.Banner("##timeline-unsaved-close", FeedbackSeverity.Warning, TimelineWindowViews.CloseQuestion(names));
+        if (ImGui.Button("Discard##timeline-close"))
+        {
+            closeConfirmed = true;
+            IsOpen = false;
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Keep editing##timeline-close"))
+            closeAsked = false;
+        ImGui.Spacing();
     }
 }

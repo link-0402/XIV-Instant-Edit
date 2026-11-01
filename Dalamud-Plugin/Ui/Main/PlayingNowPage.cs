@@ -45,6 +45,9 @@ internal sealed class PlayingNowPage
     /// <summary>What a click on a row calls: opens that animation, or its startup, in the Timeline window.</summary>
     public void AttachOpen(Action<AnimationCapture, bool> open) => openTimeline = open;
 
+    /// <summary>The actor the list is of when it isn't you, such as a partner the Timeline shows ("Aria Rose"); null for "Your character".</summary>
+    public string? ActorName { get; set; }
+
     /// <summary>
     /// How many rows play now, for the sidebar. Reads the listener's history, so it stays current on frames
     /// the page is not drawn; that also refreshes the rows the send dialog knows.
@@ -106,7 +109,7 @@ internal sealed class PlayingNowPage
                      ?? actors.FirstOrDefault(actor => actor.ObjectIndex == 0);
         List<ResourceView> views = [.. rows.Select(row => row.View)];
         animationActor = entity is null
-            ? new ActorView(null, "Your character", string.Empty, views, 0)
+            ? new ActorView(null, ActorName ?? "Your character", string.Empty, views, 0)
             : new ActorView(entity, entity.PresentationCategory.ToString(), UiText.Safe(entity.Name), views, entity.ObjectIndex);
 
         animationRowSource = history;
