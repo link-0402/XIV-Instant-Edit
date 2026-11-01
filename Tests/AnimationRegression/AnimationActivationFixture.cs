@@ -6,7 +6,7 @@ internal static class AnimationActivationFixture
 {
     public static async Task Run(Action<bool, string> check, Action<Action, string> reject)
     {
-        const string root = @"G:\Penumbra\IE Animation 20260912 215419";
+        const string root = @"D:\Mods\IE Animation 20260912 215419";
         const string path = "chara/human/c0801/skeleton/base/b0001/phy_c0801b0001.phyb";
         var file = new AnimationFileChange(path, root + @"\files/" + path, "created", root, "files/" + path, "", "hash", "", "staged");
         var other = file with { GamePath = "chara/animation.pap", Target = root + @"\files/chara/animation.pap" };
@@ -28,7 +28,7 @@ internal static class AnimationActivationFixture
             "activation verifies every effective mapping and file before issuing a single redraw");
         events.Clear();
         reject(() => AnimationCommitService.VerifyActivationAsync([file, other],
-            p => p == path ? Resolve(p) : Task.FromResult(@"G:\Penumbra\Other\animation.pap"), Validate, Redraw).GetAwaiter().GetResult(),
+            p => p == path ? Resolve(p) : Task.FromResult(@"D:\Mods\Other\animation.pap"), Validate, Redraw).GetAwaiter().GetResult(),
             "an actual activation conflict is rejected");
         check(!events.Contains("redraw"), "a mapping conflict cannot trigger an unverified character rebuild");
         events.Clear();

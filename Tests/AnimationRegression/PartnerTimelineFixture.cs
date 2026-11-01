@@ -40,23 +40,23 @@ internal static class PartnerTimelineFixture
     /// <summary>The inline questions that cover a partner's workspace: deleting its preset and closing the window.</summary>
     private static void Questions(Action<bool, string> check)
     {
-        check(TimelineWindowViews.DeleteQuestion("Aria Rose", true) == "Delete Aria Rose? Its unsaved edits go too." &&
-              TimelineWindowViews.DeleteQuestion("Aria Rose", false) == "Delete Aria Rose?",
+        check(TimelineWindowViews.DeleteQuestion("Partner One", true) == "Delete Partner One? Its unsaved edits go too." &&
+              TimelineWindowViews.DeleteQuestion("Partner One", false) == "Delete Partner One?",
             "delete: a preset whose workspace has unsaved edits says they go too");
         check(TimelineWindowViews.CloseQuestion(["You"]) == "This timeline has unsaved changes. Close it and lose them?" &&
-              TimelineWindowViews.CloseQuestion(["Aria Rose"]) == "This timeline has unsaved changes. Close it and lose them?",
+              TimelineWindowViews.CloseQuestion(["Partner One"]) == "This timeline has unsaved changes. Close it and lose them?",
             "close: one workspace with unsaved changes asks as today");
-        check(TimelineWindowViews.CloseQuestion(["You", "Aria Rose"]) == "You and Aria Rose have unsaved changes. Close and lose them?",
+        check(TimelineWindowViews.CloseQuestion(["You", "Partner One"]) == "You and Partner One have unsaved changes. Close and lose them?",
             "close: two workspaces are named in one question");
-        check(TimelineWindowViews.CloseQuestion(["You", "Aria Rose", "Mio Kai"]) == "You, Aria Rose and Mio Kai have unsaved changes. Close and lose them?",
+        check(TimelineWindowViews.CloseQuestion(["You", "Partner One", "Partner Three"]) == "You, Partner One and Partner Three have unsaved changes. Close and lose them?",
             "close: three are listed with commas");
-        check(TimelineWindowViews.Spawning("Aria Rose") == "Aria Rose is still spawning.", "spawning: a partner not ready yet says so");
+        check(TimelineWindowViews.Spawning("Partner One") == "Partner One is still spawning.", "spawning: a partner not ready yet says so");
     }
 
     /// <summary>A respawned partner is a new actor: the open clip's capture is pointed at it, so the save checks the actor there now.</summary>
     private static void Retarget(Action<bool, string> check)
     {
-        var heard = Heard("aria", 0x2000000CA, 202) with { CollectionId = Guid.NewGuid(), ActorAddress = 0x1000 };
+        var heard = Heard("partnerOne", 0x2000000CA, 202) with { CollectionId = Guid.NewGuid(), ActorAddress = 0x1000 };
         var moved = TimelineSession.Retargeted(heard, 203, 0x2000000CB, 0x2000);
         check(moved is { ActorIndex: 203, ActorId: 0x2000000CB, ActorAddress: 0x2000 } && moved.Id == heard.Id && moved.Clip == heard.Clip,
             "respawn: the capture names the new actor and stays the same clip");
@@ -76,9 +76,9 @@ internal static class PartnerTimelineFixture
         var histories = new CaptureHistories();
         histories.Set(1, Enumerable.Range(0, 60).Select(i => Heard($"you {i}", 1, 201)).ToImmutableArray());
         check(histories.Of(1).Length == CaptureHistories.PerActor && histories.Of(1)[0].Id == "you 0", "histories: 50 clips per actor, newest kept");
-        histories.Set(2, [Heard("aria", 2, 202)]);
-        check(histories.Of(1).Length == 50 && histories.Of(2).Single().Id == "aria", "histories: another actor's list leaves the first one's alone");
-        check(histories.At(202).Single().Id == "aria" && histories.At(201).Length == 50 && histories.At(203).IsEmpty,
+        histories.Set(2, [Heard("partnerOne", 2, 202)]);
+        check(histories.Of(1).Length == 50 && histories.Of(2).Single().Id == "partnerOne", "histories: another actor's list leaves the first one's alone");
+        check(histories.At(202).Single().Id == "partnerOne" && histories.At(201).Length == 50 && histories.At(203).IsEmpty,
             "histories: found by the object index of their newest clip");
         for (ulong actor = 3; actor <= 9; actor++)
             histories.Set(actor, [Heard($"actor {actor}", actor, 210)]);
@@ -94,31 +94,31 @@ internal static class PartnerTimelineFixture
     {
         var shared = Guid.NewGuid();
         var other = Guid.NewGuid();
-        var aria = new WorkspaceKey(Guid.NewGuid()).Id;
+        var partnerOne = new WorkspaceKey(Guid.NewGuid()).Id;
         var self = WorkspaceKey.Self.Id;
         var files = new PreviewFiles();
-        files.Set(aria, "Aria Rose", shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"]);
-        check(files.Holder(shared, ["CHARA/human/c0801/animation/a0001/bt_common/emote/DANCE.pap"], self) == "Aria Rose",
+        files.Set(partnerOne, "Partner One", shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"]);
+        check(files.Holder(shared, ["CHARA/human/c0801/animation/a0001/bt_common/emote/DANCE.pap"], self) == "Partner One",
             "same file: another workspace showing it on the collection holds it, whatever the case");
-        check(files.Holder(shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"], aria) == null,
+        check(files.Holder(shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"], partnerOne) == null,
             "same file: a workspace's own preview doesn't hold it against itself");
         check(files.Holder(other, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"], self) == null,
             "same file: another collection has its own copy");
         check(files.Holder(shared, ["chara/human/c0801/animation/a0001/bt_common/emote/sit.pap"], self) == null,
             "same file: another file on the collection is free");
-        files.Clear(aria);
+        files.Clear(partnerOne);
         check(files.Holder(shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"], self) == null,
             "same file: a preview that ended holds nothing");
         check(PreviewFiles.Refusal("You") == "You preview this file from the same collection. Use Live." &&
-              PreviewFiles.Refusal("Aria Rose") == "Aria Rose previews this file from the same collection. Use Live.",
+              PreviewFiles.Refusal("Partner One") == "Partner One previews this file from the same collection. Use Live.",
             "same file: the refusal names who previews it");
     }
 
     private static void Choice(Action<bool, string> check)
     {
-        var aria = Guid.NewGuid();
-        Func<ushort, Guid?> partnerAt202 = index => index == 202 ? aria : null;
-        check(WorkspaceChoice.Shown(true, 202, partnerAt202) == new WorkspaceKey(aria), "workspace: a targeted partner shows its own workspace");
+        var partnerOne = Guid.NewGuid();
+        Func<ushort, Guid?> partnerAt202 = index => index == 202 ? partnerOne : null;
+        check(WorkspaceChoice.Shown(true, 202, partnerAt202) == new WorkspaceKey(partnerOne), "workspace: a targeted partner shows its own workspace");
         check(WorkspaceChoice.Shown(true, 203, partnerAt202) == WorkspaceKey.Self, "workspace: a Brio or Ktisis actor shows yours");
         check(WorkspaceChoice.Shown(true, null, partnerAt202) == WorkspaceKey.Self, "workspace: no target shows yours");
         check(WorkspaceChoice.Shown(false, 202, partnerAt202) == WorkspaceKey.Self, "workspace: out of GPose only yours shows");

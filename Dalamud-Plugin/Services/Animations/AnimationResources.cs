@@ -175,7 +175,7 @@ internal sealed class AnimationResources(PenumbraIpc penumbra, AnimationModServi
     /// <summary>
     /// A PAP's path inside its mod folder, an expression's TMB's, or a sound's (SCD) the Timeline
     /// edits, with the extension of the game path it maps. Mod authors name their files freely
-    /// (e.g. "animations/sybian riding groundsit 1 v10.pap"), so this follows the backup store's
+    /// (e.g. "animations/sit pose 1 v10.pap"), so this follows the backup store's
     /// file-name rules rather than the stricter game-path ones.
     /// </summary>
     internal static bool SafeModRelativePath(string relativePath, string gamePath) =>

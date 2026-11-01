@@ -127,7 +127,7 @@ internal static class PhysicsOverlayScenarios
             "physics overlay: hovering the tip size lights the ball and says its size");
     }
 
-    /// <summary> Ashley's chest chain: the bone, a tip without a bone at the chain's offset, then iv_c_mune_l resting on the bone. </summary>
+    /// <summary> A chest chain: the bone, a tip without a bone at the chain's offset, then iv_c_mune_l resting on the bone. </summary>
     private static void CheckBonelessTip()
     {
         var (chest, file, _) = Chest();

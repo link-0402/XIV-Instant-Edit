@@ -38,7 +38,7 @@ internal static partial class TmbFileFixture
     /// <summary>
     /// An expression's own timeline (chara/action/facial/pose/smile.tmb: length 150, one face with
     /// time control 0 to 1 over 150 frames and the 0x08000000 bit vanilla sets) and Keep, which
-    /// writes what "Permanent Facial Expressions" does: the face's length -1, nothing else.
+    /// writes what mods that keep a face on do: the face's length -1, nothing else.
     /// </summary>
     private static void Expressions(Action<bool, string> check, Action<Action, string> reject)
     {
@@ -64,14 +64,14 @@ internal static partial class TmbFileFixture
         var savedFace = TmbFile.Parse(saved).Entries.Single();
         check(saved.Length == smile.Length && changed.Length == 4 && savedFace.Int32(12) == -1 && savedFace.Int32(20) == 0x08000001 &&
               savedFace.Single(24) == 0 && savedFace.Single(28) == 1 && TmbFile.Parse(saved).Length == 150,
-            "keeping a face changes only its length to -1, as Permanent Facial Expressions does");
+            "keeping a face changes only its length to -1, as mods that keep a face on do");
         var reread = TimelineConvert.Read(TmbFile.Parse(saved), 150);
         check(TimelineDocument.Kept(reread.Events.Single()) &&
               TimelineEdits.Keep(reread, reread.Events.Single().Key, false) is var unkept &&
               unkept.Events.Single().Duration == 150 && TimelineConvert.Apply(saved, unkept).SequenceEqual(smile),
             "a kept face reads back kept, and letting it go holds it to the end again: the vanilla file");
 
-        // Permanent Facial Expressions' own file: the header -1 too.
+        // Such a mod's own file: the header -1 too.
         var permanent = new Tmb().Head(-1, "smile", 2).Actor(2, 3).Track(3, 4).Face(4, 0, -1, 0x08000001, 1, "cfxf_smile").Build();
         var permanentDoc = TimelineConvert.Read(TmbFile.Parse(permanent), TimelineDocument.ExpressionFrames(-1));
         check(permanentDoc is { Length: 150, HeaderLength: -1, LengthChanged: false } && TimelineDocument.Kept(permanentDoc.Events.Single()) &&
@@ -229,7 +229,7 @@ internal static partial class TmbFileFixture
     }
 
     /// <summary>
-    /// A kept moving face on an expression's timeline loops: Panting Face [Taunt]'s 600-frame face
+    /// A kept moving face on an expression's timeline loops: a face mod's 600-frame face
     /// (comeon.tmb: 0 to 600 over 600, header 150) written back to back on its track to the last
     /// frame a timeline reaches, then the face returns to neutral. Seen in game 2026-10-05: copies
     /// past the header play; one entry can't loop (a range past the face's length drops it at once).
@@ -276,7 +276,7 @@ internal static partial class TmbFileFixture
         check(Faces(TimelineConvert.Apply(saved, reread with { Events = [untimed] }, frames)) is [{ Time: 0, Flags: 0x08000000 }],
             "a loop without time control is one face at its own speed");
 
-        // The mod's other speeds: Static Infinite holds still until ticked again; Half Speed loops at half speed.
+        // The mod's other speeds: one holds still until ticked again, another loops at half speed.
         var still = Open(Taunt(-1, 600));
         var stillFace = still.Events.Single();
         check(TimelineDocument.Kept(stillFace) && !TimelineDocument.Loops(stillFace) &&
@@ -355,7 +355,7 @@ internal static partial class TmbFileFixture
     /// <summary>
     /// Async VFX (C173) loop/wait: the editor reads and writes it, and the check finds looping
     /// effects that stop after one loop (1 at frame 0, or a wait) and keeps them looping, as the
-    /// Red Carpet dance's 909 needed. Effects that don't loop, aren't read, or already loop pass.
+    /// one dance mod's 909 needed. Effects that don't loop, aren't read, or already loop pass.
     /// </summary>
     private static void EffectLoops(Action<bool, string> check)
     {
@@ -413,7 +413,7 @@ internal static partial class TmbFileFixture
     }
 
     /// <summary>
-    /// Effects that stop even at loop/wait -1, as the Red Carpet dance's did: its effects schedule
+    /// Effects that stop even at loop/wait -1, as one dance mod's did: its effects schedule
     /// their own KILL at frame 908 and its music is marked to loop but has no loop points. The check
     /// finds both, and keeping them going swaps in a copy with the kill turned off and the sound
     /// looping, mapped beside the originals. Effects that clean up after themselves are left alone.
@@ -886,7 +886,7 @@ internal static partial class TmbFileFixture
     }
 
     /// <summary>
-    /// A mod's header length (TMDH) that isn't its motion's, like Red Carpet's Popoto Step dance: a
+    /// A mod's header length (TMDH) that isn't its motion's, like one dance mod's: a
     /// 455-frame motion under a header copied from a 30-frame walk, laid out for two loops. The
     /// document takes the motion's length, saving keeps the header unless the length changes (then
     /// it scales with the motion), and a length change retimes the real motion.

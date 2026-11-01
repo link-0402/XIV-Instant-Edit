@@ -11,7 +11,7 @@ internal static partial class MaterialEditorScenarios
     /// The scroll shader reads its pattern at the mesh's second UV map (TEXCOORD0.zw); a mesh without one
     /// flashed as a whole in game (2026-10-17). The synthetic model's mesh 0 (mt_b) has a two-value half
     /// UV after a half4 normal in stream 1; mesh 1 (mt_a) has a four-value float UV whose second map is
-    /// 0, 0 on every vertex, as most gear meshes have it (sampled in G:\Penumbra 2026-10-29): it glowed flat in game.
+    /// 0, 0 on every vertex, as most gear meshes have it (sampled in a Penumbra library 2026-10-29): it glowed flat in game.
     /// </summary>
     private static void CheckModelUv2()
     {

@@ -31,7 +31,7 @@ public static class MaterialPresetLibrary
             ShaderType.Iris              => Combine("iris", "Default Eye.mtrl"),
             ShaderType.Skin              => Combine("skin", "Default Skin.mtrl"),
 
-            // Not a TexTools preset: the material of Westlaketea's MatCap Library mod.
+            // Not a TexTools preset: the material of the MatCap Library mod.
             ShaderType.CharacterReflection => Combine("characterreflection", "Matcap.mtrl"),
 
             // No bundled preset yet for these — caller falls back to vanilla-cloning.

@@ -23,7 +23,7 @@ internal enum TimelineEffectIssue
 /// frames before playing it again (the community TMB notes, tested in game). Vanilla never starts a
 /// looping effect with C173; mods that do and keep 1 or a wait see the effect stop after its first
 /// loop. Even at -1, an effect whose own schedule kills it, or whose sound plays once, stops; those
-/// get a copy that keeps going (<see cref="TimelineEffectInfo.Looping"/>), which Red Carpet's dance
+/// get a copy that keeps going (<see cref="TimelineEffectInfo.Looping"/>), which one dance mod
 /// needed: its effects kill themselves at frame 908 and its music has no loop points.
 /// </summary>
 internal static class TimelineEffectCheck

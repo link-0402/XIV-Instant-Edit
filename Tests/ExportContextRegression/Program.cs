@@ -514,44 +514,44 @@ static async Task CheckExportContextsAsync(string testRoot)
         "plugin-owned staging is removed after export completion");
 
     // ---- On Screen resource-tree reconciliation for EST-swapped and vanilla models ----
-    const string galianModel = @"G:\Penumbra\Galian Hair\chara\human\c0801\obj\hair\h0154\model\c0801h0154_hir.mdl";
+    const string hairModel = @"D:\Mods\Hair Mod\chara\human\c0801\obj\hair\h0154\model\c0801h0154_hir.mdl";
     const string effectiveHairPath = "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl";
-    var galianResolvedPaths = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+    var hairResolvedPaths = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
     {
-        [galianModel] = new(StringComparer.OrdinalIgnoreCase) { effectiveHairPath },
+        [hairModel] = new(StringComparer.OrdinalIgnoreCase) { effectiveHairPath },
     };
-    var galianSource = new ResourceSource(
+    var hairSource = new ResourceSource(
         ResourceSourceState.LoadedMod,
-        "Loaded from: Galian Hair",
-        "Galian Hair",
-        "Galian Hair",
-        @"G:\Penumbra\Galian Hair",
+        "Loaded from: Hair Mod",
+        "Hair Mod",
+        "Hair Mod",
+        @"D:\Mods\Hair Mod",
         "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl");
     var supplementedHair = OnScreenService.AddMissingResolvedModels(
         Array.Empty<ResourceNode>(),
-        galianResolvedPaths,
-        _ => galianSource);
+        hairResolvedPaths,
+        _ => hairSource);
     Require(supplementedHair is [
         {
             ResourceSection: ResourceSection.CharacterFeatures,
             SlotLabel: "Hair",
             GamePath: effectiveHairPath,
-            ActualPath: galianModel,
+            ActualPath: hairModel,
             SourceState: ResourceSourceState.LoadedMod,
-            SourceModDirectory: "Galian Hair",
+            SourceModDirectory: "Hair Mod",
         }
-    ], "EST-swapped Galian Hair is restored to the Character features model list");
+    ], "EST-swapped Hair Mod is restored to the Character features model list");
 
     var deduplicatedHair = OnScreenService.AddMissingResolvedModels(
         supplementedHair,
-        galianResolvedPaths,
-        _ => galianSource);
+        hairResolvedPaths,
+        _ => hairSource);
     Require(deduplicatedHair.Count == 1,
         "resource-path reconciliation does not duplicate a model already present in the tree");
 
     var unattributedHair = OnScreenService.AddMissingResolvedModels(
         Array.Empty<ResourceNode>(),
-        galianResolvedPaths,
+        hairResolvedPaths,
         path => new ResourceSource(ResourceSourceState.ExternalResolvedFile, "External resolved file", null, null, null, path));
     Require(unattributedHair.Count == 0,
         "resource-path reconciliation does not admit models outside registered Penumbra mods");
@@ -600,13 +600,13 @@ static async Task CheckExportContextsAsync(string testRoot)
         "the disabled visibility projection removes vanilla rows while retaining modded descendants");
 
     // ---- Gear other gear hides (legs under a robe) stays loaded but isn't listed ----
-    const string robeLegsModel = @"G:\Penumbra\Robe\chara\equipment\e6001\model\c0201e6001_dwn.mdl";
+    const string robeLegsModel = @"D:\Mods\Robe\chara\equipment\e6001\model\c0201e6001_dwn.mdl";
     const string robeLegsPath = "chara/equipment/e6001/model/c0201e6001_dwn.mdl";
     var robeLegsPaths = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
     {
         [robeLegsModel] = new(StringComparer.OrdinalIgnoreCase) { robeLegsPath },
     };
-    var robeSource = new ResourceSource(ResourceSourceState.LoadedMod, "Loaded from: Robe", "Robe", "Robe", @"G:\Penumbra\Robe", robeLegsPath);
+    var robeSource = new ResourceSource(ResourceSourceState.LoadedMod, "Loaded from: Robe", "Robe", "Robe", @"D:\Mods\Robe", robeLegsPath);
     var hiddenLegs = OnScreenService.AddMissingResolvedModels([], robeLegsPaths, _ => robeSource,
         new HashSet<string>(StringComparer.Ordinal) { InstantEdit.Services.Painter.PainterVisibility.NormalizePath(robeLegsModel) });
     Require(hiddenLegs is [{ Hidden: true, SlotLabel: "Legs" }] &&
@@ -722,7 +722,7 @@ static async Task CheckExportContextsAsync(string testRoot)
 
     // ---- On Screen resource-type classification behind the cached filters ----
     Require(ResourceKindClassifier.Classify(
-                "Mdl", "chara/equipment/e0001/model/c0101e0001_top.mdl", @"G:\Penumbra\Mod\top.mdl") ==
+                "Mdl", "chara/equipment/e0001/model/c0101e0001_top.mdl", @"D:\Mods\Mod\top.mdl") ==
                 ResourceKinds.Model &&
             ResourceKindClassifier.Classify("Tex", "chara/common/texture/--sky.tex", "") == ResourceKinds.Texture &&
             ResourceKindClassifier.Classify("Resource", "vfx/common/eff/x.ATEX", null) == ResourceKinds.Texture &&
@@ -846,7 +846,7 @@ static async Task CheckExportContextsAsync(string testRoot)
     const string swappedMaterial = "chara/human/c0201/obj/hair/h0179/material/v0001/mt_c0201h0179_hir_b_c0801.mtrl";
     var swappedResources = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
     {
-        [swappedMaterial] = [@"G:\Penumbra\Swapped\mt_c0201h0179_hir_b_c0801.mtrl"],
+        [swappedMaterial] = [@"D:\Mods\Swapped\mt_c0201h0179_hir_b_c0801.mtrl"],
     };
     var materialWarnings = new List<string>();
     Require(MaterialPreviewBundleBuilder.ResolveMaterialPath(
@@ -857,7 +857,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         "dependency capture resolves an unambiguous race-swapped material mapping");
     swappedResources[
         "chara/human/c0301/obj/hair/h0179/material/v0001/mt_c0301h0179_hir_b_c0801.mtrl"] =
-        [@"G:\Penumbra\Swapped\mt_c0301h0179_hir_b_c0801.mtrl"];
+        [@"D:\Mods\Swapped\mt_c0301h0179_hir_b_c0801.mtrl"];
     Require(MaterialPreviewBundleBuilder.ResolveMaterialPath(
             "chara/human/c0801/obj/hair/h0179/model/c0801h0179_hir.mdl",
             "/mt_c0101h0179_hir_b_c0801.mtrl",
@@ -1222,7 +1222,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         Textures = [],
     };
     // ---- Mashup planning: canonical slot allocation across contributors ----
-    var galianManifest = new ResourceDependencyManifest
+    var hairManifest = new ResourceDependencyManifest
     {
         Materials =
         [
@@ -1232,7 +1232,7 @@ static async Task CheckExportContextsAsync(string testRoot)
                 'b'),
         ],
     };
-    var bucklerManifest = new ResourceDependencyManifest
+    var shieldManifest = new ResourceDependencyManifest
     {
         Materials =
         [
@@ -1247,16 +1247,16 @@ static async Task CheckExportContextsAsync(string testRoot)
                 'e'),
         ],
     };
-    var galianContext = manifestRegistry.CreateContext(
+    var hairContext = manifestRegistry.CreateContext(
         "chara/human/c0801/obj/hair/h0154/model/c0801h0154_hir.mdl", 8,
-        "galian-mod", originalTarget, "Galian", 42428, originalRoot, relative, galianManifest);
-    var bucklerContext = manifestRegistry.CreateContext(
+        "hair-mod", originalTarget, "Hair", 42428, originalRoot, relative, hairManifest);
+    var shieldContext = manifestRegistry.CreateContext(
         "chara/human/c0801/obj/hair/h0179/model/c0801h0179_hir.mdl", 9,
-        "buckler-mod", originalTarget, "Buckler", 42428, originalRoot, relative, bucklerManifest);
-    var canonicalPlan = MashupPlanning.BuildMashupPlan(galianContext,
+        "shield-mod", originalTarget, "Shield", 42428, originalRoot, relative, shieldManifest);
+    var canonicalPlan = MashupPlanning.BuildMashupPlan(hairContext,
     [
-        new MashupContributor(galianContext, ["/mt_c0801h0154_hir_b_c0801.mtrl"]),
-        new MashupContributor(bucklerContext,
+        new MashupContributor(hairContext, ["/mt_c0801h0154_hir_b_c0801.mtrl"]),
+        new MashupContributor(shieldContext,
         [
             "/mt_c0101h0179_hir_b_c0801.mtrl",
             "/mt_c0101h0179_hir_c_c0801.mtrl",
@@ -1270,7 +1270,7 @@ static async Task CheckExportContextsAsync(string testRoot)
             "/mt_c0201h0154_hir_d_c0801.mtrl",
             "/mt_c0201h0154_hir_e_c0801.mtrl",
         ]) && canonicalPlan.Assignments.All(item => !item.Alias.Contains("xivie", StringComparison.OrdinalIgnoreCase)),
-        "mashup planning preserves the Galian material and allocates Buckler into canonical c, d, and e slots");
+        "mashup planning preserves the Hair material and allocates Shield into canonical c, d, and e slots");
 
     var customTopManifest = new ResourceDependencyManifest
     {
@@ -1942,7 +1942,7 @@ static async Task CheckExportContextsAsync(string testRoot)
         "MTRL rewriting retains DX11 flags and removes the contributor model identity");
 
     Require(MashupPlanning.AllocateMashupTexturePath(
-            galianContext.GamePath, 'c', "normal", 0,
+            hairContext.GamePath, 'c', "normal", 0,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)) ==
             "chara/human/c0801/obj/hair/h0154/texture/c0801h0154_hir_c_n.tex",
         "texture conflicts use the target item stem, assigned material slot, and sampler role");
@@ -2418,13 +2418,13 @@ static async Task CheckExportContextsAsync(string testRoot)
 
     var sourceDescription = MashupPlanning.FormatMashupDescription(
     [
-        new MashupContributor(galianContext with { SourceModName = "Galian Hair" }, []),
-        new MashupContributor(bucklerContext with { SourceModName = "[178] Buckler (Swapped)" }, []),
+        new MashupContributor(hairContext with { SourceModName = "Hair Mod" }, []),
+        new MashupContributor(shieldContext with { SourceModName = "[178] Shield (Swapped)" }, []),
     ]);
-    Require(sourceDescription == "Mashup created by XIV Instant Edit from \"Galian Hair\" and \"[178] Buckler (Swapped)\".",
+    Require(sourceDescription == "Mashup created by XIV Instant Edit from \"Hair Mod\" and \"[178] Shield (Swapped)\".",
         "mashup descriptions list source mods in contributor order");
     var externalDescription = MashupPlanning.FormatMashupDescription(
-        [new MashupContributor(galianContext with { SourceModName = "Galian Hair" }, [])],
+        [new MashupContributor(hairContext with { SourceModName = "Hair Mod" }, [])],
         ["External Skin", "External Hair"]);
     Require(externalDescription.EndsWith(
             "Requires external mods: External Skin, External Hair.", StringComparison.Ordinal),

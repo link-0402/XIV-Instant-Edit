@@ -7,17 +7,17 @@ using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// Props from other mods: which models of a mod can be props, whether one rides a single bone, the private weapon
-/// body it gets and the files its copy is built from. Real mods under G:\Penumbra are only read, never written.
+/// body it gets and the files its copy is built from. Real mods, checked from a local file, are only read, never written.
 /// </summary>
-internal static class PropModelSourcesFixture
+internal static partial class PropModelSourcesFixture
 {
     private const string GameFolder = @"E:\SquareEnix\FINAL FANTASY XIV - A Realm Reborn\game\sqpack";
-    private const string HanzoModel = @"G:\Penumbra\Hanzo Dojo - I Want You Phonecase\w9001b0200_v0\chara\weapon\w9001\obj\body\b0200\model\w9001b0200.mdl";
-    private const string TelephoneMod = @"G:\Penumbra\(You're Not Gonna Reach My) Telephone";
-    private const string TelephoneModel = TelephoneMod + @"\(You're Not Gonna Reach My) Telephone\Main Install\chara\monster\m8044\obj\body\b0001\model\m8044b0001.mdl";
-    private const string VibratorMod = @"G:\Penumbra\BoneFactor Vibrator";
-    private const string VibratorModel = VibratorMod + @"\chara\weapon\w0528\obj\body\b0016\model\w0528b0016.mdl";
-    private const string BenchRiderModel = @"G:\Penumbra\[NFLB] Bench Rider [F Talls][Sit2]\new group\F Miqo\chara\accessory\a0131\model\c0101a0131_ril.mdl";
+
+    /// <summary> The checks against real mods in your library, in an untracked PropModelSourcesFixture.Local.cs; skipped without it. </summary>
+    static partial void RealMods(Action<bool, string> check);
+
+    /// <summary> A real monster model (a prop that rides n_hara) from that file; null without it. </summary>
+    static partial void RealMonster(ref string? model);
 
     public static void Run(Action<bool, string> check)
     {
@@ -33,19 +33,7 @@ internal static class PropModelSourcesFixture
         Part(check, "timeline source", () => TimelineSource(check));
         Part(check, "body choice", () => BodyChoice(check));
         Part(check, "mod listing", () => ModListing(check));
-        Lumina.GameData? data = null;
-        try
-        {
-            if (Directory.Exists(GameFolder))
-                data = new Lumina.GameData(GameFolder, new Lumina.LuminaOptions { PanicOnSheetChecksumMismatch = false });
-            Part(check, "telephone resolve", () => Telephone(check, data));
-            Part(check, "vibrator resolve", () => Vibrator(check, data));
-            Part(check, "telephone copy", () => TelephoneCopy(check, data));
-        }
-        finally
-        {
-            data?.Dispose();
-        }
+        RealMods(check);
     }
 
     private static void Part(Action<bool, string> check, string name, Action action)
@@ -70,7 +58,7 @@ internal static class PropModelSourcesFixture
     {
         check(PropModelSources.TargetSet("chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl") == 528,
             "a weapon prop keeps its own weapon set");
-        // In game 2026-10-29 a summon on w9001 never showed (the Hanzo phone case, private body or its own shipped b0200);
+        // In game 2026-10-29 a summon on w9001 never showed (a phone case mod, private body or its own shipped b0200);
         // the same copy on w9901, the set of the game's still props, did.
         check(PropModelSources.TargetSet("chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl") == 9901,
             "a monster prop goes to weapon set 9901");
@@ -132,7 +120,7 @@ internal static class PropModelSourcesFixture
         Task<string> Penumbra(string path)
         {
             asked.Add(path);
-            return Task.FromResult(path == PropModelSources.ModelPath(9001, walk[0]) ? @"G:\Penumbra\swipe left\phone.mdl" : path.ToUpperInvariant().Replace('/', '\\'));
+            return Task.FromResult(path == PropModelSources.ModelPath(9001, walk[0]) ? @"D:\Mods\Phone Mod\phone.mdl" : path.ToUpperInvariant().Replace('/', '\\'));
         }
         var found = PropModelSources.FindBody(phone, new HashSet<(ushort, ushort)> { (9001, walk[1]) }, new HashSet<(ushort, ushort)> { (9001, walk[3]) },
             path => path == $"chara/weapon/w9001/obj/body/b{walk[2]:D4}/b{walk[2]:D4}.imc", Penumbra).GetAwaiter().GetResult();
@@ -179,7 +167,7 @@ internal static class PropModelSourcesFixture
             var meta = new System.Text.Json.Nodes.JsonObject
             {
                 ["FileVersion"] = 4,
-                ["Name"] = "swipe left",
+                ["Name"] = "Phone Mod",
                 ["DefaultData"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["Files"] = Files("chara/weapon/w9001/obj/body/b9000/model/w9001b9000.mdl", "chara/weapon/w9001/obj/body/b0200/model/w9001b0200.mdl"),
@@ -278,85 +266,12 @@ internal static class PropModelSourcesFixture
 
     private static void Qualification(Action<bool, string> check)
     {
-        foreach (var (file, gamePath, qualifies, name) in new[]
-                 {
-                     (HanzoModel, "chara/weapon/w9001/obj/body/b0200/model/w9001b0200.mdl", true, "Hanzo phone"),
-                     (TelephoneModel, "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", true, "Telephone"),
-                     (VibratorModel, "chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl", true, "Vibrator"),
-                     (BenchRiderModel, "chara/accessory/a0131/model/c0101a0131_ril.mdl", false, "Bench Rider ring"),
-                 })
-        {
-            if (!File.Exists(file))
-            {
-                Console.WriteLine($"[SKIP] props from mods: the {name} model isn't at {file}");
-                continue;
-            }
-            var mdl = File.ReadAllBytes(file);
-            check(PropModelSources.Qualifies(gamePath, mdl) == qualifies,
-                $"the {name} {(qualifies ? "qualifies" : "doesn't qualify")} as a prop: {Bones(mdl)}");
-        }
         check(!PropModelSources.Qualifies("chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", [1, 2, 3]),
             "a model that can't be read doesn't qualify");
     }
 
     private static string Listing(TimelinePropSource source)
         => string.Join("; ", source.Files.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key} = {pair.Value}"));
-
-    private static void Telephone(Action<bool, string> check, Lumina.GameData? data)
-    {
-        if (!Directory.Exists(TelephoneMod))
-        {
-            Console.WriteLine($"[SKIP] props from mods: the Telephone mod isn't at {TelephoneMod}");
-            return;
-        }
-        var effective = ModOptionGroups.EffectiveFiles(TelephoneMod, new Dictionary<string, IReadOnlyList<string>>
-        {
-            ["(You're Not Gonna Reach My) Telephone"] = ["Main Install"],
-            ["Color Options"] = ["Moogle Pink"],
-        });
-        const string model = "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl";
-        check(PropModelSources.Candidates(effective).SequenceEqual([model]), "the Telephone's one prop candidate is its monster model");
-        var source = PropModelSources.Resolve(TelephoneMod, "(You're Not Gonna Reach My) Telephone", model, 9001, 9000,
-            effective, Game(data), Exists(data));
-        Console.WriteLine($"  {source.ModName} prop files: {Listing(source)}");
-        const string root = "chara/weapon/w9001/obj/body/b9000/";
-        check(source.ModDirectory == TelephoneMod && source.SourceModel == model && source.Set == 9001 && source.Body == 9000,
-            "the Telephone source keeps its mod, model and private body");
-        check(source.Files.TryGetValue(root + "model/w9001b9000.mdl", out var mdl) &&
-              string.Equals(mdl, "file:" + effective[model], StringComparison.Ordinal),
-            $"the Telephone's private model is the mod's model");
-        check(source.Files.TryGetValue(root + "material/v0001/mt_m8044b0001_a.mtrl", out var mtrl) &&
-              mtrl.StartsWith("file:", StringComparison.Ordinal) && mtrl.Contains("main install", StringComparison.OrdinalIgnoreCase),
-            $"the Telephone's private material is the mod's material");
-        var textures = MaterialPreviewBundleBuilder.ReadMaterialTextures(File.ReadAllBytes(mtrl![5..]))
-            .Select(texture => Path.GetFileName(texture.StoredPath)).Distinct().ToArray();
-        var privateTextures = source.Files.Keys.Where(key => key.StartsWith(root + "texture/", StringComparison.Ordinal)).ToArray();
-        check(textures.Length > 0 && (data is null
-                ? privateTextures.Length <= textures.Length
-                : privateTextures.Order(StringComparer.Ordinal).SequenceEqual(
-                    textures.Select(name => root + "texture/" + name).Order(StringComparer.Ordinal))),
-            $"the Telephone has one private texture per texture its material names ({string.Join(", ", textures)})");
-        check(source.Files.TryGetValue(root + "texture/v01_m8044b0001_d.tex", out var diffuse) &&
-              diffuse.StartsWith("file:", StringComparison.Ordinal) && diffuse.Contains("moogle pink", StringComparison.OrdinalIgnoreCase),
-            $"the Telephone's diffuse comes from the picked colour, Moogle Pink");
-        check(source.Files.TryGetValue(root + "texture/v01_m8044b0001_n.tex", out var normal) &&
-              normal.Contains("main install", StringComparison.OrdinalIgnoreCase),
-            $"the Telephone's normal map comes from the main install");
-        check(source.Files.Count == 2 + privateTextures.Length, $"the Telephone source holds only its model, material and textures");
-        check(source.Textures.Count == textures.Length &&
-              source.Textures.Values.Order(StringComparer.Ordinal).SequenceEqual(
-                  textures.Select(name => root + "texture/" + name).Order(StringComparer.Ordinal)) &&
-              source.Textures.TryGetValue("chara/monster/m8044/obj/body/b0001/texture/v01_m8044b0001_d.tex", out var named) &&
-              named == root + "texture/v01_m8044b0001_d.tex" &&
-              (data is null || source.Textures.Values.All(source.Files.ContainsKey)),
-            $"the Telephone names a private path for each texture its material lists: {string.Join(", ", source.Textures)}");
-        var there = PropModelSources.Resolve(TelephoneMod, "(You're Not Gonna Reach My) Telephone", model, 9001, 9003, effective, Game(data), Exists(data));
-        var moved = PropModelSources.Rebodied(source, 9003);
-        check(moved.Files.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(there.Files.OrderBy(p => p.Key, StringComparer.Ordinal)) &&
-              moved.Textures.OrderBy(p => p.Key, StringComparer.Ordinal).SequenceEqual(there.Textures.OrderBy(p => p.Key, StringComparer.Ordinal)) &&
-              PropModelSources.SameFiles(source, there),
-            "the Telephone's snapshot moved to b9003 is the one resolved there");
-    }
 
     /// <summary>
     /// An MTRL listing <paramref name="textures"/> (path and DX11 flag) behind the shader name, with an empty
@@ -390,14 +305,16 @@ internal static class PropModelSourcesFixture
     }
 
     /// <summary>
-    /// The texture rules on the Telephone's real model with a made-up material and mod files: a texture the mod ships
+    /// The texture rules on a real monster model with a made-up material and mod files: a texture the mod ships
     /// only as its DX11 <c>--</c> file, two textures of one file name from different folders, and one found nowhere.
     /// </summary>
     private static void TextureRules(Action<bool, string> check)
     {
-        if (!File.Exists(TelephoneModel))
+        string? realModel = null;
+        RealMonster(ref realModel);
+        if (realModel is null || !File.Exists(realModel))
         {
-            Console.WriteLine($"[SKIP] props from mods: the Telephone model isn't at {TelephoneModel}, so the texture rules aren't run");
+            Console.WriteLine("[SKIP] props from mods: no real monster model, so the texture rules aren't run");
             return;
         }
         var dir = Path.Combine(Path.GetTempPath(), "ie-prop-sources-" + Guid.NewGuid().ToString("N"));
@@ -422,7 +339,7 @@ internal static class PropModelSourcesFixture
             var sameB = Put("same_b.tex", [3]);
             var effective = new Dictionary<string, string>
             {
-                [model] = TelephoneModel,
+                [model] = realModel,
                 ["chara/monster/m8044/obj/body/b0001/material/v0001/mt_m8044b0001_a.mtrl"] = material,
                 ["chara/common/texture/--dx11_only.tex"] = dx11,
                 ["chara/a/texture/same.tex"] = sameA,
@@ -464,37 +381,6 @@ internal static class PropModelSourcesFixture
             if (Directory.Exists(dir))
                 Directory.Delete(dir, true);
         }
-    }
-
-    private static void Vibrator(Action<bool, string> check, Lumina.GameData? data)
-    {
-        if (!Directory.Exists(VibratorMod))
-        {
-            Console.WriteLine($"[SKIP] props from mods: the Vibrator mod isn't at {VibratorMod}");
-            return;
-        }
-        if (data is null)
-        {
-            Console.WriteLine("[SKIP] props from mods: the game isn't installed where the checks look, so the Vibrator's game material isn't read");
-            return;
-        }
-        var effective = ModOptionGroups.EffectiveFiles(VibratorMod, new Dictionary<string, IReadOnlyList<string>>());
-        const string model = "chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl";
-        var set = PropModelSources.TargetSet(model);
-        var body = PropModelSources.AllocateBody(set, Exists(data), new HashSet<(ushort, ushort)>());
-        check(set == 528 && body == 9000, $"the Vibrator gets w0528 b9000 (got w{set:D4} b{body:D4})");
-        var source = PropModelSources.Resolve(VibratorMod, "BoneFactor Vibrator", model, 528, 9000, effective, Game(data), Exists(data));
-        Console.WriteLine($"  {source.ModName} prop files: {Listing(source)}");
-        const string root = "chara/weapon/w0528/obj/body/b9000/";
-        check(source.Files.TryGetValue(root + "model/w0528b9000.mdl", out var mdl) && mdl == "file:" + effective[model],
-            $"the Vibrator's private model is the mod's model");
-        check(source.Files.TryGetValue(root + "material/v0001/mt_w0528b0016_a.mtrl", out var mtrl) &&
-              mtrl == "game:chara/weapon/w0528/obj/body/b0016/material/v0001/mt_w0528b0016_a.mtrl",
-            $"the Vibrator's material, which the mod doesn't ship, comes from the game");
-        var textures = source.Files.Where(pair => pair.Key.StartsWith(root + "texture/", StringComparison.Ordinal)).ToArray();
-        var modRoot = Path.GetFullPath(VibratorMod) + Path.DirectorySeparatorChar;
-        check(textures.Length > 0 && textures.All(pair => pair.Value.StartsWith("file:" + modRoot, StringComparison.OrdinalIgnoreCase)),
-            $"the Vibrator's textures are the mod's files");
     }
 
     private const string CopyRoot = "chara/weapon/w9001/obj/body/b9000/";
@@ -651,7 +537,7 @@ internal static class PropModelSourcesFixture
     private static void TimelineSource(Action<bool, string> check)
     {
         var empty = new TimelineDocument(100, 100, null, [], 1);
-        var source = SourceAt("Telephone", MonsterModel, 9001, 9000);
+        var source = SourceAt("Monster Prop", MonsterModel, 9001, 9000);
         var request = new TimelineAddRequest(TimelineAddKind.Prop, 0, "", Prop: new TimelinePropModel(9001, 9000, 1, null, source), ClipLength: 100,
             Summon: 1);
         var sourced = Added(empty, request);
@@ -683,7 +569,7 @@ internal static class PropModelSourcesFixture
         check(!ReferenceEquals(TimelineEdits.Replace(sourced, c198 with { Place = place }), sourced),
             "a changed place is an edit");
 
-        var two = Added(sourced, request with { Prop = new TimelinePropModel(528, 9000, 1, null, SourceAt("Vibrator", "chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl", 528, 9000)) });
+        var two = Added(sourced, request with { Prop = new TimelinePropModel(528, 9000, 1, null, SourceAt("Weapon Prop", "chara/weapon/w0528/obj/body/b0016/model/w0528b0016.mdl", 528, 9000)) });
         var saved = two with { Events = two.Events.Add(Prop("t9", null) with { Values = ImmutableDictionary<string, double>.Empty.Add("Model", 9001).Add("Body", 9003) }) };
         var stale = saved with { Events = saved.Events.Add(Prop("t8", SourceAt("Old", MonsterModel, 9001, 9007)) with
         {
@@ -708,10 +594,12 @@ internal static class PropModelSourcesFixture
             Directory.CreateDirectory(dir);
             foreach (var name in new[] { "w.mdl", "plain.mdl", "fancy.mdl", "spare.mdl", "gear.mdl" })
                 File.WriteAllBytes(Path.Combine(dir, name), [1, 2, 3]);
-            // The Telephone's real model, when it is here, qualifies as a monster on n_hara; made-up bytes don't.
-            var realMonster = File.Exists(TelephoneModel);
+            // A real monster model, when there is one, qualifies as a monster on n_hara; made-up bytes don't.
+            string? realModel = null;
+            RealMonster(ref realModel);
+            var realMonster = realModel is not null && File.Exists(realModel);
             if (realMonster)
-                File.Copy(TelephoneModel, Path.Combine(dir, "m.mdl"));
+                File.Copy(realModel!, Path.Combine(dir, "m.mdl"));
             else
                 File.WriteAllBytes(Path.Combine(dir, "m.mdl"), [1, 2, 3]);
             static System.Text.Json.Nodes.JsonObject Files(params (string GamePath, string File)[] files)
@@ -850,35 +738,5 @@ internal static class PropModelSourcesFixture
             if (Directory.Exists(dir))
                 Directory.Delete(dir, true);
         }
-    }
-
-    /// <summary>The Telephone's real model, material and textures, built into a private copy.</summary>
-    private static void TelephoneCopy(Action<bool, string> check, Lumina.GameData? data)
-    {
-        if (!Directory.Exists(TelephoneMod))
-        {
-            Console.WriteLine($"[SKIP] props from mods: the Telephone mod isn't at {TelephoneMod}, so its copy isn't built");
-            return;
-        }
-        var effective = ModOptionGroups.EffectiveFiles(TelephoneMod, new Dictionary<string, IReadOnlyList<string>>
-        {
-            ["(You're Not Gonna Reach My) Telephone"] = ["Main Install"],
-            ["Color Options"] = ["Moogle Pink"],
-        });
-        const string model = "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl";
-        var source = PropModelSources.Resolve(TelephoneMod, "(You're Not Gonna Reach My) Telephone", model, 9001, 9000,
-            effective, Game(data), Exists(data));
-        var copy = PropCopies.Build(source, Game(data));
-        var material = copy.Files[CopyRoot + "material/v0001/mt_m8044b0001_a.mtrl"];
-        var named = TexturesOf(material);
-        check(named.Length > 0 && named.All(path => path.StartsWith(CopyRoot + "texture/", StringComparison.Ordinal)),
-            $"the Telephone's built material names only private textures: {string.Join(", ", named)}");
-        check(copy.Files[CopyRoot + "model/w9001b9000.mdl"].SequenceEqual(File.ReadAllBytes(effective[model])),
-            "the Telephone's built model is the mod's model");
-        check(source.Textures.Values.Where(path => !source.Files.ContainsKey(path)).Order(StringComparer.Ordinal).SequenceEqual(copy.Missing),
-            $"the Telephone's missing textures are the private paths with no file: {string.Join(", ", copy.Missing)}");
-        check(named.All(path => copy.Files.ContainsKey(path) || copy.Missing.Contains(path)),
-            "every texture the Telephone's built material names is in the copy or reported missing");
-        check(PropCopies.Flatten(copy).Count == copy.Files.Count + 255, "the Telephone's flattened copy has its files and 255 aliases");
     }
 }

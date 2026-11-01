@@ -86,9 +86,9 @@ interactive checks have not been performed by the implementation agent.
 - **+ Material > Fit to model** on an item that has materials asks first, then redoes them.
 - Pick a stash model with the inspector's browse button, or with Add file(s) on a race set to variants. An
   item with no materials gets them, as when the model is dropped.
-- A material whose name matches no texture gets the set its UVs lie on. Open `F:\Downloads\sin tonic` and
-  drop `top.mdl` on a Build item: material a ("4.0 Ribbon" in the model) gets the ASD textures.
-- Other games' textures (2026-10-31, pending): open `F:\Downloads\sin tonic` and drop `top.mdl`,
+- A material whose name matches no texture gets the set its UVs lie on. Open a Substance Painter
+  outfit export (`top.mdl` and a `PBR` folder of ASA, ASB, ASD and ASW sets) and drop `top.mdl` on a Build item: material a ("4.0 Ribbon" in the model) gets the ASD textures.
+- Other games' textures (2026-10-31, pending): open that export and drop `top.mdl`,
   `bottoms.mdl`, `gloves.mdl` and `shoes.mdl` on four Build items. The ASA, ASD and ASW normals use
   Add alpha with the set's Opacity map, ASB's normal says "Blue: made solid", every mask is From maps
   (roughness, metallic, occlusion), and the ASW material is Translucent. Build and check in game:

@@ -3,7 +3,7 @@ namespace InstantEdit.Services.Animations.Preview;
 /// <summary>A Timeline workspace's playback as the play group sees and drives it, in seconds. Framework thread.</summary>
 internal interface IPlayGroupMember
 {
-    /// <summary>The actor, for the ruler's "Aria Rose ends here".</summary>
+    /// <summary>The actor, for the ruler's "Partner One ends here".</summary>
     string ActorName { get; }
 
     /// <summary>How long it plays (a Preview's built length, Live's cut or stretched one, else the clip's); null while it plays nothing through the Timeline.</summary>

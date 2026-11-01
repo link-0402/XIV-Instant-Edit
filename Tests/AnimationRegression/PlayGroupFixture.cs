@@ -43,25 +43,25 @@ internal static class PlayGroupFixture
         var calls = new List<string>();
         var group = new TimelinePlayGroup();
         var you = new Fake("you", calls) { PlayedSeconds = 7.33f, TimeSeconds = 1 };
-        var aria = new Fake("aria", calls) { PlayedSeconds = 2.33f, TimeSeconds = 1 };
+        var partnerOne = new Fake("partnerOne", calls) { PlayedSeconds = 2.33f, TimeSeconds = 1 };
         group.Add(you);
         group.Update();
         check(calls.Count == 0 && !group.Grouped, "play group: one clip alone is never told anything", calls);
 
-        group.Add(aria);
+        group.Add(partnerOne);
         group.Update();
-        check(group.Grouped && calls.Where(call => !call.Contains("speed")).SequenceEqual(["you again", "aria again"]) && calls[0] == "aria speed 1",
+        check(group.Grouped && calls.Where(call => !call.Contains("speed")).SequenceEqual(["you again", "partnerOne again"]) && calls[0] == "partnerOne speed 1",
             "play group: a second clip joining while playing takes the group's speed and restarts both together", calls);
 
         calls.Clear();
         you.TimeSeconds = 2;
-        aria.TimeSeconds = 2;
+        partnerOne.TimeSeconds = 2;
         group.Update();
         you.TimeSeconds = 7.33f;
         you.AtEnd = true;
-        aria.TimeSeconds = 2.33f;
+        partnerOne.TimeSeconds = 2.33f;
         group.Update();
-        check(calls.Where(call => !call.Contains("hold")).SequenceEqual(["you again", "aria again"]),
+        check(calls.Where(call => !call.Contains("hold")).SequenceEqual(["you again", "partnerOne again"]),
             "play group: at the leader's end both play again on one update", calls);
 
         calls.Clear();
@@ -71,7 +71,7 @@ internal static class PlayGroupFixture
         calls.Clear();
         you.AtEnd = false;
         group.SetFrame(4);
-        check(calls.SequenceEqual(["you pause", "you seek 4", "aria pause", "aria hold 2.33"]) && !group.Playing && group.SharedSeconds == 4,
+        check(calls.SequenceEqual(["you pause", "you seek 4", "partnerOne pause", "partnerOne hold 2.33"]) && !group.Playing && group.SharedSeconds == 4,
             "play group: a scrub pauses both and puts each on the frame, a shorter one on its end", calls);
 
         calls.Clear();
@@ -80,12 +80,12 @@ internal static class PlayGroupFixture
 
         calls.Clear();
         group.SpeedPercent = 50;
-        check(calls.SequenceEqual(["you speed 0.5", "aria speed 0.5"]) && group.SpeedPercent == 50, "play group: one speed for every clip", calls);
+        check(calls.SequenceEqual(["you speed 0.5", "partnerOne speed 0.5"]) && group.SpeedPercent == 50, "play group: one speed for every clip", calls);
 
-        check(group.EndSeconds == 7.33f && group.ShorterEnds.SequenceEqual([("aria", 2.33f)]), "play group: the group's end and where the shorter clip ends", calls);
+        check(group.EndSeconds == 7.33f && group.ShorterEnds.SequenceEqual([("partnerOne", 2.33f)]), "play group: the group's end and where the shorter clip ends", calls);
 
         calls.Clear();
-        group.Remove(aria);
+        group.Remove(partnerOne);
         group.Update();
         check(!group.Grouped && calls.Count == 0, "play group: a clip that leaves drops out; the one left plays alone", calls);
     }

@@ -298,12 +298,12 @@ internal static class PhysicsScenarios
             "physics: links past a chain's end, missing shapes and a second point without a bone after the tip are warnings, as presets ship them");
 
         // VFXEditor's chests: the tip is the first point without a bone, so only a second one is warned about.
-        var ashley = Sample();
-        ashley.Simulators[0].Chains[0].Nodes.Add(new PhybNode { Bone = PhybName.From("iv_c_mune_l") });
+        var extended = Sample();
+        extended.Simulators[0].Chains[0].Nodes.Add(new PhybNode { Bone = PhybName.From("iv_c_mune_l") });
         var twice = Sample();
         twice.Simulators[0].Chains[0].Nodes.AddRange([new PhybNode { Bone = PhybName.From("x") }, new PhybNode()]);
         var twiceIssues = PhysicsValidation.Check(twice, null).Where(issue => issue.Text.Contains("has no bone")).ToList();
-        Require(!PhysicsValidation.Check(ashley, null).Any(issue => issue.Text.Contains("has no bone")) &&
+        Require(!PhysicsValidation.Check(extended, null).Any(issue => issue.Text.Contains("has no bone")) &&
                 twiceIssues.Count == 1 && twiceIssues[0].Text.Contains("point 4 has no bone"),
             "physics: a tip without a bone before the chain's last point is fine, and a second point without one is warned about");
 
@@ -469,11 +469,11 @@ internal static class PhysicsScenarios
     /// <summary> In GPose the builder reads your posed copy: the first GPose actor with your name, as Penumbra finds it to redraw. </summary>
     private static void CheckPosed()
     {
-        string?[] slots = ["Brio One", "Lucina Zero", "Lucina Zero", null, "After Gap"];
+        string?[] slots = ["Posed One", "Partner Two", "Partner Two", null, "After Gap"];
         int? Find(string name) => PhysicsLiveReader.PosedSlot(slot => slot < slots.Length ? slots[slot] : null, name);
-        Require(Find("Lucina Zero") == PhysicsLiveReader.FirstPosed + 1 && Find("Brio One") == PhysicsLiveReader.FirstPosed,
+        Require(Find("Partner Two") == PhysicsLiveReader.FirstPosed + 1 && Find("Posed One") == PhysicsLiveReader.FirstPosed,
             "physics: in GPose your posed copy is the first GPose actor with your name");
-        Require(Find("After Gap") is null && Find("Someone Else") is null && PhysicsLiveReader.PosedSlot(_ => null, "Lucina Zero") is null,
+        Require(Find("After Gap") is null && Find("Someone Else") is null && PhysicsLiveReader.PosedSlot(_ => null, "Partner Two") is null,
             "physics: the search ends at the first empty GPose slot, as Penumbra's does");
     }
 

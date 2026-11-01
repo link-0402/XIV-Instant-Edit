@@ -49,6 +49,9 @@ docs/superpowers/
 docs/Instant Edit visual checks.md
 docs/issue-16-vertex-buffer-findings.md
 
+# Test checks against your own mods, which stay on your machine.
+Tests/**/*.Local.cs
+
 # Grill-me skill artifacts.
 **/CONTEXT.md
 **/CONTEXT-MAP.md

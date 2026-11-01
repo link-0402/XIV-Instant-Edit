@@ -57,7 +57,8 @@ internal static class GameTextureScenarios
         }
 
         // The real thing, when it is on this machine: a Substance Painter export.
-        const string substance = @"F:\Downloads\sin tonic\PBR\ASA_Normal_OpenGL.png";
+        var set = Environment.GetEnvironmentVariable("IE_SUBSTANCE_SET");
+        var substance = string.IsNullOrEmpty(set) ? "" : Path.Combine(set, "ASA_Normal_OpenGL.png");
         if (File.Exists(substance))
             Require(!GameNormal.CarriesOpacity(substance), "game normal: Substance Painter's normal holds no opacity");
     }
@@ -160,7 +161,7 @@ internal static class GameTextureScenarios
         Require(AlphaNormal.SourceOf(tex, cache, out error, out _) == null && error.Contains("not found"), "game mask: a missing map fails with why");
     }
 
-    /// <summary>A Substance set (sin tonic's layout): the fit finds its opacity, roughness, metallic and occlusion maps beside its textures.</summary>
+    /// <summary>A Substance set (a Painter export's layout): the fit finds its opacity, roughness, metallic and occlusion maps beside its textures.</summary>
     private static void TheFitFindsTheSetsMaps(string root)
     {
         var folder = Path.Combine(root, "PBR");
@@ -227,9 +228,9 @@ internal static class GameTextureScenarios
         Require(SetMaps.Find(new Dictionary<TexturePurpose, string> { [TexturePurpose.Diffuse] = body, [TexturePurpose.Normal] = bodyNormal }).Opacity == opacityBeside,
             "game fit: one named Opacity is, whatever it extends");
 
-        // The real set, when it is on this machine: sin tonic's Substance export.
-        const string real = @"F:\Downloads\sin tonic\PBR";
-        if (!Directory.Exists(real))
+        // The real set, when IE_SUBSTANCE_SET points at its PBR folder: a Substance export with ASA, ASB and ASW sets.
+        var real = Environment.GetEnvironmentVariable("IE_SUBSTANCE_SET");
+        if (string.IsNullOrEmpty(real) || !Directory.Exists(real))
             return;
         SetMaps RealSet(string set) => SetMaps.Find(new Dictionary<TexturePurpose, string>
         {
@@ -239,7 +240,7 @@ internal static class GameTextureScenarios
         var asaMaps = RealSet("ASA");
         Require(asaMaps == new SetMaps(Path.Combine(real, "ASA_Opacity.png"), Path.Combine(real, "ASA_Roughness.png"),
                                        Path.Combine(real, "ASA_Metallic.png"), Path.Combine(real, "ASA_Mixed_AO.png")),
-            $"game fit: sin tonic's ASA set finds its own four maps ({asaMaps})");
+            $"game fit: the real ASA set finds its own four maps ({asaMaps})");
         Require(RealSet("ASB").Opacity == null && RealSet("ASB").Roughness == Path.Combine(real, "ASB_Roughness.png"),
             "game fit: ASB has no opacity map, so its normal is only made solid");
         Require(!GameNormal.MostlySheer(asaMaps.Opacity!) && GameNormal.MostlySheer(RealSet("ASW").Opacity!),

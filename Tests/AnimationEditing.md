@@ -1598,7 +1598,7 @@ Save footer:
 ## Review fixes 2026-10-10 (pending)
 
 Fixes from the review of 9d39ff1 back to 2.1.0, committed 313e1ad. Automated suites pass; none
-of this has been tried in game. Candidates are mods from G:\Penumbra.
+of this has been tried in game. Candidates are mods from your Penumbra library.
 
 Live and the motion editor:
 - [x] Skeleton refusal: open an NFLB animation (the NFLB lists in Eorzean-Nightlife+), pick the NFLB
@@ -2316,7 +2316,7 @@ docs/superpowers/specs/2026-10-27-close-loop-fix-design.md.
 ## Animations from scratch (pending)
 
 Start from a still pose, stand it on the ground, and borrow breathing from an idle (Pose2Idle's idea).
-Plan: C:\Users\Example\.claude\plans\i-want-to-expand-smooth-allen.md. Test clip: a standing emote, such as
+Test clip: a standing emote, such as
 /stretch, and your race's Standing idle.
 
 - [x] 1 Load a standing emote, move the playhead to a calm frame, Add > Still pose (start from scratch).

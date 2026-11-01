@@ -19,7 +19,7 @@ internal sealed record TimelineEffectInfo(ImmutableArray<(int Start, int End)> L
 /// <summary>
 /// Reads and edits the parts of effect (AVFX) and sound (SCD) files that decide how long an effect
 /// keeps going. Layouts follow VFXEditor: a scheduler (Schd) starts timelines (TmLn) at frames,
-/// and a timeline item that plays a KILL clip ends the effect. Red Carpet's effects schedule their
+/// and a timeline item that plays a KILL clip ends the effect. One dance mod's effects schedule their
 /// own kill at frame 908, so they stop there even when the timeline keeps them looping; its music
 /// is marked to loop but has no loop points, so it plays once.
 /// </summary>
@@ -72,7 +72,7 @@ internal static class TimelineEffectFiles
     /// <summary>
     /// The effect with its schedule killing it at <paramref name="stop"/> frames after it starts, by a KILL
     /// at a local frame its timeline plays (see <see cref="Reaches"/>). Moving a KILL beats adding one:
-    /// a KILL on a timeline of its own (all it plays are kills, as Red Carpet's at 908) moves by its
+    /// a KILL on a timeline of its own (all it plays are kills, as one dance mod's at 908) moves by its
     /// scheduler item's start, in every Item and Trgr copy; another moves by its own start, in every Item
     /// container, when its scheduler item starts by the stop. Without a KILL the schedule reaches, one
     /// reached only while its item or scheduler entry is off is turned on in every copy and moved the

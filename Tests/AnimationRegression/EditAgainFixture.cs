@@ -153,9 +153,9 @@ internal static class EditAgainFixture
             "a newer capture of the clip in the same collection on the same actor is used, another character's too");
         check(AnimationEditService.EditAgainCapture(journal, [Capture("other", 8, clip, index: 201), Capture("mine", 7, clip, index: 201)], 201).Id == "mine",
             "the same character's capture comes first");
-        check(AnimationEditService.EditAgainCapture(journal, [Capture("aria", 9, clip, index: 202), Capture("mine", 7, clip, index: 201)], 202).Id == "aria",
+        check(AnimationEditService.EditAgainCapture(journal, [Capture("partnerOne", 9, clip, index: 202), Capture("mine", 7, clip, index: 201)], 202).Id == "partnerOne",
             "a partner's workspace opens the clip on the partner's own capture");
-        check(AnimationEditService.EditAgainCapture(journal, [Capture("aria", 9, clip, index: 202), Capture("mine", 7, clip, index: 201)], 203)
+        check(AnimationEditService.EditAgainCapture(journal, [Capture("partnerOne", 9, clip, index: 202), Capture("mine", 7, clip, index: 201)], 203)
                 is { Id: "saved", ActorIndex: 203 },
             "with no capture on the workspace's actor, the saved capture is pointed at it, never another actor's");
         var smile = new AnimationResource("chara/action/facial/pose/smile.tmb", "smile.tmb", "x");

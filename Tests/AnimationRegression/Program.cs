@@ -290,10 +290,10 @@ static void CheckPapsPosesAndCommits()
     // In-place edits write the mod's own file, whose name the mod author chose freely.
     var spacedRoot = Path.Combine(Path.GetTempPath(), "[Author] Spaced Mod");
     var spacedSource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/j_pose01_loop.pap",
-        Path.Combine(spacedRoot, "Animations", "Sybian Riding groundsit 1 V10.pap"), "hash", "[Author] Spaced Mod", spacedRoot,
-        "Animations/Sybian Riding groundsit 1 V10.pap");
+        Path.Combine(spacedRoot, "Animations", "Sit Pose groundsit 1 V10.pap"), "hash", "[Author] Spaced Mod", spacedRoot,
+        "Animations/Sit Pose groundsit 1 V10.pap");
     Check(AnimationResources.CanReplace(spacedSource) &&
-          AnimationResources.CanReplace(spacedSource with { RelativePath = @"Animations\Sybian Riding groundsit 1 V10.pap" }),
+          AnimationResources.CanReplace(spacedSource with { RelativePath = @"Animations\Sit Pose groundsit 1 V10.pap" }),
         "a mod PAP whose file name has spaces can be replaced in place");
     Check(!AnimationResources.CanReplace(spacedSource with { RelativePath = "../escape.pap" }) &&
           !AnimationResources.CanReplace(spacedSource with { RelativePath = "Animations/a:b.pap" }) &&
@@ -302,10 +302,10 @@ static void CheckPapsPosesAndCommits()
         "in-place targets still refuse escapes, stream names, other file types and files outside the mod");
     // An expression's timeline is a TMB of its own, replaced in place like a PAP.
     var expressionSource = new AnimationResource("chara/action/facial/pose/comeon.tmb",
-        Path.Combine(spacedRoot, "static infinite", "chara", "action", "facial", "pose", "comeon.tmb"), "hash", "[Author] Spaced Mod", spacedRoot,
-        @"static infinite\chara\action\facial\pose\comeon.tmb");
+        Path.Combine(spacedRoot, "held face", "chara", "action", "facial", "pose", "comeon.tmb"), "hash", "[Author] Spaced Mod", spacedRoot,
+        @"held face\chara\action\facial\pose\comeon.tmb");
     Check(AnimationResources.CanReplace(expressionSource) &&
-          !AnimationResources.CanReplace(expressionSource with { RelativePath = @"static infinite\comeon.pap" }) &&
+          !AnimationResources.CanReplace(expressionSource with { RelativePath = @"held face\comeon.pap" }) &&
           !AnimationResources.CanReplace(expressionSource with { GamePath = "chara/action/facial/pose/comeon.avfx", RelativePath = "comeon.avfx" }),
         "an expression's TMB can be replaced in place, but only by a file of its own type");
     // A sound the Timeline edits is the mod's own SCD, replaced in place like the animation.

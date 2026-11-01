@@ -646,11 +646,11 @@ internal static class PainterScenarios
         Require(PainterVisibility.Draws([0b011], new ModelSubmesh(0, [], 0b011)) && !PainterVisibility.Draws([0b001], new ModelSubmesh(0, [], 0b011)),
             "a part is drawn only while all of its attributes are enabled");
         Require(PainterVisibility.Draws([0b001, 0b010], new ModelSubmesh(0, [], 0b010)), "a part drawn by any loaded copy of the model counts");
-        Require(PainterVisibility.NormalizePath(@"|1_2_3|G:\Penumbra\My Mod\A.mdl") == "g:/penumbra/my mod/a.mdl" &&
+        Require(PainterVisibility.NormalizePath(@"|1_2_3|D:\Mods\My Mod\A.mdl") == "d:/mods/my mod/a.mdl" &&
                 PainterVisibility.NormalizePath("chara/x.mdl") == "chara/x.mdl", "Penumbra's path prefix and separators are normalized");
-        var live = new PainterLiveCharacter([new PainterLiveModel("g:/penumbra/my mod/a.mdl", 0b1), new PainterLiveModel("chara/v.mdl", 0b10),
-            new PainterLiveModel("g:/penumbra/my mod/a.mdl", 0b100)], null);
-        Require(live.MasksFor(new PainterModelRef("chara/a.mdl", @"G:\Penumbra\My Mod\A.mdl", false)).SequenceEqual([0b1u, 0b100u]) &&
+        var live = new PainterLiveCharacter([new PainterLiveModel("d:/mods/my mod/a.mdl", 0b1), new PainterLiveModel("chara/v.mdl", 0b10),
+            new PainterLiveModel("d:/mods/my mod/a.mdl", 0b100)], null);
+        Require(live.MasksFor(new PainterModelRef("chara/a.mdl", @"D:\Mods\My Mod\A.mdl", false)).SequenceEqual([0b1u, 0b100u]) &&
                 live.MasksFor(new PainterModelRef("chara/v.mdl", "chara/v.mdl", true)).SequenceEqual([0b10u]) &&
                 live.MasksFor(new PainterModelRef("chara/w.mdl", "chara/w.mdl", true)).Count == 0,
             "loaded models match by their file, or by game path for vanilla ones");

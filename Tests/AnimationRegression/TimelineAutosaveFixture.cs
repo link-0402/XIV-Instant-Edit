@@ -107,9 +107,9 @@ internal static class TimelineAutosaveFixture
                 Tint = new Vector3(1, 2, 3), Glow = 2, Colors = [(Vector3.One, Vector3.UnitX)], Move = new Vector3(0, .25f, 0),
                 Turn = new Vector3(0, MathF.PI / 2, 0), Stop = 12,
             });
-        var source = new TimelinePropSource("Telephone", "Telephone", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9001, 9000,
+        var source = new TimelinePropSource("Monster Prop", "Monster Prop", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9001, 9000,
             ImmutableDictionary<string, string>.Empty
-                .Add("chara/weapon/w9001/obj/body/b9000/model/w9001b9000.mdl", @"file:C:\mods\Telephone\m8044b0001.mdl")
+                .Add("chara/weapon/w9001/obj/body/b9000/model/w9001b9000.mdl", @"file:C:\mods\Monster Prop\m8044b0001.mdl")
                 .Add("chara/weapon/w9001/obj/body/b9000/texture/d.tex", "game:chara/monster/m8044/obj/body/b0001/texture/d.tex"),
             ImmutableDictionary<string, string>.Empty.Add("chara/monster/m8044/obj/body/b0001/texture/d.tex", "chara/weapon/w9001/obj/body/b9000/texture/d.tex"));
         // A prop from a mod that also has a place: both come back.

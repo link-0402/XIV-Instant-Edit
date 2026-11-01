@@ -244,7 +244,7 @@ internal static partial class TmbFileFixture
     }
 
     /// <summary>
-    /// Real effects from 25 sampled mod folders of the library at G:\Penumbra, when it is there: each
+    /// Real effects from 25 sampled mod folders of the library at IE_MOD_LIBRARY, when it is set: each
     /// reads, an empty look changes no byte, and a move either is refused for want of a position or
     /// changes only binder positions (or the root offset). The curves a move adds are laid out as the
     /// library's own binder position curves are.
@@ -253,7 +253,7 @@ internal static partial class TmbFileFixture
     {
         if (LibraryEffects() is not { } files)
         {
-            Console.WriteLine("[SKIP] effect moves: the mod library isn't at G:\\Penumbra");
+            Console.WriteLine("[SKIP] effect moves: set IE_MOD_LIBRARY to a Penumbra library to run it");
             return;
         }
         var up = new TimelineEffectEdit { Move = new Vector3(0, 1, 0) };
@@ -456,7 +456,7 @@ internal static partial class TmbFileFixture
               TimelineEffectFiles.KillsAt(another) == 60 && Found(another, "TmLn", "CpCn").Select(c => BitConverter.ToInt32(another, c.At)).SequenceEqual([0, 1]),
             "a kill is never added where an item names the clip it would be; the next timeline scheduled takes it");
 
-        // Red Carpet's layout: its kill is a timeline of its own, scheduled at 908; any stop moves that scheduler item, past the loop end too.
+        // A dance mod's layout: its kill is a timeline of its own, scheduled at 908; any stop moves that scheduler item, past the loop end too.
         var carpet = KillEffects.Effect([KillEffects.Scheduled(1, 908, 1), KillEffects.Scheduled(1, 0, 2)],
             KillEffects.Timeline(0, 0, KillEffects.Item(0, -1, 0, -1)), KillEffects.Timeline(0, 1, KillEffects.Item(0, 1, -1, 0)),
             KillEffects.Timeline(455, 0, KillEffects.Item(213, 347, 1, -1), KillEffects.Item(357, 455, 2, -1)));
@@ -559,7 +559,7 @@ internal static partial class TmbFileFixture
     }
 
     /// <summary>
-    /// Real effects from 25 sampled mod folders of the library at G:\Penumbra, when it is there: a stop
+    /// Real effects from 25 sampled mod folders of the library at IE_MOD_LIBRARY, when it is set: a stop
     /// at 120 is written into every effect with something scheduled, which then reads and kills at 120,
     /// unless its only timelines have an item naming the clip a new KILL would be or it starts after 120. The KILL clips and
     /// timeline items the writer adds are laid out as the library's own.
@@ -568,7 +568,7 @@ internal static partial class TmbFileFixture
     {
         if (LibraryEffects() is not { } files)
         {
-            Console.WriteLine("[SKIP] effect stops: the mod library isn't at G:\\Penumbra");
+            Console.WriteLine("[SKIP] effect stops: set IE_MOD_LIBRARY to a Penumbra library to run it");
             return;
         }
         int stopped = 0, unscheduled = 0, noRoom = 0, loopsSooner = 0, startsLater = 0;
@@ -646,11 +646,11 @@ internal static partial class TmbFileFixture
             $"a new timeline item has the fields of the library's own ({realItem ?? "none found"})");
     }
 
-    /// <summary> The effects of 25 sampled mod folders of the library at G:\Penumbra; null when it isn't there. </summary>
+    /// <summary> The effects of 25 sampled mod folders of the library at IE_MOD_LIBRARY; null when it isn't there. </summary>
     private static List<string>? LibraryEffects()
     {
-        const string library = @"G:\Penumbra";
-        if (!Directory.Exists(library))
+        var library = Environment.GetEnvironmentVariable("IE_MOD_LIBRARY");
+        if (string.IsNullOrEmpty(library) || !Directory.Exists(library))
             return null;
         var random = new Random(20261027);
         return Directory.GetDirectories(library).Order(StringComparer.OrdinalIgnoreCase).OrderBy(_ => random.Next())
@@ -658,7 +658,7 @@ internal static partial class TmbFileFixture
             .SelectMany(f => f).ToList();
     }
 
-    /// <summary> Effect files with a scheduler and timelines, built as VFXEditor writes them (as the Red Carpet check's are). </summary>
+    /// <summary> Effect files with a scheduler and timelines, built as VFXEditor writes them (as the dance mod check's are). </summary>
     private static class KillEffects
     {
         private static byte[] Field(string name, int value) => Chunk(name, Ints(value));

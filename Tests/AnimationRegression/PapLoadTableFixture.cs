@@ -122,7 +122,7 @@ internal static class PapLoadTableFixture
 
         // The listener: a c0801 player dancing plays c0101's loop, and its family is still the player's.
         string[] tree = [Skeleton, "chara/equipment/e0001/animation/a0001/material.pap"];
-        var dance = new AnimationCatalog.Timeline(100, "emote/dance12_loop", "Popotostep", 2, true, [100, 101], [101]);
+        var dance = new AnimationCatalog.Timeline(100, "emote/dance12_loop", "Dance Mod", 2, true, [100, 101], [101]);
         var start = dance with { Id = 101, Key = "emote/dance12_start", Loop = false };
         check(AnimationCatalog.CandidatePapPaths(dance, tree, table).SequenceEqual([Path(101, "emote/dance12_loop")]) &&
               AnimationCatalog.CandidatePapPaths(dance, tree).SequenceEqual([Path(801, "emote/dance12_loop")]),

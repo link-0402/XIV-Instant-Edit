@@ -425,7 +425,7 @@ internal sealed class TmbFile
     /// <summary>
     /// Adds a copy of entry <paramref name="sourceId"/> to the track that plays it, after that
     /// track's last entry: a run of faces on one track, as mods lay them out (19 faces on one
-    /// track in NFLB's Cow Taming). Entries that use a curve, or are on no track, are refused.
+    /// track in one emote mod). Entries that use a curve, or are on no track, are refused.
     /// Returns the copy's id, temporary like every model id until the file is written.
     /// </summary>
     public short CloneOnTrack(short sourceId)

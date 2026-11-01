@@ -179,7 +179,7 @@ internal static class TimelineWindowViewsFixture
         check(TimelineWindowViews.PastEndWarning(Doc(10, 10, Ev("a", "C063", TimelineLane.Sound, 9, "sound/a.scd"))) == null,
             "No warning while every event starts before the end");
 
-        // Red Carpet's Popoto Step dance: a 15.17 s motion under a header copied from a 1 s walk,
+        // A dance mod's motion: a 15.17 s motion under a header copied from a 1 s walk,
         // with a second loop's events laid out after the first.
         var dance = Doc(455, 455, Ev("motion", "C009", TimelineLane.Motion, 0, "cbem_dance12_2lp", 455, access: TimelineAccess.Locked),
             Ev("step", "C042", TimelineLane.Other, 200, access: TimelineAccess.Movable),

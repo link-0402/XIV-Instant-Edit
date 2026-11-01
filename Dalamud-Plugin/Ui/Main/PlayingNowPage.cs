@@ -45,7 +45,7 @@ internal sealed class PlayingNowPage
     /// <summary>What a click on a row calls: opens that animation, or its startup, in the Timeline window.</summary>
     public void AttachOpen(Action<AnimationCapture, bool> open) => openTimeline = open;
 
-    /// <summary>The actor the list is of when it isn't you, such as a partner the Timeline shows ("Aria Rose"); null for "Your character".</summary>
+    /// <summary>The actor the list is of when it isn't you, such as a partner the Timeline shows ("Partner One"); null for "Your character".</summary>
     public string? ActorName { get; set; }
 
     /// <summary>

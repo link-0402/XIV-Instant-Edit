@@ -49,11 +49,11 @@ internal static partial class MaterialEditorScenarios
 
         // A mod's material is loaded under its file on disk, as read from the game (2026-10-17).
         const string dress = "chara/equipment/e6059/material/v0001/mt_c0201e6059_top_dress.mtrl";
-        const string handle = "|2_2_1D79C9AE_0076|G:/Penumbra/Critique/chara/equipment/e6059/material/v0001/mt_c0201e6059_top_dress.mtrl";
-        var modFile = MaterialPathMatch.Candidates(dress, @"G:\Penumbra\Critique\chara\equipment\e6059\material\v0001\mt_c0201e6059_top_dress.mtrl", null);
+        const string handle = "|2_2_1D79C9AE_0076|D:/Mods/Dress Mod/chara/equipment/e6059/material/v0001/mt_c0201e6059_top_dress.mtrl";
+        var modFile = MaterialPathMatch.Candidates(dress, @"D:\Mods\Dress Mod\chara\equipment\e6059\material\v0001\mt_c0201e6059_top_dress.mtrl", null);
         Require(MaterialPathMatch.MatchesAny(handle, modFile), "a mod's material matches by the mod file it was loaded from");
         Require(!MaterialPathMatch.MatchesAny(handle, MaterialPathMatch.Candidates(dress, dress, null)), "a game file's candidates don't match a mod file");
-        var preview = MaterialPathMatch.Candidates(dress, @"G:\Penumbra\Critique\x.mtrl", @"C:\Cache\material-preview\0123456789abcdef\2\" + dress.Replace('/', '\\'));
+        var preview = MaterialPathMatch.Candidates(dress, @"D:\Mods\Dress Mod\x.mtrl", @"C:\Cache\material-preview\0123456789abcdef\2\" + dress.Replace('/', '\\'));
         Require(MaterialPathMatch.MatchesAny("|1_2_3|C:/Cache/material-preview/0123456789abcdef/2/" + dress, preview),
             "the structural preview's file matches while it is shown");
         Require(MaterialPathMatch.Candidates(dress, "", " ").Count == 1, "empty paths are left out");

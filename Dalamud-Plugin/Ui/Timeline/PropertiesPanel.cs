@@ -235,7 +235,7 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
     private static void DrawKeep(TimelineEditor current, TimelineEvent ev, bool editable)
     {
         TimelineUi.Fact("Keep");
-        // A kept moving face that could loop but holds still (as a Static Infinite option writes)
+        // A kept moving face that could loop but holds still (as some mods write it)
         // shows unticked, so ticking it makes it loop.
         var loops = TimelineEdits.CanLoop(current.Document, ev, current.MotionFrames);
         var kept = TimelineDocument.Kept(ev) && (ev.Loop || !loops);

@@ -47,12 +47,12 @@ internal interface ITimelineHost
     void Show();
 
     /// <summary>
-    /// Draws the actor's name ("You", "Aria Rose") that lists the workspaces to switch to, and returns true, while partners are
+    /// Draws the actor's name ("You", "Partner One") that lists the workspaces to switch to, and returns true, while partners are
     /// spawned; draws nothing and returns false otherwise.
     /// </summary>
     bool DrawActorSwitch();
 
-    /// <summary>Why <paramref name="key"/>'s actor can't be acted on yet ("Aria Rose is still spawning."); null when it can.</summary>
+    /// <summary>Why <paramref name="key"/>'s actor can't be acted on yet ("Partner One is still spawning."); null when it can.</summary>
     string? Waiting(WorkspaceKey key);
 }
 

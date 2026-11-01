@@ -173,7 +173,7 @@ internal static partial class TmbFileFixture
     /// </summary>
     private static void ModPropSlots(Action<bool, string> check, TimelineDocument idle, TimelineDocument toast)
     {
-        var source = new TimelinePropSource("Telephone", "Telephone", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9901, 9000,
+        var source = new TimelinePropSource("Monster Prop", "Monster Prop", "chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl", 9901, 9000,
             ImmutableDictionary<string, string>.Empty, ImmutableDictionary<string, string>.Empty);
         TimelineEvent[] ModProp(int start, ushort body = 9000, bool sourced = true) => [.. TimelineTemplates.Create(new(TimelineAddKind.Prop, start, "", 20,
             Prop: new TimelinePropModel(9901, body, 1, null, sourced ? source with { Body = body } : null), ClipLength: 70, Summon: 1))];

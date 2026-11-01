@@ -301,7 +301,7 @@ internal sealed record TimelineDocument(
 
     /// <summary>
     /// Whether <paramref name="ev"/> is a kept face: time control on and an endless length (-1),
-    /// what "Permanent Facial Expressions" writes. The game keeps showing it after its timeline
+    /// what mods that keep a face on write. The game keeps showing it after its timeline
     /// ends, until another face replaces it. It is drawn until the next face or the end.
     /// </summary>
     public static bool Kept(TimelineEvent ev) =>

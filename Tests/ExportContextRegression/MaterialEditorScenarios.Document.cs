@@ -32,7 +32,7 @@ internal static partial class MaterialEditorScenarios
             "the hair preset opens without a colour table, the Mask preset with its Dawntrail table");
     }
 
-    /// <summary>Every .mtrl in a mod library folder (IE_MTRL_LIBRARY, e.g. G:\Penumbra); skipped when unset.</summary>
+    /// <summary>Every .mtrl in a mod library folder (IE_MTRL_LIBRARY, e.g. a Penumbra library); skipped when unset.</summary>
     private static void CheckRoundTripLibrary()
     {
         var root = Environment.GetEnvironmentVariable("IE_MTRL_LIBRARY");

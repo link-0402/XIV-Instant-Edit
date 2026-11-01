@@ -304,11 +304,11 @@ slot count for the areas they move with, and genital tips are placed. Use a test
 (its chest is VFXEditor's: the bone, a tip without a bone, then iv_c_mune_l).
 
 - [x] The game aims a chain's bone at its first point without a bone, so that point is the tip.
-  (XIV Bridge physics/37, 2026-11-01, Lucina standing: Ashley's spring on that point, pulled 30 cm to the left, turned
+  (XIV Bridge physics/37, 2026-11-01, the player standing: Ashley's spring on that point, pulled 30 cm to the left, turned
   j_mune_l 29.6°; the same spring on iv_c_mune_l turned it 2.2°.)
 - [x] On a character whose Customize+ grows the breasts: Fit to my body (Middle of the breast), then Preview. The breasts
   rest where they did before the fit: j_mune_l and j_mune_r within 2° standing. (XIV Bridge physics/38, Release
-  2026-11-01 03:13, Lucina standing: j_mune_l 0.04°, j_mune_r 0.00°.)
+  2026-11-01 03:13, the player standing: j_mune_l 0.04°, j_mune_r 0.00°.)
 - [ ] The breast balls read "Moves it N cm to the middle of your left breast and sizes it to the breast." and stay under
   10 cm. A row the fit holds back ends "Kept 1 cm off ..., which it would push all the time." (physics/38 checks the
   sizes and that no body area's point comes within 1 cm of a shape at rest; the sentences by eye.)
@@ -317,7 +317,7 @@ slot count for the areas they move with, and genital tips are placed. Use a test
 - [x] The chest overlay shows the tip, the cone and the spring. (physics/38, 2026-11-01: 2 tips, 2 cones, 2 springs.)
 - [ ] On a character whose member is a ring model: the fit lists "Penis: tip place" and the testicles' tip place and size,
   and its notes say "Your right ring's model moves with iv_ochinko_a, so it was measured for the penis." (physics/39.)
-  (physics/39, 2026-11-01: skipped, no model on slots 5 to 9 is weighted to an iv_ochinko_ bone on Lucina.)
+  (physics/39, 2026-11-01: skipped, no model on slots 5 to 9 is weighted to an iv_ochinko_ bone on the player.)
 - [ ] Applied, the penis tip sits at the end of the member and the testicles' in their middle; the sizes look right (by
   eye). (physics/39 checks the penis tip.)
 - [ ] Walk and run: the arms stop at the breasts and the breasts don't knock each other apart (by eye).
@@ -332,7 +332,7 @@ with Face Camera on and the camera to one side, so the head turns.
 1. [ ] The card reads "For Female Miqo'te (c0801)" (your race); outside a loaded character it says so and has no controls.
    (The service's label checked in game; the card itself not yet seen.)
 2. [x] Preview with Lower back on a chest-touching idle: the hands stay on the chest while the back turns, and the head
-   still turns as far. (XIV Bridge physics/60, 2026-11-01, Lucina in GPose: clavicle and upper arm 0.6° off the chest vs
+   still turns as far. (XIV Bridge physics/60, 2026-11-01, the player in GPose: clavicle and upper arm 0.6° off the chest vs
    27.3° with the game's settings; head 64.1° vs 64.2°. The preview survived its own redraw with Refresh every frame.)
 3. [x] Each slider at 0 % stops its part (back and arms, neck and head, eyes); at 50 % it turns half as far. (physics/60,
    2026-11-01: back 8.5° of 16.9°, neck and head 24.0° of 48.0°, eyes 3.3° of 6.9°.)

@@ -3,7 +3,7 @@
 Exports into Penumbra mods are covered by `Tests/ExportContextRegression` (RaceExportScenarios,
 SizesExportScenarios, VariantExportScenarios, attribute group scenarios) and the Blender suites
 (`run_blender_suites.py`). Nothing below has been tried in game yet. Work on copies of mods you
-care about, or keep Instant Edit's model backups on. Candidates are mods from G:\Penumbra; the
+care about, or keep Instant Edit's model backups on. Candidates are mods from your Penumbra library; the
 character is assumed to be c0801.
 
 ## Review fixes 2026-10-10 (pending)

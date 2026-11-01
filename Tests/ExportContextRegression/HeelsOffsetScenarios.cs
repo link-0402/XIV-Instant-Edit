@@ -382,14 +382,14 @@ internal static class HeelsOffsetScenarios
 
     private static void CheckResolve()
     {
-        const string modFile = @"G:\Penumbra\Heels\chara\equipment\e6012\model\c0201e6012_sho.mdl";
-        const string legsFile = @"G:\Penumbra\Heels\legs.mdl";
+        const string modFile = @"D:\Mods\Heels\chara\equipment\e6012\model\c0201e6012_sho.mdl";
+        const string legsFile = @"D:\Mods\Heels\legs.mdl";
         var resolved = new Dictionary<string, HashSet<string>>
         {
             [legsFile] = ["chara/equipment/e6012/model/c0201e6012_dwn.mdl"],
             [modFile] = ["chara/equipment/e6012/model/c0201e6012_sho.mdl", "chara/equipment/e6012/model/c0201e6012_top.mdl"],
             ["chara/equipment/e0000/model/c0201e0000_sho.mdl"] = ["chara/equipment/e0000/model/c0201e0000_sho.mdl"],
-            [@"G:\Penumbra\Heels\x.tex"] = ["chara/equipment/e6012/texture/x.tex"],
+            [@"D:\Mods\Heels\x.tex"] = ["chara/equipment/e6012/texture/x.tex"],
         };
         Require(HeelsMeasure.Resolve(resolved, PainterVisibility.NormalizePath("|abc_def|" + modFile), HeelsSlot.Feet) ==
                 (modFile, "chara/equipment/e6012/model/c0201e6012_sho.mdl"),

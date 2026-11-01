@@ -4,11 +4,12 @@ using InstantEdit.Services.PenumbraMods;
 /// <summary>
 /// Which file a Penumbra mod serves for each game path under the user's option settings: the default files,
 /// then the picked options of each group, a higher-priority group over a lower one. Written on a temporary mod
-/// folder in the plugin's meta.json layout, plus a check against a real mod when the folder is there.
+/// folder in the plugin's meta.json layout, plus a check against a real mod in a local file when there is one.
 /// </summary>
-internal static class ModEffectiveFilesFixture
+internal static partial class ModEffectiveFilesFixture
 {
-    private const string RealMod = @"G:\Penumbra\(You're Not Gonna Reach My) Telephone";
+    /// <summary> The check against a real mod in your library, in an untracked ModEffectiveFilesFixture.Local.cs; skipped without it. </summary>
+    static partial void Real(Action<bool, string> check);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> None =
         new Dictionary<string, IReadOnlyList<string>>();
@@ -233,22 +234,5 @@ internal static class ModEffectiveFilesFixture
         var settings = ModOptionGroups.Selection(folder, Picks(("color", ["Red"]), ("Extras", [])));
         check(Show(settings) == "Extras = ; None = ; Parts = B; Plain = First; color = Red",
             $"Penumbra's settings win, and a group they leave out gets its default: {Show(settings)}");
-    }
-
-    private static void Real(Action<bool, string> check)
-    {
-        if (!Directory.Exists(RealMod))
-        {
-            Console.WriteLine("[SKIP] mod effective files: the telephone mod isn't where the checks look, so a real mod isn't read");
-            return;
-        }
-        var files = ModOptionGroups.EffectiveFiles(RealMod, Picks(
-            ("(You're Not Gonna Reach My) Telephone", ["Main Install"]), ("Color Options", ["Moogle Pink"])));
-        var diffuse = files.GetValueOrDefault("chara/monster/m8044/obj/body/b0001/texture/v01_m8044b0001_d.tex");
-        var model = files.GetValueOrDefault("chara/monster/m8044/obj/body/b0001/model/m8044b0001.mdl");
-        check(diffuse is not null && diffuse.Contains("Moogle Pink", StringComparison.OrdinalIgnoreCase) && File.Exists(diffuse),
-            "the telephone's diffuse texture resolves into the Moogle Pink option");
-        check(model is not null && model.Contains("Main Install", StringComparison.OrdinalIgnoreCase) && File.Exists(model),
-            "the telephone's model resolves into Main Install");
     }
 }

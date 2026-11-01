@@ -248,7 +248,7 @@ internal static class AnimationExportFixture
             "the clip name is not repeated when the display name already has it");
 
         // An expression: a face on the face skeleton, timed by a TMB of its own.
-        var timeline = new AnimationResource("chara/action/facial/pose/comeon.tmb", "x", "before", "Panting Face");
+        var timeline = new AnimationResource("chara/action/facial/pose/comeon.tmb", "x", "before", "Face Mod");
         var expression = Capture("Taunt") with { ExpressionTimeline = timeline };
         check(AnimationPresentation.IsExpression(expression) && AnimationPresentation.AnimationState(expression, false) == "Expression" &&
               !AnimationPresentation.IsExpression(Capture("Yes")) && AnimationPresentation.AnimationState(Capture("Yes"), false) == "Emote",

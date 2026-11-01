@@ -29,7 +29,7 @@ the delayed allocator crash; it is not a proven reconstruction of every event
 leading to the crash.
 
 The failed journal (`4d129ed3-6f76-4f6e-9d1a-6f1488e1ae3d`) recorded the target
-under `G:\Penumbra\IE Animation 20260912 215419\files/chara/...`, while Penumbra
+under `<Penumbra library>\IE Animation 20260912 215419\files/chara/...`, while Penumbra
 resolved the same file using backslashes throughout. Raw string comparison
 incorrectly rejected this activation. The journal remained `Undoing`, with
 offset clearing not started. The saved collection still had the generated mod

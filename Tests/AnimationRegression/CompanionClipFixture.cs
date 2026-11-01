@@ -21,7 +21,7 @@ internal static class CompanionClipFixture
 
     private static AnimationResource Resource(string gamePath, string? mod) => mod == null
         ? new(gamePath, gamePath, "hash-" + gamePath)
-        : new(gamePath, $@"G:\Penumbra\{mod}\{Path.GetFileName(gamePath)}", "hash-" + gamePath, mod, $@"G:\Penumbra\{mod}", Path.GetFileName(gamePath), mod);
+        : new(gamePath, $@"D:\Mods\{mod}\{Path.GetFileName(gamePath)}", "hash-" + gamePath, mod, $@"D:\Mods\{mod}", Path.GetFileName(gamePath), mod);
 
     private static AnimationCapture Capture(string? loopMod, string? startMod, bool hasStartup = true, string start = Start) =>
         new("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", new AnimationClip(Loop, "loop", 0, 0, 1, "s.sklb", IsLoop: true),

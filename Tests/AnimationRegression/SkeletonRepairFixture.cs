@@ -143,10 +143,10 @@ internal static class SkeletonRepairFixture
         // bake sampled on it freezes those rests into the output, so it is never picked or offered.
         SkeletonCandidate In(SkeletonCandidate c, string file, string? relative = null) =>
             c with { Source = c.Source with { Resource = c.Source.Resource with { ResolvedPath = file, RelativePath = relative ?? file } } };
-        check(AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\YAS\Yet Another Skeleton\Posing\chara\human\c0801\skeleton\base\b0001\skl_c0801b0001.sklb", "")) &&
+        check(AnimationSkeletonIndex.IsPosingFile(new(game, @"D:\Mods\YAS\Yet Another Skeleton\Posing\chara\human\c0801\skeleton\base\b0001\skl_c0801b0001.sklb", "")) &&
               AnimationSkeletonIndex.IsPosingFile(new(game, "synced.sklb", "", RelativePath: "files/posing/skl.sklb")) &&
-              !AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\YAS\Yet Another Skeleton\Animation_General Usage\chara\skl_c0801b0001.sklb", "")) &&
-              !AnimationSkeletonIndex.IsPosingFile(new(game, @"G:\Penumbra\Some mod\Posing.sklb", "")),
+              !AnimationSkeletonIndex.IsPosingFile(new(game, @"D:\Mods\YAS\Yet Another Skeleton\Animation_General Usage\chara\skl_c0801b0001.sklb", "")) &&
+              !AnimationSkeletonIndex.IsPosingFile(new(game, @"D:\Mods\Some mod\Posing.sklb", "")),
             "a posing skeleton is one in a folder named Posing, not a file of that name");
         check(!AnimationSkeletonIndex.IsPosingFile(new(game, @"E:\Posing\Mods\YAS\Animation_General Usage\chara\skl_c0801b0001.sklb", "",
                   "YAS", @"E:\Posing\Mods\YAS", "Animation_General Usage/chara/skl_c0801b0001.sklb")) &&
@@ -155,12 +155,12 @@ internal static class SkeletonRepairFixture
               AnimationSkeletonIndex.IsPosingFile(new(game, @"E:\Posing\Mods\YAS\Posing\chara\skl_c0801b0001.sklb", "", ModRoot: @"E:\Posing\Mods\YAS")) &&
               AnimationSkeletonIndex.InModPath(new(game, @"E:\Posing\Mods\YAS\Posing\skl.sklb", "", ModRoot: @"E:\Posing\Mods\YAS\")) == "Posing/skl.sklb",
             "only folders inside the mod count: a Penumbra root or a mod named Posing doesn't make its skeletons posing ones");
-        var posingFile = In(other, @"G:\Penumbra\YAS\Posing\skl.sklb");
+        var posingFile = In(other, @"D:\Mods\YAS\Posing\skl.sklb");
         var leftOut = AnimationSkeletonIndex.Rank(channels, [posingFile, candidate], source, game);
         check(leftOut is { State: SkeletonResolutionState.Matched } && leftOut.Selected!.Skeleton.Fingerprint == source.Fingerprint &&
               leftOut.Candidates.All(c => c.Skeleton.Fingerprint != "different"),
             "a posing skeleton is neither picked nor offered when another skeleton fits as well");
-        var syncedCopy = In(other, @"G:\Penumbra\Someone@World\skl.sklb");
+        var syncedCopy = In(other, @"D:\Mods\Someone@World\skl.sklb");
         check(AnimationSkeletonIndex.Rank(channels, [syncedCopy, candidate], source, game,
                 posing: AnimationSkeletonIndex.PosingSkeletons([posingFile])).Selected?.Skeleton.Fingerprint == source.Fingerprint,
             "a byte-identical copy of a posing skeleton outside its Posing folder is left out too");

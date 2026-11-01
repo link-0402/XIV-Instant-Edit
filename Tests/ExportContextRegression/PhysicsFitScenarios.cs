@@ -256,7 +256,7 @@ internal static class PhysicsFitScenarios
         Require(PhysicsPaths.IsBareBody("chara/equipment/e0000/model/c0201e0000_top.mdl") && PhysicsPaths.IsBareBody("chara/equipment/e0279/model/c0201e0279_dwn.mdl") &&
                 !PhysicsPaths.IsBareBody("chara/equipment/e6016/model/c0201e6016_top.mdl"),
             "physics fit: smallclothes and the Emperor's New gear count as bare body, other gear doesn't");
-        const string modFile = @"G:\Penumbra\Some Body\chara\equipment\e0000\model\c0201e0000_top.mdl";
+        const string modFile = @"D:\Mods\Some Body\chara\equipment\e0000\model\c0201e0000_top.mdl";
         var resolved = new Dictionary<string, HashSet<string>>
         {
             [modFile] = ["chara/equipment/e0000/model/c0201e0000_top.mdl", "chara/equipment/e0279/model/c0201e0279_top.mdl"],
@@ -266,7 +266,7 @@ internal static class PhysicsFitScenarios
             "physics fit: a drawn model is read from the file Penumbra loads, with its slot's game path");
         Require(PhysicsPaths.ResolveDrawn(resolved, "chara/equipment/e0000/model/c0201e0000_glv.mdl", 2) is
                     ("chara/equipment/e0000/model/c0201e0000_glv.mdl", "chara/equipment/e0000/model/c0201e0000_glv.mdl") &&
-                PhysicsPaths.ResolveDrawn(resolved, "g:/penumbra/elsewhere/c0201e0000_sho.mdl", 4) is null,
+                PhysicsPaths.ResolveDrawn(resolved, "d:/mods/elsewhere/c0201e0000_sho.mdl", 4) is null,
             "physics fit: a game file is its own game path, and a mod file Penumbra doesn't list isn't guessed");
     }
 
@@ -560,12 +560,12 @@ internal static class PhysicsFitScenarios
     private static void CheckTipNotes()
     {
         var (body, skeleton) = SyntheticBody();
-        // Lucina's skeleton has no iv_c_mune_l, the last point of Ashley's chest chain [j_mune_l, tip, iv_c_mune_l].
+        // The player's skeleton has no iv_c_mune_l, the last point of a chest chain [j_mune_l, tip, iv_c_mune_l].
         var lacking = new PhysicsSkeleton(skeleton.Body.Where(bone => bone.Name != "iv_c_mune_l").ToList());
         var bare = InPose(body, body.Pose.Where(pair => pair.Key != "iv_c_mune_l").ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
-        var ashley = SyntheticFile(0.12f);
-        ashley.Simulators[1].Chains[0].Nodes.Add(new PhybNode { Bone = PhybName.From("iv_c_mune_l"), Radius = 0.05f, CollisionFlags = 3 });
-        var fit = PhysicsFit.Measure(ashley, bare, lacking);
+        var extended = SyntheticFile(0.12f);
+        extended.Simulators[1].Chains[0].Nodes.Add(new PhybNode { Bone = PhybName.From("iv_c_mune_l"), Radius = 0.05f, CollisionFlags = 3 });
+        var fit = PhysicsFit.Measure(extended, bare, lacking);
         Require(fit.Notes.All(note => !note.Contains("lacks", StringComparison.Ordinal)) &&
                 fit.Items.Any(item => item is { Target: PhysicsFitTarget.Place, Name: "j_mune_l" }),
             "physics fit: a chest whose tip has no bone still places its tip when the bone of its last point is missing");
@@ -637,7 +637,7 @@ internal static class PhysicsFitScenarios
                 PhysicsPaths.SlotName(5) == "ears" && PhysicsPaths.SlotName(6) == "neck" && PhysicsPaths.SlotName(7) == "wrists" &&
                 PhysicsPaths.SlotName(8) == "right ring" && PhysicsPaths.SlotName(9) == "left ring",
             "physics fit: slots 5 to 9 are the accessories, named as the game names them");
-        const string ring = @"G:\Penumbra\Some Ring\chara\accessory\a0001\model\c0201a0001_rir.mdl";
+        const string ring = @"D:\Mods\Some Ring\chara\accessory\a0001\model\c0201a0001_rir.mdl";
         var rings = new Dictionary<string, HashSet<string>>
         {
             [ring] = ["chara/accessory/a0001/model/c0201a0001_rir.mdl", "chara/accessory/a0001/model/c0201a0001_ril.mdl"],
@@ -745,7 +745,7 @@ internal static class PhysicsFitScenarios
             $"physics fit: an accessory model that can't be read is left out of the measure ({stopped})");
     }
 
-    /// <summary> A file whose right chest chain bumps into a ball on the left breast's bone, as Ashley's does: a zero-length capsule, or a sphere. </summary>
+    /// <summary> A file whose right chest chain bumps into a ball on the left breast's bone, as some chest mods do: a zero-length capsule, or a sphere. </summary>
     private static PhybFile PartBallFile(Vector3 end = default, bool sphere = false, string ballBone = "j_mune_l", string chainBone = "j_mune_r")
     {
         var file = new PhybFile();
@@ -984,7 +984,7 @@ internal static class PhysicsFitScenarios
         Require(!PhysicsFit.Measure(noBreasts, body, skeleton).BreastTips, "physics fit: genital tips aren't breast tips, so the breast tip choice stays hidden");
     }
 
-    /// <summary> Two breast bones 6.6 cm apart under the spine, X axis forward, with real rest places, as Ashley's skeleton has them. </summary>
+    /// <summary> Two breast bones 6.6 cm apart under the spine, X axis forward, with real rest places, as a real skeleton has them. </summary>
     private static PhysicsSkeleton ChestSkeleton()
     {
         var forward = Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2);
@@ -998,7 +998,7 @@ internal static class PhysicsFitScenarios
         ]);
     }
 
-    /// <summary> Both chest chains, each bumping into a ball on the other breast's bone, as Ashley's do, their tips 14 cm out. </summary>
+    /// <summary> Both chest chains, each bumping into a ball on the other breast's bone, as some chest mods do, their tips 14 cm out. </summary>
     private static PhybFile ChestFile(float ball = 0.025f)
     {
         var file = new PhybFile();

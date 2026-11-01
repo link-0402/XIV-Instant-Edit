@@ -797,7 +797,7 @@ internal static class HandShapeFixture
             new AnimationResource("chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", "chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", "")),
             TestHand(false, false), 0, "");
         var modded = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Mod,
-            new AnimationResource("chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", @"G:\Penumbra\Some Skeleton\skl_c0801b0001.sklb", "", ModName: "Some Skeleton")),
+            new AnimationResource("chara/human/c0801/skeleton/base/b0001/skl_c0801b0001.sklb", @"D:\Mods\Some Skeleton\skl_c0801b0001.sklb", "", ModName: "Some Skeleton")),
             TestHand(false, false), 0, "");
         var rebuild = new RaceRebuild("c0801", new StandardSkeleton(SkeletonStandard.Vanilla, TestHand(false, false), "Game data"));
         check(HandTipCheck.SkeletonName(game, null) == "skl_c0801b0001.sklb from the game" &&
