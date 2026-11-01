@@ -68,6 +68,8 @@ internal enum TimelineGesture : byte
     ScaleKeys,
     /// <summary>Moves one weight point of a bone layer, its frame and value, or the one a press on its row just added.</summary>
     WeightPoint,
+    /// <summary>Moves a bone layer up or down the stack by its name.</summary>
+    LayerOrder,
 }
 
 /// <summary>
@@ -106,6 +108,8 @@ internal sealed class TimelineEditor
     private int[] targets = [];
     // The bone layer a layer gesture drags, and for a key drag the key's frame when it began and the bone a bone key drag moves.
     private string? gestureLayer;
+    // The rows as they were when a layer's name was pressed, so its places stay put while the layer moves through them.
+    private TimelineLayout? orderLayout;
     private int gestureKeyFrame;
     private string? gestureBone;
     // The picks a group key drag or a key box began with, the primary pick a plain click narrows to on release, and the
@@ -576,6 +580,13 @@ internal sealed class TimelineEditor
                 if (!ctrl && !shift)
                     ClearSelection();
                 break;
+            // A layer's own name drags it up or down the stack.
+            case TimelinePart.Legend when hit is { Layer: { } ordered, Bone: null } && MotionEdits.Find(doc, ordered) != null && doc.Motion.Length > 1:
+                SelectLayer(ordered);
+                BeginEdit(TimelineGesture.LayerOrder, [], [], []);
+                gestureLayer = ordered;
+                orderLayout = Layout;
+                break;
             case TimelinePart.Legend or TimelinePart.BoneLane when hit.Layer != null && MotionEdits.Find(doc, hit.Layer) != null:
                 SelectLayer(hit.Layer);
                 gesture = TimelineGesture.Select;
@@ -844,6 +855,11 @@ internal sealed class TimelineEditor
             DragScale(frameAtMouse);
             return;
         }
+        if (gesture == TimelineGesture.LayerOrder)
+        {
+            DragOrder(row);
+            return;
+        }
         var magnet = Snap && !alt;
         if (gesture == TimelineGesture.Scrub)
         {
@@ -926,6 +942,20 @@ internal sealed class TimelineEditor
         }
         SnapGuide = guide == landed ? guide : null;
         History.Preview(next);
+    }
+
+    /// <summary>
+    /// A layer's name dragged to <paramref name="row"/>: the layer takes the place of the one drawn there at the press (its own
+    /// row or a bone row of it), the first place above the layers and the last below them. Off the rows it stays put.
+    /// </summary>
+    private void DragOrder(int row)
+    {
+        if (row < 0 || origin is not { } start || gestureLayer is not { } key || orderLayout is not { LayerCount: > 0 } rows)
+            return;
+        var target = row < rows.MotionFirstRow ? 0
+            : rows.MotionRowAt(row) is { Layer: >= 0 and var at } ? at
+            : rows.LayerCount - 1;
+        History.Preview(MotionEdits.Reorder(start, key, target - MotionEdits.IndexOf(start, key)));
     }
 
     /// <summary>The document a layer drag of <paramref name="delta"/> frames makes, and the frame the dragged edge, fade or key lands on.</summary>
@@ -2250,6 +2280,7 @@ internal sealed class TimelineEditor
         anchors = [];
         targets = [];
         gestureLayer = null;
+        orderLayout = null;
         gestureBone = null;
         gesturePicks = [];
         boxBefore = (null, [], null);

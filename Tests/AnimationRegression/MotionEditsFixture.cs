@@ -19,6 +19,7 @@ internal static class MotionEditsFixture
         Stack(check);
         Angles(check);
         Rows(check);
+        Ordering(check);
         Gestures(check);
         BoneRows(check);
         KeyPicks(check);
@@ -471,6 +472,38 @@ internal static class MotionEditsFixture
         var none = new TimelineEditor(Empty());
         none.SetWidth(440);
         check(none.HitTest(Geometry, At(10, 6)) is { Part: TimelinePart.MotionLane, Layer: null }, "with no layers one empty bone row takes the first");
+    }
+
+    private static void Ordering(Action<bool, string> check)
+    {
+        var editor = Editor();
+        static Vector2 Name(int row) => new(50, 24 + row * 20 + 10);
+        string[] Order() => [.. editor.Document.Motion.Select(layer => layer.Key)];
+        // Rows: m1 in 6 with its hand's row in 7, m2 in 8.
+        editor.Press(editor.HitTest(Geometry, Name(8)));
+        check(editor is { Gesture: TimelineGesture.LayerOrder, SelectedLayer: "m2" }, "pressing a layer's name selects it and starts moving it");
+        editor.Drag(0, row: 7);
+        check(Order().SequenceEqual(["m2", "m1"]), "dragged over a bone row of the layer above, it takes that layer's place");
+        editor.Drag(0, row: 8);
+        check(Order().SequenceEqual(["m1", "m2"]), "the places stay as they were at the press, so dragging back puts it back");
+        editor.Drag(0, row: 2);
+        editor.Drag(0, row: -1);
+        check(Order().SequenceEqual(["m2", "m1"]), "above the layers it goes first, and off the rows it stays put");
+        editor.Release();
+        check(editor.History.UndoCount == 1 && editor.Gesture == TimelineGesture.None, "the drag is one undo step");
+
+        // Now m2 in 6, m1 in 7 with its hand's row in 8.
+        editor.Press(editor.HitTest(Geometry, Name(6)));
+        editor.Drag(0, row: 30);
+        check(Order().SequenceEqual(["m1", "m2"]), "below the layers it goes last");
+        editor.Cancel();
+        check(Order().SequenceEqual(["m2", "m1"]) && editor.History.UndoCount == 1, "Escape puts it back");
+        editor.Press(editor.HitTest(Geometry, Name(6)));
+        editor.Release();
+        check(editor.History.UndoCount == 1, "a click without a drag changes nothing");
+        editor.Press(editor.HitTest(Geometry, Name(8)));
+        check(editor is { Gesture: TimelineGesture.Select, SelectedLayer: "m1" }, "a bone row's name only selects");
+        editor.Release();
     }
 
     private static void BoneRows(Action<bool, string> check)

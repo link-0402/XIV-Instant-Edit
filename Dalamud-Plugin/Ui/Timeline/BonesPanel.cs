@@ -718,7 +718,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.Spacing();
     }
 
-    /// <summary> In the Bones window: undo and redo, and the arrows step the playhead. </summary>
+    /// <summary> In the Bones window: undo and redo, the arrows step the playhead and Space plays or pauses. </summary>
     private void HandleBonesKeys(TimelineEditor current)
     {
         if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
@@ -752,5 +752,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             if (current.Key(TimelineKey.Right, keys.Shift))
                 timelinePreview.PauseForStep();
         }
+        else if (!keys.Ctrl && !keys.Alt && keys.Pressed(ImGuiKey.Space, VirtualKey.SPACE, ctrl: false))
+            timelinePreview.PlayKey();
     }
 }

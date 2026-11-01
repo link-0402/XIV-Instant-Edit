@@ -3204,3 +3204,12 @@ only).
 - [ ] 4 Record the partner: the recorded bones are unscaled, and its Customize+ proportions come back afterwards.
 - [ ] 5 Despawn with unsaved edits, then spawn again: the clip and edits come back; saving works.
 - [ ] 6 Target the partner, then back to you with edits on both: closing the window asks once, naming both.
+
+## Layer order drag and Space (pending)
+
+Drag a bone layer's name up or down to change the order layers apply in; Space plays and pauses the preview.
+
+- [ ] 1 Drag a layer's name past another: it moves as you drag, Live shows the new order, and one Ctrl+Z puts it back.
+- [ ] 2 Drag with a layer's bone rows shown: over a bone row the layer takes that layer's place; Escape mid-drag puts it back.
+- [ ] 3 With a preview shown, Space in the Timeline and in the Bones window pauses and resumes it, and the character doesn't
+  jump. Typing a space in a field still types it.

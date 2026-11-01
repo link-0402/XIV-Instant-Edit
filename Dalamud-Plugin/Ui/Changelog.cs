@@ -107,6 +107,8 @@ internal static class ChangelogCatalog
             Entry("Tween, Push / pull and Relax in the Bones window key the selected bones from the layer's keys either side.", 1),
             Entry("Curves under the lanes show the selected bone's turns and moves over the clip. Drag a key's dot to change one value.", 1),
             Entry("Unfold a layer to see a row per bone, and drag one bone's key on its own.", 1),
+            Entry("Drag a layer's name up or down to change the order layers apply in.", 1),
+            Entry("Space plays and pauses the preview in the Timeline and the Bones window.", 1),
             Highlight("Animations: every animation tool is in the Timeline window now."),
             Entry("The Timeline opens on a start page with what's playing, the game's animations, saved edits, Partners and Record. The Animations button opens it.", 1),
             Entry("Partners: one click spawns a GPose partner with its own collection, Glamourer design and Customize+ profile.", 1),

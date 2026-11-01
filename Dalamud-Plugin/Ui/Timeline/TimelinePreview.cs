@@ -585,6 +585,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             await Task.Delay(ShowPoll, token);
     }
 
+    /// <summary>Space: the play bar's Play/Pause, while that button can be pressed.</summary>
+    public void PlayKey()
+    {
+        if (previewFingerprint != null && PlaybackAvailable(out _))
+            TogglePlay();
+    }
+
     public void TogglePlay()
     {
         // With another actor's clip playing too, Play and Pause act on every one.

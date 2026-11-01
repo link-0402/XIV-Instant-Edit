@@ -207,6 +207,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                     TimelinePart.LayerRight or TimelinePart.LayerFadeIn or TimelinePart.LayerFadeOut or TimelinePart.LayerKey or TimelinePart.BoneKey or
                     TimelinePart.ClipLeft or TimelinePart.ClipRight or TimelinePart.JoinEdge or TimelinePart.SeamEdge or TimelinePart.EaseEdge))
             ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
+        else if (current.Gesture == TimelineGesture.LayerOrder && ImGui.IsMouseDragging(ImGuiMouseButton.Left, Theme.Scaled(3)))
+            ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeNs);
     }
 
     /// <summary>
@@ -624,6 +626,12 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             ImGui.SetTooltip(current.IsUnfolded(folding) ? "Hide the bone rows." : "Show a row per bone, to move one bone's keys on their own.");
             return;
         }
+        if (!readOnly && hit is { Part: TimelinePart.Legend, Layer: { } named, Bone: null } && current.Document.Motion.Length > 1 &&
+            Widgets.HoverDelay("layer-name:" + named))
+        {
+            ImGui.SetTooltip("Drag up or down to change the order layers apply in.");
+            return;
+        }
         if (hit.Part is TimelinePart.BoneLane or TimelinePart.Legend && hit.Bone is { } boneRow &&
             MotionEdits.Find(current.Document, hit.Layer) is { } owner && Widgets.HoverDelay($"bone-row:{owner.Key}:{boneRow}"))
         {
@@ -1025,9 +1033,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
 
     /// <summary>
     /// Shortcuts, only while this window is focused, no text is being typed, no control is active
-    /// and no menu is open. Space is left to the game (it jumps), so it never plays.
+    /// and no menu is open. Space calls <paramref name="togglePlay"/>; taken from the game, it doesn't jump.
     /// </summary>
-    public void HandleKeys(TimelineEditor current)
+    public void HandleKeys(TimelineEditor current, Action togglePlay)
     {
         if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
             return;
@@ -1096,6 +1104,8 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         }
         else if (!ctrl && keys.Pressed(ImGuiKey.F, VirtualKey.F, ctrl: false))
             current.Key(TimelineKey.Fit);
+        else if (!ctrl && !alt && keys.Pressed(ImGuiKey.Space, VirtualKey.SPACE, ctrl: false))
+            togglePlay();
         else if (!ctrl && !alt && keys.Pressed(ImGuiKey.B, VirtualKey.B, ctrl: false))
         {
             if (!readOnly)

@@ -793,7 +793,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
 
         pickers.Draw(editor);
         var playhead = editor.Playhead;
-        canvas.HandleKeys(editor);
+        canvas.HandleKeys(editor, timelinePreview.PlayKey);
         if (editor.Playhead != playhead)
             timelinePreview.PauseForStep();
         // Escape cancels a drag; it must not also close the window.
