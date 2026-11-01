@@ -102,6 +102,12 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         ImGui.Separator();
         foreach (var kind in TimelineWindowViews.LayerKinds)
         {
+            // A link needs its partner: the item opens the link picker.
+            if (kind == MotionLayerKind.Link)
+            {
+                session.LinkPicker?.DrawAddItem($"{MotionEdits.KindName(kind)} layer", session.ReadOnly, TimelineWindowViews.LayerKindHint(kind));
+                continue;
+            }
             if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer"))
                 current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
             if (ImGui.IsItemHovered())

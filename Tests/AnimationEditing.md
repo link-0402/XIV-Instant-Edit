@@ -3205,6 +3205,27 @@ only).
 - [ ] 5 Despawn with unsaved edits, then spawn again: the clip and edits come back; saving works.
 - [ ] 6 Target the partner, then back to you with edits on both: closing the window asks once, naming both.
 
+## Partner links (pending)
+
+A Link layer joins a bone of your clip to a bone of a partner's clip, so an edit that moves one moves the other. Spec:
+docs/superpowers/specs/2026-11-01-partner-link-layer-design.md (local only).
+
+- [ ] 1 With no partner clip open, Add > Link layer is greyed with "Open a clip on a partner first." Open a partner mod's
+  two halves, one on you and one on the partner, with Live on both: the item opens the Link layer picker.
+- [ ] 2 Select your right hand and open the picker: Bone is the right hand, Partner bone the same bone. n_hara and the
+  bones right under it (other than the hips) are greyed. Pick the partner's left hand and Link: "Link: Aria Rose" is
+  added here, and "Link: You" on the partner's clip, each one undo step in its own clip.
+- [ ] 3 Hand-holding: add an Offset on the partner's hand above its link: your hand follows and the hands stay together.
+  Then the same from your side.
+- [ ] 4 A fine-tune: an Offset below the link on one clip moves only that actor's hand.
+- [ ] 5 Hip contact: link the hips both ways and drag the partner's hips: your hips follow and your feet stay planted.
+  Untick a foot under Hold: that foot goes with the hips.
+- [ ] 6 Delete the partner's link layer: yours shows Link back; its hover says the partner doesn't follow yet, and a
+  click adds the link back.
+- [ ] 7 Despawn the partner: the state line says it isn't spawned, your Live shows your clip without the link, and the
+  save footer says the partner's edits aren't in this save. Spawn again: the link is back.
+- [ ] 8 Save both halves to test copies and play them in game: they play as Live showed them.
+
 ## Layer order drag and Space (pending)
 
 Drag a bone layer's name up or down to change the order layers apply in; Space plays and pauses the preview.

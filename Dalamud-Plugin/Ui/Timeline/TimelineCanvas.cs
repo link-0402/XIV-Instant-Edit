@@ -701,7 +701,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     }
 
     /// <summary> A bone layer's or key's tooltip: what it is, where it lies and what dragging the part under the pointer does. </summary>
-    private static void DrawLayerTooltip(MotionLayer layer, TimelineHit hit, bool readOnly)
+    private void DrawLayerTooltip(MotionLayer layer, TimelineHit hit, bool readOnly)
     {
         using var tooltip = ImRaii.Tooltip();
         ImGui.TextColored(Theme.Label, layer.Name);
@@ -727,7 +727,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         ImGui.TextUnformatted($"From {TimelineWindowViews.FrameText(layer.Start)} to {TimelineWindowViews.FrameText(layer.End)}");
         if (layer.FadeIn > 0 || layer.FadeOut > 0)
             ImGui.TextUnformatted($"Fades in {TimelineText.Seconds(layer.FadeIn)}, out {TimelineText.Seconds(layer.FadeOut)}");
-        ImGui.TextUnformatted(TimelineWindowViews.LayerContent(layer));
+        ImGui.TextUnformatted(TimelineWindowViews.LayerContent(layer, session.PartnerName));
         if (readOnly)
             return;
         // An anchored layer's inner edge sets its length: the left one, or for a close loop placed After the right one.
@@ -796,6 +796,12 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         {
             foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
             {
+                // A link needs its partner: the item opens the link picker.
+                if (kind == MotionLayerKind.Link)
+                {
+                    session.LinkPicker?.DrawAddItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer", readOnly, TimelineWindowViews.LayerKindHint(kind));
+                    continue;
+                }
                 if (ImGui.MenuItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer", "", false, !readOnly))
                     AddLayer(current, kind);
                 if (ImGui.IsItemHovered())

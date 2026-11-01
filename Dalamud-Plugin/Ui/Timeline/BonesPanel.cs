@@ -645,6 +645,12 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         else if (layer.Kind == MotionLayerKind.Pin)
             // Its own hint says what to select; with the bones on the character the gizmo choice says what the gizmo waits for.
             boneEditor.DrawPinButtons(current, layer, skeleton, loaded, readOnly);
+        else if (layer.Kind == MotionLayerKind.Link)
+        {
+            // A link follows its partner: no keys here; the gizmo says to edit a layer above.
+            LinkFields.DrawState(layer, session);
+            boneEditor.DrawGizmoWaits(layer, current.Playhead, skeleton);
+        }
         else
             boneEditor.Draw(current, layer, skeleton, loaded, readOnly);
         if (BoneEditor.ShowsBreakdown(layer.Kind))
@@ -674,6 +680,12 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             return;
         foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
         {
+            // A link needs its partner: the item opens the link picker, in the Timeline window.
+            if (kind == MotionLayerKind.Link)
+            {
+                session.LinkPicker?.DrawAddItem($"{MotionEdits.KindName(kind)} layer", readOnly, TimelineWindowViews.LayerKindHint(kind));
+                continue;
+            }
             if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer", "", false, !readOnly))
                 current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
             if (ImGui.IsItemHovered())

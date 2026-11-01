@@ -122,6 +122,12 @@ internal sealed class TimelineSession
     /// <summary>A link track of this workspace is being built or waits to be: a save or Preview start waits for it.</summary>
     public bool LinksBuilding { get; set; }
 
+    /// <summary>A link's partner as texts name it, by preset: "You" for null, the partner's name, null once its preset is gone. Set by the workspace.</summary>
+    public Func<Guid?, string?> PartnerName { get; set; } = preset => preset == null ? "You" : null;
+
+    /// <summary>The Link layer picker the Add menus open and the link panel asks for partners; set by the workspace.</summary>
+    public LinkPicker? LinkPicker { get; set; }
+
     /// <summary>
     /// The content of the partner tracks the clip's file holds its active link layers baked with, by layer key (<see cref="LinkTrack.Print"/>):
     /// from the last save in this window, or the saved edit Edit again opened; empty before either.

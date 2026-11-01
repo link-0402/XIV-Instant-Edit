@@ -30,6 +30,26 @@ internal sealed class TimelineTexts(TimelineSession session)
     /// <summary>How many events keeping the effects going changes.</summary>
     public int EffectEvents { get; private set; }
 
+    // The link line, for the document and the link states it was made for: states change without the document changing.
+    private (TimelineDocument? Document, IReadOnlyDictionary<string, LinkState>? States, string? Text) linkOff;
+
+    /// <summary>
+    /// The save footer's line when a link of the open document is off now, so the save leaves that partner's edits out
+    /// (<see cref="TimelineWindowViews.LinkOffWarning"/>); null when none is.
+    /// </summary>
+    public string? LinkOffWarning
+    {
+        get
+        {
+            if (session.Editor?.Document is not { } doc)
+                return null;
+            var states = session.LinkStates;
+            if (!ReferenceEquals(linkOff.Document, doc) || !ReferenceEquals(linkOff.States, states))
+                linkOff = (doc, states, TimelineWindowViews.LinkOffWarning(doc, states, session.PartnerName));
+            return linkOff.Text;
+        }
+    }
+
     /// <summary> Makes the texts again for the next document drawn, as after a clip is read. </summary>
     public void Forget() => labelDocument = null;
 

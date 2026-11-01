@@ -71,6 +71,9 @@ internal interface ITimelineHost
     /// <paramref name="expectedPath"/> at <paramref name="expectedBinding"/>; dropped otherwise.
     /// </summary>
     void AddLinkBack(WorkspaceKey partner, MotionLink link, string name, string expectedPath, int expectedBinding);
+
+    /// <summary>The actor of a workspace by its preset, as link texts name it: "You" for null, the partner's name, null once its preset is gone.</summary>
+    string? ActorName(Guid? preset);
 }
 
 /// <summary>
@@ -94,6 +97,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     private readonly EffectPlaceEditor effectPlace;
     private readonly SoundFiles soundFiles;
     private readonly TimelinePickers pickers;
+    private readonly LinkPicker linkPicker;
     private readonly SoundInspector soundInspector;
     private readonly TimelinePreview timelinePreview;
     private readonly PlayBar playBar;
@@ -176,6 +180,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
         playBar = new PlayBar(session, timelinePreview);
         posing = new BonePosing(session, decode);
+        // The Add menus open the link picker, and link texts name partners, through the session.
+        session.PartnerName = host.ActorName;
+        session.LinkPicker = linkPicker = new LinkPicker(session, posing, host, key);
         boneEditor = new BoneEditor(session, decode, posing, this);
         var poseOptions = new PoseKeyOptions(posing);
         poseBrowser = new PoseBrowser(session, decode, posing, poseOptions, host.Thumbnails);
@@ -861,6 +868,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         footerHeight = Math.Max(1, ImGui.GetCursorPosY() - footerStart);
 
         pickers.Draw(editor);
+        linkPicker.Draw(editor);
         var playhead = editor.Playhead;
         canvas.HandleKeys(editor, timelinePreview.PlayKey);
         if (editor.Playhead != playhead)

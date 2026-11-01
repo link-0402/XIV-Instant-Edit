@@ -38,7 +38,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             if (selectionLayer != layer.Key)
             {
                 selectionLayer = layer.Key;
-                if (posing.Selection.Count == 0 && (layer.Keys.SelectMany(key => key.Bones.Keys).FirstOrDefault() ?? layer.Bones.FirstOrDefault() ?? layer.Pins.FirstOrDefault()?.Bone) is { } first &&
+                if (posing.Selection.Count == 0 && (layer.Keys.SelectMany(key => key.Bones.Keys).FirstOrDefault() ?? layer.Bones.FirstOrDefault() ?? layer.Pins.FirstOrDefault()?.Bone ?? layer.Link?.Bone) is { } first &&
                     posing.BoneTree(skeleton).Index.ContainsKey(first))
                     posing.Selection.Only(first);
             }
@@ -110,7 +110,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         hands.DrawFields(current, layer, hand);
                     else if (reset)
                         DrawAxes(current, layer);
-                    else if (layer.Kind is not (MotionLayerKind.Pin or MotionLayerKind.LookAt))
+                    else if (layer.Kind is not (MotionLayerKind.Pin or MotionLayerKind.LookAt or MotionLayerKind.Link))
                         DrawComponents(current, layer);
                     if (layer.Kind == MotionLayerKind.Swing)
                         SwingFields.Draw(current, layer);
@@ -122,7 +122,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         LookFields.Draw(current, layer, skeleton);
                     // A look that follows a bone has no keys to go between.
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                        MotionLayerKind.Smooth or MotionLayerKind.Noise) && layer.Look?.Follow == null)
+                        MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Link) && layer.Look?.Follow == null)
                         DrawInterpolation(current, layer);
                 }
             }
@@ -192,6 +192,12 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 }
             }
         }
+        else if (layer.Kind == MotionLayerKind.Link)
+        {
+            LinkFields.Draw(current, layer, skeleton, posing.BoneTree(skeleton).Index, session, readOnly);
+            ImGui.Spacing();
+            DrawPosing(layer);
+        }
         else if (layer.Kind == MotionLayerKind.Pin)
         {
             DrawPins(current, layer, skeleton, loaded, readOnly);
@@ -237,9 +243,10 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
 
     /// <summary>
     /// One line on the bones the layer works on: how many it is limited to, keys, copies, turns, swings, wobbles or smooths,
-    /// or how many pins it has. Null for a hand shape or a root reset, whose bones are set by what they do.
+    /// or how many pins it has; for a link the bones it joins, its partner named by <paramref name="nameOf"/>. Null for a hand shape or
+    /// a root reset, whose bones are set by what they do.
     /// </summary>
-    public static string? Summary(MotionLayer layer)
+    public static string? Summary(MotionLayer layer, Func<Guid?, string?>? nameOf = null)
     {
         if (layer.Fix?.Kind is MotionFixKind.HandShape or MotionFixKind.ResetRoot)
             return null;
@@ -254,6 +261,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             MotionLayerKind.Noise => $"Wobbles {Count(bones, "bone")}",
             MotionLayerKind.Swing => $"Swings {Count(bones, "bone")}",
             MotionLayerKind.Smooth => bones == 0 ? "Smooths every bone" : $"Smooths {Count(bones, "bone")}",
+            MotionLayerKind.Link => layer.Link is { } link ? TimelineWindowViews.LinkSummary(link, nameOf ?? (_ => null)) : null,
             _ => null,
         };
     }
@@ -275,7 +283,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     {
         // A layer's record changes with every edit, so the same one keeps its line.
         if (!ReferenceEquals(summaryShown.Layer, layer))
-            summaryShown = (layer, Summary(layer));
+            summaryShown = (layer, Summary(layer, session.PartnerName));
         if (summaryShown.Text is { } summary)
         {
             ImGui.AlignTextToFramePadding();
@@ -617,6 +625,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         var smooth = layer.Fix?.Kind == MotionFixKind.SmoothJitter;
         TimelineUi.Fact(smooth ? "Strength" : layer.Kind switch
         {
+            MotionLayerKind.Link => TimelineWindowViews.LinkPullLabel,
             MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
                 MotionLayerKind.LookAt => "Strength",
             MotionLayerKind.Amplitude => "Movement",
@@ -630,6 +639,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(layer.Kind switch
             {
+                MotionLayerKind.Link => TimelineWindowViews.LinkPullTip,
                 MotionLayerKind.Offset => "How much of the keyed offsets applies. Ctrl+click to type.",
                 MotionLayerKind.Amplitude => "100% keeps the motion. Less calms it toward the average pose, more exaggerates it. Ctrl+click to type.",
                 MotionLayerKind.Symmetry => "How far the bones blend toward the other side's motion. Ctrl+click to type.",

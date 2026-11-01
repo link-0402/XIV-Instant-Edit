@@ -157,7 +157,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var (warning, colour) = problem != null ? (problem, Theme.Warning)
             : saveError != null ? (saveError, Theme.Error)
             : saveMessage == AnimationEditService.SavedSkeletonTooSmall ? (saveMessage, Theme.Warning)
-            : (texts.PastEndWarning ?? texts.LayerBonesWarning ?? LeftOutWarning(clip, doc, repair), Theme.Warning);
+            : (texts.PastEndWarning ?? texts.LayerBonesWarning ?? texts.LinkOffWarning ?? LeftOutWarning(clip, doc, repair), Theme.Warning);
         if (warning != null)
         {
             using var wrap = ImRaii.TextWrapPos(0f);

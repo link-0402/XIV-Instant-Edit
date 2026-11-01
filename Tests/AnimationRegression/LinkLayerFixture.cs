@@ -29,6 +29,39 @@ internal static class LinkLayerFixture
         AddLinks(check);
         Wiring(check);
         Views(check);
+        Picker(check);
+    }
+
+    /// <summary>The link picker's bones and the link back it asks for.</summary>
+    private static void Picker(Action<bool, string> check)
+    {
+        var body = HipDragFixture.Body();
+        var index = MotionEvaluator.Index(body);
+        bool Linkable(string bone) => LinkPicker.Linkable(body, index, index[bone]);
+        check(!Linkable("n_root") && !Linkable(PinChains.Body) && !Linkable("j_sebo_a"),
+            "picker: the root, the body and a bone right under it other than the hips can't be linked");
+        check(Linkable(PinChains.Hips) && Linkable("j_te_r") && Linkable("j_sebo_b") && Linkable("j_asi_a_l") && Linkable(PinChains.FootL),
+            "picker: the hips, a hand, the back and the legs can be linked");
+        var bones = LinkPicker.Linkable(body);
+        check(bones.Length == body.Bones.Length && Enumerable.Range(0, body.Bones.Length).All(b => bones[b] == LinkPicker.Linkable(body, index, b)) &&
+              ReferenceEquals(LinkPicker.Linkable(body), bones), "picker: each bone's answer, kept for the skeleton");
+        // Every bone the picker offers passes the save's checks.
+        check(Enumerable.Range(0, body.Bones.Length).Where(b => bones[b]).All(b =>
+            {
+                try
+                {
+                    MotionEvaluator.CheckBones([Layer(Hand() with { Bone = body.Bones[b].Name, Top = null })], body);
+                    return true;
+                }
+                catch (InvalidDataException)
+                {
+                    return false;
+                }
+            }), "picker: every linkable bone passes the link checks");
+        var back = LinkPicker.Back(Hand(), null, "chara/self.pap", 2);
+        check(back.Bone == "j_te_l" && back.PartnerBone == "j_te_r" && back.Partner == null && back.PartnerClip == "chara/self.pap" && back.PartnerBinding == 2 &&
+              back.HoldTurn && back.Top == null && back.Holds.IsEmpty, "picker: a link back swaps the bones and points at this clip");
+        check(MotionLinks.LinkBack([Layer(back)], Hand(), null) != null, "picker: the partner finds the link back it asked for");
     }
 
     /// <summary>A link layer's name, look and texts, and how the edits, the Bones window and the views treat the kind.</summary>

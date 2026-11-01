@@ -266,6 +266,12 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
 
     bool ITimelineHost.HasLinkPartner(WorkspaceKey self) => links.HasPartner(self);
 
+    // From the presets, not the workspaces' services, which a preset without a workspace would build.
+    string? ITimelineHost.ActorName(Guid? preset) =>
+        preset is not { } id ? "You"
+        : partners?.Store.Presets.FirstOrDefault(known => known.Id == id) is { } stored ? partners.Find(id)?.Name ?? stored.Name
+        : null;
+
     void ITimelineHost.AddLinkBack(WorkspaceKey partner, MotionLink link, string name, string expectedPath, int expectedBinding) =>
         linkBacks.Add((partner, link, name, expectedPath, expectedBinding));
 

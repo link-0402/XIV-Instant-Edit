@@ -114,6 +114,7 @@ internal static class ChangelogCatalog
             Entry("The Timeline opens on a start page with what's playing, the game's animations, saved edits, Partners and Record. The Animations button opens it.", 1),
             Entry("Partners: one click spawns a GPose partner with its own collection, Glamourer design and Customize+ profile.", 1),
             Entry("Partners: target a partner in GPose to edit its half of the animation. Both clips stay open and play on one playhead.", 1),
+            Entry("Link layers join a bone to a partner's, such as two held hands or the hips, so an edit that moves one moves the other.", 1),
             Entry("Load any animation onto your GPose character from the timeline: emotes, idles, ground and chair sits and bed poses by number, every movement track, expressions, or anything else the game has.", 1),
             Entry("Idles, sits and bed poses also list the start that plays before each one.", 1),
             Entry("The loader and the preview won't play an animation that moves bones your character's skeleton lacks, which could crash the game.", 1),
