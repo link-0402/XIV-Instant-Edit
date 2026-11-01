@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc.Exceptions;
 using Dalamud.Plugin.Services;
@@ -71,6 +72,27 @@ internal sealed class PenumbraIpc : IDisposable
 
     internal PenumbraApiEc ResolvePath(Guid collection, string gamePath, out string? resolved)
         => new ResolvePath(_pi).Invoke(collection, gamePath, out resolved);
+
+    // The object GetCollectionTargetAsync last found using each collection, for ResolveThroughObject.
+    private readonly ConcurrentDictionary<Guid, int> _collectionObjects = new();
+
+    private ResolveGameObjectPath? _resolveGameObjectPath;
+
+    /// <summary>
+    /// What <paramref name="collection"/> resolves <paramref name="gamePath"/> to, asked through the object
+    /// <see cref="GetCollectionTargetAsync"/> last found using it, while it still does; null without one. For a temporary
+    /// collection (another plugin's, or a test's), which <see cref="ResolvePath"/> answers CollectionMissing. Framework thread.
+    /// </summary>
+    internal string? ResolveThroughObject(Guid collection, string gamePath)
+    {
+        if (!_collectionObjects.TryGetValue(collection, out var index))
+            return null;
+        var (valid, _, (id, _)) = _getCollectionForObject.Invoke(index);
+        if (!valid || id != collection)
+            return null;
+        var resolved = (_resolveGameObjectPath ??= new ResolveGameObjectPath(_pi)).Invoke(gamePath, index);
+        return string.IsNullOrWhiteSpace(resolved) ? null : resolved;
+    }
 
     internal string GetMetaManipulations(int objectIndex) => new GetMetaManipulations(_pi).Invoke(objectIndex);
 
@@ -152,10 +174,12 @@ internal sealed class PenumbraIpc : IDisposable
             try
             {
                 var collection = _getCollectionForObject.Invoke(gameObjectIndex);
-                return collection.ObjectValid && collection.EffectiveCollection.Id != Guid.Empty &&
-                       !string.IsNullOrWhiteSpace(collection.EffectiveCollection.Name)
-                    ? new PenumbraCollectionTarget(collection.EffectiveCollection.Id, collection.EffectiveCollection.Name)
-                    : null;
+                if (!collection.ObjectValid || collection.EffectiveCollection.Id == Guid.Empty ||
+                    string.IsNullOrWhiteSpace(collection.EffectiveCollection.Name))
+                    return null;
+                if (_collectionObjects.Count >= 64) _collectionObjects.Clear();
+                _collectionObjects[collection.EffectiveCollection.Id] = gameObjectIndex;
+                return new PenumbraCollectionTarget(collection.EffectiveCollection.Id, collection.EffectiveCollection.Name);
             }
             catch (Exception e)
             {

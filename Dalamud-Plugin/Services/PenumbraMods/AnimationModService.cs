@@ -79,6 +79,9 @@ internal sealed class AnimationModService
         return await _framework.RunOnFrameworkThread(() =>
         {
             var result = _ipc.ResolvePath(collection, gamePath, out var resolved);
+            // ResolvePath knows saved collections only: a temporary one (another plugin's, a test partner's) is asked through its object.
+            if (result == PenumbraApiEc.CollectionMissing && _ipc.ResolveThroughObject(collection, gamePath) is { } through)
+                return through;
             if (result != PenumbraApiEc.Success || string.IsNullOrWhiteSpace(resolved))
                 throw new IOException($"Penumbra could not resolve {gamePath} ({result}).");
             return resolved;
