@@ -244,7 +244,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     internal void PoseBrowserClosed() => poseBrowser.Closed();
 
     /// <summary>Reads whether the live character has fingertip bones; the plugin sets it once the physics builder exists.</summary>
-    internal Func<CancellationToken, Task<HandTipFacts>>? HandTips { get => session.HandTips; set => session.HandTips = value; }
+    internal Func<ushort?, CancellationToken, Task<HandTipFacts>>? HandTips { get => session.HandTips; set => session.HandTips = value; }
 
     /// <summary>A drag runs on the lanes, which Escape cancels: Escape must not also close the window then.</summary>
     internal bool HoldsEscape { get; private set; }

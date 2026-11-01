@@ -43,7 +43,7 @@ internal sealed class TimelineSession
     public PreviewFiles? Files { get; init; }
 
     /// <summary>Reads whether the live character's skeleton and hand model have fingertip bones; set by the plugin, null without a game.</summary>
-    public Func<CancellationToken, Task<HandTipFacts>>? HandTips { get; set; }
+    public Func<ushort?, CancellationToken, Task<HandTipFacts>>? HandTips { get; set; }
 
     /// <summary>The open startup's loop read for Match startup to loop, shared by the Add menus and the layer panel.</summary>
     public LoopPoseReader LoopPose { get; }
@@ -167,6 +167,24 @@ internal sealed class TimelineSession
         var loop = current.Capture.Clip;
         var resolution = LatestMatch(current.Capture.Id, loop, false);
         return ReferenceEquals(resolution, loop.Resolution) ? current.Capture : current.Capture with { Clip = loop with { Resolution = resolution } };
+    }
+
+    /// <summary>
+    /// <paramref name="capture"/> pointed at another actor: a respawned partner is a new object, and the save checks the actor the
+    /// capture names. Its clip, Id and collection stay, so a preset whose collection changed is still refused.
+    /// </summary>
+    public static AnimationCapture Retargeted(AnimationCapture capture, ushort index, ulong actorId, long address) =>
+        capture with { ActorIndex = index, ActorId = actorId, ActorAddress = address };
+
+    /// <summary>The open clip, its expression's face too, points at the actor now at <paramref name="index"/> (a respawn).</summary>
+    public void Retarget(ushort index, ulong actorId, long address)
+    {
+        if (Source is not { } current)
+            return;
+        var moved = current with { Capture = Retargeted(current.Capture, index, actorId, address) };
+        if (moved.Face is { } face)
+            moved = moved with { Face = face with { Capture = Retargeted(face.Capture, index, actorId, address) } };
+        Source = moved;
     }
 
     /// <summary>The object index of the workspace's actor in GPose; null outside it or when its actor isn't there.</summary>

@@ -197,8 +197,10 @@ internal sealed class HandShapePanel(TimelineSession session, BonePosing posing)
         checkKey = key;
         var token = cancel.Token;
         var read = session.HandTips!;
+        // The workspace's actor: a partner's hands are its own.
+        var actor = session.ActorIndex;
         // Off the draw thread: from here the framework hop would run inline and the mesh reads after it in this frame.
-        checking = Task.Run(() => read(token), token);
+        checking = Task.Run(() => read(actor, token), token);
     }
 
     /// <summary>Takes a finished check as the result for the clip and character it was started for; failure or cancellation is no result.</summary>

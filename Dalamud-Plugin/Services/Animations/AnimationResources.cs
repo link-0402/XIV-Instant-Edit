@@ -200,7 +200,7 @@ internal sealed class AnimationResources(PenumbraIpc penumbra, AnimationModServi
             reads.ToImmutableDictionary(r => r.Resource.GamePath, r => r.Bytes, StringComparer.OrdinalIgnoreCase));
         if (destination != AnimationDestination.NewMod) return manifest;
         // A new mod carries the collection's metadata that applies to its clips.
-        var metadata = AnimationMetadata.Decode(await animationMods.AnimationMetadataAsync(capture.CollectionId));
+        var metadata = AnimationMetadata.Decode(await animationMods.AnimationMetadataAsync(capture.CollectionId, capture.ActorIndex));
         return manifest with { ManipulationsJson = AnimationMetadata.Applicable(metadata, manifest.Files.Keys).ToJsonString() };
     }
 }

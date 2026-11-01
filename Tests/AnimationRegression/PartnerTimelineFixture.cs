@@ -15,6 +15,18 @@ internal static class PartnerTimelineFixture
         Choice(check);
         SameFile(check);
         Histories(check);
+        Retarget(check);
+    }
+
+    /// <summary>A respawned partner is a new actor: the open clip's capture is pointed at it, so the save checks the actor there now.</summary>
+    private static void Retarget(Action<bool, string> check)
+    {
+        var heard = Heard("aria", 0x2000000CA, 202) with { CollectionId = Guid.NewGuid(), ActorAddress = 0x1000 };
+        var moved = TimelineSession.Retargeted(heard, 203, 0x2000000CB, 0x2000);
+        check(moved is { ActorIndex: 203, ActorId: 0x2000000CB, ActorAddress: 0x2000 } && moved.Id == heard.Id && moved.Clip == heard.Clip,
+            "respawn: the capture names the new actor and stays the same clip");
+        check(moved.CollectionId == heard.CollectionId,
+            "respawn: the collection stays the one heard, so a preset whose collection changed is still refused when saving");
     }
 
     private static AnimationCapture Heard(string id, ulong actor, ushort index)

@@ -232,12 +232,20 @@ internal sealed class ModActivation
     }
 
     /// <summary>Redraw the local player and the currently spawned entities they own.</summary>
-    internal string? RedrawPlayerOwnedEntitiesOnFramework()
+    internal string? RedrawPlayerOwnedEntitiesOnFramework() => RedrawPlayerOwnedEntitiesOnFramework(null);
+
+    /// <summary>
+    /// Redraw the local player and the currently spawned entities they own, and <paramref name="also"/>, a GPose actor such as
+    /// a partner whose clip was saved.
+    /// </summary>
+    internal string? RedrawPlayerOwnedEntitiesOnFramework(ushort? also)
     {
         if (_objects.LocalPlayer is not { Address: not 0 } localPlayer)
             return "The local player could not be found; player-owned redraw was skipped.";
 
         var targets = new HashSet<ushort> { localPlayer.ObjectIndex };
+        if (also is >= 200 and var actor && _objects[actor] is { Address: not 0 })
+            targets.Add(actor);
         var warnings = new List<string>();
         try
         {

@@ -95,12 +95,13 @@ internal sealed class AnimationModService
     internal Task<string> AnimationModRootAsync() => _framework.RunOnFrameworkThread(() =>
         _getModDirectory.Invoke() ?? throw new IOException("Penumbra has no mod directory."));
 
-    internal Task<string> AnimationMetadataAsync(Guid collection) => _framework.RunOnFrameworkThread(() =>
+    /// <summary>The meta manipulations the clip's actor at <paramref name="objectIndex"/> gets from <paramref name="collection"/>, for a new mod.</summary>
+    internal Task<string> AnimationMetadataAsync(Guid collection, ushort objectIndex) => _framework.RunOnFrameworkThread(() =>
     {
-        var player = _objects.LocalPlayer ?? throw new IOException("The player is unavailable.");
-        var target = _getCollectionForObject.Invoke(player.ObjectIndex);
+        if (_objects[objectIndex] is not { Address: not 0 }) throw new IOException("The player is unavailable.");
+        var target = _getCollectionForObject.Invoke(objectIndex);
         if (!target.ObjectValid || target.EffectiveCollection.Id != collection) throw new IOException("The player collection changed.");
-        return _ipc.GetMetaManipulations(player.ObjectIndex);
+        return _ipc.GetMetaManipulations(objectIndex);
     });
 
     internal async Task CheckAnimationModRootAsync(string mod, string root)
@@ -161,9 +162,10 @@ internal sealed class AnimationModService
         return null;
     }
 
-    internal Task RedrawAnimationAsync() => _framework.RunOnFrameworkThread(() =>
+    /// <summary>Redraws you and what you own, and <paramref name="actor"/>, the clip's GPose actor, such as a partner.</summary>
+    internal Task RedrawAnimationAsync(ushort? actor = null) => _framework.RunOnFrameworkThread(() =>
     {
-        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework(actor) is { } error) throw new IOException(error);
     });
 
     /// <summary>
@@ -193,7 +195,7 @@ internal sealed class AnimationModService
         }
     }
 
-    internal Task DisableAnimationModAsync(AnimationEditJournal journal) => _framework.RunOnFrameworkThread(() =>
+    internal Task DisableAnimationModAsync(AnimationEditJournal journal, ushort? actor = null) => _framework.RunOnFrameworkThread(() =>
     {
         if (!_getModList.Invoke().ContainsKey(journal.ModDirectory)) return;
         var registered = RegisteredAnimationModRootOnFramework(journal.ModDirectory);
@@ -202,13 +204,13 @@ internal sealed class AnimationModService
         var result = _trySetMod.Invoke(journal.Request.Capture.CollectionId, journal.ModDirectory, false, journal.ModDirectory);
         if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
             throw new IOException($"Penumbra could not disable the edited mod ({result}).");
-        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } error) throw new IOException(error);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework(actor) is { } error) throw new IOException(error);
     });
 
-    internal Task ReloadAnimationSourcesAsync(IEnumerable<string> mods) => _framework.RunOnFrameworkThread(() =>
+    internal Task ReloadAnimationSourcesAsync(IEnumerable<string> mods, ushort? actor = null) => _framework.RunOnFrameworkThread(() =>
     {
         foreach (var mod in mods.Distinct())
             if (_activation.ReloadModOnFramework(mod) is { Success: false } error) throw new IOException(error.Message);
-        if (_activation.RedrawPlayerOwnedEntitiesOnFramework() is { } warning) throw new IOException(warning);
+        if (_activation.RedrawPlayerOwnedEntitiesOnFramework(actor) is { } warning) throw new IOException(warning);
     });
 }

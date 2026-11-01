@@ -422,17 +422,17 @@ internal sealed class PhysicsBuilderService : IDisposable
     }
 
     /// <summary>
-    /// Whether your character can bend its fingertips: its live skeleton holds each hand's tip bones and a
-    /// drawn model holding that hand's bones is weighted to them. A failure to read is in
-    /// <see cref="HandTipFacts.Problem"/>; this never throws.
+    /// Whether your character, or in GPose the GPose character at <paramref name="actor"/> (a partner), can bend its fingertips:
+    /// its live skeleton holds each hand's tip bones and a drawn model holding that hand's bones is weighted to them. A failure to
+    /// read is in <see cref="HandTipFacts.Problem"/>; this never throws.
     /// </summary>
-    public async Task<HandTipFacts> ReadHandTipsAsync(CancellationToken token)
+    public async Task<HandTipFacts> ReadHandTipsAsync(ushort? actor, CancellationToken token)
     {
         try
         {
             var (capture, resolved) = await framework.RunOnFrameworkThread(() =>
             {
-                var (body, problem) = PhysicsLiveReader.ReadBody(objects, clientState.IsGPosing);
+                var (body, problem) = PhysicsLiveReader.ReadBody(objects, clientState.IsGPosing, actor);
                 if (body is null)
                     throw new IOException(problem ?? "Your character can't be read.");
                 return (body, penumbra.GetResourcePaths((ushort)body.ObjectIndex));

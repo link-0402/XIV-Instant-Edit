@@ -40,7 +40,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private (Action Draw, Func<int> Playing)? playingNow;
     private Action? partnersPage;
     private (Configuration Config, Action Save)? poseFolders;
-    private Func<CancellationToken, Task<HandTipFacts>>? handTips;
+    private Func<ushort?, CancellationToken, Task<HandTipFacts>>? handTips;
     private bool disposed;
 
     internal TimelineWindow(WorkspaceServiceFactory services, string? animationError, IFramework framework, ITextureProvider textures, IKeyState keyState)
@@ -216,7 +216,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     internal void AttachListening(Func<bool> mainWindowListens) => mainListens = mainWindowListens;
 
     /// <summary>Reads whether the live character has fingertip bones; the plugin sets it once the physics builder exists.</summary>
-    internal Func<CancellationToken, Task<HandTipFacts>>? HandTips
+    internal Func<ushort?, CancellationToken, Task<HandTipFacts>>? HandTips
     {
         get => handTips;
         set

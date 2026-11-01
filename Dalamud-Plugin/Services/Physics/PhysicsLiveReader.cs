@@ -53,13 +53,18 @@ internal static unsafe class PhysicsLiveReader
     /// </summary>
     private static readonly int[] ModelSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-    /// <summary> The local player's drawn body and live pose, or why they can't be read. </summary>
-    public static (PhysicsBodyCapture? Capture, string? Problem) ReadBody(IObjectTable objects, bool posing)
+    /// <summary>
+    /// The local player's drawn body and live pose, or why they can't be read. In GPose <paramref name="actor"/>, a GPose
+    /// character such as a partner, is read in its place: its skeleton and drawn models (the character facts stay yours).
+    /// </summary>
+    public static (PhysicsBodyCapture? Capture, string? Problem) ReadBody(IObjectTable objects, bool posing, ushort? actor = null)
     {
         var (character, problem) = ReadLocalPlayer(objects, posing);
         if (character is null || objects.LocalPlayer is not ICharacter local)
             return (null, problem ?? "Your character isn't loaded.");
-        var player = Shown(objects, local, posing);
+        var player = posing && actor is >= 200 and var index && objects[index] is ICharacter { Address: not 0 } posed
+            ? posed
+            : Shown(objects, local, posing);
         var drawObject = ((Character*)player.Address)->GetCharacterBase();
         if (drawObject == null)
             return (null, "Your character isn't drawn.");

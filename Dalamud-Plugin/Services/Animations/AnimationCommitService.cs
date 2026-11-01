@@ -317,7 +317,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             if (journal.Request.Destination == AnimationDestination.NewMod)
             {
                 var metadata = AnimationMetadata.Applicable(
-                    AnimationMetadata.Decode(await animationMods.AnimationMetadataAsync(journal.Request.Capture.CollectionId)),
+                    AnimationMetadata.Decode(await animationMods.AnimationMetadataAsync(journal.Request.Capture.CollectionId, journal.Request.Capture.ActorIndex)),
                     journal.Files.Where(file => file.AddedFor == null).Select(file => file.GamePath)).ToJsonString();
                 if (metadata != manifest.ManipulationsJson) throw new IOException("Applicable collection metadata changed during baking. Refresh and retry.");
             }
@@ -403,7 +403,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 await VerifyActivationAsync(journal.Files,
                     path => animationMods.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, path),
                     file => RequireHash(file.Target, file.AfterHash),
-                    animationMods.RedrawAnimationAsync);
+                    () => animationMods.RedrawAnimationAsync(journal.Request.Capture.ActorIndex));
                 if (journal.Request.Destination == AnimationDestination.NewMod) journal.ModFileHashes = ModHashes(journal.ModRoot);
                 journal.State = "Activated"; store.Save(journal);
             }
@@ -518,7 +518,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                     throw new IOException("The created mod was changed after activation. Undo will not disable newer work.");
             }
             journal.State = "Undoing"; store.Save(journal);
-            await animationMods.DisableAnimationModAsync(journal);
+            await animationMods.DisableAnimationModAsync(journal, journal.Request.Capture.ActorIndex);
         }
         else
         {
@@ -590,7 +590,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 RequireHash(file.Target, file.AfterHash);
                 AnimationJournalStore.WriteAtomic(file.Target, File.ReadAllBytes(ResolveBackup(file)));
             }
-            await animationMods.ReloadAnimationSourcesAsync(journal.Files.Select(f => f.ModDirectory));
+            await animationMods.ReloadAnimationSourcesAsync(journal.Files.Select(f => f.ModDirectory), journal.Request.Capture.ActorIndex);
         }
         journal.State = "FilesUndone"; store.Save(journal);
     }
