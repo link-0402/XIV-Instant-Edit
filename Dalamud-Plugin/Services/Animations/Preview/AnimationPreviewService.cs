@@ -50,11 +50,36 @@ internal sealed class AnimationPreviewService : IDisposable
     private bool _shared;
     private string _status = string.Empty;
     private string _error = string.Empty;
+    private readonly string _tag;
+    private readonly bool _sweepStale;
+    private readonly string _configDirectory;
+
+    /// <summary>A partner workspace's temporary mod tag: <see cref="Tag"/> and the preset's Id.</summary>
+    public static string PartnerTag(Guid preset) => $"{Tag} {preset:N}";
+
+    /// <summary>A partner workspace's record file in the config folder.</summary>
+    public static string PartnerRecord(Guid preset) => $"AnimationPreview-{preset:N}.json";
+
+    /// <summary>The presets whose partner workspaces left a record in <paramref name="configDirectory"/>, for the crash cleanup.</summary>
+    public static IEnumerable<Guid> PartnerRecords(string configDirectory)
+    {
+        if (!Directory.Exists(configDirectory))
+            return [];
+        return Directory.EnumerateFiles(configDirectory, "AnimationPreview-*.json")
+            .Select(path => Path.GetFileNameWithoutExtension(path)["AnimationPreview-".Length..])
+            .Where(id => id.Length == 32)
+            .Select(id => Guid.TryParseExact(id, "N", out var preset) ? preset : (Guid?)null)
+            .OfType<Guid>()
+            .ToArray();
+    }
 
     /// <param name="cacheRoot">The managed cache root (TextureFiles.EnsureCacheRoot); may throw while the cache is broken.</param>
     /// <param name="clientState">When given, leaving GPose ends the preview.</param>
+    /// <param name="tag">The temporary mod's tag: a partner's workspace has its own (<see cref="PartnerTag"/>).</param>
+    /// <param name="recordFile">The record's file in the config folder: a partner's workspace has its own (<see cref="PartnerRecord"/>).</param>
+    /// <param name="sweepStale">Whether the startup cleanup deletes day-old session folders; only one service should.</param>
     public AnimationPreviewService(PenumbraIpc penumbra, AnimationModService animationMods, PreviewModWriter previewMods, IFramework framework, IPluginLog log, string configDirectory, Func<string> cacheRoot,
-        IClientState? clientState = null)
+        IClientState? clientState = null, string tag = Tag, string recordFile = AnimationPreviewStore.FileName, bool sweepStale = true)
     {
         _penumbra = penumbra;
         _animationMods = animationMods;
@@ -62,7 +87,10 @@ internal sealed class AnimationPreviewService : IDisposable
         _framework = framework;
         _log = log;
         _cacheRoot = cacheRoot;
-        _store = new AnimationPreviewStore(configDirectory);
+        _tag = tag;
+        _sweepStale = sweepStale;
+        _configDirectory = configDirectory;
+        _store = new AnimationPreviewStore(configDirectory, recordFile);
         _store.Load();
         if (_store.LoadError.Length > 0)
         {
@@ -268,7 +296,7 @@ internal sealed class AnimationPreviewService : IDisposable
             // A preview moves with the character's collection: take it out of the old one first.
             if (oldSession != null && oldCollection != collection.Id)
             {
-                var moved = await RemoveOnFrameworkAsync(Tag, oldCollection, Priority).ConfigureAwait(false);
+                var moved = await RemoveOnFrameworkAsync(_tag, oldCollection, Priority).ConfigureAwait(false);
                 if (!moved.Gone)
                     throw new IOException(moved.Error ?? "Penumbra could not remove the preview.");
             }
@@ -277,7 +305,7 @@ internal sealed class AnimationPreviewService : IDisposable
                 ? current
                 : new AnimationPreviewRecord
                 {
-                    Tag = Tag,
+                    Tag = _tag,
                     CollectionId = collection.Id,
                     Priority = Priority,
                     SessionFolder = sessionFolder,
@@ -301,7 +329,7 @@ internal sealed class AnimationPreviewService : IDisposable
             var added = await _framework.RunOnFrameworkThread(() =>
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                return _penumbra.AddTemporaryModOnFramework(Tag, collection.Id, plan, manipulations, Priority);
+                return _penumbra.AddTemporaryModOnFramework(_tag, collection.Id, plan, manipulations, Priority);
             }).ConfigureAwait(false);
             if (added != PenumbraApiEc.Success)
                 throw new IOException($"Penumbra could not add the preview ({added}).");
@@ -405,20 +433,30 @@ internal sealed class AnimationPreviewService : IDisposable
             }
             else if (_recordLost)
             {
-                var removed = await _penumbra.RemoveTemporaryModEverywhereAsync(Tag, Priority).ConfigureAwait(false);
+                var removed = await _penumbra.RemoveTemporaryModEverywhereAsync(_tag, Priority).ConfigureAwait(false);
                 if (!removed.Gone)
                 {
                     _log.Warning($"Could not remove a lost animation preview from Penumbra: {removed.Error}");
                     return;
                 }
             }
+            if (!_sweepStale)
+                return;
             string previewRoot;
             try { previewRoot = AnimationPreviewRules.PreviewRoot(_cacheRoot()); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 return;
             }
-            var sessions = SubfolderNames(previewRoot).Select(name => (name, LastWriteUtc(Path.Combine(previewRoot, name))));
+            // A partner workspace's leftover is its own service's to remove, folder included.
+            var others = PartnerRecords(_configDirectory).Select(preset =>
+            {
+                var store = new AnimationPreviewStore(_configDirectory, PartnerRecord(preset));
+                store.Load();
+                return store.Record is { } record ? Path.GetFileName(record.SessionFolder) : null;
+            }).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var sessions = SubfolderNames(previewRoot).Where(name => !others.Contains(name))
+                .Select(name => (name, LastWriteUtc(Path.Combine(previewRoot, name))));
             foreach (var stale in AnimationPreviewRules.StaleSessions(sessions, null, DateTime.UtcNow - AnimationPreviewRules.StaleSessionAge))
                 TryDelete(Path.Combine(previewRoot, stale), Path.Combine(previewRoot, stale));
         }

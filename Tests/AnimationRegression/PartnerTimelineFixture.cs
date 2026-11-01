@@ -1,3 +1,4 @@
+using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
@@ -9,6 +10,32 @@ internal static class PartnerTimelineFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         Choice(check);
+        SameFile(check);
+    }
+
+    /// <summary>Two actors on one collection can't both preview edits of one file: Penumbra gives a collection one file per game path.</summary>
+    private static void SameFile(Action<bool, string> check)
+    {
+        var shared = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var aria = new WorkspaceKey(Guid.NewGuid()).Id;
+        var self = WorkspaceKey.Self.Id;
+        var files = new PreviewFiles();
+        files.Set(aria, "Aria Rose", shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"]);
+        check(files.Holder(shared, ["CHARA/human/c0801/animation/a0001/bt_common/emote/DANCE.pap"], self) == "Aria Rose",
+            "same file: another workspace showing it on the collection holds it, whatever the case");
+        check(files.Holder(shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"], aria) == null,
+            "same file: a workspace's own preview doesn't hold it against itself");
+        check(files.Holder(other, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"], self) == null,
+            "same file: another collection has its own copy");
+        check(files.Holder(shared, ["chara/human/c0801/animation/a0001/bt_common/emote/sit.pap"], self) == null,
+            "same file: another file on the collection is free");
+        files.Clear(aria);
+        check(files.Holder(shared, ["chara/human/c0801/animation/a0001/bt_common/emote/dance.pap"], self) == null,
+            "same file: a preview that ended holds nothing");
+        check(PreviewFiles.Refusal("You") == "You preview this file from the same collection. Use Live." &&
+              PreviewFiles.Refusal("Aria Rose") == "Aria Rose previews this file from the same collection. Use Live.",
+            "same file: the refusal names who previews it");
     }
 
     private static void Choice(Action<bool, string> check)

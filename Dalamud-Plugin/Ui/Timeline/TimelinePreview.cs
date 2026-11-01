@@ -337,6 +337,14 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             previewError = e.Message;
             return;
         }
+        // Penumbra gives a collection one file per game path: another actor previewing this file there keeps it.
+        string[] gamePaths = [clip.GamePath, .. added.Keys, .. lookFiles.Keys, .. soundRedirects.Keys];
+        if (session.Files?.Holder(target.Capture.CollectionId, gamePaths, session.WorkspaceId) is { } holder)
+        {
+            previewError = PreviewFiles.Refusal(holder);
+            return;
+        }
+        session.Files?.Set(session.WorkspaceId, session.ActorName(), target.Capture.CollectionId, gamePaths, () => previewJob || session.Preview.Active);
         var speed = speedPercent / 100f;
         var generation = ++previewGeneration;
         ForgetPreviewLooks();
@@ -492,6 +500,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// </summary>
     public void StopTemporaryMod(ushort? redraw = null)
     {
+        session.Files?.Clear(session.WorkspaceId);
         if (!session.Preview.Active && !session.Preview.Busy)
             return;
         var stop = redraw is { } index ? StopAndRedraw(index) : session.Preview.StopAsync();

@@ -32,6 +32,15 @@ internal sealed class TimelineSession
         LoopPose = new LoopPoseReader(this);
     }
 
+    /// <summary>The workspace's key in ids and file names: "self", or a partner preset's Id.</summary>
+    public string WorkspaceId { get; init; } = "self";
+
+    /// <summary>The workspace's actor as texts name it: "You", or the partner's name.</summary>
+    public Func<string> ActorName { get; init; } = () => "You";
+
+    /// <summary>The game paths every workspace's preview shows, shared by them all; null without a game.</summary>
+    public PreviewFiles? Files { get; init; }
+
     /// <summary>Reads whether the live character's skeleton and hand model have fingertip bones; set by the plugin, null without a game.</summary>
     public Func<CancellationToken, Task<HandTipFacts>>? HandTips { get; set; }
 

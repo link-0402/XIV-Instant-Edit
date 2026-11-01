@@ -25,10 +25,13 @@ internal readonly record struct WorkspaceKey(Guid? Preset)
     public string Id => Preset is { } preset ? preset.ToString("N") : "self";
 }
 
-/// <summary>The services a workspace's parts act through; a partner's act on its actor only.</summary>
+/// <summary>
+/// The services a workspace's parts act through; a partner's playback, Live and preview act on its actor only.
+/// <paramref name="Files"/> is shared by every workspace; <paramref name="ActorName"/> names the actor ("You", or the partner).
+/// </summary>
 internal sealed record WorkspaceServices(AnimationEditService? Animations, TimelineCatalog Catalog, AnimationPreviewService Preview,
     AnimationPlayback Playback, MotionLiveDisplay? MotionDisplay, AnimationRecorder Recorder, IDataManager Data, IFramework Framework,
-    ITextureProvider Textures, IPluginLog Log, GameSoundPlayer? SoundPlayer);
+    ITextureProvider Textures, IPluginLog Log, GameSoundPlayer? SoundPlayer, PreviewFiles Files, Func<string> ActorName);
 
 /// <summary>What a workspace takes from the Timeline window around it.</summary>
 internal interface ITimelineHost
@@ -132,7 +135,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         Key = key;
         this.host = host;
         session = new TimelineSession(services.Animations, services.Catalog, services.Preview, services.Playback, services.MotionDisplay,
-            services.Data, services.Framework, services.Log);
+            services.Data, services.Framework, services.Log) { WorkspaceId = key.Id, ActorName = services.ActorName, Files = services.Files };
         reader = new TimelineReader(session);
         soundPlayer = services.SoundPlayer;
         bonesWindow = host.Bones;

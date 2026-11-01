@@ -21,6 +21,7 @@ namespace InstantEdit.Ui;
 /// </summary>
 public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
 {
+    private readonly WorkspaceServiceFactory services;
     private readonly WorkspaceServices selfServices;
     private readonly IFramework framework;
     private readonly Dictionary<WorkspaceKey, TimelineWorkspace> workspaces = [];
@@ -42,14 +43,13 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private Func<CancellationToken, Task<HandTipFacts>>? handTips;
     private bool disposed;
 
-    internal TimelineWindow(AnimationEditService? animations, string? animationError, TimelineCatalog catalog,
-        AnimationPreviewService preview, AnimationPlayback playback, MotionLiveDisplay? motionDisplay, AnimationRecorder recorder, IDataManager data,
-        IFramework framework, ITextureProvider textures, IKeyState keyState, IPluginLog log, GameSoundPlayer? soundPlayer = null)
+    internal TimelineWindow(WorkspaceServiceFactory services, string? animationError, IFramework framework, ITextureProvider textures, IKeyState keyState)
         : base("Timeline (Beta)###XIVInstantEditTimeline")
     {
+        this.services = services;
         this.framework = framework;
         this.animationError = animationError;
-        selfServices = new WorkspaceServices(animations, catalog, preview, playback, motionDisplay, recorder, data, framework, textures, log, soundPlayer);
+        selfServices = services.For(WorkspaceKey.Self);
         bonesWindow = new BonesWindow(this);
         overlayWindow = new BonesOverlay(this);
         poseBrowserWindow = new PoseBrowserWindow(this);
@@ -88,7 +88,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     {
         if (workspaces.TryGetValue(key, out var found))
             return found;
-        var made = new TimelineWorkspace(key, selfServices, this);
+        var made = new TimelineWorkspace(key, services.For(key), this);
         if (tools is { } attachedTools)
             made.AttachTools(attachedTools.Settings, attachedTools.Recorder);
         if (blender != null)

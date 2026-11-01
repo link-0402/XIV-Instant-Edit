@@ -39,6 +39,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Services.Audio.GameSoundPlayer _soundPlayer;
     private readonly Services.Animations.Preview.AnimationPlayback _animationPlayback;
     private readonly Services.Animations.Preview.MotionLiveDisplay? _motionDisplay;
+    private readonly Ui.Timeline.WorkspaceServiceFactory _workspaceServices;
     private readonly TimelineWindow          _timelineWindow;
     private readonly ExportServer            _exportServer;
     private readonly Services.Painter.PainterJobService _painterJobs;
@@ -187,15 +188,36 @@ public sealed class Plugin : IDalamudPlugin
                 () => Services.Animations.AnimationRuntime.InspectPapDurations(bytes), cancellationToken: token).GetAwaiter().GetResult());
         _animationPreview = new Services.Animations.Preview.AnimationPreviewService(_penumbra.Ipc, _penumbra.Animations, _penumbra.Previews, framework, log, configDirectory,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState);
-        _animationPlayback =new Services.Animations.Preview.AnimationPlayback(framework, data, objects, clientState, targets, log);
+        // Your Timeline workspace's playback: the GPose target unless it is a spawned partner, which has a workspace of its own.
+        _animationPlayback = new Services.Animations.Preview.AnimationPlayback(framework, data, objects, clientState, targets, log,
+            Ui.Timeline.WorkspaceActors.Self(objects, clientState, targets, index => _partners?.PresetAt(index)));
         // The Timeline's sound inspector plays sounds through the game, served by a temporary mod.
         _soundPlayer = new Services.Audio.GameSoundPlayer(sigScanner, framework, _penumbra.Ipc, log,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         // Bone layers shown live on the GPose actor: an edited copy of the clip swapped into its controls.
         _motionDisplay = _animations == null ? null
             : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
-        _timelineWindow = new TimelineWindow(_animations, animationError, _timelineCatalog, _animationPreview, _animationPlayback,
-            _motionDisplay, _recorder, data, framework, textureProvider, keyState, log, _soundPlayer);
+        // Each Timeline workspace's services: yours are the ones above; a partner's playback, Live and preview act on its actor alone.
+        var previewFiles = new Services.Animations.Preview.PreviewFiles();
+        _workspaceServices = new Ui.Timeline.WorkspaceServiceFactory(key =>
+        {
+            if (key.Preset is not { } preset)
+                return new Ui.Timeline.WorkspaceServices(_animations, _timelineCatalog, _animationPreview, _animationPlayback, _motionDisplay, _recorder,
+                    data, framework, textureProvider, log, _soundPlayer, previewFiles, () => "You");
+            // Partner keys come only once the partner service below exists.
+            var partners = _partners ?? throw new InvalidOperationException("A partner workspace needs the partner service.");
+            var playback = new Services.Animations.Preview.AnimationPlayback(framework, data, objects, clientState, targets, log,
+                Ui.Timeline.WorkspaceActors.Partner(preset, partners, objects, clientState));
+            var display = _animations == null ? null
+                : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
+            var preview = new Services.Animations.Preview.AnimationPreviewService(_penumbra.Ipc, _penumbra.Animations, _penumbra.Previews, framework, log,
+                configDirectory, () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory), clientState,
+                Services.Animations.Preview.AnimationPreviewService.PartnerTag(preset), Services.Animations.Preview.AnimationPreviewService.PartnerRecord(preset),
+                sweepStale: false);
+            return new Ui.Timeline.WorkspaceServices(_animations, _timelineCatalog, preview, playback, display, _recorder, data, framework, textureProvider, log,
+                _soundPlayer, previewFiles, () => partners.Find(preset)?.Name ?? partners.Store.Presets.FirstOrDefault(p => p.Id == preset)?.Name ?? "Partner");
+        });
+        _timelineWindow = new TimelineWindow(_workspaceServices, animationError, framework, textureProvider, keyState);
         _exportServer = new ExportServer(_config, _penumbra.ModelExports, _penumbra.RaceExports, _penumbra.SizesExports,
             _penumbra.ModelBackups, _penumbra.Mashups, _penumbra.Scanner, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);
@@ -280,6 +302,9 @@ public sealed class Plugin : IDalamudPlugin
         _partners = new PartnerService(partnerStore, _actorSpawner, new PartnerCollections(_penumbra.Ipc, () => _penumbra.Ipc.Available),
             new GlamourerIpc(pi, log), new CustomizePlusProfiles(pi, log), warn: message => log.Warning("{Message}", message));
         _timelineWindow.AttachPartners(new Ui.Timeline.PartnersPage(_partners).Draw);
+        // A partner workspace's preview left by a crash goes now, whether or not that workspace is opened again.
+        foreach (var preset in Services.Animations.Preview.AnimationPreviewService.PartnerRecords(configDirectory))
+            _workspaceServices.For(new Ui.Timeline.WorkspaceKey(preset));
         // In GPose your posed character walks or runs for the builder through the Timeline preview's playback.
         _physicsWindow = new PhysicsWindow(_physics, _animationPlayback, _config, SaveConfiguration, log);
         _window.AttachPhysics(_physicsWindow.Open);
@@ -506,6 +531,8 @@ public sealed class Plugin : IDalamudPlugin
         // GPose actor back), the preview (removes its temporary mod) and the catalog; all of them before
         // Penumbra goes away.
         _timelineWindow.Dispose();
+        // The partner workspaces' Live, playback and preview, each putting back what it changed.
+        _workspaceServices.Dispose();
         _motionDisplay?.Dispose();
         _animationPlayback.Dispose();
         _soundPlayer.Dispose();

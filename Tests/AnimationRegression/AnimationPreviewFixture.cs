@@ -23,6 +23,7 @@ internal static class AnimationPreviewFixture
         Leftovers(check);
         Times(check);
         Records(check);
+        PartnerRecords(check);
         OwnedCacheEntry(check);
         MetaManipulations(check);
     }
@@ -214,6 +215,46 @@ internal static class AnimationPreviewFixture
               new[] { "emote/l_pose02_loop", "emote/bed_liedown_loop" }.All(key => AnimationPreviewRules.SeatedMode(key) == 3) &&
               new[] { "normal/idle", "emote/salute", "emote/pose01_loop", "emote/u_amazed", "emote_sp/sp01", "", null }.All(key => AnimationPreviewRules.SeatedMode(key) == 0),
             "ground, chair and bed timelines are told from each other and from standing ones by key");
+    }
+
+    /// <summary>A partner's workspace previews under its own tag and record file, which a crash cleanup finds by name.</summary>
+    private static void PartnerRecords(Action<bool, string> check)
+    {
+        var preset = Guid.Parse("0f8e2a52-6c1b-4f43-9a0e-5d2f7c3b8e11");
+        check(AnimationPreviewService.PartnerTag(preset) == "XIV Instant Edit animation preview 0f8e2a526c1b4f439a0e5d2f7c3b8e11" &&
+              AnimationPreviewService.PartnerRecord(preset) == "AnimationPreview-0f8e2a526c1b4f439a0e5d2f7c3b8e11.json",
+            "a partner's preview: its own tag and record file, named by its preset");
+        var root = Path.Combine(Path.GetTempPath(), "InstantEditAnimationPreviewRegression", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, AnimationPreviewStore.FileName), "{}");
+            File.WriteAllText(Path.Combine(root, AnimationPreviewService.PartnerRecord(preset)), "{}");
+            File.WriteAllText(Path.Combine(root, "AnimationPreview-junk.json"), "{}");
+            check(AnimationPreviewService.PartnerRecords(root).SequenceEqual([preset]), "the crash cleanup finds each partner's record, and only those");
+            check(!AnimationPreviewService.PartnerRecords(Path.Combine(root, "missing")).Any(), "no config folder, no partner records");
+
+            File.Delete(Path.Combine(root, AnimationPreviewStore.FileName));
+            File.Delete(Path.Combine(root, AnimationPreviewService.PartnerRecord(preset)));
+            var record = new AnimationPreviewRecord
+            {
+                Tag = AnimationPreviewService.PartnerTag(preset),
+                CollectionId = Guid.NewGuid(),
+                Priority = AnimationPreviewService.Priority,
+                SessionFolder = AnimationPreviewRules.SessionFolder(AnimationPreviewRules.PreviewRoot(Path.Combine(root, "XIV Instant Edit")),
+                    AnimationPreviewRules.NewSessionName()),
+                CreatedUtc = new DateTime(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc),
+            };
+            new AnimationPreviewStore(root, AnimationPreviewService.PartnerRecord(preset)).Save(record);
+            var back = new AnimationPreviewStore(root, AnimationPreviewService.PartnerRecord(preset));
+            back.Load();
+            check(back.Record == record && !File.Exists(Path.Combine(root, AnimationPreviewStore.FileName)),
+                "a partner's record round-trips in its own file and leaves yours alone");
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     private static void Records(Action<bool, string> check)
