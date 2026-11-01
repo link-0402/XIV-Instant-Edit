@@ -30,11 +30,16 @@ internal static class MotionEvaluator
     public const int MaxWeights = 256;
 
     /// <summary>
-    /// Whether <paramref name="layer"/> changes anything when applied. Weight points holding it at 0 all along leave it out: all at 0,
-    /// with one on its first frame and one on its last.
+    /// Whether <paramref name="layer"/> changes anything when applied without partner tracks: a link layer never does.
     /// </summary>
-    public static bool Active(MotionLayer layer) => layer.Enabled && (layer.Weights.IsEmpty || layer.Weights.Any(point => point.Value > 0) ||
-                                                                      layer.Weights[0].Frame > layer.Start || layer.Weights[^1].Frame < layer.End) && layer.Kind switch
+    public static bool Active(MotionLayer layer) => Active(layer, null);
+
+    /// <summary>
+    /// Whether <paramref name="layer"/> changes anything when applied with <paramref name="links"/>. Weight points holding it at 0
+    /// all along leave it out: all at 0, with one on its first frame and one on its last. A link layer needs its track in
+    /// <paramref name="links"/>.
+    /// </summary>
+    public static bool Active(MotionLayer layer, MotionLinkSet? links) => Weighted(layer) && layer.Kind switch
     {
         MotionLayerKind.Amplitude => Math.Abs(layer.Amount - 1) > 1e-6f &&
                                      (layer.Components & (PoseComponents.Rotation | PoseComponents.Position)) != 0,
@@ -57,11 +62,23 @@ internal static class MotionEvaluator
                                   noise.Slide > 0 && layer.Components.HasFlag(PoseComponents.Position)),
         MotionLayerKind.LookAt => layer.Amount > 0 && layer.Look is { Limit: > 0 } look && !layer.Bones.IsEmpty &&
                                   (look.Follow != null || layer.Keys.Any(key => key.Bones.ContainsKey(MotionLooks.KeyBone))),
+        MotionLayerKind.Link => layer.Amount > 0 && layer.Link != null && links?.For(layer.Key) != null,
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
-    /// <summary>Whether any of <paramref name="layers"/> changes the motion.</summary>
+    /// <summary>
+    /// Whether <paramref name="layer"/> is on with some weight: weight points holding it at 0 all along (all at 0, with one on its
+    /// first frame and one on its last) leave it out. What every kind's <see cref="Active(MotionLayer, MotionLinkSet?)"/> asks first.
+    /// </summary>
+    internal static bool Weighted(MotionLayer layer) => layer.Enabled && (layer.Weights.IsEmpty || layer.Weights.Any(point => point.Value > 0) ||
+                                                                          layer.Weights[0].Frame > layer.Start || layer.Weights[^1].Frame < layer.End);
+
+    /// <summary>Whether any of <paramref name="layers"/> changes the motion without partner tracks.</summary>
     public static bool Changes(ImmutableArray<MotionLayer> layers) => !layers.IsDefaultOrEmpty && layers.Any(Active);
+
+    /// <summary>Whether any of <paramref name="layers"/> changes the motion with <paramref name="links"/>.</summary>
+    public static bool Changes(ImmutableArray<MotionLayer> layers, MotionLinkSet? links) =>
+        !layers.IsDefaultOrEmpty && layers.Any(layer => Active(layer, links));
 
     /// <summary>
     /// How much of <paramref name="layer"/> applies at <paramref name="frame"/>, before its amount:
@@ -158,9 +175,10 @@ internal static class MotionEvaluator
         return BlendsAtMostFully(layer.Kind) ? Math.Min(1, weight) : weight;
     }
 
-    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's pull, a fix, a smooth or a look.</summary>
+    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's or a link's pull, a fix, a smooth or a look.</summary>
     public static bool BlendsAtMostFully(MotionLayerKind kind) =>
-        kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.LookAt;
+        kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.LookAt or
+            MotionLayerKind.Link;
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
@@ -184,7 +202,7 @@ internal static class MotionEvaluator
         if (layer.Keys.Length > MaxKeys)
             throw new InvalidDataException($"{name} has too many keys.");
         if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
-                MotionLayerKind.Noise && !layer.Keys.IsEmpty)
+                MotionLayerKind.Noise or MotionLayerKind.Link && !layer.Keys.IsEmpty)
             throw new InvalidDataException($"{name} can't have keys.");
         if (layer.Kind != MotionLayerKind.Pin && !layer.Pins.IsEmpty)
             throw new InvalidDataException($"{name} can't have pins.");
@@ -221,6 +239,21 @@ internal static class MotionEvaluator
                 throw new InvalidDataException($"{name} turns a bone other than the head, neck and upper back.");
             if (look.Follow != null && !layer.Keys.IsEmpty)
                 throw new InvalidDataException($"{name} follows a bone, so it can't have keys.");
+        }
+        if (layer.Kind == MotionLayerKind.Link && layer.Link == null)
+            throw new InvalidDataException($"{name} has no link.");
+        if (layer.Kind != MotionLayerKind.Link && layer.Link != null)
+            throw new InvalidDataException($"{name} can't have a link.");
+        if (layer.Link is { } link)
+        {
+            if (string.IsNullOrEmpty(link.Bone) || string.IsNullOrEmpty(link.PartnerBone))
+                throw new InvalidDataException($"{name} links a bone without a name.");
+            if (!float.IsFinite(link.Bend) || link.Bend is < -180 or > 180)
+                throw new InvalidDataException($"{name} has a bend out of range.");
+            if (!link.Holds.IsEmpty && link.Bone != PinChains.Hips)
+                throw new InvalidDataException($"{name} holds bones, but only a link on the hips can.");
+            if (link.Holds.Any(string.IsNullOrEmpty) || link.Holds.Distinct(StringComparer.Ordinal).Count() != link.Holds.Length)
+                throw new InvalidDataException($"{name} holds a bone twice or a bone without a name.");
         }
         if (layer.Kind == MotionLayerKind.Smooth && layer.Window is < MotionSmoothing.MinWindow or > MotionSmoothing.MaxWindow)
             throw new InvalidDataException($"{name} has a window out of range.");
@@ -475,6 +508,30 @@ internal static class MotionEvaluator
                 PinChains.Check(skeleton, layer);
             if (layer.Kind == MotionLayerKind.LookAt)
                 MotionLooks.Plan(skeleton, layer, index);
+            if (layer is { Kind: MotionLayerKind.Link, Link: { } link })
+                CheckLink(skeleton, index, layer, link);
+        }
+    }
+
+    /// <summary>
+    /// Throws when <paramref name="link"/> names a bone, top or held bone the skeleton lacks, bends up to a bone that isn't above
+    /// its bone below the body, links the body or a bone above it, or holds a bone that doesn't hang below the hips.
+    /// </summary>
+    private static void CheckLink(SkeletonDescription skeleton, Dictionary<string, int> index, MotionLayer layer, MotionLink link)
+    {
+        var name = string.IsNullOrWhiteSpace(layer.Name) ? "A bone layer" : $"The bone layer {layer.Name}";
+        var bone = index.TryGetValue(link.Bone, out var found) ? found : throw Missing(link.Bone);
+        if (skeleton.Bones[bone].Parent < 0 || link.Bone == PinChains.Body ||
+            index.TryGetValue(PinChains.Body, out var body) && PinChains.IsBelow(skeleton, body, bone))
+            throw new InvalidDataException($"{name} links {AnimationPresentation.BoneName(link.Bone)}, which would move the whole character.");
+        // The chain bends as a pin on the bone would: the same top and bend rules.
+        PinChains.Check(skeleton, layer with { Pins = [new MotionPin(link.Bone, link.HoldTurn, null, link.Top, false, PinSensitivity.Normal, link.Bend)] });
+        foreach (var hold in link.Holds)
+        {
+            if (!index.ContainsKey(hold))
+                throw Missing(hold);
+            if (HipSolver.Candidates(skeleton, [hold]).Count == 0)
+                throw new InvalidDataException($"{name} holds {AnimationPresentation.BoneName(hold)}, which doesn't hang below the hips.");
         }
     }
 

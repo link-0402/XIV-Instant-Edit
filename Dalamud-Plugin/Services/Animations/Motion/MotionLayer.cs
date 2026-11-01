@@ -29,6 +29,8 @@ internal enum MotionLayerKind : byte
     Noise,
     /// <summary>Turns the head, with some of the neck and upper back, toward keyed spots or a followed bone (<see cref="MotionLook"/>).</summary>
     LookAt,
+    /// <summary>Moves a bone with a partner's bone (<see cref="MotionLink"/>).</summary>
+    Link,
 }
 
 /// <summary>What a fix layer repairs. Saved as numbers.</summary>
@@ -126,6 +128,20 @@ internal sealed record MotionMarkers(MarkerDetail Detail = MarkerDetail.Normal, 
 /// </summary>
 internal sealed record MotionPin(string Bone, bool HoldTurn = true, string? RelativeTo = null, string? Top = null, bool Planted = false,
     PinSensitivity Sensitivity = PinSensitivity.Normal, float Bend = 0, bool Floor = false);
+
+/// <summary>
+/// What a link layer joins: <paramref name="Bone"/> of this clip moves the way <paramref name="PartnerBone"/> of the partner's
+/// clip moves from its edits. <paramref name="Partner"/> is the partner workspace's preset Id, null for You (the partner's side
+/// of a link to you). <paramref name="PartnerClip"/> and <paramref name="PartnerBinding"/> are the clip the link expects open
+/// there (<see cref="AnimationClip.GamePath"/>, <see cref="AnimationClip.BindingIndex"/>). <paramref name="HoldTurn"/> carries
+/// the partner's turn onto the bone too. <paramref name="Top"/> and <paramref name="Bend"/> are a pin's (<see cref="MotionPin"/>),
+/// for limbs and chains. <paramref name="Holds"/> are, for a hips link only, the bones that stay where they are.
+/// </summary>
+internal sealed record MotionLink(string Bone, Guid? Partner, string PartnerBone, string PartnerClip, int PartnerBinding,
+    bool HoldTurn = true, string? Top = null, float Bend = 0, ImmutableArray<string> Holds = default)
+{
+    public ImmutableArray<string> Holds { get; init; } = Holds.IsDefault ? [] : Holds;
+}
 
 /// <summary>A side of the body, for the side a symmetry layer copies. Saved as numbers.</summary>
 internal enum MotionSide : byte
@@ -275,6 +291,8 @@ internal sealed record MotionWeight(int Frame, float Value);
 /// <param name="Noise">For a noise layer, how its bones wobble; its amount is the wobble's strength. Other kinds have none.</param>
 /// <param name="Look">For a look-at layer, what it looks at and how far it turns; its keys hold spots in character space under the
 /// head's name and its amount is the turn's blend. Other kinds have none.</param>
+/// <param name="Link">For a link layer, the bones it joins; its amount is the pull toward the partner's move and it has no keys.
+/// Other kinds have none, and journals written before it load with none.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -299,7 +317,8 @@ internal sealed record MotionLayer(
     int Window = 0,
     ImmutableArray<MotionWeight> Weights = default,
     MotionNoise? Noise = null,
-    MotionLook? Look = null)
+    MotionLook? Look = null,
+    MotionLink? Link = null)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;
