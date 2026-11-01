@@ -368,7 +368,10 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         }
     }
 
-    /// <summary> One pin's settings, as fact rows: Holds, Attached to, Bends up to, Bend for a hand or a foot, When, and Sensitivity when planted. </summary>
+    /// <summary>
+    /// One pin's settings, as fact rows: Holds, Attached to, Bends up to, Bend for a hand or a foot, When, Sensitivity when planted,
+    /// and Floor for a planted foot held relative to the character.
+    /// </summary>
     private static void DrawPinSettings(TimelineEditor current, MotionLayer layer, MotionPin pin, SkeletonDescription skeleton, Dictionary<string, int> index,
         PinChain? chain)
     {
@@ -430,6 +433,11 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             PinChoice(current, layer, "Sensitivity", "##pin-sensitivity", "How readily the bone counts as down. Strict holds less, Loose more.",
                 pin.Sensitivity.ToString(), () => [(PinSensitivity.Normal, "Normal"), (PinSensitivity.Strict, "Strict"), (PinSensitivity.Loose, "Loose")],
                 pin.Sensitivity, sensitivity => pin with { Sensitivity = sensitivity });
+        if (pin is { Planted: true, RelativeTo: null, Bone: PinChains.FootL or PinChains.FootR })
+            PinChoice(current, layer, "Floor", "##pin-floor",
+                "On the floor sets the held foot down on the floor and levels it. A foot tipped far, as in a kneel, keeps its angle. With Holds: Position only its height changes.",
+                pin.Floor ? "On the floor" : "As the motion has it", () => [(false, "As the motion has it"), (true, "On the floor")], pin.Floor,
+                floor => pin with { Floor = floor });
     }
 
     /// <summary>

@@ -1073,6 +1073,10 @@ internal static class MotionEvaluator
         foreach (var (p, path) in paths)
         {
             var found = PinPlanting.Find(path, rate, first, last, wraps, pins[p].Pin.Sensitivity, gap, shortest, ease, heights[p]);
+            // A foot set on the floor first, so a floor the leg can't reach still comes in to where it can.
+            if (pins[p].Pin is { Floor: true, RelativeTo: null } && PinPlanting.Sole(clip.Skeleton, pins[p].Chain.End) is { } sole)
+                found = reaches.TryGetValue(p, out var limb) ? PinPlanting.OnFloor(found, sole, pins[p].Pin.HoldTurn, limb.Roots, limb.Limits)
+                    : PinPlanting.OnFloor(found, sole, pins[p].Pin.HoldTurn);
             planted[p] = reaches.TryGetValue(p, out var reach) ? PinPlanting.Reachable(found, reach.Roots, reach.Limits) : found;
         }
     }

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Timeline;
 
 namespace InstantEdit.Services.Animations.Motion;
@@ -11,6 +12,9 @@ namespace InstantEdit.Services.Animations.Motion;
 /// <paramref name="First"/> past <paramref name="Last"/>: it runs from First to the end and on from the start to Last.
 /// </summary>
 internal sealed record PlantedStretch(int First, int Last, MotionTransform Held);
+
+/// <summary>A foot's sole in the foot's own space: its <paramref name="Up"/> when it stands flat, and the points under its heel and ball.</summary>
+internal readonly record struct FootSole(Vector3 Up, Vector3 Heel, Vector3 Ball);
 
 /// <summary>
 /// Where a planted pin holds its bone over a clip <paramref name="Samples"/> long: its stretches, and
@@ -139,31 +143,112 @@ internal static class PinPlanting
     {
         var stretches = path.Stretches.ToBuilder();
         for (var s = 0; s < stretches.Count; s++)
-        {
-            var stretch = stretches[s];
-            var held = stretch.Held.Position;
-            // Each sample's reach is a ball round its root; passes of projecting onto each settle on a spot inside all of them.
-            for (var pass = 0; pass < ReachPasses; pass++)
-            {
-                var moved = false;
-                foreach (var i in SamplesIn(stretch, path.Samples))
-                {
-                    var offset = held - roots[i];
-                    var distance = offset.Length();
-                    if (distance <= limits[i] || distance < 1e-6f)
-                        continue;
-                    held = roots[i] + offset * (limits[i] / distance);
-                    moved = true;
-                }
-                if (!moved)
-                    break;
-            }
-            stretches[s] = stretch with { Held = stretch.Held with { Position = held } };
-        }
+            stretches[s] = stretches[s] with { Held = stretches[s].Held with { Position = InReach(stretches[s].Held.Position, stretches[s], path.Samples, roots, limits) } };
         return path with { Stretches = stretches.ToImmutable() };
     }
 
     private const int ReachPasses = 16;
+
+    /// <summary><paramref name="held"/> brought in until every sample of <paramref name="stretch"/> reaches it, as <see cref="Reachable"/> does.</summary>
+    private static Vector3 InReach(Vector3 held, PlantedStretch stretch, int samples, ReadOnlySpan<Vector3> roots, ReadOnlySpan<float> limits)
+    {
+        // Each sample's reach is a ball round its root; passes of projecting onto each settle on a spot inside all of them.
+        for (var pass = 0; pass < ReachPasses; pass++)
+        {
+            var moved = false;
+            foreach (var i in SamplesIn(stretch, samples))
+            {
+                var offset = held - roots[i];
+                var distance = offset.Length();
+                if (distance <= limits[i] || distance < 1e-6f)
+                    continue;
+                held = roots[i] + offset * (limits[i] / distance);
+                moved = true;
+            }
+            if (!moved)
+                break;
+        }
+        return held;
+    }
+
+    /// <summary>Up to this tilt from flat, in degrees, a held foot is levelled; one tipped further (a kneel, tiptoes) keeps its angle.</summary>
+    public const float FlatDegrees = 30;
+
+    /// <summary>
+    /// The sole of <paramref name="skeleton"/>'s <paramref name="foot"/> as its rest pose stands it on the floor (model Y 0), in the
+    /// foot's own space: the way up, and the heel and ball, the floor's points under the ankle and the toe joint. Null for a bone
+    /// that isn't a foot. A foot without its toe bone has only the heel.
+    /// </summary>
+    public static FootSole? Sole(SkeletonDescription skeleton, int foot)
+    {
+        var name = skeleton.Bones[foot].Name;
+        if (name is not (PinChains.FootL or PinChains.FootR))
+            return null;
+        var rest = MotionEvaluator.ModelSpace(skeleton, [.. skeleton.Bones.Select(bone => MotionTransform.From(bone.Reference))]);
+        var inverse = Quaternion.Inverse(Quaternion.Normalize(rest[foot].Rotation));
+        var ankle = rest[foot].Position;
+        Vector3 Under(Vector3 joint) => Vector3.Transform(new Vector3(joint.X, 0, joint.Z) - ankle, inverse);
+        var toeName = "j_asi_e" + name[^2..];
+        var heel = Under(ankle);
+        var ball = heel;
+        for (var b = 0; b < skeleton.Bones.Length; b++)
+            if (skeleton.Bones[b].Parent == foot && skeleton.Bones[b].Name == toeName)
+                ball = Under(rest[b].Position);
+        return new FootSole(Vector3.Normalize(Vector3.Transform(Vector3.UnitY, inverse)), heel, ball);
+    }
+
+    /// <summary>Steps from level back to the motion's tilt that <see cref="OnFloor"/> tries for a leg that can't bring a level sole down.</summary>
+    private const int LevelSteps = 16;
+
+    /// <summary>How close over the floor, in metres (0.1 mm), a sole counts as on it.</summary>
+    private const float Touching = 1e-4f;
+
+    /// <summary>
+    /// <paramref name="path"/> with each stretch's held foot (model space) set down on the floor: with <paramref name="turn"/> (the pin
+    /// holds its turn) a foot tilted up to <see cref="FlatDegrees"/> from <paramref name="sole"/>'s flat is levelled, keeping its
+    /// heading; then it moves up or down until the lower of its heel and ball is at Y 0. A foot the motion tips further lands on its
+    /// heel or ball at its own angle. Given the limb's reach (<paramref name="roots"/> and <paramref name="limits"/>, as
+    /// <see cref="Reachable"/> takes them), a foot the leg can't lower far enough is levelled only as far as its sole still touches
+    /// the floor, or as near as it comes: levelling a toe-down foot on a straight leg would lift the ball off the floor.
+    /// </summary>
+    public static PlantedPath OnFloor(PlantedPath path, FootSole sole, bool turn, ReadOnlySpan<Vector3> roots = default, ReadOnlySpan<float> limits = default)
+    {
+        var stretches = path.Stretches.ToBuilder();
+        for (var s = 0; s < stretches.Count; s++)
+        {
+            var stretch = stretches[s];
+            var held = stretch.Held;
+            var own = Quaternion.Normalize(held.Rotation);
+            var rotation = own;
+            var up = Vector3.Transform(sole.Up, own);
+            if (turn && MathF.Acos(Math.Clamp(up.Y, -1, 1)) * 180 / MathF.PI <= FlatDegrees)
+            {
+                var level = Quaternion.Normalize(PinSolver.Between(up, Vector3.UnitY) * own);
+                rotation = level;
+                if (!roots.IsEmpty)
+                {
+                    // From level toward the motion's own tilt, the first that touches, else the nearest; a tie keeps the more level.
+                    var best = float.MaxValue;
+                    for (var step = 0; step <= LevelSteps && best > Touching; step++)
+                    {
+                        var tried = Quaternion.Normalize(Quaternion.Slerp(level, own, (float)step / LevelSteps));
+                        var gap = InReach(Floored(held.Position, tried, sole), stretch, path.Samples, roots, limits).Y + Lowest(tried, sole);
+                        if (gap < best - Touching)
+                            (best, rotation) = (gap, tried);
+                    }
+                }
+            }
+            stretches[s] = stretch with { Held = held with { Position = Floored(held.Position, rotation, sole), Rotation = turn ? rotation : held.Rotation } };
+        }
+        return path with { Stretches = stretches.ToImmutable() };
+    }
+
+    /// <summary>The height of the lower of <paramref name="sole"/>'s heel and ball under the foot's ankle, turned <paramref name="rotation"/>.</summary>
+    private static float Lowest(Quaternion rotation, FootSole sole) =>
+        Math.Min(Vector3.Transform(sole.Heel, rotation).Y, Vector3.Transform(sole.Ball, rotation).Y);
+
+    /// <summary>The ankle at <paramref name="position"/> moved up or down until the foot, turned <paramref name="rotation"/>, stands on the floor.</summary>
+    private static Vector3 Floored(Vector3 position, Quaternion rotation, FootSole sole) => position with { Y = -Lowest(rotation, sole) };
 
     /// <summary>A stretch's samples, round the seam when it runs over it.</summary>
     private static IEnumerable<int> SamplesIn(PlantedStretch stretch, int samples)

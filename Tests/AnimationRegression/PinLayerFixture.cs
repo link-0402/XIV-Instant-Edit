@@ -337,6 +337,30 @@ internal static class PinLayerFixture
         return MotionClip.FromPoses(Body(), 3, poses);
     }
 
+    /// <summary>Standing still for a second (31 samples), the hips <paramref name="drop"/> lower and the left foot tipped <paramref name="tilt"/>° about X.</summary>
+    private static MotionClip Sunk(float drop, float tilt)
+    {
+        var pose = Rest();
+        pose[Hara] = pose[Hara] with { Position = pose[Hara].Position - new Vector3(0, drop, 0) };
+        pose[FootL] = pose[FootL] with { Rotation = Q(Vector3.UnitX, tilt) };
+        var bones = pose.Select(value => value.ToBone()).ToArray();
+        return MotionClip.FromPoses(Body(), 1, [.. Enumerable.Repeat(bones, 31)]);
+    }
+
+    /// <summary>
+    /// Standing still for 3 s (31 samples) on a straight left leg, the hips <paramref name="lift"/> higher, the foot turned as the rest
+    /// pose has it and then <paramref name="tilt"/>° toes down.
+    /// </summary>
+    private static MotionClip StraightAbove(float lift, float tilt = 0)
+    {
+        var pose = Rest();
+        pose[Hara] = pose[Hara] with { Position = pose[Hara].Position + new Vector3(0, lift, 0) };
+        pose[KneeL] = pose[KneeL] with { Rotation = Quaternion.Identity };
+        pose[FootL] = pose[FootL] with { Rotation = Q(Vector3.UnitX, 20 + tilt) };
+        var bones = pose.Select(value => value.ToBone()).ToArray();
+        return MotionClip.FromPoses(Body(), 3, [.. Enumerable.Repeat(bones, 31)]);
+    }
+
     private static MotionTransform[] Row(MotionClip clip, int sample) => [.. Enumerable.Range(0, clip.Bones).Select(b => clip.Get(sample, b))];
 
     private static bool All(MotionClip clip, Func<int, bool> sample) => Enumerable.Range(0, clip.Samples).All(sample);
@@ -423,6 +447,41 @@ internal static class PinLayerFixture
         check(MathF.Abs(heldAt.Stretches[0].Held.Position.Y - Enumerable.Range(0, bob.Samples).Max(i => Foot(bob, i).Y)) < 1e-5f &&
               MathF.Abs(heldAt.Stretches[0].Held.Position.X - Foot(bob, 0).X) < 1e-5f && MathF.Abs(heldAt.Stretches[0].Held.Position.Z - Foot(bob, 0).Z) < 1e-5f,
             "the held spot comes in only as far as the motion's own feet went");
+
+        // On the floor: a foot the hips sink 2 cm into it, tipped 10°, comes up flat on it as the rest pose stands it.
+        var rest = Model()[FootL];
+        float Tilt(MotionClip clip, int sample) =>
+            MathF.Acos(Math.Clamp(Vector3.Transform(Vector3.Transform(Vector3.UnitY, Quaternion.Inverse(rest.Rotation)), MotionEvaluator.ModelSpace(body, Row(clip, sample))[FootL].Rotation).Y, -1, 1)) * 180 / MathF.PI;
+        var floor = PinLayer([new(PinChains.FootL, Planted: true, Floor: true)]);
+        var sunk = Sunk(.02f, 10);
+        MotionEvaluator.Apply(sunk, [floor]);
+        check(All(sunk, i => MathF.Abs(Foot(sunk, i).Y - rest.Position.Y) < 1e-4f && Tilt(sunk, i) < .1f) && MathF.Abs(Tilt(Sunk(.02f, 10), 0) - 10) < .01f,
+            "a planted foot set on the floor comes up out of it and lies flat");
+        var leftAlone = Sunk(.02f, 10);
+        MotionEvaluator.Apply(leftAlone, [PinLayer([new(PinChains.FootL, Planted: true)])]);
+        check(All(leftAlone, i => MathF.Abs(Foot(leftAlone, i).Y - (rest.Position.Y - .02f)) < 1e-4f && MathF.Abs(Tilt(leftAlone, i) - 10) < .1f),
+            "without it the foot stays where the motion has it");
+        // A straight leg whose flat foot the hips lift 2.6 cm over the floor can't reach it: the foot comes down as far as the leg reaches, and holds still.
+        var high = StraightAbove(.05f);
+        check(Foot(high, 0).Y - rest.Position.Y > .02f, "the straight leg's foot starts over the floor");
+        var highHeld = MotionEvaluator.Planted(high, PinLayer([new(PinChains.FootL, Planted: true, Floor: true)], end: 90))[PinChains.FootL].Stretches[0].Held;
+        MotionEvaluator.Apply(high, [PinLayer([new(PinChains.FootL, Planted: true, Floor: true)], end: 90)]);
+        check(MathF.Abs(highHeld.Position.Y - Foot(StraightAbove(.05f), 0).Y) < 1e-5f && All(high, i => Vector3.Distance(Foot(high, i), highHeld.Position) < 1e-4f),
+            "a floor out of the straight leg's reach leaves the foot as low as the leg reaches");
+        // A straight leg's foot tipped 5° toes down with its ball on the floor (Idle 6's right foot, XIV Bridge 542): levelled, the
+        // ball would lift and the leg couldn't lower the ankle after it, so the foot keeps the tilt that lets it touch.
+        var sole = PinPlanting.Sole(body, FootL)!.Value;
+        var tippedDown = Model()[FootL].Rotation * Q(Vector3.UnitX, 5);
+        var touching = -Math.Min(Vector3.Transform(sole.Heel, tippedDown).Y, Vector3.Transform(sole.Ball, tippedDown).Y) - Foot(StraightAbove(0, 5), 0).Y;
+        var toeDown = StraightAbove(touching, 5);
+        MotionEvaluator.Apply(toeDown, [PinLayer([new(PinChains.FootL, Planted: true, Floor: true)], end: 90)]);
+        float SoleGap(MotionClip clip, int sample)
+        {
+            var foot = MotionEvaluator.ModelSpace(body, Row(clip, sample))[FootL];
+            return foot.Position.Y + Math.Min(Vector3.Transform(sole.Heel, foot.Rotation).Y, Vector3.Transform(sole.Ball, foot.Rotation).Y);
+        }
+        check(MathF.Abs(SoleGap(StraightAbove(touching, 5), 0)) < 1e-5f && All(toeDown, i => MathF.Abs(SoleGap(toeDown, i)) < 2e-4f && MathF.Abs(Tilt(toeDown, i) - 5) < .5f),
+            "a straight leg's toe-down foot keeps the tilt that lets its ball touch the floor, rather than levelling and floating");
 
         // Relative to the chest: the hand rides with the sway.
         var hand = MotionEvaluator.Relative(MotionEvaluator.ModelSpace(body, Row(original, 0))[Chest], MotionEvaluator.ModelSpace(body, Row(original, 0))[HandL]);
@@ -626,6 +685,35 @@ internal static class PinLayerFixture
         for (var i = 1; i < 120 && smooth; i++)
             smooth = close.Target(i) is { } now && close.Target(i - 1) is { } before && Vector3.Distance(now.Position, before.Position) < .1f;
         check(smooth, "overlapping eases blend the held spots without a jump");
+
+        // On the floor: a sole whose flat foot points up its own Y, heel 8 cm under the ankle, ball 12 cm ahead of it and 7 cm down.
+        var sole = new FootSole(Vector3.UnitY, new Vector3(0, -.08f, 0), new Vector3(0, -.07f, .12f));
+        PlantedPath Holding(Vector3 position, Quaternion rotation) =>
+            new([new PlantedStretch(0, 9, new MotionTransform(position, rotation, Vector3.One)), new PlantedStretch(12, 19, new MotionTransform(new Vector3(.3f, .08f, 0), Quaternion.Identity, Vector3.One))], 20, false, 2);
+        var heading = Q(Vector3.UnitY, 40);
+        var tipped = Q(Vector3.UnitX, 10) * heading;
+        var floated = PinPlanting.OnFloor(Holding(new Vector3(.1f, .11f, .2f), tipped), sole, true);
+        var level = floated.Stretches[0].Held;
+        check(Vector3.Distance(level.Position, new Vector3(.1f, .08f, .2f)) < 1e-5f && Vector3.Transform(Vector3.UnitY, level.Rotation).Y > MathF.Cos(.1f * MathF.PI / 180) &&
+              Vector3.Distance(Vector3.Transform(Vector3.UnitZ, level.Rotation), Vector3.Transform(Vector3.UnitZ, heading)) < 1e-4f &&
+              floated.Stretches[1] == Holding(Vector3.Zero, Quaternion.Identity).Stretches[1] && floated.Stretches[0] is { First: 0, Last: 9 },
+            "a foot floating 3 cm and tipped 10° is levelled with its heading kept and set on the floor; one already flat on it stays");
+        var sunk = PinPlanting.OnFloor(Holding(new Vector3(0, .05f, 0), Quaternion.Identity), sole, true).Stretches[0].Held;
+        check(MathF.Abs(sunk.Position.Y - .08f) < 1e-5f && sunk.Rotation == Quaternion.Identity, "a foot sunk into the floor comes up onto it");
+        // Toes down.
+        var kneel = Q(Vector3.UnitX, 60);
+        var knelt = PinPlanting.OnFloor(Holding(new Vector3(0, .2f, 0), kneel), sole, true).Stretches[0].Held;
+        var ballY = knelt.Position.Y + Vector3.Transform(sole.Ball, knelt.Rotation).Y;
+        check(Degrees(knelt.Rotation, kneel) < .01f && MathF.Abs(ballY) < 1e-5f && knelt.Position.Y + Vector3.Transform(sole.Heel, knelt.Rotation).Y > ballY,
+            "a foot tipped 60°, as in a kneel, keeps its angle and lands on its ball");
+        var positionOnly = PinPlanting.OnFloor(Holding(new Vector3(0, .11f, 0), tipped), sole, false).Stretches[0].Held;
+        check(positionOnly.Rotation == tipped && MathF.Abs(positionOnly.Position.Y + Math.Min(Vector3.Transform(sole.Heel, tipped).Y, Vector3.Transform(sole.Ball, tipped).Y)) < 1e-5f,
+            "a pin holding only its position keeps the motion's turn and only sets the height");
+        check(PinPlanting.Sole(Body(), FootL) is { } bodySole && PinPlanting.Sole(Body(), HandL) == null &&
+              Vector3.Distance(Vector3.Transform(bodySole.Up, Model()[FootL].Rotation), Vector3.UnitY) < 1e-5f &&
+              MathF.Abs(Model()[FootL].Position.Y + Vector3.Transform(bodySole.Heel, Model()[FootL].Rotation).Y) < 1e-5f &&
+              MathF.Abs(Model()[FootL].Position.Y + Vector3.Transform(bodySole.Ball, Model()[FootL].Rotation).Y) < 1e-5f,
+            "a foot's sole is its rest pose's, flat on the floor under the ankle and the toe joint; a hand has none");
     }
 
     private static MotionTransform[] Rest(SkeletonDescription? skeleton = null) => [.. (skeleton ?? Body()).Bones.Select(bone => MotionTransform.From(bone.Reference))];
@@ -1100,7 +1188,7 @@ internal static class PinLayerFixture
             var clip = new AnimationClip(resource.GamePath, "loop", 0, 0, 42, "chara/test.sklb");
             var capture = new AnimationCapture("clip", 1, 1, Guid.NewGuid(), "Test", "Idle", clip, null, [resource.GamePath], [resource], DateTime.UtcNow, true);
             var foot = PinChains.FootL;
-            var layer = PinLayer([new(foot, HoldTurn: false, RelativeTo: "j_sebo_c", Top: "j_sako_l", Bend: 45), new(PinChains.FootR, Planted: true, Sensitivity: PinSensitivity.Loose)],
+            var layer = PinLayer([new(foot, HoldTurn: false, RelativeTo: "j_sebo_c", Top: "j_sako_l", Bend: 45), new(PinChains.FootR, Planted: true, Sensitivity: PinSensitivity.Loose, Floor: true)],
                 [Key(3, (foot, T(new Vector3(.1f, .2f, .3f), Q(Vector3.UnitY, 10))))]);
             var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "Motion", false,
                 AnimationOperation.EditTimeline,
@@ -1114,9 +1202,12 @@ internal static class PinLayerFixture
             // Journals written before the bend angle have no Bend: their pins bend as the solver picks.
             var unbent = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
             check(unbent["Request"]!["Timeline"]!["Motion"]![0]!["Pins"]![0]!.AsObject().Remove("Bend"), "a journal stores a pin's bend as Bend");
+            // And before Floor: their feet stay where the motion has them.
+            check(unbent["Request"]!["Timeline"]!["Motion"]![0]!["Pins"]![1]!.AsObject().Remove("Floor"), "a journal stores a pin's floor as Floor");
             File.WriteAllText(path, unbent.ToJsonString());
             var plain = new AnimationJournalStore(temp).Load().Single().Request.Timeline!.Motion.Single();
-            check(plain.Pins[0] == layer.Pins[0] with { Bend = 0 } && plain.Pins[1] == layer.Pins[1], "an older journal's pins load with no bend");
+            check(plain.Pins[0] == layer.Pins[0] with { Bend = 0 } && plain.Pins[1] == layer.Pins[1] with { Floor = false },
+                "an older journal's pins load with no bend and the feet off the floor setting");
             // Journals written before pin layers have no Pins.
             var json = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
             check(json["Request"]!["Timeline"]!["Motion"]![0]!.AsObject().Remove("Pins"), "a journal stores a layer's pins as Pins");

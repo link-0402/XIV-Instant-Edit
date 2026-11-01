@@ -121,10 +121,11 @@ internal sealed record MotionMarkers(MarkerDetail Detail = MarkerDetail.Normal, 
 /// is the highest bone the solver may turn, null for the default chain. A <paramref name="Planted"/>
 /// pin has no keys: it holds the bone where the motion has it down, as readily as <paramref name="Sensitivity"/> says.
 /// <paramref name="Bend"/> turns a limb's bend about the line from its upper bone to the held spot, in degrees (-180 to 180):
-/// 0 bends it the way the solver picks.
+/// 0 bends it the way the solver picks. <paramref name="Floor"/> sets a planted foot held relative to the character down on the
+/// floor, flat unless the motion tips it far (see <see cref="PinPlanting.OnFloor"/>); other pins ignore it.
 /// </summary>
 internal sealed record MotionPin(string Bone, bool HoldTurn = true, string? RelativeTo = null, string? Top = null, bool Planted = false,
-    PinSensitivity Sensitivity = PinSensitivity.Normal, float Bend = 0);
+    PinSensitivity Sensitivity = PinSensitivity.Normal, float Bend = 0, bool Floor = false);
 
 /// <summary>A side of the body, for the side a symmetry layer copies. Saved as numbers.</summary>
 internal enum MotionSide : byte

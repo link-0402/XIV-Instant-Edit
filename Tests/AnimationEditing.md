@@ -2013,6 +2013,22 @@ Fortitude on Idle 6, option default (pose06_loop).
   game."), as Live already did: XIV Bridge 346 refuses Side Step on the 106-bone skeleton without playing it and allows
   it on NFLB + YAS (455 bones). Not checked: Preview's refusal in game (it needs an edit made for a bigger skeleton
   previewed on a smaller one).
+- [ ] 9 On a clip whose feet float or tip a little (Standing idle 6, or any port), Add, Pin feet, and set each foot's
+  Floor to On the floor. In GPose with Live on, camera down at the shoes: both soles lie flat on the floor, neither
+  floating nor sunk, and the knees stay natural. On the Kneel emote, look at a foot tipped far: toes down, the ball
+  should touch the floor at the motion's angle; note where a foot lying on its top ends up (the sole model has only the
+  heel and ball). Set Floor back: the feet are where they were.
+  Partly checked (XIV Bridge tests/instant-edit/animations-pending/532, Release 2026-11-01, Idle 6 on NFLB + YAS): the
+  motion's held soles sit 3.0 and 3.7 mm over model Y 0 (so Y 0 is the floor), tilted 0.6 and 2.8 deg. The first run
+  levelled the right foot and it floated 7.7 mm: the standing leg is about straight and can't lower the ankle. Since then
+  a foot levels only as far as its sole still touches; on the second run the left sole is at 2.7 mm and 0.4 deg, the right
+  keeps 3.7 mm and 2.8 deg, the knees keep their side, and Live shows it in game (0.00 deg off the document, soles 2.7 and
+  3.7 mm). Floor back off gives the motion Pin feet gives without it (0.00 mm; the 0.07 deg the angle reads is its noise
+  floor: a tail bone the layer never touches reads it between two equal reads). Kneel (XIV Bridge 533, its own test, as
+  opened after Idle 6 its loader row twice didn't open in 45 s): its held feet are flat (0-1 deg); with Floor on the soles
+  are 0.1 and 2.0 mm, the same as Pin feet without Floor (a held spot must be in the leg's reach at every sample of its
+  stretch), and the knees keep their side. No held foot of Kneel is tipped past 30 deg, so that case is checked only
+  offline. Not looked at by eye.
 
 ## IK drag (pending)
 

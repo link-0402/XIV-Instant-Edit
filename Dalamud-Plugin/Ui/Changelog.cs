@@ -67,7 +67,7 @@ internal static class ChangelogCatalog
             Entry("Amplitude layers make bones move more or less.", 1),
             Entry("Pose layers blend bones toward poses you key.", 1),
             Entry("Symmetry layers copy one side's motion onto the other, mirrored. Make symmetrical in the Bones window adds one.", 1),
-            Entry("Pin layers hold a bone at a spot, feet on the floor or a hand on the chest, and bend the limb to reach it. Pin feet finds where the feet are down and holds them there.", 1),
+            Entry("Pin layers hold a bone at a spot, feet on the floor or a hand on the chest, and bend the limb to reach it. Pin feet finds where the feet are down and holds them there, and can set them flat on the floor.", 1),
             Entry("Fix layers: Match startup to loop blends a startup's end into the loop frame the game shows then, after its own cross-fade, measured when you play the emote; Smooth jitter calms small shakes, removes brief twists and keeps sharp moves.", 1),
             Entry("Fix layers: Hand shape sets a hand's fingers to a fist, flat hand, point and more, with Curl and Spread sliders, and saves your own shapes.", 1),
             Entry("Fix layers: Reset root turn takes a turn baked into the root bone back out, on the axes you tick.", 1),
