@@ -158,6 +158,7 @@ internal static class ChangelogCatalog
             Entry("Drag a texture's name onto another texture's row, on any material or model, to copy it there the same way.", 1),
             Entry("On Screen: Edit as a separate copy, in a texture's menu, edits a copy only its material uses. Saving gives the copy its own path, so other materials keep the original. This works for shared textures like white.tex too."),
             Entry("On Screen: when a texture comes from another mod, like a MatCap library, Duplicate into source mod in its menu copies it into the material's mod. The mod then works without the library."),
+            Entry("On Screen: a texture's menu can resize it to a preset size, or replace it with a plain dummy that suits its slot, like a flat normal map. Undo is in the same menu."),
             Entry("Heels offset: when your gear hides your feet, the legs or body model now gets the offset instead of the hidden shoes."),
             Entry("Optimize textures: a notification now says what each run compressed, resized or cropped."),
             Entry("Part toggles: exports now refuse another slot's tags, like body tags on a necklace, which could never hide, and say which names to use. Toggle groups also keep a mod's own variant materials instead of switching them back to the game's."),

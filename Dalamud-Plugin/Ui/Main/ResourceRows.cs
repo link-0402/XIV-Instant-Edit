@@ -247,6 +247,7 @@ internal sealed class ResourceRows
                     ImGui.SetTooltip(blocked ?? $"Copy this texture into {UiText.Safe(parent!.SourceLabel, parent.SourceModDirectory)}.\n" +
                         $"Its material uses the copy, so it no longer needs {UiText.Safe(node.SourceLabel, node.SourceModDirectory)}.");
             }
+            DrawTextureReplaceItems(actor, node);
         }
         // Shown while the texture still holds an image dropped on it.
         if (texture && _textureTab.UndoableReplace(node, actor) is { Replacement: { } drop } replaced)
@@ -255,7 +256,7 @@ internal sealed class ResourceRows
                 if (ImGui.MenuItem("Undo replace"))
                     _textureTab.UndoTextureReplace(replaced);
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip($"Put back the texture from before {drop.File} was dropped on it.");
+                ImGui.SetTooltip($"Put back the texture from before it was replaced with {drop.File}.");
         }
         var animation = ResourceViews.IsAnimation(node);
         if (animation)
@@ -296,6 +297,43 @@ internal sealed class ResourceRows
             OpenInPenumbra(node);
         if (ImGui.MenuItem("Open mod"))
             _modBrowser.OpenModWindow(node.SourceModRootPath, node.SourceModDirectory);
+    }
+
+    /// <summary> Resize texture and Replace with dummy texture; both can be undone like a dropped image. </summary>
+    private void DrawTextureReplaceItems(ActorView actor, ResourceView node)
+    {
+        var blocked = _textureTab.ResizeBlock(node);
+        using (ImRaii.Disabled(blocked is not null || _textureTab.Busy.IsBusy))
+            if (ImGui.MenuItem("Resize texture"))
+                _textureTab.OpenResize(node, actor);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(blocked ?? "Pick a new size for this texture.");
+
+        var editable = TextureSessionsTab.TextureEditAvailable(node);
+        var options = TextureSessionsTab.DummyOptions(node);
+        var reason = editable ? null
+            : TextureSessionsTab.TextureEditBlock(node) is { Length: > 0 } block ? block : "This texture has no verified writable mod source.";
+        using (ImRaii.Disabled(!editable || _textureTab.Busy.IsBusy))
+        {
+            if (options.Count == 1)
+            {
+                if (ImGui.MenuItem("Replace with dummy texture"))
+                    _textureTab.ReplaceWithDummy(node, actor, options[0]);
+                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip(reason ?? $"Replace it with a plain {options[0].Label.ToLowerInvariant()} texture.");
+                return;
+            }
+            using var menu = ImRaii.Menu("Replace with dummy texture");
+            if (!menu.Success)
+            {
+                if (reason is not null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip(reason);
+                return;
+            }
+            foreach (var option in options)
+                if (ImGui.MenuItem(option.Label))
+                    _textureTab.ReplaceWithDummy(node, actor, option);
+        }
     }
 
     private static string? ContainingFolder(ResourceView node)

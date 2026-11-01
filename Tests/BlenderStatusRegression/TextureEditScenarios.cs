@@ -100,6 +100,7 @@ internal static partial class TextureEditScenarios
             await DroppedImageAsync(Path.Combine(root, "dropped"));
             await DroppedVanillaImageAsync(Path.Combine(root, "dropped-vanilla"));
             await CopiedTextureAsync(Path.Combine(root, "copied"));
+            await ResizedAndDummyTextureAsync(Path.Combine(root, "resized"));
             await DuplicateIntoModAsync(Path.Combine(root, "duplicate"));
         }
         finally
@@ -1147,6 +1148,38 @@ internal static partial class TextureEditScenarios
             "a copy whose name isn't an image is refused");
         Check(!read && f.Backend.Commits == 1 && File.ReadAllBytes(s.TargetFile)[80] == 70,
             "a refused copy reads nothing and leaves the texture alone");
+    }
+
+    /// <summary>
+    /// Resize texture and Replace with dummy texture from a texture's menu in On Screen: the image is made in
+    /// memory and goes through the texture's session as a dropped image does, Undo included.
+    /// </summary>
+    private static async Task ResizedAndDummyTextureAsync(string root)
+    {
+        using var f = new Fixture(root, (uint)TexFile.TextureFormat.BC7);
+        var png = File.ReadAllBytes(Png(Path.Combine(root, "images", "Blue.png"), 8, 8, 40));
+        var result = await f.Service.ResizeAsync(f.Request, "test.png", _ => Task.FromResult(png), 4, 4, index: false);
+        var s = f.Service.Sessions.Single();
+        var header = TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile));
+        Check(result.Outcome == ExternalTextureOutcome.Applied && header is { Width: 4, Height: 4 } && File.ReadAllBytes(s.TargetFile)[80] == 40 &&
+              s.Replacement is { File: "a 4 × 4 version" } && f.Service.FindUndoableReplace(f.Request)?.Id == s.Id,
+            "a resize commits the texture's own pixels at the new size and can be undone");
+
+        var before = File.ReadAllBytes(s.TargetFile);
+        result = await f.Service.ResizeAsync(f.Request, "test.png", _ => Task.FromResult(png), 6, 6, index: false);
+        Check(result.Outcome == ExternalTextureOutcome.Failed && result.Message.Contains("power of two") && File.ReadAllBytes(s.TargetFile).SequenceEqual(before),
+            "a resize to a side that isn't a power of two is refused and the file stays");
+
+        var flat = new InstantEdit.Services.Painter.RgbaImage(16, 16);
+        for (var i = 0; i < flat.Pixels.Length; i += 4) { flat.Pixels[i] = 128; flat.Pixels[i + 1] = 128; flat.Pixels[i + 2] = 255; flat.Pixels[i + 3] = 255; }
+        result = await f.Service.ReplaceWithImageAsync(f.Request, "a flat (no bump) dummy", _ => Task.FromResult(flat));
+        s = f.Service.Sessions.Single();
+        Check(result.Outcome == ExternalTextureOutcome.Applied && TextureFiles.ReadTex(File.ReadAllBytes(s.TargetFile)) is { Width: 16, Height: 16 } &&
+              File.ReadAllBytes(s.TargetFile)[80] == 255 && s.Replacement is { File: "a flat (no bump) dummy" },
+            "a dummy is committed at its own size and recorded for Undo");
+        await f.Service.UndoReplaceAsync(s.Id);
+        Check(File.ReadAllBytes(s.TargetFile).SequenceEqual(before) && f.Service.Sessions.Single().Replacement is null,
+            "undo puts back the texture from before the dummy");
     }
 
     /// <summary>

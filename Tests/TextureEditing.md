@@ -200,6 +200,35 @@ outline, and the Include-vanilla dialog):
   (XIV Bridge textures/07, Release 2026-10-29: after a real reload of Instant Edit, Undo replace is
   still offered for an image dropped before it and puts the texture from before the drop back.)
 
+## Resize texture and Replace with dummy texture in On Screen (2026-10-31, pending)
+
+`Tests/BlenderStatusRegression` covers the service side (ResizedAndDummyTextureAsync). These need the game:
+- [x] A mod texture's menu (dots button or right-click) shows **Resize texture**. The dialog says
+  "Now <w> × <h>", the current size is greyed out with "(now)", and a size that isn't a power of two
+  is greyed out with why. Pick a smaller size and Resize: the file is that size, the character draws
+  it, and **Undo replace** puts the old one back.
+  (XIV Bridge textures/13, Release 2026-10-31 19:42, right-clicks and clicks on the drawn menu and dialog: on
+  v01_c0101e0502_top_n.tex the dialog says "Now 512 × 1024", "512 × 1024 (now)" is greyed out; on a 768 × 1024 copy every
+  size is greyed out and 3072 × 4096 says "Texture sides must be a power of two from 4 to 8192; this one is 3072 × 4096.";
+  256 × 512 writes a 256 × 512 file the character draws, and Undo replace puts the old bytes back. Note: the resized BC1
+  map was saved uncompressed (A8R8G8B8) while its status said only "Texture saved and redrawn", without the "saved
+  uncompressed" note.)
+- [x] An index texture resized down keeps its colour rows (no blended rows on the character).
+  (XIV Bridge textures/13, Release 2026-10-31: v01_c0101e0502_top_id.tex 512 × 1024 to 256 × 512: of 3,451 pixels on an
+  edge between rows, 3,443 took one of the four they stand for and 5 fell between; 26 of 131,072 pixels match none (BC5
+  noise). The look on the character: by eye.)
+- [x] **Replace with dummy texture** on a normal map makes it a flat 16 × 16 map; on a mask it opens
+  White and Metal; on a diffuse it makes it white. Undo replace puts each back.
+  (XIV Bridge textures/13, Release 2026-10-31: the normal map becomes 16 × 16 (132,130,255); the mask's submenu lists White
+  and Metal, and Metal makes it 16 × 16 (255,0,255); an earring's base becomes 16 × 16 white; each keeps its format, the
+  character draws it, and Undo replace puts the old bytes back.)
+- [x] Both items on a Game Data texture (Include vanilla on) ask for the new mod's name first.
+  (XIV Bridge textures/13, Release 2026-10-31, on v01_c0101e0504_glv_n.tex: the dialog says "Replace a vanilla texture"
+  with "A 256 × 256 version goes into a new mod" and "A flat (no bump) dummy goes into a new mod"; Cancel makes none.)
+- [x] Both items are greyed out on white.tex and other shared blanks, with why.
+  (XIV Bridge textures/13, Release 2026-10-31: on id_16.tex both are greyed out and say "id_16.tex is a blank texture the
+  game shares between many materials; editing it would change all of them.")
+
 ## Copying a texture onto another row in On Screen (2026-10-17, pending)
 
 `Tests/BlenderStatusRegression` covers the service side (CopiedTextureAsync). These need the game

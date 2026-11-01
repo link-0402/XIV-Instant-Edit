@@ -144,12 +144,12 @@ public sealed record TextureVersion
 }
 
 /// <summary>
-/// An image file dropped over a texture in On Screen. Undo puts back what it replaced while the
-/// destination still holds what the drop committed (<see cref="Hash"/>); any later save ends that.
+/// An image file dropped over a texture in On Screen, or a resize or dummy from its menu. Undo puts back
+/// what it replaced while the destination still holds what the drop committed (<see cref="Hash"/>); any later save ends that.
 /// </summary>
 public sealed record TextureReplacement
 {
-    /// <summary>The dropped file's name.</summary>
+    /// <summary>The dropped file's name, or what replaced the texture ("a white dummy").</summary>
     public string File { get; init; } = "";
     /// <summary>The backup of the texture the drop replaced; empty when the drop created the mod, so the captured original was there.</summary>
     public string Backup { get; init; } = "";

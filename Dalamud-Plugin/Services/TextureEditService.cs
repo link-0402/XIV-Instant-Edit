@@ -1372,7 +1372,24 @@ public sealed class TextureEditService : IDisposable
     /// <paramref name="read"/> giving its bytes: another texture copied onto this one, read from its mod or the
     /// game's data. <paramref name="name"/> is the image's file name, whose extension says how to decode it.
     /// </summary>
-    internal async Task<ExternalTextureResult> ReplaceAsync(TextureEditRequest request, string name, Func<CancellationToken, Task<byte[]>> read)
+    internal Task<ExternalTextureResult> ReplaceAsync(TextureEditRequest request, string name, Func<CancellationToken, Task<byte[]>> read)
+        => ReplaceWithImageAsync(request, name, session => ReadImageAsync(session, name, read));
+
+    /// <summary>
+    /// Puts the texture, read with <paramref name="read"/> as <see cref="ReplaceAsync(TextureEditRequest, string, Func{CancellationToken, Task{byte[]}})"/>
+    /// does, back in place at <paramref name="width"/> × <paramref name="height"/>. Index maps are resized
+    /// without blending, so every pixel keeps a colour row the material has.
+    /// </summary>
+    internal Task<ExternalTextureResult> ResizeAsync(TextureEditRequest request, string name, Func<CancellationToken, Task<byte[]>> read,
+        int width, int height, bool index)
+        => ReplaceWithImageAsync(request, $"a {width} × {height} version",
+            async session => Resized(await ReadImageAsync(session, name, read).ConfigureAwait(false), width, height, index));
+
+    /// <summary>
+    /// Puts the image <paramref name="image"/> gives in place of a texture, as an image dropped on it is.
+    /// <paramref name="label"/> names it in the statuses ("Replaced with a white dummy") and for Undo.
+    /// </summary>
+    internal async Task<ExternalTextureResult> ReplaceWithImageAsync(TextureEditRequest request, string label, Func<TextureEditSession, Task<RgbaImage>> image)
     {
         var id = await StartAsync(request, launchEditor: false).ConfigureAwait(false);
         var session = Sessions.First(s => s.Id == id);
@@ -1380,12 +1397,44 @@ public sealed class TextureEditService : IDisposable
         if (VariantShowing(session, request) is { } variant)
             throw new IOException($"Your character shows this texture's variant \"{variant.Name}\". " +
                 $"Select \"{TextureModBackend.OriginalTextureOptionName}\" in its Penumbra group to replace the texture itself.");
+        var tga = TgaImage.WriteBgra32(await image(session).ConfigureAwait(false));
+        var results = await ApplyExternalAsync([new ExternalTextureSave(id, tga, label)], _life.Token).ConfigureAwait(false);
+        return results.Single();
+    }
+
+    /// <summary> The pixels of the image <paramref name="read"/> gives; <paramref name="name"/> is its file name. </summary>
+    private async Task<RgbaImage> ReadImageAsync(TextureEditSession session, string name, Func<CancellationToken, Task<byte[]>> read)
+    {
         CheckImageName(name);
         var bytes = await read(_life.Token).ConfigureAwait(false);
         if (bytes.Length is <= 0 or > TextureFiles.MaxBytes) throw new IOException($"{name} is empty or too large.");
-        var tga = await ReadImageAsTgaAsync(session, name, bytes).ConfigureAwait(false);
-        var results = await ApplyExternalAsync([new ExternalTextureSave(id, tga, name)], _life.Token).ConfigureAwait(false);
-        return results.Single();
+        return await ReadImageAsync(session, name, bytes).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The image at the new size. Colour stays unpremultiplied, so pixels whose alpha is 0 keep theirs: the
+    /// game reads alpha as another channel. Shrinking averages each block (sides are powers of two), growing
+    /// is bicubic, and an index map takes the nearest pixel.
+    /// </summary>
+    private static RgbaImage Resized(RgbaImage image, int width, int height, bool index)
+    {
+        if (image.Width == width && image.Height == height)
+            return image;
+        using var pixels = SixLabors.ImageSharp.Image.LoadPixelData<SixLabors.ImageSharp.PixelFormats.Rgba32>(image.Pixels, image.Width, image.Height);
+        var sampler = index ? SixLabors.ImageSharp.Processing.KnownResamplers.NearestNeighbor
+            : width <= image.Width && height <= image.Height ? SixLabors.ImageSharp.Processing.KnownResamplers.Box
+            : SixLabors.ImageSharp.Processing.KnownResamplers.Bicubic;
+        SixLabors.ImageSharp.Processing.ProcessingExtensions.Mutate(pixels, x => SixLabors.ImageSharp.Processing.ResizeExtensions.Resize(x,
+            new SixLabors.ImageSharp.Processing.ResizeOptions
+            {
+                Size = new SixLabors.ImageSharp.Size(width, height),
+                Mode = SixLabors.ImageSharp.Processing.ResizeMode.Stretch,
+                Sampler = sampler,
+                PremultiplyAlpha = false,
+            }));
+        var result = new RgbaImage(width, height);
+        pixels.CopyPixelDataTo(result.Pixels);
+        return result;
     }
 
     private static void CheckImageName(string name)
@@ -1405,10 +1454,10 @@ public sealed class TextureEditService : IDisposable
     }
 
     /// <summary>
-    /// The image as the 32-bit TGA saves take. PNG, JPEG and TGA are decoded here; DDS and TEX go
-    /// through the converter, which reads the game's formats (a TEX with its mip offsets normalized first).
+    /// The image's pixels. PNG, JPEG and TGA are decoded here; DDS and TEX go through the converter,
+    /// which reads the game's formats (a TEX with its mip offsets normalized first).
     /// </summary>
-    private async Task<byte[]> ReadImageAsTgaAsync(TextureEditSession s, string name, byte[] bytes)
+    private async Task<RgbaImage> ReadImageAsync(TextureEditSession s, string name, byte[] bytes)
     {
         var extension = Path.GetExtension(name).ToLowerInvariant();
         RgbaImage pixels;
@@ -1433,7 +1482,7 @@ public sealed class TextureEditService : IDisposable
             pixels = new RgbaImage(decoded.Width, decoded.Height);
             decoded.CopyPixelDataTo(pixels.Pixels);
         }
-        return TgaImage.WriteBgra32(pixels);
+        return pixels;
     }
 
     /// <summary>Removes a drop's scratch files once they're used, so automatic cleanup can remove the session again.</summary>
@@ -1489,7 +1538,7 @@ public sealed class TextureEditService : IDisposable
             s.Height = header.Height;
             s.LastSaved = DateTimeOffset.UtcNow;
             s.Replacement = null;
-            s.Status = $"Undid the drop of {drop.File}";
+            s.Status = $"Undid the replace with {drop.File}";
             RaiseFileChanged(s.TargetFile);
             var work = Path.Combine(s.Directory, DropWorkFolder);
             TextureFiles.EnsureLocalPath(work);

@@ -5,7 +5,9 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
 using InstantEdit.Services;
+using InstantEdit.Services.Painter;
 using InstantEdit.Services.Previews;
+using InstantEdit.Studio.Services;
 using DroppedPaths = InstantEdit.Studio.Windows.UI.DroppedPaths;
 using FileDrop = InstantEdit.Studio.Windows.UI.FileDrop;
 using HeldDrop = InstantEdit.Studio.Windows.UI.HeldDrop;
@@ -19,7 +21,11 @@ namespace InstantEdit.Ui.Main;
 internal sealed class TextureSessionsTab
 {
     private const string CleanUpTexturesDialog = "Clean up texture sessions";
+    private const string ResizeTextureDialog = "Resize texture";
     private const string RestorePopup = "##restore-versions";
+
+    /// <summary> The longest side the resize dialog offers; the other side keeps the texture's shape. </summary>
+    private static readonly int[] ResizeSides = [4096, 2048, 1024, 512, 256, 128];
 
     /// <summary> How long a dragged image has to rest on a texture row before it can be dropped there. </summary>
     private static readonly TimeSpan TextureDropHold = TimeSpan.FromSeconds(1);
@@ -38,6 +44,7 @@ internal sealed class TextureSessionsTab
     private string _textureModName = "";
     private Guid? _discardTexture;
     private bool _cleanUpTextures;
+    private ResizeDialog? _resize;
     /// <summary> The session whose restore picker is open, with the choices taken when it opened. </summary>
     private (Guid Session, List<RestoreChoice> Choices)? _restoreChoices;
     private readonly Dictionary<Guid, float> _sessionCardHeights = new();
@@ -426,7 +433,7 @@ internal sealed class TextureSessionsTab
             Widgets.SectionHeader(image is null ? "Edit a vanilla texture" : "Replace a vanilla texture");
             Widgets.HintWrapped(image is null
                 ? "The first successful save creates a new mod with this name and enables it in the actor's collection."
-                : $"{image.Label} goes into a new mod with this name, enabled in the actor's collection.");
+                : $"{Capitalized(image.Label)} goes into a new mod with this name, enabled in the actor's collection.");
             ImGui.Spacing();
             ImGui.SetNextItemWidth(-1);
             if (ImGui.InputTextWithHint("##texture-mod-name", "Mod name", ref _textureModName, 120))
@@ -474,7 +481,166 @@ internal sealed class TextureSessionsTab
             ImGui.EndPopup();
         }
         DrawCleanUpTexturesDialog();
+        DrawResizeDialog();
     }
+
+    /// <summary>
+    /// The texture the resize dialog is open for, and its size once read off the file's header
+    /// (<see cref="Width"/> is set last, so a non-zero one means both are there).
+    /// </summary>
+    private sealed class ResizeDialog(ResourceView node, ActorView actor, TextureImage source)
+    {
+        public ResourceView Node { get; } = node;
+        public ActorView Actor { get; } = actor;
+        public TextureImage Source { get; } = source;
+        public volatile int Width;
+        public volatile int Height;
+        public volatile string Error = "";
+        public int Side;
+    }
+
+    /// <summary> Why the row's texture can't be resized, or null when it can. </summary>
+    public string? ResizeBlock(ResourceView node)
+    {
+        if (!TextureEditAvailable(node))
+            return TextureEditBlock(node) is { Length: > 0 } blocked ? blocked : "This texture has no verified writable mod source.";
+        return CopySource(node) is null ? "This texture has no file to read." : null;
+    }
+
+    /// <summary> Opens the resize dialog for the row's texture and reads its size in the background. </summary>
+    public void OpenResize(ResourceView node, ActorView actor)
+    {
+        if (ResizeBlock(node) is not null || CopySource(node) is not { } source)
+            return;
+        var dialog = new ResizeDialog(node, actor, source);
+        _resize = dialog;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var header = source.FromGame
+                    ? _data.GetFile(source.Path)?.Data ?? throw new IOException($"{source.Name} could not be read from the game's data.")
+                    : ReadHeader(source.Path);
+                if (header.Length < 16) throw new InvalidDataException($"{source.Name} is not a texture.");
+                dialog.Height = BitConverter.ToUInt16(header, 10);
+                dialog.Width = BitConverter.ToUInt16(header, 8);
+            }
+            catch (Exception error)
+            {
+                _log.Warning(error, "Could not read a texture's size for resizing.");
+                dialog.Error = $"Could not read {source.Name}: {error.Message}";
+            }
+        });
+
+        static byte[] ReadHeader(string path)
+        {
+            using var file = File.OpenRead(path);
+            var header = new byte[16];
+            file.ReadExactly(header);
+            return header;
+        }
+    }
+
+    /// <summary> The size a preset gives the texture, keeping its shape; null when its sides don't divide evenly. </summary>
+    private static (int Width, int Height)? ResizedTo(int width, int height, int side)
+    {
+        var longest = Math.Max(width, height);
+        if ((long)width * side % longest != 0 || (long)height * side % longest != 0)
+            return null;
+        return ((int)((long)width * side / longest), (int)((long)height * side / longest));
+    }
+
+    private void DrawResizeDialog()
+    {
+        if (_resize is not null && !ImGui.IsPopupOpen(ResizeTextureDialog)) ImGui.OpenPopup(ResizeTextureDialog);
+        ImGui.SetNextWindowSizeConstraints(Theme.Scaled(360, 0), Theme.Scaled(640, 500));
+        if (!ImGui.BeginPopupModal(ResizeTextureDialog, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+        var dialog = _resize;
+        if (dialog is null)
+        {
+            ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+            return;
+        }
+        var name = Path.GetFileName(dialog.Node.GamePath);
+        Widgets.SectionHeader($"Resize {name}");
+        int width = dialog.Width, height = dialog.Height;
+        if (dialog.Error.Length > 0)
+            Widgets.HintWrapped(dialog.Error);
+        else if (width == 0)
+            Widgets.HintWrapped("Reading the texture's size");
+        else
+        {
+            Widgets.HintWrapped($"Now {width} × {height}. Undo is in the row's menu.");
+            ImGui.Spacing();
+            foreach (var side in ResizeSides)
+            {
+                var size = ResizedTo(width, height, side);
+                var current = size == (width, height);
+                var problem = size is { } s ? TextureFiles.SizeProblem(s.Width, s.Height) : "This size doesn't keep the texture's shape.";
+                using (ImRaii.Disabled(current || problem.Length > 0))
+                    if (ImGui.RadioButton(size is { } shown ? current ? $"{shown.Width} × {shown.Height} (now)" : $"{shown.Width} × {shown.Height}" : $"{side}",
+                            dialog.Side == side))
+                        dialog.Side = side;
+                if (problem.Length > 0 && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                    ImGui.SetTooltip(problem);
+            }
+        }
+        ImGui.Spacing();
+        var target = width > 0 && dialog.Side > 0 ? ResizedTo(width, height, dialog.Side) : null;
+        using (ImRaii.Disabled(target is null || target == (width, height) || Busy.IsBusy))
+        {
+            if (ImGui.Button("Resize") && target is { } to)
+            {
+                _resize = null;
+                ImGui.CloseCurrentPopup();
+                var source = dialog.Source;
+                var index = dialog.Node.TextureRole == TextureRole.Index;
+                ReplaceTexture(dialog.Node, dialog.Actor, new TextureImage("", false, source.Name, $"a {to.Width} × {to.Height} version",
+                    Apply: request => _textures.ResizeAsync(request, source.Name, ReadSource(source), to.Width, to.Height, index)));
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel")) { _resize = null; ImGui.CloseCurrentPopup(); }
+        ImGui.EndPopup();
+    }
+
+    /// <summary> The placeholder textures the row's slot can take, as the mod builder offers them. </summary>
+    public static IReadOnlyList<DummyTextureLibrary.DummyOption> DummyOptions(ResourceView node)
+        => DummyTextureLibrary.OptionsFor(node.TextureRole switch
+        {
+            TextureRole.Normal => Studio.Models.TextureType.Normal,
+            TextureRole.Mask => Studio.Models.TextureType.Mask,
+            TextureRole.Index => Studio.Models.TextureType.Index,
+            _ => Studio.Models.TextureType.Diffuse,
+        });
+
+    /// <summary> Replaces the row's texture with a small square of the placeholder's colour. </summary>
+    public void ReplaceWithDummy(ResourceView node, ActorView actor, DummyTextureLibrary.DummyOption option)
+    {
+        if (!IsTextureRow(node) || !TextureEditAvailable(node) || Busy.IsBusy)
+            return;
+        var label = $"a {option.Label.ToLowerInvariant()} dummy";
+        ReplaceTexture(node, actor, new TextureImage("", false, label, label,
+            Apply: request => _textures.ReplaceWithImageAsync(request, label, _ => Task.FromResult(Solid(option)))));
+    }
+
+    private static RgbaImage Solid(DummyTextureLibrary.DummyOption option)
+    {
+        var image = new RgbaImage(DummyTextureLibrary.Size, DummyTextureLibrary.Size);
+        for (var i = 0; i < image.Pixels.Length; i += 4)
+        {
+            image.Pixels[i] = option.R;
+            image.Pixels[i + 1] = option.G;
+            image.Pixels[i + 2] = option.B;
+            image.Pixels[i + 3] = option.A;
+        }
+        return image;
+    }
+
+    private static string Capitalized(string text)
+        => text.Length > 0 && char.IsLower(text[0]) ? char.ToUpperInvariant(text[0]) + text[1..] : text;
 
     private void DrawCleanUpTexturesDialog()
     {
@@ -567,9 +733,11 @@ internal sealed class TextureSessionsTab
     /// What replaces a texture: an image file dropped from Explorer, or the texture of another row copied
     /// onto it. <paramref name="Path"/> is a file on disk, or a game path when <paramref name="FromGame"/>.
     /// <paramref name="Name"/> is its file name and <paramref name="Label"/> how the status names it.
-    /// <paramref name="Row"/> is the row it was dragged from, if any.
+    /// <paramref name="Row"/> is the row it was dragged from, if any. <paramref name="Apply"/> makes the image
+    /// itself instead of reading a file: a resize or a dummy from the row's menu.
     /// </summary>
-    private sealed record TextureImage(string Path, bool FromGame, string Name, string Label, ResourceView? Row = null)
+    private sealed record TextureImage(string Path, bool FromGame, string Name, string Label, ResourceView? Row = null,
+        Func<TextureEditRequest, Task<ExternalTextureResult>>? Apply = null)
     {
         public static TextureImage File(string path)
             => new(path, false, System.IO.Path.GetFileName(path), System.IO.Path.GetFileName(path));
@@ -685,9 +853,8 @@ internal sealed class TextureSessionsTab
         {
             try
             {
-                var result = image.FromGame
-                    ? await _textures.ReplaceAsync(request, image.Name, _ => Task.Run(() => _data.GetFile(image.Path)?.Data
-                        ?? throw new IOException($"{image.Name} could not be read from the game's data."))).ConfigureAwait(false)
+                var result = image.Apply is { } apply ? await apply(request).ConfigureAwait(false)
+                    : image.FromGame ? await _textures.ReplaceAsync(request, image.Name, ReadSource(image)).ConfigureAwait(false)
                     : await _textures.ReplaceAsync(request, image.Path).ConfigureAwait(false);
                 // The session's status after the drop says whether the reload and redraw went through.
                 var refresh = _textures.Sessions.FirstOrDefault(s => s.Id == result.SessionId)?.Status ?? "";
@@ -696,7 +863,7 @@ internal sealed class TextureSessionsTab
                 else if (result.Outcome == ExternalTextureOutcome.Applied)
                     _feed.SetStatus($"Replaced {texture} with {file}. Undo is in the row's menu.", FeedbackSeverity.Success);
                 else if (result.Outcome == ExternalTextureOutcome.Unchanged)
-                    _feed.SetStatus($"{file} is the same as {texture}, so nothing changed.", FeedbackSeverity.Info);
+                    _feed.SetStatus($"{Capitalized(file)} is the same as {texture}, so nothing changed.", FeedbackSeverity.Info);
                 else
                     _feed.SetStatus($"Could not replace {texture}: {result.Message}", FeedbackSeverity.Error);
             }
@@ -709,6 +876,12 @@ internal sealed class TextureSessionsTab
             finally { Busy.Exit(); }
         });
     }
+
+    /// <summary> Reads a copied texture's bytes: from the game's data, or its file on disk. </summary>
+    private Func<CancellationToken, Task<byte[]>> ReadSource(TextureImage image)
+        => image.FromGame
+            ? _ => Task.Run(() => _data.GetFile(image.Path)?.Data ?? throw new IOException($"{image.Name} could not be read from the game's data."))
+            : token => File.ReadAllBytesAsync(image.Path, token);
 
     /// <summary> The session holding an image dropped on the row's texture, while the drop can still be undone. </summary>
     public TextureEditSession? UndoableReplace(ResourceView resource, ActorView actor)
@@ -727,7 +900,7 @@ internal sealed class TextureSessionsTab
                 var status = _textures.Sessions.FirstOrDefault(s => s.Id == session.Id)?.Status ?? "";
                 _feed.SetStatus(status.Contains("attention", StringComparison.Ordinal)
                     ? $"{texture} is back, but {status}"
-                    : $"{texture} is back to how it was before {session.Replacement?.File}.",
+                    : $"{texture} is back to how it was before it was replaced with {session.Replacement?.File}.",
                     status.Contains("attention", StringComparison.Ordinal) ? FeedbackSeverity.Warning : FeedbackSeverity.Success);
             }
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
