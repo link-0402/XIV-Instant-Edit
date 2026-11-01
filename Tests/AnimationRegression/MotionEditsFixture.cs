@@ -295,7 +295,8 @@ internal static class MotionEditsFixture
               MotionEdits.Find(smooth, smoothKey) is { Name: "Smooth motion 1", Amount: 1, Window: MotionSmoothing.DefaultWindow, Swing: null },
             "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
         check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
-                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Pin]) &&
+                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Link,
+                  MotionLayerKind.Pin]) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
               TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&

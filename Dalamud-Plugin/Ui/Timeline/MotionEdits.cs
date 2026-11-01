@@ -89,6 +89,7 @@ internal static class MotionEdits
         MotionLayerKind.Smooth => "Smooth motion",
         MotionLayerKind.Noise => "Noise",
         MotionLayerKind.LookAt => "Look at",
+        MotionLayerKind.Link => "Link",
         _ => "Pose",
     };
 
@@ -100,12 +101,17 @@ internal static class MotionEdits
     /// the others, so it applies last, named "Offset 2" and so on, with no fades, so a loop
     /// stays seamless. An amplitude starts at 150%, every other kind at full strength; a swing starts with the
     /// default swing, a smooth motion with the default window, a noise with the default noise and a look turning the
-    /// head, neck and upper back with the default limit.
+    /// head, neck and upper back with the default limit. A link needs its partner, so it is refused here (see <see cref="AddLink"/>).
     /// </summary>
     public static TimelineDocument Add(TimelineDocument doc, MotionLayerKind kind, int start, int end, out string key, out string? error)
     {
         key = string.Empty;
         error = null;
+        if (kind == MotionLayerKind.Link)
+        {
+            error = "Add a link from the Link layer menu.";
+            return doc;
+        }
         if (doc.Motion.Length >= MotionEvaluator.MaxLayers)
         {
             error = $"An animation can have at most {MotionEvaluator.MaxLayers} bone layers.";
@@ -161,6 +167,30 @@ internal static class MotionEdits
         var added = new MotionLayer(key, MotionLayerKind.Link, name.Length > MaxName ? name[..MaxName] : name,
             0, Math.Max(TimelineDocument.MinLength, doc.Length), 0, 0, 1, PoseComponents.None, MotionInterpolation.Smooth, Link: link);
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
+    }
+
+    /// <summary>
+    /// Replaces the link of the link layer <paramref name="key"/> by <paramref name="link"/>, kept valid: a bend within a half turn,
+    /// holds only on the hips, and no top on the hips. With <paramref name="skeleton"/>, a top that isn't above the bone there goes too.
+    /// Unchanged for another kind or the same link.
+    /// </summary>
+    public static TimelineDocument SetLink(TimelineDocument doc, string key, MotionLink link, SkeletonDescription? skeleton = null)
+    {
+        var index = IndexOf(doc, key);
+        if (index < 0 || doc.Motion[index] is not { Kind: MotionLayerKind.Link } layer)
+            return doc;
+        if (skeleton != null && link.Top != null && link.Bone != PinChains.Hips)
+            try
+            {
+                if (!PinChains.TopChoices(skeleton, link.Bone).Contains(link.Top, StringComparer.Ordinal))
+                    link = link with { Top = null };
+            }
+            catch (InvalidDataException)
+            {
+                // A bone the skeleton lacks: applying the layer reports it.
+            }
+        var next = Normalize(layer with { Link = link });
+        return Same(layer, next) ? doc : doc with { Motion = doc.Motion.SetItem(index, next) };
     }
 
     /// <summary>
@@ -1084,11 +1114,11 @@ internal static class MotionEdits
     {
         frame = KeyFrame(doc, frame);
         var index = IndexOf(doc, key);
-        // Symmetry, fix, idle-motion, swing, smooth motion and noise layers never hold keys; a pin layer keys only its keyed pins,
+        // Symmetry, fix, idle-motion, swing, smooth motion, noise and link layers never hold keys; a pin layer keys only its keyed pins,
         // a look only the head's spot, and none while it follows a bone.
         if (index < 0 || string.IsNullOrEmpty(bone) ||
             doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
-                MotionLayerKind.Noise ||
+                MotionLayerKind.Noise or MotionLayerKind.Link ||
             doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted) ||
             doc.Motion[index].Kind == MotionLayerKind.LookAt && (bone != MotionLooks.KeyBone || doc.Motion[index].Look?.Follow != null))
             return doc;
@@ -1341,10 +1371,24 @@ internal static class MotionEdits
 
     /// <summary>
     /// The layer kept valid: on the timeline, a frame long or more, fades that fit, an amount in range, a short name, only the
-    /// weight points inside it, and a look's limit in range, its keyed spots dropped once it follows a bone.
+    /// weight points inside it, a look's limit in range, its keyed spots dropped once it follows a bone, and a link's bend within a
+    /// half turn, with holds and no top only on the hips.
     /// </summary>
     private static MotionLayer Normalize(MotionLayer layer)
     {
+        if (layer.Link is { } link)
+        {
+            var hips = link.Bone == PinChains.Hips;
+            layer = layer with
+            {
+                Link = link with
+                {
+                    Bend = float.IsFinite(link.Bend) ? Math.Clamp(link.Bend, -180, 180) : 0,
+                    Holds = hips ? link.Holds : [],
+                    Top = hips ? null : link.Top,
+                },
+            };
+        }
         if (layer.Look is { } look)
             layer = layer with
             {
@@ -1368,10 +1412,10 @@ internal static class MotionEdits
         return normalized with { Weights = TakesWeights(normalized) ? MotionEvaluator.FitWeights(normalized, normalized.Weights) : [] };
     }
 
-    /// <summary>Field-by-field equality, keys, bones, pins, weight points and the fix's loop pose compared by content.</summary>
+    /// <summary>Field-by-field equality, keys, bones, pins, weight points, the fix's loop pose and a link's holds compared by content.</summary>
     public static bool Same(MotionLayer a, MotionLayer b) =>
         ReferenceEquals(a, b) ||
-        a.Key == b.Key && a.Kind == b.Kind && a.Name == b.Name && a.Start == b.Start && a.End == b.End && a.FadeIn == b.FadeIn &&
+        a.Key == b.Key && a.Kind == b.Kind && a.Name == b.Name && a.Start == b.Start && a.End == b.End && a.FadeIn == b.FadeIn && SameLink(a.Link, b.Link) &&
         a.FadeOut == b.FadeOut && a.Amount.Equals(b.Amount) && a.Components == b.Components && a.Interpolation == b.Interpolation &&
         a.Enabled == b.Enabled && a.From == b.From && a.Bones.SequenceEqual(b.Bones, StringComparer.Ordinal) && a.Pins.SequenceEqual(b.Pins) &&
         a.Weights.SequenceEqual(b.Weights) &&
@@ -1382,6 +1426,13 @@ internal static class MotionEdits
         a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));
+
+    /// <summary>The links field by field, holds by sequence (a record compares the holds' arrays by reference).</summary>
+    private static bool SameLink(MotionLink? a, MotionLink? b) =>
+        ReferenceEquals(a, b) ||
+        a != null && b != null && a.Bone == b.Bone && a.Partner == b.Partner && a.PartnerBone == b.PartnerBone && a.PartnerClip == b.PartnerClip &&
+        a.PartnerBinding == b.PartnerBinding && a.HoldTurn == b.HoldTurn && a.Top == b.Top && a.Bend.Equals(b.Bend) &&
+        a.Holds.SequenceEqual(b.Holds, StringComparer.Ordinal);
 
     private static bool SameHand(MotionHand? a, MotionHand? b) =>
         ReferenceEquals(a, b) ||

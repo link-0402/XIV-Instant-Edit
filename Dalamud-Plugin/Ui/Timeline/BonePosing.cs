@@ -186,9 +186,9 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     }
 
     /// <summary>
-    /// The bones a symmetry, pin or idle layer marks on the map, the list and the character, by name: a pin's
-    /// pinned bones and the bones it bends; the bones a symmetry copies onto; the bones an idle moves. Null for other layers, whose
-    /// keys say what they change. Kept while the layer stays.
+    /// The bones a symmetry, pin, link or idle layer marks on the map, the list and the character, by name: a pin's
+    /// pinned bones and the bones it bends; a link's bone, marked as pinned, and the bones its solve turns; the bones a symmetry
+    /// copies onto; the bones an idle moves. Null for other layers, whose keys say what they change. Kept while the layer stays.
     /// </summary>
     public LayerBoneSets? BonesOf(MotionLayer? layer, SkeletonDescription skeleton)
     {
@@ -196,7 +196,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         {
             case MotionLayerKind.Symmetry:
                 return new LayerBoneSets(EmptySet, Symmetry(layer, skeleton).Bones);
-            case MotionLayerKind.Pin:
+            case MotionLayerKind.Pin or MotionLayerKind.Link:
                 if (pinBones is { } cached && ReferenceEquals(cached.Layer, layer) && ReferenceEquals(cached.Skeleton, skeleton))
                     return cached.Bones;
                 var bones = LayerBones(layer, skeleton);
@@ -215,13 +215,26 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     private static readonly IReadOnlySet<string> EmptySet = new HashSet<string>();
 
     /// <summary>
-    /// A pin layer's pinned bones and the bones its pins bend, by name, on <paramref name="skeleton"/>; empty
-    /// sets for other layers, and for pins the skeleton can't resolve (applying the layer reports them).
+    /// A pin layer's pinned bones and the bones its pins bend, by name, on <paramref name="skeleton"/>; a link layer's bone
+    /// and the other bones its solve may turn (<see cref="MotionLinks.Moved"/>); empty sets for other layers, and for pins or a
+    /// link the skeleton can't resolve (applying the layer reports them).
     /// </summary>
     public static LayerBoneSets LayerBones(MotionLayer? layer, SkeletonDescription skeleton)
     {
         var pinned = new HashSet<string>(StringComparer.Ordinal);
         var changed = new HashSet<string>(StringComparer.Ordinal);
+        if (layer is { Kind: MotionLayerKind.Link, Link: { } link })
+            try
+            {
+                changed.UnionWith(MotionLinks.Moved(skeleton, layer).Select(bone => skeleton.Bones[bone].Name));
+                changed.Remove(link.Bone);
+                pinned.Add(link.Bone);
+            }
+            catch (InvalidDataException)
+            {
+                // A link on a bone this skeleton lacks marks nothing.
+                changed.Clear();
+            }
         if (layer is { Kind: MotionLayerKind.Pin })
             foreach (var pin in layer.Pins)
                 try
@@ -278,7 +291,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         if (layer != null)
         {
             if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                    MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.LookAt) && PoseEdits.Keyed(layer, bone, frame))
+                    MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Link) && PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
             if (layerBones?.Pinned.Contains(bone) == true)
                 return BoneState.Pinned;
@@ -291,6 +304,8 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     public static string StateText(BoneState state, MotionLayer? layer) => state switch
     {
         BoneState.Keyed => "Keyed here in this layer.",
+        // A link's own bone shows as pinned: it follows the partner as its chain does.
+        BoneState.Pinned when layer?.Kind == MotionLayerKind.Link => "Bent to follow a link.",
         BoneState.Pinned => "Pinned by this layer.",
         BoneState.Changed => layer?.Kind switch
         {
@@ -303,6 +318,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             MotionLayerKind.Smooth => "This layer smooths its bones.",
             MotionLayerKind.Noise => "This layer wobbles its bones.",
             MotionLayerKind.LookAt => "Turned to look at the target.",
+            MotionLayerKind.Link => "Bent to follow a link.",
             _ => "This layer changes it.",
         },
         BoneState.Animated => "The clip moves it.",

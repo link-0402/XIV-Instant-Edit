@@ -525,6 +525,12 @@ internal sealed partial class TimelineWorkspace
             reason = TimelinePreview.PastEnd;
             return null;
         }
+        // A link follows its partner, so nothing on it is the gizmo's to change.
+        if (layer.Kind == MotionLayerKind.Link)
+        {
+            reason = TimelineWindowViews.LinkGizmo;
+            return null;
+        }
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
                 MotionLayerKind.Smooth or MotionLayerKind.Noise || ReadOnly)
             return null;

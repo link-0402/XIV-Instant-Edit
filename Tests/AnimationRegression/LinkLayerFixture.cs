@@ -6,6 +6,8 @@ using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui;
+using InstantEdit.Ui.Pose;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>Link layers: a bone that moves with a partner's bone. Their validation, activity, partner tracks, journals and solves.</summary>
@@ -26,6 +28,130 @@ internal static class LinkLayerFixture
         Service(check);
         AddLinks(check);
         Wiring(check);
+        Views(check);
+    }
+
+    /// <summary>A link layer's name, look and texts, and how the edits, the Bones window and the views treat the kind.</summary>
+    private static void Views(Action<bool, string> check)
+    {
+        static string? Names(Guid? id) => id == null ? "You" : id == Partner ? "Aria Rose" : null;
+        var hand = Hand();
+        var mine = hand with { Partner = null };
+        var gone = hand with { Partner = Guid.NewGuid() };
+
+        // The kind: its name, hint, icon, colour and place in the Add menu.
+        check(MotionEdits.KindName(MotionLayerKind.Link) == "Link" && TimelineWindowViews.LayerKindHint(MotionLayerKind.Link) == "Moves a bone with a partner's bone.",
+            "views: a link layer is named Link and says what it does");
+        check(TimelineUi.LayerIcon(MotionLayerKind.Link).ToString() == "Handshake" && TimelineWindowViews.LayerColour(MotionLayerKind.Link) == Theme.OtherTexture &&
+              Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.Link).All(kind =>
+                  TimelineWindowViews.LayerColour(kind) != Theme.OtherTexture && TimelineUi.LayerIcon(kind) != TimelineUi.LayerIcon(MotionLayerKind.Link)),
+            "views: a link layer has the handshake icon and a colour no other kind uses");
+        check(TimelineWindowViews.LayerKinds[^2] == MotionLayerKind.Link && TimelineWindowViews.LayerKinds[^1] == MotionLayerKind.Pin &&
+              !TimelineWindowViews.FaceLayerKinds.Contains(MotionLayerKind.Link), "views: the Add menu offers Link right before Pin, and a face's none");
+
+        // The texts, for a partner and for You.
+        check(TimelineWindowViews.LinkName("Aria Rose") == "Link: Aria Rose" && TimelineWindowViews.LinkName("You") == "Link: You",
+            "views: a link layer is named after its partner");
+        check(TimelineWindowViews.LinkNoPartner == "Open a clip on a partner first." &&
+              TimelineWindowViews.LinkReadOnly("Aria Rose") == "Aria Rose's clip is read-only." && TimelineWindowViews.LinkReadOnly("You") == "Your clip is read-only.",
+            "views: the picker says why it can't link or link back");
+        check(TimelineWindowViews.LinkSummary(hand, Names) == "j_te_r with Aria Rose's j_te_l" && TimelineWindowViews.LinkSummary(mine, Names) == "j_te_r with your j_te_l",
+            "views: a link's summary names both bones and the partner");
+        check(TimelineWindowViews.LayerContent(Layer(hand), Names) == "Follows Aria Rose's j_te_l" && TimelineWindowViews.LayerContent(Layer(mine), Names) == "Follows your j_te_l",
+            "views: a link's tooltip says whose bone it follows");
+        string? State(LinkState? state, MotionLink link) => TimelineWindowViews.LinkStateText(state, link, Names);
+        check(State(LinkState.On, hand) == "Moves with Aria Rose's j_te_l." && State(LinkState.On, mine) == "Moves with your j_te_l." &&
+              State(LinkState.NotOpen, hand) == "Aria Rose's clip isn't open." && State(LinkState.NotOpen, mine) == "Your clip isn't open." &&
+              State(LinkState.OtherClip, hand) == "Aria Rose has another clip open." && State(LinkState.OtherClip, mine) == "You have another clip open." &&
+              State(LinkState.Despawned, hand) == "Aria Rose isn't spawned." && State(LinkState.Despawned, mine) == "You aren't spawned." &&
+              State(LinkState.OutOfGPose, hand) == "Links work in GPose." && State(LinkState.OutOfGPose, mine) == "Links work in GPose." &&
+              State(LinkState.PartnerGone, gone) == "That partner no longer exists." &&
+              State(LinkState.NoBone, hand) == "Aria Rose's skeleton has no j_te_l." && State(LinkState.NoBone, mine) == "Your skeleton has no j_te_l." &&
+              State(LinkState.Unreadable, hand) == "Aria Rose's clip can't be read." && State(LinkState.Unreadable, mine) == "Your clip can't be read.",
+            "views: each link state says why, for a partner and for you");
+        check(State(null, hand) == null && State(LinkState.NotOpen, gone) == "That partner no longer exists.",
+            "views: a link that is off itself has no state line, and one to a deleted preset says it is gone");
+        check(TimelineWindowViews.LinkBackHover("Aria Rose") == "Aria Rose doesn't follow your edits yet." &&
+              TimelineWindowViews.LinkBackHover("You") == "You don't follow these edits yet.", "views: Link back says who doesn't follow yet");
+        check(TimelineWindowViews.LinkPullLabel == "Pull" && TimelineWindowViews.LinkPullTip == "How far the bone follows the partner. Ctrl+click to type.",
+            "views: a link's amount is its pull");
+        check(TimelineWindowViews.LinkGizmo == "Links follow the partner. Edit a layer above." &&
+              BonePosing.StateText(BoneState.Changed, Layer(hand)) == "Bent to follow a link." && BonePosing.StateText(BoneState.Pinned, Layer(hand)) == "Bent to follow a link.",
+            "views: the gizmo and the Bones window say a link follows its partner");
+
+        // The save footer names a partner whose link is off.
+        var doc = new TimelineDocument(30, 30, null, [], 1) { Motion = [Layer(hand)] };
+        IReadOnlyDictionary<string, LinkState> States(LinkState state) => ImmutableDictionary<string, LinkState>.Empty.Add("m1", state);
+        check(TimelineWindowViews.LinkOffWarning(doc, States(LinkState.NotOpen), Names) == "The link to Aria Rose is off. Aria Rose's edits aren't in this save." &&
+              TimelineWindowViews.LinkOffWarning(doc with { Motion = [Layer(mine)] }, States(LinkState.Despawned), Names) ==
+                  "The link to you is off. Your edits aren't in this save.",
+            "views: the footer says a save leaves out the edits of a partner whose link is off");
+        check(TimelineWindowViews.LinkOffWarning(doc, States(LinkState.On), Names) == null &&
+              TimelineWindowViews.LinkOffWarning(doc, ImmutableDictionary<string, LinkState>.Empty, Names) == null &&
+              TimelineWindowViews.LinkOffWarning(doc with { Motion = [Layer(hand) with { Enabled = false }] }, States(LinkState.NotOpen), Names) == null,
+            "views: the footer says nothing while the link is on or off itself");
+
+        // Edits: a link is added from its picker only, takes no keys, and is kept valid.
+        var face = TimelineFace.Open(new TimelineDocument(150, 150, null, [], 1), 0, 1, 150);
+        check(ReferenceEquals(MotionEdits.Add(doc, MotionLayerKind.Link, 0, 30, out var addedKey, out var refused), doc) && addedKey == "" &&
+              refused == "Add a link from the Link layer menu." &&
+              ReferenceEquals(MotionEdits.Add(face, MotionLayerKind.Link, 0, 30, out _, out var faceRefused), face) && faceRefused == "Add a link from the Link layer menu.",
+            "views: Add refuses a link layer, which needs its partner");
+        check(ReferenceEquals(MotionEdits.SetKey(doc, "m1", 5, "j_te_r", T(Vector3.UnitX)), doc), "views: a link layer takes no keys");
+        var added = MotionEdits.AddLink(new TimelineDocument(30, 30, null, [], 1), Hips() with { Holds = [] }, TimelineWindowViews.LinkName("Aria Rose"), out var hipsKey);
+        check(MotionEdits.Find(added, hipsKey)?.Link?.Holds.SequenceEqual([PinChains.FootL, PinChains.FootR]) == true, "views: AddLink gives a hips link both feet");
+        var body = HipDragFixture.Body();
+        MotionLink? Linked(MotionLink link, SkeletonDescription? skeleton = null) => MotionEdits.Find(MotionEdits.SetLink(doc, "m1", link, skeleton), "m1")?.Link;
+        check(Linked(hand with { Bend = 400 })?.Bend == 180 && Linked(hand with { Bend = -400 })?.Bend == -180 && Linked(hand with { Bend = float.NaN })?.Bend == 0,
+            "views: SetLink keeps the bend within a half turn");
+        check(Linked(hand with { Holds = [PinChains.FootL] })?.Holds.IsEmpty == true && Linked(Hips() with { Top = "j_sebo_a" }) is { Top: null } hipsSet &&
+              hipsSet.Holds.SequenceEqual([PinChains.FootL, PinChains.FootR]), "views: SetLink holds bones only on the hips, which bend up to nothing");
+        check(Linked(hand with { Bone = "j_te_l" }, body) is { Top: null } && Linked(hand, body)?.Top == "j_sako_r" && Linked(hand with { Bone = "j_te_l" })?.Top == "j_sako_r",
+            "views: SetLink drops a top that isn't above the bone on the skeleton");
+        check(ReferenceEquals(MotionEdits.SetLink(doc, "m1", hand with { Holds = [] }), doc) && ReferenceEquals(MotionEdits.SetLink(doc, "m9", Hips()), doc),
+            "views: SetLink leaves an unchanged link, or a missing layer, as it was");
+        var hipsLayer = Layer(Hips());
+        check(MotionEdits.Same(hipsLayer, Layer(Hips() with { Holds = [PinChains.FootL, PinChains.FootR] })) &&
+              !MotionEdits.Same(hipsLayer, Layer(Hips() with { Holds = [PinChains.FootL] })) && !MotionEdits.Same(Layer(hand), Layer(hand with { Bend = 10 })) &&
+              !MotionEdits.Same(Layer(hand), Layer(null)),
+            "views: Same compares links by their fields and holds");
+
+        // The Bones window: the linked bone square, the chain it bends changed, never keyed.
+        var bones = BonePosing.LayerBones(Layer(hand), body);
+        ImmutableArray<string> moved = [.. MotionLinks.Moved(body, Layer(hand)).Select(b => body.Bones[b].Name)];
+        check(bones.Pinned.SetEquals(["j_te_r"]) && bones.Changed.SetEquals(moved.Where(name => name != "j_te_r")) && bones.Changed.Contains("j_ude_b_r") &&
+              bones.Changed.Contains("j_sako_r"), "views: a link marks its bone as pinned and the chain it bends as changed");
+        var keyed = Layer(hand) with { Keys = [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_ude_b_r", T(Vector3.Zero)))] };
+        check(PoseEdits.Changes(Layer(hand), "j_ude_b_r", bones.Changed) && !PoseEdits.Changes(Layer(hand), "j_te_l", bones.Changed) &&
+              !PoseEdits.Changes(Layer(hand), "j_ude_b_r") &&
+              BonePosing.StateOf("j_ude_b_r", keyed, 0, null, bones) == BoneState.Changed && BonePosing.StateOf("j_te_r", keyed, 0, null, bones) == BoneState.Pinned,
+            "views: a link's chain bones show as changed by it, never keyed");
+        check(BonePosing.LayerBones(Layer(Hips()), body).Pinned.SetEquals([PinChains.Hips]), "views: a hips link marks the hips");
+        check(!TimelineLayout.Unfolds(keyed), "views: a link layer has no bone rows");
+
+        // Live on a rebuilt clip: a limb link moves no lengths, a hips link moves the hips.
+        check(!TimelineWindowViews.LiveRebuiltPositions(doc) && TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Layer(Hips())] }) &&
+              !TimelineWindowViews.LiveRebuiltPositions(doc with { Motion = [Layer(Hips()) with { Enabled = false }] }),
+            "views: LiveRebuiltPositions is false for a limb link and true for a hips link");
+
+        // A link that bends bones outside the standard skeletons warns as a pin does.
+        var kosi = MotionEvaluator.Index(body)[PinChains.Hips];
+        var tail = body with
+        {
+            Bones = [.. body.Bones, new("j_custom_a", (short)kosi, 0, T(new Vector3(0, 0, -.1f))), new("j_custom_b", (short)body.Bones.Length, 0, T(new Vector3(0, 0, -.1f))),
+                new("j_custom_c", (short)(body.Bones.Length + 1), 0, T(new Vector3(0, 0, -.1f)))],
+        };
+        var candidate = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Game, new AnimationResource("chara/a.pap", "a.pap", "hash")), tail, 0, "");
+        var clip = new AnimationClip("chara/a.pap", "loop", 0, 0, 1, "s.sklb",
+            Resolution: new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, TrackBones: [.. Enumerable.Range(0, body.Bones.Length).Select(b => (short)b)],
+                Standards: [new StandardSkeleton(SkeletonStandard.Vanilla, body, "game")]));
+        var tailLink = doc with { Motion = [Layer(hand with { Bone = "j_custom_c", Top = null })] };
+        check(TimelineWindowViews.LayerBonesWarning(tailLink, clip, tail) is { } warning && warning.Contains("j_custom_b", StringComparison.Ordinal) &&
+              TimelineWindowViews.LayerBonesWarning(tailLink with { Motion = [tailLink.Motion[0] with { Enabled = false }] }, clip, tail) == null,
+            "views: a link bending bones outside the standard skeletons warns as a pin does");
+        check(TimelineWindowViews.BonesProblem(tailLink with { ExcludedBones = ["j_custom_b"] },
+                  clip with { Resolution = clip.Resolution! with { TrackBones = [.. Enumerable.Range(0, tail.Bones.Length).Select(b => (short)b)] } }, tail, null) is { } problem &&
+              problem.Contains("j_custom_b", StringComparison.Ordinal), "views: a link bending a bone left out of the save refuses to save");
     }
 
     /// <summary>Where the partner tracks go: saves, Live, the Bones window and the unsaved state.</summary>
@@ -881,7 +1007,7 @@ internal static class LinkLayerFixture
         return new LinkTrack(samples, samples, 1 / 30f);
     }
 
-    /// <summary>The links field by field, holds by sequence (<see cref="MotionEdits.Same"/> doesn't compare links yet).</summary>
+    /// <summary>The links field by field, holds by sequence, as <see cref="MotionEdits.Same"/> compares them.</summary>
     private static bool SameLink(MotionLink? a, MotionLink? b) => a == null || b == null
         ? a == b
         : a.Bone == b.Bone && a.Partner == b.Partner && a.PartnerBone == b.PartnerBone && a.PartnerClip == b.PartnerClip &&

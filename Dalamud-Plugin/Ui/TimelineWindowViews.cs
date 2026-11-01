@@ -41,7 +41,7 @@ internal static partial class TimelineWindowViews
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
         [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
-            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Pin];
+            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Pin];
 
     /// <summary>The bone layer items a face's Add menu has: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
     public static readonly ImmutableArray<MotionLayerKind> FaceLayerKinds = [.. LayerKinds.Where(kind => TimelineFace.Allows(kind, null))];
@@ -114,6 +114,88 @@ internal static partial class TimelineWindowViews
     /// <summary>Why the gizmo can't move a look-at layer's target, whichever bone is selected; null when it can.</summary>
     public static string? LookGizmo(MotionLayer layer) =>
         layer.Look is { Follow: { } follow } ? $"This layer follows {AnimationPresentation.BoneName(follow)}. Pick Spot to move a target." : null;
+
+    /// <summary>The name the link texts get for your own actor, as <see cref="TimelineSession.ActorName"/> gives it.</summary>
+    private const string You = "You";
+
+    /// <summary>Why the gizmo is off on a link layer, whichever bone is selected.</summary>
+    public const string LinkGizmo = "Links follow the partner. Edit a layer above.";
+
+    /// <summary>The Add menus' Link layer item's hover while no other workspace has a clip open.</summary>
+    public const string LinkNoPartner = "Open a clip on a partner first.";
+
+    /// <summary>A link layer's amount: its label and tooltip.</summary>
+    public const string LinkPullLabel = "Pull";
+    public const string LinkPullTip = "How far the bone follows the partner. Ctrl+click to type.";
+
+    /// <summary>A new link layer's name, after its partner: "Link: Aria Rose", or "Link: You" on a partner's side of a link to you.</summary>
+    public static string LinkName(string name) => $"Link: {name}";
+
+    /// <summary>The picker's Link back hover while the partner's clip is read-only.</summary>
+    public static string LinkReadOnly(string name) => $"{Possessive(name, true)} clip is read-only.";
+
+    /// <summary>The Link back button's hover: the partner, <paramref name="name"/>, doesn't link back yet.</summary>
+    public static string LinkBackHover(string name) => name == You ? "You don't follow these edits yet." : $"{name} doesn't follow your edits yet.";
+
+    /// <summary>A link's summary: "j_te_r with Aria Rose's j_te_l", or "j_te_r with your j_te_l" for a link to you.</summary>
+    public static string LinkSummary(MotionLink link, Func<Guid?, string?> nameOf) =>
+        $"{link.Bone} with {Possessive(PartnerName(link, nameOf), false)} {link.PartnerBone}";
+
+    /// <summary>
+    /// A link layer's state line: that it follows its partner, or why not. Null without a <paramref name="state"/>: the layer is off
+    /// itself (disabled, at 0% or weighted out), which its bar already says. A partner <paramref name="nameOf"/> can't name, its preset
+    /// deleted, is gone whatever the state.
+    /// </summary>
+    public static string? LinkStateText(LinkState? state, MotionLink link, Func<Guid?, string?> nameOf)
+    {
+        if (state is not { } known)
+            return null;
+        var name = PartnerName(link, nameOf);
+        if (known == LinkState.PartnerGone || name == null)
+            return "That partner no longer exists.";
+        var you = name == You;
+        return known switch
+        {
+            LinkState.On => $"Moves with {Possessive(name, false)} {link.PartnerBone}.",
+            LinkState.NotOpen => $"{Possessive(name, true)} clip isn't open.",
+            LinkState.OtherClip => you ? "You have another clip open." : $"{name} has another clip open.",
+            LinkState.Despawned => you ? "You aren't spawned." : $"{name} isn't spawned.",
+            LinkState.OutOfGPose => "Links work in GPose.",
+            LinkState.NoBone => $"{Possessive(name, true)} skeleton has no {link.PartnerBone}.",
+            _ => $"{Possessive(name, true)} clip can't be read.",
+        };
+    }
+
+    /// <summary>
+    /// The save footer's line when a link of <paramref name="doc"/> that may change the motion is off now (its state in
+    /// <paramref name="states"/> isn't On): the save leaves that partner's edits out. It names the first such partner, one with a
+    /// name before one whose preset is gone. Null when every link is on or off itself.
+    /// </summary>
+    public static string? LinkOffWarning(TimelineDocument doc, IReadOnlyDictionary<string, LinkState> states, Func<Guid?, string?> nameOf)
+    {
+        var off = false;
+        foreach (var layer in doc.Motion)
+            if (MotionLinks.MayChange(layer) && states.TryGetValue(layer.Key, out var state) && state != LinkState.On)
+            {
+                if (PartnerName(layer.Link!, nameOf) is { } name)
+                    return name == You
+                        ? "The link to you is off. Your edits aren't in this save."
+                        : $"The link to {name} is off. {name}'s edits aren't in this save.";
+                off = true;
+            }
+        return off ? "The link to a partner is off. A partner's edits aren't in this save." : null;
+    }
+
+    /// <summary>A link's partner as the texts name it: "You" for a link to you, else <paramref name="nameOf"/>'s name, null once the preset is gone.</summary>
+    private static string? PartnerName(MotionLink link, Func<Guid?, string?>? nameOf) => link.Partner == null ? You : nameOf?.Invoke(link.Partner);
+
+    /// <summary>"Aria Rose's", "your" for you, "a partner's" for a partner without a name; capitalised to start a sentence.</summary>
+    private static string Possessive(string? name, bool start) => name switch
+    {
+        You => start ? "Your" : "your",
+        null => start ? "A partner's" : "a partner's",
+        _ => name + "'s",
+    };
 
     /// <summary>
     /// Why the gizmo can't drag <paramref name="primary"/> in <paramref name="layer"/>, bending the limb above it, or for
@@ -190,6 +272,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Smooth => Theme.BaseTexture,
         MotionLayerKind.Noise => Theme.IndexTexture,
         MotionLayerKind.LookAt => Theme.AnimationKind,
+        MotionLayerKind.Link => Theme.OtherTexture,
         _ => Theme.Important,
     };
 
@@ -206,6 +289,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Smooth => "Even out sudden moves.",
         MotionLayerKind.Noise => "Random wobble on bones.",
         MotionLayerKind.LookAt => "Turn the head toward a spot.",
+        MotionLayerKind.Link => "Moves a bone with a partner's bone.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -248,8 +332,14 @@ internal static partial class TimelineWindowViews
         var vanilla = game.Skeleton.Bones.Select(bone => bone.Name).ToHashSet(StringComparer.Ordinal);
         var animated = AnimationBones.Animated(clip).ToHashSet(StringComparer.Ordinal);
         var moved = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var layer in doc.Motion.Where(MotionEvaluator.Active))
+        foreach (var layer in doc.Motion.Where(MayChange))
         {
+            // A link gives tracks to the bones its solve may turn, as a pin does.
+            if (layer.Kind == MotionLayerKind.Link)
+            {
+                moved.UnionWith(LinkedBones(layer, skeleton));
+                continue;
+            }
             // A match gives tracks to the loop's bones it moves off rest; a close loop only reshapes what the other layers move, so it names none.
             if (MotionEdits.IsMatch(layer))
             {
@@ -295,9 +385,14 @@ internal static partial class TimelineWindowViews
         return $"Bone layers move {names}, which other players' skeletons may not have. Sync plugins can refuse the saved file.";
     }
 
-    /// <summary>How many keys and bones a layer has, for its tooltip; an amplitude, a fix, a swing or a smooth motion has no keys, only the bones it is limited to.</summary>
-    public static string LayerContent(MotionLayer layer)
+    /// <summary>
+    /// How many keys and bones a layer has, for its tooltip; an amplitude, a fix, a swing or a smooth motion has no keys, only the bones
+    /// it is limited to. A link says whose bone it follows, its partner named by <paramref name="nameOf"/> (see <see cref="LinkSummary"/>).
+    /// </summary>
+    public static string LayerContent(MotionLayer layer, Func<Guid?, string?>? nameOf = null)
     {
+        if (layer is { Kind: MotionLayerKind.Link, Link: { } link })
+            return $"Follows {Possessive(PartnerName(link, nameOf), false)} {link.PartnerBone}";
         if (layer.Kind == MotionLayerKind.Pin)
         {
             if (layer.Pins.IsEmpty)
@@ -632,6 +727,31 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
+    /// The bones a link layer may change when saved (<see cref="MotionLinks.Moved"/>), on <paramref name="skeleton"/>, the editing
+    /// skeleton. None before the skeleton is known, or for a link the skeleton can't resolve, which applying the layer reports.
+    /// </summary>
+    public static IEnumerable<string> LinkedBones(MotionLayer layer, SkeletonDescription? skeleton)
+    {
+        if (skeleton == null)
+            return [];
+        try
+        {
+            return MotionLinks.Moved(skeleton, layer).Select(bone => skeleton.Bones[bone].Name).ToArray();
+        }
+        catch (InvalidDataException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="layer"/> may change the motion as the views read it: a link once it is on with a pull, whether or not
+    /// its partner's track is there (<see cref="MotionLinks.MayChange"/>), any other kind when it is active.
+    /// </summary>
+    private static bool MayChange(MotionLayer layer) =>
+        layer.Kind == MotionLayerKind.Link ? MotionLinks.MayChange(layer) : MotionEvaluator.Active(layer);
+
+    /// <summary>
     /// What stops saving with <paramref name="doc"/>'s bones left out and a repair onto <paramref name="repair"/>,
     /// as the old rebakes refused them; null when nothing does. Bone layers on a bone left out would be lost,
     /// and a repair onto the skeleton the clip was already made for changes nothing. The layers are read on
@@ -645,9 +765,10 @@ internal static partial class TimelineWindowViews
         if (!excluded.IsEmpty)
         {
             var left = excluded.ToHashSet(StringComparer.Ordinal);
-            var moved = doc.Motion.Where(MotionEvaluator.Active)
+            var moved = doc.Motion.Where(MayChange)
                 .SelectMany(layer => layer.Kind switch
                 {
+                    MotionLayerKind.Link => LinkedBones(layer, editing),
                     MotionLayerKind.Fix when layer.Fix is { Kind: MotionFixKind.HandShape, Hand: { } hand } => HandBones(hand, editing),
                     MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot =>
                         editing?.Bones.Where(bone => bone.Parent < 0).Select(bone => bone.Name) ?? Enumerable.Empty<string>(),
@@ -1013,18 +1134,21 @@ internal static partial class TimelineWindowViews
     /// <summary>
     /// Whether <paramref name="document"/>'s layers may move a bone other than n_hara, which Live on a rebuilt clip can't
     /// show: the game takes those lengths from the character. Offset and pose layers count by their keys, a swing or a noise
-    /// when it slides; any other layer that changes positions counts.
+    /// when it slides, a link on the hips; any other layer that changes positions counts.
     /// </summary>
     public static bool LiveRebuiltPositions(TimelineDocument document) =>
-        document.Motion.Any(layer => MotionEvaluator.Active(layer) && layer.Components.HasFlag(PoseComponents.Position) && layer.Kind switch
-        {
-            MotionLayerKind.Offset => layer.Keys.Any(key => key.Bones.Any(bone => bone.Key != "n_hara" && bone.Value.Position != Vector3.Zero)),
-            MotionLayerKind.Pose => layer.Keys.Any(key => key.Moved.Any(bone => bone != "n_hara")),
-            MotionLayerKind.Swing => layer.Swing is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
-            MotionLayerKind.Noise => layer.Noise is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
-            MotionLayerKind.LookAt => false,
-            _ => true,
-        });
+        document.Motion.Any(layer => layer.Kind == MotionLayerKind.Link
+            // A link on a limb or a chain only turns bones; on the hips it moves them.
+            ? MotionLinks.MayChange(layer) && layer.Link!.Bone == PinChains.Hips
+            : MotionEvaluator.Active(layer) && layer.Components.HasFlag(PoseComponents.Position) && layer.Kind switch
+            {
+                MotionLayerKind.Offset => layer.Keys.Any(key => key.Bones.Any(bone => bone.Key != "n_hara" && bone.Value.Position != Vector3.Zero)),
+                MotionLayerKind.Pose => layer.Keys.Any(key => key.Moved.Any(bone => bone != "n_hara")),
+                MotionLayerKind.Swing => layer.Swing is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
+                MotionLayerKind.Noise => layer.Noise is { Slide: > 0 } && layer.Bones.Any(bone => bone != "n_hara"),
+                MotionLayerKind.LookAt => false,
+                _ => true,
+            });
 
     /// <summary>A loop that slows to a stop at its end: over how many frames.</summary>
     public static string StallText(int frames) => $"The motion holds still before the loop starts again (last {frames} frames).";

@@ -263,7 +263,8 @@ internal static class LookAtFixture
               layer.Look == new MotionLook() && layer.Bones.SequenceEqual(["j_kao", "j_kubi", "j_sebo_c"]) && MotionEdits.MaxAmount(MotionLayerKind.LookAt) == 1,
             "a look-at layer starts on the head, neck and upper back with an 80 degree limit, at full strength");
         check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
-                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Pin]) &&
+                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Link,
+                  MotionLayerKind.Pin]) &&
               MotionEdits.KindName(MotionLayerKind.LookAt) == "Look at" && TimelineWindowViews.LayerKindHint(MotionLayerKind.LookAt) == "Turn the head toward a spot." &&
               Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.LookAt).All(kind =>
                   TimelineWindowViews.LayerColour(kind) != TimelineWindowViews.LayerColour(MotionLayerKind.LookAt) && TimelineUi.LayerIcon(kind) != TimelineUi.LayerIcon(MotionLayerKind.LookAt)),
