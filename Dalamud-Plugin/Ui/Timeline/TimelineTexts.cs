@@ -50,6 +50,24 @@ internal sealed class TimelineTexts(TimelineSession session)
         }
     }
 
+    // The bake-in line, for the document and the partners it was made for: other workspaces' links change without this document.
+    private (TimelineDocument? Document, IReadOnlyList<string>? Linked, string? Text) linkBake;
+
+    /// <summary>
+    /// The save footer's line when the save bakes the layers in (<paramref name="bakesIn"/>) and so ends a link of the open document, or
+    /// another workspace's link to it (<see cref="TimelineWindowViews.LinkBakeWarning"/>); null when none ends. Asks for the other
+    /// workspaces' links only while the save bakes in.
+    /// </summary>
+    public string? LinkBakeWarning(bool bakesIn)
+    {
+        if (!bakesIn || session.Editor?.Document is not { } doc)
+            return null;
+        var linked = session.LinkedBy();
+        if (!ReferenceEquals(linkBake.Document, doc) || linkBake.Linked is not { } was || !was.SequenceEqual(linked, StringComparer.Ordinal))
+            linkBake = (doc, linked, TimelineWindowViews.LinkBakeWarning(true, TimelineWindowViews.LinkBakeNames(doc, session.PartnerName, linked)));
+        return linkBake.Text;
+    }
+
     /// <summary> Makes the texts again for the next document drawn, as after a clip is read. </summary>
     public void Forget() => labelDocument = null;
 

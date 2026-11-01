@@ -206,6 +206,48 @@ internal static partial class TimelineWindowViews
         return off ? "The link to a partner is off. A partner's edits aren't in this save." : null;
     }
 
+    /// <summary>
+    /// The save footer's line when the save bakes the layers in (<paramref name="bakesIn"/>) and so ends a link: the clip reads back
+    /// without layers, so its own links stop following and a partner's link to it carries nothing. It names the first of
+    /// <paramref name="partnerNames"/> (<see cref="LinkBakeNames"/>). Null when the save keeps the layers, or no link is there.
+    /// </summary>
+    public static string? LinkBakeWarning(bool bakesIn, IReadOnlyList<string> partnerNames) =>
+        !bakesIn || partnerNames.Count == 0 ? null
+        : partnerNames[0] == You ? "Baking the layers in ends the link to you."
+        : $"Baking the layers in ends the link to {partnerNames[0]}.";
+
+    /// <summary>
+    /// The partners a save that bakes <paramref name="doc"/>'s layers in ends a link with: those of its own link layers that may change
+    /// the motion, named by <paramref name="nameOf"/> (a deleted preset's left out), then <paramref name="linkedBy"/>, the other
+    /// workspaces linking to this clip (<see cref="LinkedBy"/>); each once, in that order.
+    /// </summary>
+    public static IReadOnlyList<string> LinkBakeNames(TimelineDocument doc, Func<Guid?, string?> nameOf, IEnumerable<string> linkedBy)
+    {
+        var names = new List<string>();
+        foreach (var layer in doc.Motion)
+            if (MotionLinks.MayChange(layer) && PartnerName(layer.Link!, nameOf) is { } name && !names.Contains(name, StringComparer.Ordinal))
+                names.Add(name);
+        foreach (var name in linkedBy)
+            if (!names.Contains(name, StringComparer.Ordinal))
+                names.Add(name);
+        return names;
+    }
+
+    /// <summary>
+    /// The names of the <paramref name="others"/> workspaces with a link layer that may change the motion and links to this clip: its
+    /// partner is <paramref name="self"/> (this workspace's preset, null for You) and it expects <paramref name="gamePath"/> at
+    /// <paramref name="binding"/>. Each once, in their order. Reads documents only.
+    /// </summary>
+    public static IReadOnlyList<string> LinkedBy(IEnumerable<(string Name, TimelineDocument Document)> others, Guid? self, string gamePath, int binding)
+    {
+        var names = new List<string>();
+        foreach (var (name, document) in others)
+            if (!names.Contains(name, StringComparer.Ordinal) && document.Motion.Any(layer => MotionLinks.MayChange(layer) && layer.Link!.Partner == self &&
+                    string.Equals(layer.Link.PartnerClip, gamePath, StringComparison.OrdinalIgnoreCase) && layer.Link.PartnerBinding == binding))
+                names.Add(name);
+        return names;
+    }
+
     /// <summary>A link's partner as the texts name it: "You" for a link to you, else <paramref name="nameOf"/>'s name, null once the preset is gone.</summary>
     private static string? PartnerName(MotionLink link, Func<Guid?, string?>? nameOf) => link.Partner == null ? You : nameOf?.Invoke(link.Partner);
 

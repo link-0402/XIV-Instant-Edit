@@ -83,6 +83,12 @@ internal interface ITimelineHost
 
     /// <summary>The actor of a workspace by its preset, as link texts name it: "You" for null, the partner's name, null once its preset is gone.</summary>
     string? ActorName(Guid? preset);
+
+    /// <summary>
+    /// The other workspaces whose link layers follow <paramref name="self"/>'s open clip, by actor name, as the last framework update
+    /// found them (<see cref="TimelineWindowViews.LinkedBy"/>); reads no motion.
+    /// </summary>
+    IReadOnlyList<string> LinkedBy(WorkspaceKey self);
 }
 
 /// <summary>
@@ -191,6 +197,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         posing = new BonePosing(session, decode);
         // The Add menus open the link picker, and link texts name partners, through the session.
         session.PartnerName = host.ActorName;
+        session.LinkedBy = () => host.LinkedBy(key);
         session.LinkPicker = linkPicker = new LinkPicker(session, posing, host, key);
         boneEditor = new BoneEditor(session, decode, posing, this);
         var poseOptions = new PoseKeyOptions(posing);

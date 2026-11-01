@@ -3225,6 +3225,8 @@ docs/superpowers/specs/2026-11-01-partner-link-layer-design.md (local only).
 - [ ] 7 Despawn the partner: the state line says it isn't spawned, your Live shows your clip without the link, and the
   save footer says the partner's edits aren't in this save. Spawn again: the link is back.
 - [ ] 8 Save both halves to test copies and play them in game: they play as Live showed them.
+- [ ] 9 Cut one linked half: the save footer says "Baking the layers in ends the link to Aria Rose." (on the partner's
+  half: "to you."). Save still works, and the clip reads back without its layers.
 
 ## Layer order drag and Space (pending)
 

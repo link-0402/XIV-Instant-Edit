@@ -165,6 +165,37 @@ internal static class LinkLayerFixture
               TimelineWindowViews.LinkOffWarning(doc with { Motion = [Layer(hand) with { Enabled = false }] }, States(LinkState.NotOpen), Names) == null,
             "views: the footer says nothing while the link is on or off itself");
 
+        // The save footer warns when a save that bakes the layers in ends a link.
+        check(TimelineWindowViews.LinkBakeWarning(true, ["Aria Rose"]) == "Baking the layers in ends the link to Aria Rose." &&
+              TimelineWindowViews.LinkBakeWarning(true, ["You"]) == "Baking the layers in ends the link to you.",
+            "views: the footer says baking the layers in ends the link, for a partner and for you");
+        check(TimelineWindowViews.LinkBakeWarning(false, ["Aria Rose"]) == null && TimelineWindowViews.LinkBakeWarning(true, []) == null &&
+              TimelineWindowViews.LinkBakeWarning(false, []) == null,
+            "views: no bake-in line when the save keeps the layers or no link is there");
+        check(TimelineWindowViews.LinkBakeWarning(true, ["You", "Aria Rose"]) == "Baking the layers in ends the link to you." &&
+              TimelineWindowViews.LinkBakeWarning(true, ["Aria Rose", "You"]) == "Baking the layers in ends the link to Aria Rose.",
+            "views: the bake-in line names the first partner");
+        var stretched = doc with { Length = 60 };
+        check(stretched.Stretched && SaveFooter.DropsLayers(stretched, null) && SaveFooter.DropsLayers(doc, SkeletonStandard.Vanilla) &&
+              SaveFooter.DropsLayers(doc with { ExcludedBones = ["j_kosi"] }, null) && !SaveFooter.DropsLayers(doc, null),
+            "views: a stretch, a repair or bones left out drop the layers on save; a plain save keeps them");
+        check(TimelineWindowViews.LinkBakeNames(doc, Names, []).SequenceEqual(["Aria Rose"]) &&
+              TimelineWindowViews.LinkBakeNames(doc with { Motion = [Layer(mine), Layer(hand, key: "m2"), Layer(hand with { Bone = "j_te_l" }, key: "m3")] }, Names, ["Bea", "Aria Rose"])
+                  .SequenceEqual(["You", "Aria Rose", "Bea"]),
+            "views: the bake-in names are this clip's own links first, then the others linking to it, each once");
+        check(TimelineWindowViews.LinkBakeNames(doc with { Motion = [Layer(hand) with { Enabled = false }, Layer(gone, key: "m2"), Offset("m3", "j_te_l", Vector3.Zero)] }, Names, []).Count == 0 &&
+              TimelineWindowViews.LinkBakeNames(new TimelineDocument(30, 30, null, [], 1), Names, []).Count == 0,
+            "views: a link off itself, one to a deleted preset and other layers name nobody");
+        var toYou = new TimelineDocument(30, 30, null, [], 1) { Motion = [Layer(new MotionLink("j_te_l", null, "j_te_r", Hug, 1))] };
+        var toAria = new TimelineDocument(30, 30, null, [], 1) { Motion = [Layer(new MotionLink("j_te_l", Partner, "j_te_r", Hug, 1))] };
+        check(TimelineWindowViews.LinkedBy([("Aria Rose", toYou), ("Bea", toAria), ("Cid", toYou), ("Aria Rose", toYou)], null, Hug.ToUpperInvariant(), 1).SequenceEqual(["Aria Rose", "Cid"]) &&
+              TimelineWindowViews.LinkedBy([("You", toAria), ("Bea", toYou)], Partner, Hug, 1).SequenceEqual(["You"]),
+            "views: LinkedBy names the other workspaces whose links follow this workspace, each once");
+        check(TimelineWindowViews.LinkedBy([("Aria Rose", toYou)], null, "chara/other.pap", 1).Count == 0 && TimelineWindowViews.LinkedBy([("Aria Rose", toYou)], null, Hug, 2).Count == 0 &&
+              TimelineWindowViews.LinkedBy([("Aria Rose", toYou with { Motion = [toYou.Motion[0] with { Amount = 0 }] })], null, Hug, 1).Count == 0 &&
+              TimelineWindowViews.LinkedBy([], null, Hug, 1).Count == 0,
+            "views: LinkedBy skips links to another clip or binding, and links off themselves");
+
         // Edits: a link is added from its picker only, takes no keys, and is kept valid.
         var face = TimelineFace.Open(new TimelineDocument(150, 150, null, [], 1), 0, 1, 150);
         check(ReferenceEquals(MotionEdits.Add(doc, MotionLayerKind.Link, 0, 30, out var addedKey, out var refused), doc) && addedKey == "" &&

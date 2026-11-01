@@ -276,6 +276,12 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         : partners?.Store.Presets.FirstOrDefault(known => known.Id == id) is { } stored ? partners.Find(id)?.Name ?? stored.Name
         : null;
 
+    IReadOnlyList<string> ITimelineHost.LinkedBy(WorkspaceKey self) =>
+        links.Candidates.FirstOrDefault(candidate => candidate.Key == self) is { } mine
+            ? TimelineWindowViews.LinkedBy(links.Candidates.Where(candidate => candidate.Key != self).Select(candidate => (candidate.Name, candidate.Document)),
+                self.Preset, mine.GamePath, mine.Binding)
+            : [];
+
     void ITimelineHost.AddLinkBack(WorkspaceKey partner, MotionLink link, string name, string expectedPath, int expectedBinding) =>
         linkBacks.Add((partner, link, name, expectedPath, expectedBinding));
 

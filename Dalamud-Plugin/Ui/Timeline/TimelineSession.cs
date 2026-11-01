@@ -125,6 +125,9 @@ internal sealed class TimelineSession
     /// <summary>A link's partner as texts name it, by preset: "You" for null, the partner's name, null once its preset is gone. Set by the workspace.</summary>
     public Func<Guid?, string?> PartnerName { get; set; } = preset => preset == null ? "You" : null;
 
+    /// <summary>The other workspaces whose link layers follow this clip, by actor name (<see cref="ITimelineHost.LinkedBy"/>). Set by the workspace.</summary>
+    public Func<IReadOnlyList<string>> LinkedBy { get; set; } = () => [];
+
     /// <summary>The Link layer picker the Add menus open and the link panel asks for partners; set by the workspace.</summary>
     public LinkPicker? LinkPicker { get; set; }
 

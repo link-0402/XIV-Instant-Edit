@@ -157,7 +157,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var (warning, colour) = problem != null ? (problem, Theme.Warning)
             : saveError != null ? (saveError, Theme.Error)
             : saveMessage == AnimationEditService.SavedSkeletonTooSmall ? (saveMessage, Theme.Warning)
-            : (texts.PastEndWarning ?? texts.LayerBonesWarning ?? texts.LinkOffWarning ?? LeftOutWarning(clip, doc, repair), Theme.Warning);
+            : (texts.PastEndWarning ?? texts.LayerBonesWarning ?? texts.LinkBakeWarning(!doc.Motion.IsEmpty && DropsLayers(doc, repair)) ??
+               texts.LinkOffWarning ?? LeftOutWarning(clip, doc, repair), Theme.Warning);
         if (warning != null)
         {
             using var wrap = ImRaii.TextWrapPos(0f);
@@ -566,8 +567,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair)
     {
         var clip = TimelineSession.ClipKey(loaded);
-        // A motion from Blender saved without layers is the saved file's own motion: nothing to carry.
-        if (!AnimationBakeRules.KeepsLayersOverSave(document, repair) || document.Replacement != null && document.Motion.IsEmpty)
+        if (DropsLayers(document, repair))
         {
             // An undo of a bake onto an earlier edit's base reads that edit back, so its layers come back with these.
             bakedOnBase = loaded.MotionTarget.BaseMotion != null && document.Replacement == null;
@@ -581,6 +581,14 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             motionBase = KeptMotion(loaded);
         motionCarry = (clip, document.Motion, document.NextMotionKey, false);
     }
+
+    /// <summary>
+    /// Whether saving <paramref name="document"/> with <paramref name="repair"/> reads the saved file back without its layers: they
+    /// are baked in (<see cref="AnimationBakeRules.KeepsLayersOverSave"/>), or a motion from Blender is saved without layers, which
+    /// is the saved file's own motion. What <see cref="KeepMotionForSave"/> and the footer's bake-in line decide by.
+    /// </summary>
+    internal static bool DropsLayers(TimelineDocument document, SkeletonStandard? repair) =>
+        !AnimationBakeRules.KeepsLayersOverSave(document, repair) || document.Replacement != null && document.Motion.IsEmpty;
 
     /// <summary> The clip as read, with the base its layers apply to while this window has saved layers into it. </summary>
     public AnimationTimelineSource WithMotionBase(AnimationTimelineSource loaded)
