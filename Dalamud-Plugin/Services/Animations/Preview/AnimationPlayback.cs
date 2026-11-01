@@ -453,9 +453,10 @@ internal sealed unsafe class AnimationPlayback : IDisposable
     /// <summary>
     /// The clip's current time in seconds, read only: on the playback's actor or the GPose actor
     /// while posing, else on the local player (for a playhead that follows the game). Null when no
-    /// live control holds the clip.
+    /// live control holds the clip. <paramref name="newest"/> reads the round the latest play started, also while the one
+    /// before still outweighs it (<see cref="AnimationPreviewRules.PickControl"/>).
     /// </summary>
-    public float? CurrentTime(string bindingFingerprint)
+    public float? CurrentTime(string bindingFingerprint, bool newest = false)
     {
         RequireFrameworkThread();
         if (string.IsNullOrEmpty(bindingFingerprint))
@@ -470,14 +471,15 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         }
         else if (ReadActor() is { Address: not 0 } player)
             chara = (Character*)player.Address;
-        return chara == null ? null : ReadTime(chara, bindingFingerprint);
+        return chara == null ? null : ReadTime(chara, bindingFingerprint, newest);
     }
 
     /// <summary>
     /// Whether the clip has played to its end on the playback's actor: its control used up its cycles (Havok then holds
     /// LocalTime at the end) or sits at its duration. Null when no live control holds the clip, as after its timeline ended.
+    /// <paramref name="newest"/> asks it of the round the latest play started, as <see cref="CurrentTime"/>.
     /// </summary>
-    public bool? AtEnd(string bindingFingerprint)
+    public bool? AtEnd(string bindingFingerprint, bool newest = false)
     {
         RequireFrameworkThread();
         if (string.IsNullOrEmpty(bindingFingerprint) || _session == null || !_clientState.IsGPosing)
@@ -485,13 +487,7 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         var chara = SessionActor(_session);
         if (chara == null)
             return null;
-        hkaDefaultAnimationControl* best = null;
-        foreach (var address in Matching(chara, bindingFingerprint))
-        {
-            var control = (hkaDefaultAnimationControl*)address;
-            if (best == null || control->Weight > best->Weight)
-                best = control;
-        }
+        var best = Pick(chara, bindingFingerprint, newest);
         if (best == null)
             return null;
         var duration = best->Binding.ptr->Animation.ptr->Duration;
@@ -598,17 +594,21 @@ internal sealed unsafe class AnimationPlayback : IDisposable
         return matches.Count;
     }
 
-    /// <summary> The time of the matched control with the most weight. </summary>
-    private float? ReadTime(Character* chara, string fingerprint)
+    /// <summary> The time of the matched control with the most weight, or with <paramref name="newest"/> the one started last. </summary>
+    private float? ReadTime(Character* chara, string fingerprint, bool newest = false)
     {
-        hkaDefaultAnimationControl* best = null;
-        foreach (var address in Matching(chara, fingerprint))
-        {
-            var control = (hkaDefaultAnimationControl*)address;
-            if (best == null || control->Weight > best->Weight)
-                best = control;
-        }
+        var best = Pick(chara, fingerprint, newest);
         return best == null || !float.IsFinite(best->LocalTime) ? null : best->LocalTime;
+    }
+
+    private hkaDefaultAnimationControl* Pick(Character* chara, string fingerprint, bool newest)
+    {
+        var matches = Matching(chara, fingerprint);
+        Span<float> weights = matches.Count <= 64 ? stackalloc float[matches.Count] : new float[matches.Count];
+        for (var i = 0; i < matches.Count; i++)
+            weights[i] = ((hkaDefaultAnimationControl*)matches[i])->Weight;
+        var index = AnimationPreviewRules.PickControl(weights, newest);
+        return index < 0 ? null : (hkaDefaultAnimationControl*)matches[index];
     }
 
     /// <summary>

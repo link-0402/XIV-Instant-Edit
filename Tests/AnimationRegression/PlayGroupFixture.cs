@@ -11,6 +11,48 @@ internal static class PlayGroupFixture
     {
         Rules(check);
         Group(check);
+        Rounds(check);
+    }
+
+    /// <summary>
+    /// After a play again the game blends the new round in from the old one, which keeps the most weight for about 0.17 s
+    /// (seen in game, 2026-11-02). Read from that control, the leader still stood on its end: the shorter clip was held
+    /// again, and when the new round took over, every clip played again a second time. A member reads its newest round.
+    /// </summary>
+    private static void Rounds(Action<bool, string> report)
+    {
+        void check(bool ok, string message, List<string> calls) => report(ok, ok ? message : $"{message} ({string.Join(", ", calls)})");
+
+        // The old round on its end, then the new one a frame in, as the game held them the update after a play again.
+        ReadOnlySpan<float> blending = [0.99f, 0.01f];
+        report(AnimationPreviewRules.PickControl(blending, newest: true) == 1 && AnimationPreviewRules.PickControl(blending, newest: false) == 0 &&
+               AnimationPreviewRules.PickControl([0.5f, 0.5f], newest: false) == 0 && AnimationPreviewRules.PickControl([], newest: true) == -1,
+            "play group: a member's time is its newest round's; the playhead's read keeps the control with the most weight");
+
+        var calls = new List<string>();
+        var group = new TimelinePlayGroup();
+        var you = new Fake("you", calls) { PlayedSeconds = 9.33f, TimeSeconds = 1 };
+        var partnerOne = new Fake("partnerOne", calls) { PlayedSeconds = 2.33f, TimeSeconds = 1 };
+        group.Add(you);
+        group.Add(partnerOne);
+        group.Update();
+        you.TimeSeconds = 2.33f;
+        partnerOne.TimeSeconds = 2.33f;
+        group.Update();
+        you.TimeSeconds = 9.33f;
+        you.AtEnd = true;
+        group.Update();
+        calls.Clear();
+        you.TimeSeconds = 0.017f;
+        you.AtEnd = false;
+        partnerOne.TimeSeconds = 0.017f;
+        partnerOne.AtEnd = false;
+        group.Update();
+        you.TimeSeconds = 0.2f;
+        partnerOne.TimeSeconds = 0.2f;
+        group.Update();
+        check(calls.Count == 0 && group.SharedSeconds == 0.2f,
+            "play group: the updates after both play again find both on their new round: the shorter isn't held again, nothing plays a second time", calls);
     }
 
     /// <summary>A clip that logs what the group tells it.</summary>

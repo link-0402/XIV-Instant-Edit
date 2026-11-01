@@ -183,6 +183,22 @@ internal static class AnimationPreviewRules
     public static float ClampSpeed(float speed) => float.IsNaN(speed) ? 1 : Math.Clamp(speed, 0, 4);
 
     /// <summary>
+    /// Which of a clip's live controls, by weight in Havok's order (oldest first), a time read takes: the one with the most
+    /// weight, a tie the first; with <paramref name="newest"/> the last, the round the latest play started (the round it
+    /// blends in from keeps the most weight for about 0.17 s). -1 without controls.
+    /// </summary>
+    public static int PickControl(ReadOnlySpan<float> weights, bool newest)
+    {
+        if (newest || weights.IsEmpty)
+            return weights.Length - 1;
+        var best = 0;
+        for (var i = 1; i < weights.Length; i++)
+            if (weights[i] > weights[best])
+                best = i;
+        return best;
+    }
+
+    /// <summary>
     /// The EmoteMode an ActionTimeline key sits or lies in: 1 on the ground, 2 in a chair, 3 in bed, else 0. These are
     /// the ground, chair and bed poses, their starts, and the emotes' versions there (emote/j_clap, emote/s_doze).
     /// </summary>

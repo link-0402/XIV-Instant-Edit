@@ -9,9 +9,13 @@ internal interface IPlayGroupMember
     /// <summary>How long it plays (a Preview's built length, Live's cut or stretched one, else the clip's); null while it plays nothing through the Timeline.</summary>
     float? PlayedSeconds { get; }
 
+    /// <summary>
+    /// Where its newest round stands: the one the latest play (the group's, or the game's own repeat of a clip that loops)
+    /// started. The round it blends in from keeps the most weight for about 0.17 s, still on its old end after a play again.
+    /// </summary>
     float? TimeSeconds { get; }
 
-    /// <summary>Whether it played to its end; null when no control holds it (the game dropped a clip that doesn't loop).</summary>
+    /// <summary>Whether its newest round played to its end; null when no control holds it (the game dropped a clip that doesn't loop).</summary>
     bool? AtEnd { get; }
 
     bool Paused { get; }

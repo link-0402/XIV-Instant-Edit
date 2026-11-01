@@ -172,9 +172,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     float? IPlayGroupMember.PlayedSeconds => memberLength;
 
-    float? IPlayGroupMember.TimeSeconds => memberFingerprint is { } fingerprint ? Safely(() => session.Playback.CurrentTime(fingerprint)) : null;
+    float? IPlayGroupMember.TimeSeconds => memberFingerprint is { } fingerprint ? Safely(() => session.Playback.CurrentTime(fingerprint, newest: true)) : null;
 
-    bool? IPlayGroupMember.AtEnd => memberFingerprint is { } fingerprint ? Safely(() => session.Playback.AtEnd(fingerprint)) : null;
+    bool? IPlayGroupMember.AtEnd => memberFingerprint is { } fingerprint ? Safely(() => session.Playback.AtEnd(fingerprint, newest: true)) : null;
 
     bool IPlayGroupMember.Paused => session.Playback.Paused;
 
