@@ -11,6 +11,7 @@ using InstantEdit.Ui.Timeline;
 internal static class LinkLayerFixture
 {
     private static readonly Guid Partner = new("6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+    private const string Hug = "chara/human/c0101/animation/a0001/bt_common/emote/hug.pap";
 
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
@@ -19,6 +20,7 @@ internal static class LinkLayerFixture
         Journals(check);
         Solving(check);
         Hips(check);
+        Partners(check, reject);
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
@@ -369,6 +371,116 @@ internal static class LinkLayerFixture
         }
     }
 
+    private static void Partners(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var body = HipDragFixture.Body();
+        var index = MotionEvaluator.Index(body);
+        int right = index["j_te_r"], left = index["j_te_l"];
+
+        // A link back is the partner's link from this workspace (null for You), its bones the other way round; the first counts.
+        var hand = Hand();
+        var back = Layer(new MotionLink("j_te_l", null, "j_te_r", Hug, 0), key: "m2");
+        var wrongWay = Layer(new MotionLink("j_te_r", null, "j_te_l", Hug, 0), key: "m3");
+        var other = Layer(new MotionLink("j_te_l", Guid.NewGuid(), "j_te_r", Hug, 0), key: "m4");
+        var second = Layer(new MotionLink("j_te_l", null, "j_te_r", Hug, 0, Top: "j_sako_l"), key: "m5");
+        var nudge = Offset("m6", "j_te_l", new Vector3(.05f, .02f, 0));
+        check(ReferenceEquals(MotionLinks.LinkBack([nudge, wrongWay, other, back, second], hand, null), back),
+            "a link back links the partner's bone to this one");
+        check(MotionLinks.LinkBack([nudge, wrongWay, other], hand, null) == null && MotionLinks.LinkBack([back], hand, Partner) == null,
+            "the same bones the wrong way round or another workspace's link isn't a link back");
+        check(ReferenceEquals(MotionLinks.LinkBack([second, back], hand, null), second), "of two link backs the first counts");
+        var fromPartner = Layer(new MotionLink("j_te_l", Partner, "j_te_r", Hug, 0), key: "m7");
+        check(ReferenceEquals(MotionLinks.LinkBack([back, fromPartner], hand with { Partner = null }, Partner), fromPartner),
+            "a link back to a partner names that partner");
+
+        // The partner's own edits: its layers above its link back, without links.
+        var above = Offset("m8", "j_sebo_c", new Vector3(0, .01f, 0));
+        var below = Offset("m9", "j_te_l", new Vector3(0, 0, .03f));
+        ImmutableArray<MotionLayer> partner = [above, other, nudge, back, below, second];
+        var own = MotionLinks.Own(partner, back);
+        check(own.Length == 2 && ReferenceEquals(own[0], above) && ReferenceEquals(own[1], nudge), "links and layers below the link back aren't the partner's own");
+        check(MotionLinks.Own(partner, null).SequenceEqual([above, nudge, below]) && MotionLinks.Own([], null).IsEmpty,
+            "without a link back every layer but the links is the partner's own");
+
+        // Tracks from the partner's clip as played: its bone's model transforms, without and with its own edits.
+        var clip = Reaching();
+        var plain = MotionLinks.Track(clip, [], "j_te_l", 1, default);
+        check(plain.Samples == clip.Samples && plain.Duration == clip.Duration &&
+              All(clip, i => plain.Before[i] == Model(clip, i)[left] && plain.After[i] == plain.Before[i]),
+            "a partner without its own edits gives a track that doesn't move");
+        var scaled = MotionLinks.Track(clip, [nudge], "j_te_l", 1.2f, default);
+        var edited = Applied(clip, [nudge]);
+        check(All(clip, i => Vector3.Distance(scaled.Before[i].Position, Model(clip, i)[left].Position * 1.2f) < 1e-6f &&
+                             Vector3.Distance(scaled.After[i].Position, Model(edited, i)[left].Position * 1.2f) < 1e-6f &&
+                             Vector3.Distance(scaled.After[i].Position - scaled.Before[i].Position, new Vector3(.05f, .02f, 0) * 1.2f) < 1e-5f &&
+                             scaled.Before[i].Rotation == Model(clip, i)[left].Rotation && scaled.After[i].Rotation == Model(edited, i)[left].Rotation &&
+                             scaled.After[i].Scale == Model(edited, i)[left].Scale),
+            "a partner's hand moved by an offset gives that move, scaled by the sizes, and keeps its turn");
+        check(SameRows(clip, Reaching()), "building a track leaves the played clip as it was");
+        var missing = false;
+        try { _ = MotionLinks.Track(clip, [], "j_nothing", 1, default); }
+        catch (InvalidDataException e) { missing = e.Message == MotionEvaluator.Missing("j_nothing").Message; }
+        check(missing, "a partner skeleton without the bone is refused as missing");
+        reject(() => _ = MotionLinks.Track(clip, [], "j_te_l", float.NaN, default), "a size ratio that isn't a number is refused");
+
+        // No echo: A (You) and B (the partner) link their hands and hips both ways. A's hips offset sits above its links; B has no edits.
+        var a = Reaching();
+        var b = Reaching();
+        var lean = Offset("m1", PinChains.Hips, new Vector3(0, 0, .04f));
+        var aHand = Layer(new MotionLink("j_te_r", Partner, "j_te_l", Hug, 1), key: "m2");
+        var aHips = Layer(new MotionLink(PinChains.Hips, Partner, PinChains.Hips, Hug, 1), key: "m3");
+        var bHand = Layer(new MotionLink("j_te_l", null, "j_te_r", Hug, 1), key: "m1");
+        var bHips = Layer(new MotionLink(PinChains.Hips, null, PinChains.Hips, Hug, 1), key: "m2");
+        ImmutableArray<MotionLayer> aLayers = [lean, aHand, aHips], bLayers = [bHand, bHips];
+        // Each side's tracks, as the host builds them: from the partner's own edits above its link back.
+        LinkTrack From(MotionClip played, ImmutableArray<MotionLayer> layers, MotionLayer link, Guid? self) =>
+            MotionLinks.Track(played, MotionLinks.Own(layers, MotionLinks.LinkBack(layers, link.Link!, self)), link.Link!.PartnerBone, 1, default);
+        check(ReferenceEquals(MotionLinks.LinkBack(aLayers, bHand.Link!, Partner), aHand) && ReferenceEquals(MotionLinks.LinkBack(aLayers, bHips.Link!, Partner), aHips) &&
+              ReferenceEquals(MotionLinks.LinkBack(bLayers, aHand.Link!, null), bHand) && ReferenceEquals(MotionLinks.LinkBack(bLayers, aHips.Link!, null), bHips),
+            "hands and hips linked both ways find each other's link backs");
+        check(MotionLinks.Own(aLayers, aHips).SequenceEqual([lean]) && MotionLinks.Own(bLayers, bHand).IsEmpty && MotionLinks.Own(bLayers, null).IsEmpty,
+            "links never carry links");
+        var leaned = Applied(a, [lean]);
+        var bHandTrack = From(a, aLayers, bHand, Partner);
+        var bHipsTrack = From(a, aLayers, bHips, Partner);
+        // The hips (j_kosi) and the back with its arms hang from n_hara side by side, so A's hips move doesn't reach A's hand.
+        check(All(a, i => bHandTrack.Before[i] == Model(a, i)[right] && bHandTrack.After[i] == Model(leaned, i)[right] &&
+                          bHipsTrack.After[i] == Model(leaned, i)[index[PinChains.Hips]] &&
+                          Vector3.Distance(bHipsTrack.After[i].Position - bHipsTrack.Before[i].Position, new Vector3(0, 0, .04f)) < 1e-5f),
+            "B's tracks carry A's hips move only through A's own body");
+        var aHandTrack = From(b, bLayers, aHand, null);
+        var aHipsTrack = From(b, bLayers, aHips, null);
+        check(aHandTrack.Before.SequenceEqual(aHandTrack.After) && aHipsTrack.Before.SequenceEqual(aHipsTrack.After),
+            "A's tracks from B's own edits don't move: nothing echoes back");
+        check(SameRows(Applied(a, aLayers, Set(("m2", aHandTrack), ("m3", aHipsTrack))), leaned), "A's links then leave A as its own edits have it");
+
+        // End to end: B moves its hand by an offset above its link back, and A's linked hand follows it.
+        var bNudged = Applied(b, [nudge]);
+        var follow = From(b, [nudge, bHand, bHips], aHand, null);
+        var followed = Applied(a, [aHand], Set(("m2", follow)));
+        check(All(a, i => Vector3.Distance(Model(followed, i)[right].Position - Model(a, i)[right].Position,
+                              Model(bNudged, i)[left].Position - Model(b, i)[left].Position) < 1e-4f),
+            "A's hand follows B's edited hand");
+
+        // Different lengths: a 60-frame A with a 30-frame B, whose hand goes 6 cm along X over its 30 frames: past them A holds B's last sample.
+        var longer = Reaching(61, 2);
+        var ramp = new MotionLayer("m6", MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1, PoseComponents.All, MotionInterpolation.Linear,
+            Keys: [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_te_l", T(Vector3.Zero))),
+                   new MotionKey(30, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_te_l", T(new Vector3(.06f, 0, 0))))]);
+        var shorter = MotionLinks.Track(b, [ramp], "j_te_l", 1, default);
+        check(Near(shorter.At(45), shorter.Before[^1], shorter.After[^1]) && Near(shorter.At(60), shorter.Before[^1], shorter.After[^1]),
+            "a 30-frame partner's track holds its last sample past frame 30");
+        var held = Applied(longer, [aHand with { End = 60 }], Set(("m2", shorter)));
+        check(longer.Frame(longer.Samples - 1) == 60 && All(longer, i => Vector3.Distance(Model(held, i)[right].Position - Model(longer, i)[right].Position,
+                  new Vector3(.06f * Math.Min(longer.Frame(i), 30) / 30, 0, 0)) < 1e-4f),
+            "a 60-frame clip follows a 30-frame partner, holding its last sample past frame 30");
+    }
+
+    /// <summary>An offset layer moving <paramref name="bone"/> by <paramref name="move"/> in character space over frames 0 to 30.</summary>
+    private static MotionLayer Offset(string key, string bone, Vector3 move) =>
+        new(key, MotionLayerKind.Offset, "Offset 1", 0, 30, 0, 0, 1, PoseComponents.All, MotionInterpolation.Linear,
+            Keys: [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add(bone, T(move)))]);
+
     /// <summary>
     /// <see cref="Reaching"/> with the hips 15 cm lower and the feet where they were, so the knees bend and the legs can reach the feet
     /// from hips moved a few centimetres.
@@ -401,10 +513,10 @@ internal static class LinkLayerFixture
     }
 
     /// <summary>
-    /// <see cref="HipDragFixture.Body"/> over one second in <paramref name="samples"/> samples, the right elbow bent 50° (and with
-    /// <paramref name="still"/> off, swinging 10° either way while the chest sways 5°).
+    /// <see cref="HipDragFixture.Body"/> over <paramref name="duration"/> seconds in <paramref name="samples"/> samples, the right elbow
+    /// bent 50° (and with <paramref name="still"/> off, swinging 10° either way while the chest sways 5°).
     /// </summary>
-    private static MotionClip Reaching(int samples = 31, bool still = false)
+    private static MotionClip Reaching(int samples = 31, float duration = 1, bool still = false)
     {
         var body = HipDragFixture.Body();
         var index = MotionEvaluator.Index(body);
@@ -416,7 +528,7 @@ internal static class LinkLayerFixture
             pose[index["j_ude_b_r"]] = pose[index["j_ude_b_r"]] with { Rotation = Q(Vector3.UnitY, -50 + 10 * MathF.Sin(phase)) };
             return pose.Select(value => value.ToBone()).ToArray();
         }).ToArray();
-        return MotionClip.FromPoses(body, 1, poses);
+        return MotionClip.FromPoses(body, duration, poses);
     }
 
     /// <summary>

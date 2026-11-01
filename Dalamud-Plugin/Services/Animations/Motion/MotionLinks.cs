@@ -108,4 +108,71 @@ internal static class MotionLinks
         bones.UnionWith(HipSolver.Turned(anchors));
         return [.. bones];
     }
+
+    /// <summary>
+    /// The partner's link back to <paramref name="link"/>: the first of <paramref name="partnerLayers"/> that links from the workspace
+    /// <paramref name="self"/> (null for You), with this link's bones the other way round. Null when the partner doesn't link back.
+    /// </summary>
+    public static MotionLayer? LinkBack(IReadOnlyList<MotionLayer> partnerLayers, MotionLink link, Guid? self)
+    {
+        foreach (var layer in partnerLayers)
+            if (layer is { Kind: MotionLayerKind.Link, Link: { } back } && back.Partner == self &&
+                back.Bone == link.PartnerBone && back.PartnerBone == link.Bone)
+                return layer;
+        return null;
+    }
+
+    /// <summary>
+    /// The partner's own edits, what a link carries: its layers above <paramref name="linkBack"/> (all of them when it is null), in
+    /// order, without links. Links never carry links, so two links between the same clips can't feed each other.
+    /// </summary>
+    public static ImmutableArray<MotionLayer> Own(IReadOnlyList<MotionLayer> partnerLayers, MotionLayer? linkBack)
+    {
+        var own = ImmutableArray.CreateBuilder<MotionLayer>();
+        foreach (var layer in partnerLayers)
+        {
+            if (linkBack != null && ReferenceEquals(layer, linkBack))
+                break;
+            if (layer.Kind != MotionLayerKind.Link)
+                own.Add(layer);
+        }
+        return own.ToImmutable();
+    }
+
+    /// <summary>
+    /// The track of a link to <paramref name="partnerBone"/> on the partner's clip as <paramref name="played"/>: the bone in model space
+    /// as played and with the partner's <paramref name="own"/> edits, positions times <paramref name="ratio"/> (partner size over this
+    /// character's). Leaves <paramref name="played"/> as it was. Throws <see cref="MotionEvaluator.Missing"/> for a bone the partner's
+    /// skeleton lacks.
+    /// </summary>
+    public static LinkTrack Track(MotionClip played, IReadOnlyList<MotionLayer> own, string partnerBone, float ratio, CancellationToken token)
+    {
+        if (!float.IsFinite(ratio) || ratio <= 0)
+            throw new ArgumentOutOfRangeException(nameof(ratio), "The partners' sizes don't give a ratio.");
+        var bone = MotionEvaluator.Index(played.Skeleton).TryGetValue(partnerBone, out var found) ? found : throw MotionEvaluator.Missing(partnerBone);
+        var edited = played.Clone();
+        MotionEvaluator.Apply(edited, own, token);
+        return new LinkTrack(Sampled(played, bone, ratio, token), Sampled(edited, bone, ratio, token), played.Duration);
+    }
+
+    /// <summary><paramref name="clip"/>'s <paramref name="bone"/> in model space at each sample, as <see cref="MotionEvaluator.ModelSpace"/> gives it, positions times <paramref name="ratio"/>.</summary>
+    private static ImmutableArray<MotionTransform> Sampled(MotionClip clip, int bone, float ratio, CancellationToken token)
+    {
+        // The bone and its parents, root first: composing just them gives what ModelSpace does for the bone.
+        var chain = new List<int>();
+        for (var b = bone; b >= 0; b = clip.Skeleton.Bones[b].Parent)
+            chain.Add(b);
+        chain.Reverse();
+        var samples = ImmutableArray.CreateBuilder<MotionTransform>(clip.Samples);
+        for (var i = 0; i < clip.Samples; i++)
+        {
+            if ((i & 63) == 0)
+                token.ThrowIfCancellationRequested();
+            var model = clip.Get(i, chain[0]);
+            for (var c = 1; c < chain.Count; c++)
+                model = MotionEvaluator.Compose(model, clip.Get(i, chain[c]));
+            samples.Add(model with { Position = model.Position * ratio });
+        }
+        return samples.MoveToImmutable();
+    }
 }
