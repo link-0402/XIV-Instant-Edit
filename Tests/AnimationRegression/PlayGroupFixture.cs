@@ -10,6 +10,76 @@ internal static class PlayGroupFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         Rules(check);
+        Group(check);
+    }
+
+    /// <summary>A clip that logs what the group tells it.</summary>
+    private sealed class Fake(string name, List<string> calls) : IPlayGroupMember
+    {
+        public string ActorName => name;
+        public float? PlayedSeconds { get; set; }
+        public float? TimeSeconds { get; set; }
+        public bool AtEnd { get; set; }
+        public bool Paused { get; set; }
+        public bool Restarted;
+        public bool TakeStarted()
+        {
+            var was = Restarted;
+            Restarted = false;
+            return was;
+        }
+        public void Seek(float seconds) => calls.Add(FormattableString.Invariant($"{name} seek {seconds:0.##}"));
+        public void Hold(float seconds) => calls.Add(FormattableString.Invariant($"{name} hold {seconds:0.##}"));
+        public void PlayAgain() => calls.Add($"{name} again");
+        public void Pause() => calls.Add($"{name} pause");
+        public void Resume() => calls.Add($"{name} resume");
+        public void SetSpeed(float speed) => calls.Add(FormattableString.Invariant($"{name} speed {speed:0.##}"));
+    }
+
+    private static void Group(Action<bool, string> report)
+    {
+        void check(bool ok, string message, List<string> calls) => report(ok, ok ? message : $"{message} ({string.Join(", ", calls)})");
+
+        var calls = new List<string>();
+        var group = new TimelinePlayGroup();
+        var you = new Fake("you", calls) { PlayedSeconds = 7.33f, TimeSeconds = 1 };
+        var aria = new Fake("aria", calls) { PlayedSeconds = 2.33f, TimeSeconds = 1 };
+        group.Add(you);
+        group.Update();
+        check(calls.Count == 0 && !group.Grouped, "play group: one clip alone is never told anything", calls);
+
+        group.Add(aria);
+        group.Update();
+        check(group.Grouped && calls.Where(call => !call.Contains("speed")).SequenceEqual(["you again", "aria again"]) && calls[0] == "aria speed 1",
+            "play group: a second clip joining while playing takes the group's speed and restarts both together", calls);
+
+        calls.Clear();
+        you.TimeSeconds = 7.33f;
+        you.AtEnd = true;
+        aria.TimeSeconds = 2.33f;
+        group.Update();
+        check(calls.SequenceEqual(["you again", "aria again"]), "play group: at the leader's end both play again on one update", calls);
+
+        calls.Clear();
+        you.AtEnd = false;
+        group.SetFrame(4);
+        check(calls.SequenceEqual(["you pause", "you seek 4", "aria pause", "aria hold 2.33"]) && !group.Playing && group.SharedSeconds == 4,
+            "play group: a scrub pauses both and puts each on the frame, a shorter one on its end", calls);
+
+        calls.Clear();
+        group.TogglePlay();
+        check(calls.SequenceEqual(["you resume"]) && group.Playing, "play group: Play resumes the clips not holding their end", calls);
+
+        calls.Clear();
+        group.SpeedPercent = 50;
+        check(calls.SequenceEqual(["you speed 0.5", "aria speed 0.5"]) && group.SpeedPercent == 50, "play group: one speed for every clip", calls);
+
+        check(group.EndSeconds == 7.33f && group.ShorterEnds.SequenceEqual([("aria", 2.33f)]), "play group: the group's end and where the shorter clip ends", calls);
+
+        calls.Clear();
+        group.Remove(aria);
+        group.Update();
+        check(!group.Grouped && calls.Count == 0, "play group: a clip that leaves drops out; the one left plays alone", calls);
     }
 
     private static GroupMember Member(int key, float length, float? time, bool atEnd = false, bool started = false, bool held = false) =>

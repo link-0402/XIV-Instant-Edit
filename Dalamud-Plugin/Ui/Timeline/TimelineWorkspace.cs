@@ -31,7 +31,7 @@ internal readonly record struct WorkspaceKey(Guid? Preset)
 /// </summary>
 internal sealed record WorkspaceServices(AnimationEditService? Animations, TimelineCatalog Catalog, AnimationPreviewService Preview,
     AnimationPlayback Playback, MotionLiveDisplay? MotionDisplay, AnimationRecorder Recorder, IDataManager Data, IFramework Framework,
-    ITextureProvider Textures, IPluginLog Log, GameSoundPlayer? SoundPlayer, PreviewFiles Files, Func<string> ActorName);
+    ITextureProvider Textures, IPluginLog Log, GameSoundPlayer? SoundPlayer, PreviewFiles Files, Func<string> ActorName, TimelinePlayGroup Group);
 
 /// <summary>What a workspace takes from the Timeline window around it.</summary>
 internal interface ITimelineHost
@@ -140,7 +140,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         Key = key;
         this.host = host;
         session = new TimelineSession(services.Animations, services.Catalog, services.Preview, services.Playback, services.MotionDisplay,
-            services.Data, services.Framework, services.Log) { WorkspaceId = key.Id, ActorName = services.ActorName, Files = services.Files };
+            services.Data, services.Framework, services.Log) { WorkspaceId = key.Id, ActorName = services.ActorName, Files = services.Files, Group = services.Group };
         reader = new TimelineReader(session);
         soundPlayer = services.SoundPlayer;
         bonesWindow = host.Bones;
@@ -682,7 +682,11 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         // Every frame: the bone rows' order, Live and the save all read the clip's match.
         session.KeepMatch();
         if (source?.Document == null || editor == null)
+        {
+            // No editable clip plays through the Timeline here, so none is in the play group.
+            timelinePreview.ClearMember();
             return;
+        }
         // Other parts read the texts every frame, also while the start page shows.
         texts.Refresh(editor.Document);
         livePose.Poll(editor, source);

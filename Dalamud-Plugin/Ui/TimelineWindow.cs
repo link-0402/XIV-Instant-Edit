@@ -207,6 +207,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         {
             if (ReferenceEquals(Shown, workspace))
                 Shown = Workspace(WorkspaceKey.Self);
+            workspace.Session.Group?.Remove(workspace.Preview);
             workspace.Close();
             workspace.Dispose();
         }
@@ -234,6 +235,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
             made.AttachPoseFolders(folders.Config, folders.Save);
         made.HandTips = handTips;
         workspaces[key] = made;
+        made.Session.Group?.Add(made.Preview);
         return made;
     }
 
@@ -248,6 +250,8 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         SyncShown();
         foreach (var workspace in workspaces.Values)
             workspace.Tick();
+        // After every workspace's own update, so every clip it plays again starts on this framework frame.
+        selfServices.Group.Update();
     }
 
     /// <summary>Shows the GPose target's workspace, made the first time that partner is the target.</summary>

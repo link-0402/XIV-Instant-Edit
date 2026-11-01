@@ -42,6 +42,9 @@ internal sealed class TimelineSession
     /// <summary>The game paths every workspace's preview shows, shared by them all; null without a game.</summary>
     public PreviewFiles? Files { get; init; }
 
+    /// <summary>The one playhead over every workspace's clip that plays, shared by them all; null without a game.</summary>
+    public TimelinePlayGroup? Group { get; init; }
+
     /// <summary>Reads whether the live character's skeleton and hand model have fingertip bones; set by the plugin, null without a game.</summary>
     public Func<ushort?, CancellationToken, Task<HandTipFacts>>? HandTips { get; set; }
 

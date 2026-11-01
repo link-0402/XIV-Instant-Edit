@@ -199,11 +199,12 @@ public sealed class Plugin : IDalamudPlugin
             : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
         // Each Timeline workspace's services: yours are the ones above; a partner's playback, Live and preview act on its actor alone.
         var previewFiles = new Services.Animations.Preview.PreviewFiles();
+        var playGroup = new Services.Animations.Preview.TimelinePlayGroup();
         _workspaceServices = new Ui.Timeline.WorkspaceServiceFactory(key =>
         {
             if (key.Preset is not { } preset)
                 return new Ui.Timeline.WorkspaceServices(_animations, _timelineCatalog, _animationPreview, _animationPlayback, _motionDisplay, _recorder,
-                    data, framework, textureProvider, log, _soundPlayer, previewFiles, () => "You");
+                    data, framework, textureProvider, log, _soundPlayer, previewFiles, () => "You", playGroup);
             // Partner keys come only once the partner service below exists.
             var partners = _partners ?? throw new InvalidOperationException("A partner workspace needs the partner service.");
             var playback = new Services.Animations.Preview.AnimationPlayback(framework, data, objects, clientState, targets, log,
@@ -215,7 +216,8 @@ public sealed class Plugin : IDalamudPlugin
                 Services.Animations.Preview.AnimationPreviewService.PartnerTag(preset), Services.Animations.Preview.AnimationPreviewService.PartnerRecord(preset),
                 sweepStale: false);
             return new Ui.Timeline.WorkspaceServices(_animations, _timelineCatalog, preview, playback, display, _recorder, data, framework, textureProvider, log,
-                _soundPlayer, previewFiles, () => partners.Find(preset)?.Name ?? partners.Store.Presets.FirstOrDefault(p => p.Id == preset)?.Name ?? "Partner");
+                _soundPlayer, previewFiles, () => partners.Find(preset)?.Name ?? partners.Store.Presets.FirstOrDefault(p => p.Id == preset)?.Name ?? "Partner",
+                playGroup);
         });
         _timelineWindow = new TimelineWindow(_workspaceServices, animationError, framework, textureProvider, keyState, objects, clientState, targets);
         _exportServer = new ExportServer(_config, _penumbra.ModelExports, _penumbra.RaceExports, _penumbra.SizesExports,

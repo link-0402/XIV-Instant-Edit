@@ -22,8 +22,17 @@ namespace InstantEdit.Ui.Timeline;
 /// playback call runs here, on the framework thread.
 /// </summary>
 internal sealed class TimelinePreview(TimelineSession session, MotionDecode decode, EffectLookEditor effectLooks, SoundFiles soundFiles)
+    : IPlayGroupMember
 {
     private float speedPercent = 100;
+    // What this workspace plays through the Timeline for the play group, as of its last update: the binding and the
+    // played length in seconds; null while it plays nothing (a clip only playing by itself isn't driven).
+    private string? memberFingerprint;
+    private float? memberLength;
+    // It started again by itself since the group last looked (a new Preview, Live, a look or sound reload).
+    private bool memberStarted;
+    // The frame the editor's playhead was last set to from the group's, so a step or scrub is told from it.
+    private int lastMirror = -1;
     private volatile string? previewFingerprint;
     private volatile int previewGeneration;
     private ushort previewTimeline;
@@ -124,16 +133,123 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary>Outside the preview, the playhead moves with this clip while your character plays it.</summary>
     public bool Follow { get; set; } = true;
 
-    /// <summary>The preview's playback speed in percent, 10 to 200. Setting it while the preview plays changes the speed now.</summary>
+    /// <summary>
+    /// The preview's playback speed in percent, 10 to 200. Setting it while the preview plays changes the speed now. With
+    /// other actors' clips playing too it is the play group's one speed.
+    /// </summary>
     public float SpeedPercent
     {
-        get => speedPercent;
+        get => Grouped is { } group ? group.SpeedPercent : speedPercent;
         set
         {
+            if (Grouped is { } group)
+            {
+                group.SpeedPercent = value;
+                return;
+            }
             speedPercent = Math.Clamp(value, 10, 200);
             if (session.Playback.Active)
                 PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
         }
+    }
+
+    /// <summary>The play group while this clip plays in it with another actor's; null when it plays alone or not at all.</summary>
+    private TimelinePlayGroup? Grouped => session.Group is { Grouped: true } group && memberFingerprint != null ? group : null;
+
+    string IPlayGroupMember.ActorName => session.ActorName();
+
+    float? IPlayGroupMember.PlayedSeconds => memberLength;
+
+    float? IPlayGroupMember.TimeSeconds => memberFingerprint is { } fingerprint ? Safely(() => session.Playback.CurrentTime(fingerprint)) : null;
+
+    bool IPlayGroupMember.AtEnd => memberFingerprint is { } fingerprint && Safely(() => session.Playback.AtEnd(fingerprint)) == true;
+
+    bool IPlayGroupMember.Paused => session.Playback.Paused;
+
+    bool IPlayGroupMember.TakeStarted()
+    {
+        var started = memberStarted;
+        memberStarted = false;
+        return started;
+    }
+
+    void IPlayGroupMember.Seek(float seconds)
+    {
+        if (memberFingerprint is { } fingerprint)
+            PlaybackCall(() => session.Playback.Seek(seconds, fingerprint));
+    }
+
+    void IPlayGroupMember.Hold(float seconds)
+    {
+        ((IPlayGroupMember)this).Pause();
+        ((IPlayGroupMember)this).Seek(seconds);
+    }
+
+    void IPlayGroupMember.PlayAgain()
+    {
+        if (memberFingerprint is not { } fingerprint)
+            return;
+        repeatArmed = false;
+        // A preview or Live plays its own timeline; a clip the loader played, the one playing.
+        var timeline = previewFingerprint != null ? previewTimeline : session.Playback.Timeline;
+        PlaybackCall(() => session.Playback.Play(timeline, fingerprint, previewActor ?? session.ActorIndex, previewFace));
+        if (Math.Abs(speedPercent - 100) > .1f && session.Playback.Active)
+            PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
+    }
+
+    void IPlayGroupMember.Pause()
+    {
+        if (session.Playback.Active && !session.Playback.Paused)
+            PlaybackCall(session.Playback.Pause);
+    }
+
+    void IPlayGroupMember.Resume()
+    {
+        if (session.Playback.Active && session.Playback.Paused)
+            PlaybackCall(session.Playback.Resume);
+    }
+
+    void IPlayGroupMember.SetSpeed(float speed)
+    {
+        speedPercent = Math.Clamp(speed * 100, 10, 200);
+        if (session.Playback.Active)
+            PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
+    }
+
+    private T? Safely<T>(Func<T?> read) where T : struct
+    {
+        try { return read(); }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    /// <summary>
+    /// What this workspace plays through the Timeline, for the play group: a Preview or Live, or a clip the loader played
+    /// (it has a session); a Preview's built length, Live's cut or stretched one, else the clip's.
+    /// </summary>
+    /// <summary>Plays nothing through the Timeline now (no editable clip, or stopped): out of the play group.</summary>
+    public void ClearMember()
+    {
+        memberFingerprint = null;
+        memberLength = null;
+    }
+
+    private void UpdateMember(TimelineEditor current, AnimationTimelineSource loaded)
+    {
+        ClearMember();
+        try
+        {
+            if (!session.Playback.Active)
+                return;
+            var fingerprint = previewFingerprint ??
+                              (loaded.Clip.BindingFingerprint.Length > 0 && session.Playback.CurrentTime(loaded.Clip.BindingFingerprint) != null
+                                  ? loaded.Clip.BindingFingerprint : null);
+            if (fingerprint == null)
+                return;
+            var frames = liveStarted && LiveLength(current.Document) is > 0 and var live ? live : builtDocument?.Length ?? current.Document.Length;
+            memberFingerprint = fingerprint;
+            memberLength = Math.Max(1, frames) / (float)TimelineDocument.Fps;
+        }
+        catch (InvalidOperationException) { }
     }
 
     /// <summary>Why Preview can't start now; null when it can.</summary>
@@ -157,6 +273,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             if (OnBuiltPreview() != null)
                 StartLive(loaded);
         }
+        UpdateMember(current, loaded);
         SyncPlayback(current, loaded);
         UpdateLive(current, loaded);
         SyncLooks(current);
@@ -401,6 +518,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 repeatArmed = false;
                 if (!session.Playback.Play(previewTimeline, built.BindingFingerprint, index, previewFace))
                     return false;
+                memberStarted = true;
                 if (Math.Abs(speed - 1) > .001f)
                     session.Playback.SetSpeed(speed);
                 // The props whose attach point is unknown are watched as they appear, to 2 s after the last one does;
@@ -429,6 +547,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     public void TogglePlay()
     {
+        // With another actor's clip playing too, Play and Pause act on every one.
+        if (Grouped is { } group)
+        {
+            group.TogglePlay();
+            return;
+        }
         if (!session.Playback.Active)
         {
             if (previewFingerprint is { } fingerprint)
@@ -450,6 +574,11 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// </summary>
     public void PauseForStep()
     {
+        if (Grouped is { } group)
+        {
+            group.Pause();
+            return;
+        }
         if (session.Playback.Active && !session.Playback.Paused)
             PlaybackCall(session.Playback.Pause);
     }
@@ -457,6 +586,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary>Plays the shown preview again from frame 0, the playhead with it.</summary>
     internal void Replay(TimelineEditor current)
     {
+        if (Grouped is { } group)
+        {
+            group.Replay();
+            current.Playhead = 0;
+            lastMirror = 0;
+            return;
+        }
         if (previewFingerprint is not { } fingerprint)
             return;
         repeatArmed = false;
@@ -489,6 +625,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         previewFingerprint = null;
         previewDocument = null;
         lastSeekFrame = -1;
+        ClearMember();
         var redraw = previewRedrawn ? previewActor : null;
         previewRedrawn = false;
         StopTemporaryMod(redraw);
@@ -559,6 +696,14 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         session.PlayheadFollows = false;
         try
         {
+            // With another actor's clip playing too, the play group holds the frame: the playhead mirrors it, and a step or
+            // scrub goes to the group.
+            if (Grouped is { } group)
+            {
+                MirrorGroup(current, group);
+                return;
+            }
+            lastMirror = -1;
             if (session.Playback.Active && previewFingerprint is { } fingerprint)
             {
                 if (session.Playback.Paused || current.Gesture == TimelineGesture.Scrub)
@@ -605,6 +750,25 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         catch (InvalidOperationException e)
         {
             previewError = e.Message;
+        }
+    }
+
+    /// <summary>
+    /// The playhead on the group's shared frame, capped at this clip's last frame; a playhead moved since (a step, a scrub)
+    /// moves the group's frame instead, pausing every clip there.
+    /// </summary>
+    private void MirrorGroup(TimelineEditor current, TimelinePlayGroup group)
+    {
+        if (lastMirror >= 0 && current.Playhead != lastMirror)
+            group.SetFrame(current.Playhead / (float)TimelineDocument.Fps);
+        var frame = Math.Min(TimelineWindowViews.Frames(group.SharedSeconds), Math.Max(0, current.Document.Length - 1));
+        current.Playhead = frame;
+        lastMirror = frame;
+        lastSeekFrame = frame;
+        if (group.Playing)
+        {
+            current.Reveal(frame);
+            session.PlayheadFollows = true;
         }
     }
 
@@ -805,6 +969,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                     if (!StartDisplay(current, fresh, decoded, built.Actor))
                         return;
                     liveStarted = true;
+                    memberStarted = true;
                     return;
                 }
                 if (session.Playback.ActorIndex() is not { } actor)
@@ -833,6 +998,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 if (!StartDisplay(current, fresh, decoded, actor))
                     return;
                 liveStarted = true;
+                memberStarted = true;
                 return;
             }
             if (!ReferenceEquals(decoded, liveDecoded))
@@ -1073,9 +1239,11 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         // Live without a built preview plays the clip's own file again itself, once the character is drawn.
         if (generation != lookGeneration || liveWanted && livePreview == null || previewFingerprint is not { } fingerprint)
             return;
-        reloadHold = session.Playback.Active && session.Playback.Paused && lastSeekFrame >= 0 ? lastSeekFrame : null;
+        // In the play group a reload counts as a start: the group puts it back on the shared frame, paused or not.
+        reloadHold = Grouped == null && session.Playback.Active && session.Playback.Paused && lastSeekFrame >= 0 ? lastSeekFrame : null;
         repeatArmed = false;
         PlaybackCall(() => session.Playback.Play(previewTimeline, fingerprint, previewActor, previewFace));
+        memberStarted = true;
         if (Math.Abs(speedPercent - 100) > .1f && session.Playback.Active)
             PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
     }
