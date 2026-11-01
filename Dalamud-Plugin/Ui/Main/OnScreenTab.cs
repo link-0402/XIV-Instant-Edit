@@ -36,6 +36,14 @@ internal sealed class OnScreenTab
     private bool _actorSnapshotIncludesVanilla;
     private List<ActorView> _actors = [];
 
+    // The player's modded VRAM and triangles, measured on a worker once per snapshot. The last
+    // result stays up while the next is measured.
+    private readonly ResourceCostCache _costCache = new();
+    private IReadOnlyList<OnScreenObject>? _costSnapshot;
+    private Task<ResourceCostTotals>? _costTask;
+    private string _costText = string.Empty;
+    private int _costUnreadable;
+
     public OnScreenTab(Configuration config, Action saveConfig, OnScreenService onScreen, ResourceRows rows, ResourceHoverCards hoverCards,
         TextureSessionsTab textureTab, SlotIcons slotIcons, ExpansionState expansion)
     {
@@ -89,6 +97,44 @@ internal sealed class OnScreenTab
         }
         ImGui.SameLine(0, Theme.Gap);
         Widgets.HelpTip("Show resources loaded directly from game data alongside Penumbra-modified resources. Needed to edit vanilla models and textures.");
+        DrawPlayerCost();
+    }
+
+    /// <summary> The player's modded VRAM and triangles, at the right end of the chips row. </summary>
+    private void DrawPlayerCost()
+    {
+        var items = _onScreen.Items;
+        if (!ReferenceEquals(items, _costSnapshot))
+        {
+            _costSnapshot = items;
+            var player = items.FirstOrDefault(item => item.ObjectIndex == 0);
+            _costTask = player is null ? null : Task.Run(() => ResourceCost.Measure(player.ResourceRoots, _costCache.Read));
+            if (player is null)
+                _costText = string.Empty;
+        }
+        if (_costTask is { IsCompleted: true } done)
+        {
+            if (done.IsCompletedSuccessfully)
+            {
+                var totals = done.Result;
+                _costText = totals.Textures + totals.Models == 0 ? string.Empty
+                    : $"{TextureCompressionViews.Bytes(totals.Vram)} VRAM · {totals.Triangles:N0} tris";
+                _costUnreadable = totals.Unreadable;
+            }
+            _costTask = null;
+        }
+        if (_costText.Length == 0)
+            return;
+
+        var width = ImGui.CalcTextSize(_costText).X;
+        ImGui.SameLine(0, Theme.Scaled(16));
+        ImGui.SameLine(Math.Max(ImGui.GetCursorPosX(), ImGui.GetContentRegionMax().X - width));
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, _costText);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Your character's modded textures and models: video memory of both, and triangles at full detail.\n"
+                + "Gear hidden by other gear counts too, as the game keeps it loaded."
+                + (_costUnreadable == 0 ? string.Empty : _costUnreadable == 1 ? "\n1 file couldn't be read and isn't counted." : $"\n{_costUnreadable} files couldn't be read and aren't counted."));
     }
 
     private void DrawResources(IReadOnlyList<ActorView> actors, string? emptyMessage = null)

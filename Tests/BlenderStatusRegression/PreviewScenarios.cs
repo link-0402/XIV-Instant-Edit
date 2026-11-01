@@ -1,4 +1,7 @@
+using InstantEdit.Models;
+using InstantEdit.Services;
 using InstantEdit.Services.Previews;
+using InstantEdit.Services.TextureCompression;
 using Lumina.Data.Files;
 using static InstantEdit.TestSupport.Assertions;
 
@@ -133,6 +136,10 @@ internal static class PreviewScenarios
         BitConverter.TryWriteBytes(ancient.AsSpan(0, 4), 0x01000005u);
         Require(ModelInfoReader.Read(ancient).VersionLabel == "V5" && ModelInfoReader.Read([1, 2, 3]).Partial,
             "unsupported versions and junk are reported, never thrown");
+        Require(ResourceCost.ReadModel(model[..BitConverter.ToInt32(model, 16)]) == new FileCost(8 * 12 + 36 * 2, 12)
+                && ResourceCost.ReadModel([1, 2, 3]) is null,
+            "a model's cost is its buffers and LOD 0 triangles, read from the tables before its vertex data");
+        CostChecks();
 
         var geometry = ModelGeometryReader.Read(model);
         Require(geometry.Positions.Length == 8 && geometry.Indices.Length == 36 && geometry.TriangleCount == 12 && geometry.Meshes.Length == 1
@@ -161,6 +168,47 @@ internal static class PreviewScenarios
             "supersampling produces soft edges");
         var empty = new ModelGeometry([], [], [], System.Numerics.Vector3.Zero, System.Numerics.Vector3.Zero);
         Require(ModelThumbnailRenderer.Render(empty, 16, false).All(b => b == 0), "empty geometry renders fully transparent");
+    }
+
+    private static ResourceNode CostNode(string actualPath, ResourceSourceState state, params ResourceNode[] children) => new()
+    {
+        Type = string.Empty, Icon = string.Empty, Name = string.Empty, GamePath = string.Empty, ActualPath = actualPath,
+        Children = children, SourceState = state, SourceLabel = string.Empty, SlotLabel = string.Empty,
+        ResourceSection = ResourceSection.Gear, SortOrder = 0,
+    };
+
+    private static void CostChecks()
+    {
+        var head = new byte[TextureCost.HeaderSize];
+        BitConverter.TryWriteBytes(head.AsSpan(0, 4), 0x00800000u);
+        BitConverter.TryWriteBytes(head.AsSpan(4, 4), TextureCost.Bc7);
+        BitConverter.TryWriteBytes(head.AsSpan(8, 2), (ushort)1024);
+        BitConverter.TryWriteBytes(head.AsSpan(10, 2), (ushort)1024);
+        head[12] = 1;
+        head[14] = 11;
+        Require(ResourceCost.ReadTexture(head) == new FileCost(TextureCost.Vram(TextureCost.Bc7, 1024, 1024, 11), 0) && ResourceCost.ReadTexture(head[..40]) is null,
+            "a texture's cost is its mip chain, read from the header");
+
+        // The same texture under two materials counts once; game files, swaps to game paths and other file types don't count.
+        var shared = @"C:\mods\a\shared.tex";
+        var roots = new[]
+        {
+            CostNode(@"C:\mods\a\top.mdl", ResourceSourceState.LoadedMod,
+                CostNode(@"C:\mods\a\top.mtrl", ResourceSourceState.LoadedMod, CostNode(shared, ResourceSourceState.LoadedMod)),
+                CostNode(@"C:\mods\a\top_b.mtrl", ResourceSourceState.LoadedMod, CostNode(shared.ToUpperInvariant(), ResourceSourceState.LoadedMod),
+                    CostNode("chara/common/texture/white.tex", ResourceSourceState.LoadedMod))),
+            CostNode("chara/equipment/e0001/model/c0101e0001_dwn.mdl", ResourceSourceState.GameData,
+                CostNode(@"C:\mods\b\broken.tex", ResourceSourceState.LoadedMod)),
+        };
+        var reads = new List<string>();
+        var totals = ResourceCost.Measure(roots, path =>
+        {
+            reads.Add(path);
+            return path.EndsWith("broken.tex", StringComparison.Ordinal) ? null
+                : path.EndsWith(".mdl", StringComparison.Ordinal) ? new FileCost(1000, 12) : new FileCost(4096, 0);
+        });
+        Require(totals == new ResourceCostTotals(4096, 1000, 12, 1, 1, 1) && totals.Vram == 5096 && reads.Count == 3,
+            "the cost counts each modded texture and model once and reports unreadable ones");
     }
 
     private static async Task CachePolicyAsync()

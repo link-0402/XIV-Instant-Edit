@@ -154,6 +154,7 @@ internal static class ChangelogCatalog
             Entry("Timeline: the Bones window has the IVCS groin bones, and more bones have plain names."),
             Entry("On Screen no longer freezes the game for a moment when it refreshes, and the animation listener no longer causes small stutters."),
             Entry("On Screen no longer lists gear your other gear hides, such as legs under a robe. Send my character leaves it out too."),
+            Entry("On Screen shows your character's modded VRAM and triangle count next to the filters."),
             Entry("On Screen: drop an image on a texture to replace it. Hold it on the row until the row lights up, then let go. Undo is in the row's menu."),
             Entry("Drag a texture's name onto another texture's row, on any material or model, to copy it there the same way.", 1),
             Entry("On Screen: Edit as a separate copy, in a texture's menu, edits a copy only its material uses. Saving gives the copy its own path, so other materials keep the original. This works for shared textures like white.tex too."),
