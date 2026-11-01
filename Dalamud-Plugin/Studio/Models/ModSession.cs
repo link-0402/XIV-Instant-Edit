@@ -1217,7 +1217,9 @@ internal sealed class ModSession : ISetUpSession, IItemShelf
             {
                 if (replacement.Authored is { } material)
                     paths.AddRange(material.Textures.Where(t => !t.UseWhiteDummy)
-                        .SelectMany(t => t.UseAlphaOverlay ? new[] { t.SourcePath, t.AlphaSourcePath } : new[] { t.SourcePath }));
+                        .SelectMany(t => t.UseAlphaOverlay ? new[] { t.SourcePath, t.AlphaSourcePath }
+                                       : t.UseMadeMask ? new[] { t.SourcePath, t.MetallicSourcePath, t.OcclusionSourcePath }
+                                       : new[] { t.SourcePath }));
                 else
                     paths.Add(replacement.SourcePath);
             }

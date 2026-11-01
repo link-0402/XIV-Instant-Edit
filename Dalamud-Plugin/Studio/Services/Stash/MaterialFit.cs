@@ -65,7 +65,8 @@ internal static class MaterialFit
             // The preset's slots only: a hair has no use for the stash's diffuse.
             var slots = material.Textures.Select(t => t.Type).ToList();
             var applied = StashApply.Fill(material, StashApply.Plan(found, slots).Where(p => slots.Contains(p.Type)).ToList());
-            foreach (var slot in material.Textures.Where(t => string.IsNullOrWhiteSpace(t.SourcePath)))
+            SetMaps.Find(found).ApplyTo(material);
+            foreach (var slot in material.Textures.Where(t => string.IsNullOrWhiteSpace(t.SourcePath) && !t.UseMadeMask))
                 slot.UseWhiteDummy = true;
 
             if (material.Textures.Any(t => t.Type == TextureType.Diffuse && !t.UseWhiteDummy))

@@ -98,6 +98,18 @@ internal sealed class TextureThumbnailCache : IDisposable
             return;
         }
 
+        if (tex.UseMadeMask && tex.Type == TextureType.Mask)
+        {
+            var maps = GameMask.Maps(tex);
+            if (maps.Count > 0 && maps.All(m => File.Exists(m.Path)))
+            {
+                var slot = tex.Clone();
+                var key = $"{AlphaPrefix}mask|{string.Join("|", maps.Select(m => $"{m.Role}={TextureCache.KeyFor(m.Path)}"))}";
+                DrawLoaded(Get(key, () => MadeMaskPng(slot), checkStamp: false), side, $"Mask made from {GameMask.Describe(tex)}");
+                return;
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(tex.SourcePath))
         {
             Placeholder(side, FontAwesomeIcon.Image, Theme.Faint, tex.UseVariants ? "No variant files yet" : "No source set");
@@ -137,6 +149,12 @@ internal sealed class TextureThumbnailCache : IDisposable
     private static byte[] DiffuseNormalPng(string diffusePath, float strength)
     {
         using var image = DiffuseNormal.Make(diffusePath, strength);
+        return ToPng(image);
+    }
+
+    private static byte[] MadeMaskPng(TextureSlot slot)
+    {
+        using var image = GameMask.Make(slot);
         return ToPng(image);
     }
 

@@ -3,11 +3,14 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using InstantEdit.Services.Materials;
+using InstantEdit.Services.Materials.Presets;
 using InstantEdit.Services.TextureCompression;
 using InstantEdit.Studio.Models;
+using InstantEdit.Studio.Services.Project;
 
 namespace InstantEdit.Studio.Services;
 
@@ -460,7 +463,6 @@ internal sealed class ModBuilder
                 var textureName = MaterialNaming.ComposeTextureName(mat.Name, tex.Postfix);
                 var gamePath = subject.TextureGamePath(textureName);
                 var source = new Target(TargetKind.Texture, subject.Key, m, t);
-                bool ok;
 
                 if (tex.IsShared)
                 {
@@ -473,24 +475,25 @@ internal sealed class ModBuilder
                 }
 
                 var rel = RelFor(tex.Option, gamePath);
+                string? used;
                 if (tex.UseWhiteDummy)
                 {
                     Step(textureName);
-                    ok = ProcessDummyTexture(tex, textureName, gamePath, rel, modPath, report, source);
-                    if (ok) Place(tex.Option, gamePath, rel);
+                    used = ProcessDummyTexture(tex, textureName, gamePath, rel, modPath, report, source);
                 }
                 else if (tex.UseVariants)
                 {
-                    ok = ProcessVariantFolder(mat, tex, textureName, gamePath, modPath, report, source, ct);
+                    used = ProcessVariantFolder(mat, tex, textureName, gamePath, modPath, report, source, ct) ? gamePath : null;
                 }
                 else
                 {
                     Step(textureName);
-                    ok = ProcessSingleTexture(mat, tex, textureName, gamePath, rel, modPath, report, source);
-                    if (ok) Place(tex.Option, gamePath, rel);
+                    used = ProcessSingleTexture(mat, tex, textureName, gamePath, rel, modPath, report, source);
                 }
 
-                if (ok) replacements[tex.Type] = gamePath;
+                // A texture another slot already wrote is pointed at, not written again.
+                if (used == gamePath && !tex.UseVariants) Place(tex.Option, gamePath, rel);
+                if (used != null) replacements[tex.Type] = used;
             }
 
             replacementsByMaterial[mat] = replacements;
@@ -892,6 +895,14 @@ internal sealed class ModBuilder
             sourceDescription = $"cloned from {found.Value.GamePath}";
         }
 
+        if (mat.Translucent && template.ShaderDataParsed && (template.MaterialFlags1 & PresetChecks.Translucent) == 0
+            && !PresetChecks.TranslucentCrashes(template.ShaderPackageName))
+        {
+            template = template.Clone();   // a cloned game material is shared by every slot
+            template.MaterialFlags1 |= (ushort)PresetChecks.Translucent;
+            sourceDescription += ", translucent";
+        }
+
         if (!MaterialPatcher.TryBuildPatchedMaterial(template, replacements, presetPath != null, out var mtrlData, out var plan, out var error))
         {
             report.Add(BuildOutcome.Failed, BuildCategory.Material, label, gamePath, error, source);
@@ -955,54 +966,83 @@ internal sealed class ModBuilder
     private static RaceGender MaterialRaceOf(ItemBuildRequest item, RaceModelEntry model)
         => item.MaterialRaceByModel.TryGetValue(model.RaceGender.RaceCode, out var race) ? race : model.RaceGender;
 
-    /// <summary>Converts a single source image and writes it at its game path. Returns true on success.</summary>
-    private bool ProcessSingleTexture(MaterialSetup mat, TextureSlot tex, string textureName, string gamePath, string rel, string modPath,
+    /// <summary>
+    /// Converts a single source image and writes it at its game path. Returns the game path the material
+    /// points at: its own, or that of the same texture another slot of the pack wrote; null when it failed.
+    /// </summary>
+    private string? ProcessSingleTexture(MaterialSetup mat, TextureSlot tex, string textureName, string gamePath, string rel, string modPath,
         BuildReport report, Target source)
     {
-        if (string.IsNullOrWhiteSpace(tex.SourcePath))
+        bool madeMask = tex.UseMadeMask && tex.Type == TextureType.Mask;   // its maps are checked as it is made
+        if (!madeMask && string.IsNullOrWhiteSpace(tex.SourcePath))
         {
             report.Add(BuildOutcome.Skipped, BuildCategory.Texture, textureName, gamePath, "no local file set", source);
-            return false;
+            return null;
         }
 
-        if (!File.Exists(tex.SourcePath))
+        if (!madeMask && !File.Exists(tex.SourcePath))
         {
             report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, $"file not found ({tex.SourcePath})", source);
-            return false;
+            return null;
         }
 
-        if (AlphaNormal.SourceOf(tex, _req.CacheDirectory, out var alphaError) is not { } sourcePath)
+        if (AlphaNormal.SourceOf(tex, _req.CacheDirectory, out var alphaError, out var note, mat.ShaderType, OpacityScale(mat)) is not { } sourcePath)
         {
             report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, alphaError, source);
-            return false;
+            return null;
         }
 
         if (!ConvertTexture(sourcePath, tex.Compression, UsesFor(mat, tex), textureName, out var texData, out var error, out var detail))
         {
             report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, error, source);
-            return false;
+            return null;
         }
         if (tex.UseAlphaOverlay)
-            detail = $"{Path.GetFileName(tex.SourcePath)} with the alpha of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
+            detail = GameNormal.ReadsBlueAsOpacity(mat.ShaderType) && tex.Type == TextureType.Normal
+                ? $"{Path.GetFileName(tex.SourcePath)} with the opacity of {Path.GetFileName(tex.AlphaSourcePath)} in its blue{(note.Length > 0 ? $" ({note})" : string.Empty)}: {detail}"
+                : $"{Path.GetFileName(tex.SourcePath)} with the alpha of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
         else if (tex.UseDiffuseNormal)
             detail = $"normal made from {Path.GetFileName(tex.SourcePath)}: {detail}";
-        else if (sourcePath != tex.SourcePath)
-            detail = $"DirectX normal, green flipped: {detail}";
+        else if (note.Length > 0)
+            detail = $"{note}: {detail}";
 
-        File.WriteAllBytes(LocalPath(modPath, rel), texData);
-        report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath, detail, source);
-        return true;
+        return WriteTexture(texData, tex.Option, textureName, gamePath, rel, modPath, detail, report, source);
     }
 
     /// <summary>
-    /// How a material reads a slot's texture, for Auto's check: from its bundled preset when it has
-    /// one. One cloned from the game's material is only found per mesh slot later, so it is checked
-    /// as its shader reads textures, with any opacity channel taken as a cut-out.
+    /// The textures written so far, by their bytes: the game path of the first, its place and name. A
+    /// texture the same as one of them is not written again (the game would load it once per path).
     /// </summary>
-    private IReadOnlyList<TextureUse> UsesFor(MaterialSetup mat, TextureSlot tex)
+    private readonly Dictionary<string, (string Place, string GamePath, string Name)> _writtenTextures = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Writes a texture at its game path, or, when the pack already has the same bytes written where this
+    /// one would be loaded too (the default files, or the same option), points at that one instead.
+    /// Returns the game path the material points at.
+    /// </summary>
+    private string WriteTexture(byte[] texData, string? option, string textureName, string gamePath, string rel, string modPath,
+        string detail, BuildReport report, Target source)
     {
-        if (tex.Compression != TextureCompression.Auto)
-            return Array.Empty<TextureUse>();
+        var place = Known(option);
+        var key = Convert.ToHexString(SHA256.HashData(texData));
+        if (_writtenTextures.TryGetValue(key, out var earlier) && (earlier.Place.Length == 0 || earlier.Place == place)
+            && !PathNormalizer.SameGamePath(earlier.GamePath, gamePath))
+        {
+            report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, earlier.GamePath, $"same as {earlier.Name}, uses its file", source);
+            return earlier.GamePath;
+        }
+
+        File.WriteAllBytes(LocalPath(modPath, rel), texData);
+        report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath, detail, source);
+        // The default files' copy serves every later one; an option's only that option's.
+        if (!_writtenTextures.TryGetValue(key, out earlier) || earlier.Place.Length > 0 && place.Length == 0)
+            _writtenTextures[key] = (place, gamePath, textureName);
+        return gamePath;
+    }
+
+    /// <summary>The template a material is made from, when it is a bundled preset; read once per material.</summary>
+    private MtrlInfo? PresetTemplate(MaterialSetup mat)
+    {
         if (!_presetTemplates.TryGetValue(mat, out var template))
         {
             var presetPath = MaterialPresetLibrary.FindPresetPath(mat.ShaderType, mat.Textures.Select(t => t.Type).ToHashSet());
@@ -1017,7 +1057,31 @@ internal sealed class ModBuilder
             }
             _presetTemplates[mat] = template;
         }
-        return AutoCompression.UsesFor(tex.Type, mat.ShaderType, template);
+        return template;
+    }
+
+    /// <summary>
+    /// What an opacity in the normal's blue is multiplied by: a Translucent material divides it by its
+    /// alpha cutoff, so it is written times the cutoff to show as it is; anything else takes it as it is.
+    /// </summary>
+    private float OpacityScale(MaterialSetup mat)
+    {
+        if (!mat.Translucent)
+            return 1f;
+        var threshold = AutoCompression.AlphaThreshold(PresetTemplate(mat));
+        return threshold is > 0f and < 1f ? threshold : 1f;
+    }
+
+    /// <summary>
+    /// How a material reads a slot's texture, for Auto's check: from its bundled preset when it has
+    /// one. One cloned from the game's material is only found per mesh slot later, so it is checked
+    /// as its shader reads textures, with any opacity channel taken as a cut-out.
+    /// </summary>
+    private IReadOnlyList<TextureUse> UsesFor(MaterialSetup mat, TextureSlot tex)
+    {
+        if (tex.Compression != TextureCompression.Auto)
+            return Array.Empty<TextureUse>();
+        return AutoCompression.UsesFor(tex.Type, mat.ShaderType, PresetTemplate(mat), mat.Translucent);
     }
 
     /// <summary>Converts one image as <see cref="ConvertTexture(string, TextureCompression, string, out byte[], out string, out bool)"/> does, or picks its format first for Auto; <paramref name="detail"/> is its report line.</summary>
@@ -1228,7 +1292,7 @@ internal sealed class ModBuilder
     /// Fills a texture slot's placeholder: a generated square of one colour — see
     /// <see cref="DummyTextureLibrary"/>. Returns true on success.
     /// </summary>
-    private bool ProcessDummyTexture(TextureSlot tex, string textureName, string gamePath, string rel, string modPath,
+    private string? ProcessDummyTexture(TextureSlot tex, string textureName, string gamePath, string rel, string modPath,
         BuildReport report, Target source)
     {
         var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
@@ -1242,13 +1306,11 @@ internal sealed class ModBuilder
         if (texData == null)
         {
             report.Add(BuildOutcome.Failed, BuildCategory.Texture, textureName, gamePath, error, source);
-            return false;
+            return null;
         }
 
-        File.WriteAllBytes(LocalPath(modPath, rel), texData);
-        report.Add(BuildOutcome.Ok, BuildCategory.Texture, textureName, gamePath,
-            $"{option.Label.ToLowerInvariant()} {DummyTextureLibrary.Size}x{DummyTextureLibrary.Size} dummy", source);
-        return true;
+        return WriteTexture(texData, tex.Option, textureName, gamePath, rel, modPath,
+            $"{option.Label.ToLowerInvariant()} {DummyTextureLibrary.Size}x{DummyTextureLibrary.Size} dummy", report, source);
     }
 
     /// <summary>

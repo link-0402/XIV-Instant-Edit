@@ -26,14 +26,18 @@ internal sealed record AutoCompressionResult(byte[] Tex, TextureCompression Form
 internal static class AutoCompression
 {
     /// <summary>How a material of <paramref name="shader"/> reads a slot's texture: from its template material when there is one.</summary>
-    public static IReadOnlyList<TextureUse> UsesFor(TextureType type, ShaderType shader, MtrlInfo? material)
+    /// <param name="translucent">The material is written Translucent whatever its template says (see <see cref="MaterialSetup.Translucent"/>).</param>
+    public static IReadOnlyList<TextureUse> UsesFor(TextureType type, ShaderType shader, MtrlInfo? material, bool translucent = false)
     {
         var package = material is { ShaderPackageName.Length: > 0 } ? material.ShaderPackageName : ShaderInfo.ShaderPackName(shader);
         if (material is not { ShaderDataParsed: true })
             return TextureUse.Unknown(RoleOf(type), package);
-        var (threshold, translucent) = Transparency(material);
-        return new[] { new TextureUse { Role = RoleOf(type), ShaderPackage = package, AlphaThreshold = threshold, Translucent = translucent } };
+        var (threshold, flagged) = Transparency(material);
+        return new[] { new TextureUse { Role = RoleOf(type), ShaderPackage = package, AlphaThreshold = threshold, Translucent = flagged || translucent } };
     }
+
+    /// <summary>A material's alpha cutoff (g_AlphaThreshold), 0 when it has none or isn't read.</summary>
+    public static float AlphaThreshold(MtrlInfo? material) => material is { ShaderDataParsed: true } ? Transparency(material).Threshold : 0f;
 
     /// <summary>
     /// How an image replacing the texture at <paramref name="gamePath"/> is read, when its materials

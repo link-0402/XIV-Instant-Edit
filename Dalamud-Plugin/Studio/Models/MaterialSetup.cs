@@ -28,14 +28,21 @@ public class MaterialSetup
     /// <summary>Build mode: where its .mtrl files (and its textures, unless put elsewhere) go in the mod — see <see cref="PackPlace"/>. Null goes with the item.</summary>
     public string? Option { get; set; }
 
+    /// <summary>
+    /// Written with the Translucent flag: the normal's opacity blends instead of being cut off at the
+    /// alpha cutoff, for parts that are mostly see-through. Never on skin or stockings (that crashes the game).
+    /// </summary>
+    public bool Translucent { get; set; }
+
     public MaterialSetup Clone()
     {
         var copy = new MaterialSetup
         {
-            Id         = Id,
-            Name       = Name,
-            ShaderType = ShaderType,
-            Option     = Option,
+            Id          = Id,
+            Name        = Name,
+            ShaderType  = ShaderType,
+            Option      = Option,
+            Translucent = Translucent,
         };
         foreach (var t in Textures)
             copy.Textures.Add(t.Clone());
@@ -142,13 +149,27 @@ public class TextureSlot
 
     /// <summary>
     /// When true (normal slots), the texture is <see cref="SourcePath"/> — a base normal map — with
-    /// the image at <see cref="AlphaSourcePath"/> written into its alpha: black where there is no
-    /// hair, white where there is. See <see cref="Services.AlphaNormal"/>.
+    /// the image at <see cref="AlphaSourcePath"/> written into its opacity: black where there is no
+    /// hair (or cloth), white where there is. Hair reads it from the alpha, gear from the blue.
+    /// See <see cref="Services.AlphaNormal"/> and <see cref="Services.GameNormal"/>.
     /// </summary>
     public bool UseAlphaOverlay { get; set; }
 
-    /// <summary>The black-and-white alpha map put into the base normal's alpha when <see cref="UseAlphaOverlay"/> is set.</summary>
+    /// <summary>The black-and-white alpha map put into the base normal's opacity when <see cref="UseAlphaOverlay"/> is set.</summary>
     public string AlphaSourcePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// When true (mask slots), the mask is made from another game's maps the way the game's own are
+    /// laid out: <see cref="SourcePath"/> is the roughness (or gloss) map, or empty, and
+    /// <see cref="MetallicSourcePath"/> and <see cref="OcclusionSourcePath"/> the other two. See <see cref="Services.GameMask"/>.
+    /// </summary>
+    public bool UseMadeMask { get; set; }
+
+    /// <summary>The metallic map a made mask reads, or empty.</summary>
+    public string MetallicSourcePath { get; set; } = string.Empty;
+
+    /// <summary>The ambient occlusion map a made mask reads, or empty.</summary>
+    public string OcclusionSourcePath { get; set; } = string.Empty;
 
     /// <summary>
     /// When true (gear normal slots), <see cref="SourcePath"/> is a diffuse texture and the normal is
@@ -211,6 +232,9 @@ public class TextureSlot
         DummyPreset    = DummyPreset,
         UseAlphaOverlay = UseAlphaOverlay,
         AlphaSourcePath = AlphaSourcePath,
+        UseMadeMask         = UseMadeMask,
+        MetallicSourcePath  = MetallicSourcePath,
+        OcclusionSourcePath = OcclusionSourcePath,
         UseDiffuseNormal      = UseDiffuseNormal,
         DiffuseNormalStrength = DiffuseNormalStrength,
         NormalSourcePath      = NormalSourcePath,

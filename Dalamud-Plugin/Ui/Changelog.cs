@@ -29,6 +29,8 @@ internal static class ChangelogCatalog
             Entry("Edit a model in Blender, a texture in your image editor or send an animation to Blender from the mod window. Exports go back into the option you picked it from.", 1),
             Entry("Build a new mod from gear ported from another game, Sims 4 packages included, and build it into Penumbra.", 1),
             Entry("Import package opens Sims 4 and Unity packages and folders of loose files. Drag their models and textures onto your mod from the list.", 1),
+            Entry("Textures from other games are made to fit: a normal's blue becomes its opacity (from the set's opacity map, else solid), and a mask is made from the set's roughness, metallic and occlusion maps. Mostly see-through parts are made translucent.", 1),
+            Entry("A texture used by several materials or items is written once and shared.", 1),
             Entry("Add weapons and animations from the game, not just gear.", 1),
             Entry("New textures pick their compression on their own and stay uncompressed when compressing would change how they look.", 1),
             Entry("Texture edits do the same: a compressed texture you save stays compressed unless that would change how it looks. The Recompress saved textures option is gone.", 1),

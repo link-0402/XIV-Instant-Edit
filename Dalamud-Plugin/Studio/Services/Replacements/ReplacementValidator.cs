@@ -178,6 +178,13 @@ internal static class ReplacementValidator
                 issues.Add(new(Severity.Info, target, $"{slot}: {PortValidator.MatcapLibraryNote}"));
             else if (tex.UseVariants)
                 issues.Add(new(Severity.Warning, target, $"{slot}: a folder of variants is not supported for a material made here — pick one image."));
+            else if (tex.UseMadeMask && tex.Type == TextureType.Mask)
+            {
+                if (GameMask.Maps(tex) is { Count: 0 })
+                    issues.Add(new(Severity.Error, target, $"{slot}: no maps set to make the mask from."));
+                else if (GameMask.Maps(tex).FirstOrDefault(m => !File.Exists(m.Path)) is { Path: { } missing })
+                    issues.Add(new(Severity.Error, target, $"{slot}: {Path.GetFileName(missing)} does not exist."));
+            }
             else if (string.IsNullOrWhiteSpace(tex.SourcePath))
                 issues.Add(new(Severity.Warning, target, $"{slot}: no image set — the slot is left out."));
             else if (!File.Exists(tex.SourcePath))

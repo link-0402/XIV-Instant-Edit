@@ -371,10 +371,10 @@ internal sealed class ModWriter
             : Intent("tex", source, compression);
 
     /// <summary>A texture slot of a material made here: its placeholder, or its image.</summary>
-    private string SlotIntent(TextureSlot tex, IReadOnlyList<TextureUse> uses)
+    private string SlotIntent(TextureSlot tex, IReadOnlyList<TextureUse> uses, ShaderType shader)
     {
         if (!tex.UseWhiteDummy)
-            return TextureIntent(AlphaNormal.SourceOf(tex, _req.CacheDirectory, out _) ?? tex.SourcePath, tex.Compression, uses);
+            return TextureIntent(AlphaNormal.SourceOf(tex, _req.CacheDirectory, out _, out _, shader) ?? tex.SourcePath, tex.Compression, uses);
 
         var option = DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset);
         return $"dummy:{TextureCache.KeyForGenerated(option, DummyTextureLibrary.Size, TextureCompressionInfo.ForPlaceholder(tex.Compression))}";
@@ -721,15 +721,15 @@ internal sealed class ModWriter
                     "a folder of variants is not supported for a material made here — pick one image", target);
                 continue;
             }
-            if (!tex.UseWhiteDummy && string.IsNullOrWhiteSpace(tex.SourcePath))
+            if (!tex.UseWhiteDummy && !(tex.UseMadeMask && tex.Type == TextureType.Mask) && string.IsNullOrWhiteSpace(tex.SourcePath))
             {
                 _report.Add(WriteOutcome.Skipped, texLabel, texPath, "no image set", target);
                 continue;
             }
 
             var uses = tex.Compression == TextureCompression.Auto ? AutoCompression.UsesFor(tex.Type, mat.ShaderType, template) : Array.Empty<TextureUse>();
-            var plan = Plan(texPath, option, ReplacementRel(meta, texPath, option), SlotIntent(tex, uses), texLabel, target);
-            if (MakeTexture(plan, tex, uses, $"{TextureTypeInfo.DisplayName(tex.Type)} for {label}, from "))
+            var plan = Plan(texPath, option, ReplacementRel(meta, texPath, option), SlotIntent(tex, uses, mat.ShaderType), texLabel, target);
+            if (MakeTexture(plan, tex, uses, mat.ShaderType, $"{TextureTypeInfo.DisplayName(tex.Type)} for {label}, from "))
                 textures[tex.Type] = texPath;
         }
 
@@ -789,7 +789,7 @@ internal sealed class ModWriter
     /// Makes a planned texture from its slot, if the plan needs it: the placeholder, or the image
     /// converted. Returns whether the mod has the texture afterwards.
     /// </summary>
-    private bool MakeTexture(Planned plan, TextureSlot tex, IReadOnlyList<TextureUse> uses, string prefix = "")
+    private bool MakeTexture(Planned plan, TextureSlot tex, IReadOnlyList<TextureUse> uses, ShaderType shader, string prefix = "")
     {
         if (!plan.NeedsContent)
             return true;
@@ -803,18 +803,18 @@ internal sealed class ModWriter
         }
         else
         {
-            if (!File.Exists(tex.SourcePath))
+            if (!(tex.UseMadeMask && tex.Type == TextureType.Mask) && !File.Exists(tex.SourcePath))
                 return Fail(plan, $"file not found ({tex.SourcePath})");
-            if (AlphaNormal.SourceOf(tex, _req.CacheDirectory, out var alphaError) is not { } sourcePath)
+            if (AlphaNormal.SourceOf(tex, _req.CacheDirectory, out var alphaError, out var note, shader) is not { } sourcePath)
                 return Fail(plan, alphaError);
             if (!ConvertTexture(sourcePath, tex.Compression, uses, plan.Label, out content, out var error, out detail))
                 return Fail(plan, error);
             if (tex.UseAlphaOverlay)
-                detail = $"{Path.GetFileName(tex.SourcePath)} with the alpha of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
+                detail = $"{Path.GetFileName(tex.SourcePath)} with the {(GameNormal.ReadsBlueAsOpacity(shader) ? "opacity" : "alpha")} of {Path.GetFileName(tex.AlphaSourcePath)}: {detail}";
             else if (tex.UseDiffuseNormal)
                 detail = $"normal made from {Path.GetFileName(tex.SourcePath)}: {detail}";
-            else if (sourcePath != tex.SourcePath)
-                detail = $"DirectX normal, green flipped: {detail}";
+            else if (note.Length > 0)
+                detail = $"{note}: {detail}";
         }
 
         Provide(plan, content, prefix + detail);

@@ -609,6 +609,18 @@ internal sealed class ModelInspector
             _session.MarkDirty();
         }
 
+        if (GameNormal.ReadsBlueAsOpacity(mat.ShaderType) || mat.Translucent)
+        {
+            Gui.Label("Translucent", "See-through parts blend by their opacity instead of being cut off at 50%. "
+                                   + "Set by itself for a part whose opacity map is mostly see-through.");
+            bool translucent = mat.Translucent;
+            if (ImGui.Checkbox("##MatTranslucent", ref translucent))
+            {
+                mat.Translucent = translucent;
+                _session.MarkDirty();
+            }
+        }
+
         // Where the .mtrl will come from, so a shader with no template is obvious now, not at build time.
         Gui.Label("Template");
         var resolved = _host.MaterialTemplates.Resolve(item, mat);

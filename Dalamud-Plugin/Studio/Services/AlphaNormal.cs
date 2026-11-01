@@ -27,12 +27,40 @@ internal static class AlphaNormal
 
     /// <summary>The image a slot is converted from: its own file, or, with an alpha overlay, the combined image (made if needed). Null with why.</summary>
     public static string? SourceOf(TextureSlot tex, string? cacheDirectory, out string error)
+        => SourceOf(tex, cacheDirectory, out error, out _);
+
+    /// <summary>
+    /// The image a slot of a <paramref name="shader"/> material is converted from (made if needed), and
+    /// what was done to its file, in a few words ("green flipped", empty for nothing). A material that
+    /// reads its normal's blue as opacity gets its opacity there (see <see cref="GameNormal"/>), times
+    /// <paramref name="opacityScale"/>; a made mask is made (see <see cref="GameMask"/>). Null with why.
+    /// </summary>
+    public static string? SourceOf(TextureSlot tex, string? cacheDirectory, out string error, out string note,
+        ShaderType? shader = null, float opacityScale = 1f)
     {
         error = string.Empty;
+        note  = string.Empty;
+        if (tex.UseMadeMask && tex.Type == TextureType.Mask)
+        {
+            note = $"mask made from {GameMask.Describe(tex)}";
+            return GameMask.SourceOf(tex, cacheDirectory, out error);
+        }
         if (tex.UseDiffuseNormal)
             return DiffuseNormal.SourceOf(tex, cacheDirectory, out error);
+
+        bool blueIsOpacity = tex.Type == TextureType.Normal && GameNormal.ReadsBlueAsOpacity(shader);
         if (!tex.UseAlphaOverlay)
-            return NormalGreen.SourceOf(tex, cacheDirectory, out error);
+        {
+            var file = NormalGreen.SourceOf(tex, cacheDirectory, out error);
+            var flipped = file != null && file != tex.SourcePath;
+            note = flipped ? "DirectX normal, green flipped" : string.Empty;
+            if (file == null || !blueIsOpacity || !NormalGreen.Applies(tex))
+                return file;
+            var solid = GameNormal.Solid(file, cacheDirectory, out var changed, out error);
+            if (changed)
+                note = flipped ? "DirectX normal, green flipped, blue made solid" : "blue made solid";
+            return solid;
+        }
 
         if (string.IsNullOrWhiteSpace(tex.SourcePath) || !File.Exists(tex.SourcePath))
         {
@@ -43,6 +71,17 @@ internal static class AlphaNormal
         {
             error = string.IsNullOrWhiteSpace(tex.AlphaSourcePath) ? "no alpha map set" : $"alpha map not found ({tex.AlphaSourcePath})";
             return null;
+        }
+
+        if (blueIsOpacity)
+        {
+            // The base normal as a plain file would be taken: its green flipped if it points down.
+            var plain = tex.Clone();
+            plain.UseAlphaOverlay = false;
+            if (NormalGreen.SourceOf(plain, cacheDirectory, out error) is not { } normal)
+                return null;
+            note = normal != tex.SourcePath ? "DirectX normal, green flipped" : string.Empty;
+            return GameNormal.WithOpacity(normal, tex.AlphaSourcePath, opacityScale, cacheDirectory, out error);
         }
 
         var folder = Path.Combine(string.IsNullOrWhiteSpace(cacheDirectory) ? Path.GetTempPath() : cacheDirectory, "alpha-normals");

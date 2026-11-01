@@ -419,6 +419,16 @@ internal static class PortValidator
             return;
         }
 
+        if (tex.UseMadeMask && tex.Type == TextureType.Mask)
+        {
+            var maps = GameMask.Maps(tex);
+            if (maps.Count == 0)
+                issues.Add(new(Severity.Error, target, $"{who}: no maps set to make the mask from — pick one, or switch the source back to File."));
+            foreach (var (role, path) in maps.Where(m => !File.Exists(m.Path)))
+                issues.Add(new(Severity.Error, target, $"{who}: {role} map not found ({Path.GetFileName(path)})."));
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(tex.SourcePath))
             issues.Add(new(Severity.Warning, target, $"{who}: no source file — this texture will be skipped."));
         else if (!File.Exists(tex.SourcePath))

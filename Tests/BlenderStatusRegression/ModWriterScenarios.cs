@@ -36,6 +36,7 @@ internal static class ModWriterScenarios
             await ABuiltModelsPartTagsBecomeAToggleGroup(root);
             await MeshesOfOneMaterialCanBePointedApart(root);
             await FittedMaterialsWireTheirDiffuse(root);
+            await ItemsShareTheirSameTextures(root);
             AStoppedWatcherIsNoticed(root);                             // glue-6
         }
         finally
@@ -324,13 +325,90 @@ internal static class ModWriterScenarios
         var placeholders = TextureMode("mt_c0201e6000_top_b");
         Require(Directory.EnumerateFiles(mod, "mt_c0201e6000_top_b.mtrl", SearchOption.AllDirectories).Any() && placeholders != 0x600EF9DF,
             $"the one with only placeholders is written too, and keeps the colour table ({placeholders?.ToString("X8") ?? "the preset's default"})");
-        Require(report.Entries.Count(e => e.Category == BuildCategory.Texture && e.Detail == "flat (no bump) 16x16 dummy") == 2
-                && report.Entries.Count(e => e.Category == BuildCategory.Texture && e.Detail == "white 16x16 dummy") == 4,
-            "every empty slot gets its role's placeholder: a flat normal, a white mask and a white index");
+        Require(report.Entries.Count(e => e.Category == BuildCategory.Texture && e.Detail == "flat (no bump) 16x16 dummy") == 1
+                && report.Entries.Count(e => e.Category == BuildCategory.Texture && e.Detail == "white 16x16 dummy") == 1
+                && report.Entries.Count(e => e.Category == BuildCategory.Texture && e.Detail?.StartsWith("same as ", StringComparison.Ordinal) == true) == 4,
+            "every empty slot gets its role's placeholder (a flat normal, a white mask and a white index), each written once and shared");
+        var normals = new[] { "mt_c0201e6000_top_a", "mt_c0201e6000_top_b" }
+            .Select(m => MtrlReader.Read(File.ReadAllBytes(Directory.EnumerateFiles(mod, m + ".mtrl", SearchOption.AllDirectories).Single()))
+                                   .TextureOffsets.Select(t => t.Path).Single(p => p.EndsWith("_normal.tex", StringComparison.Ordinal)))
+            .ToList();
+        Require(normals.Distinct().Count() == 1 && Directory.EnumerateFiles(mod, "*_normal.tex", SearchOption.AllDirectories).Count() == 1,
+            $"both materials point at the one flat normal written ({string.Join(", ", normals)})");
 
         var model = File.ReadAllBytes(Directory.EnumerateFiles(mod, "*.mdl", SearchOption.AllDirectories).Single());
         Require(ModelMaterialRewriter.ReadMeshMaterialsStrict(model).SequenceEqual(new[] { "/mt_c0201e6000_top_a.mtrl", "/mt_c0201e6000_top_b.mtrl" }),
             "each mesh points at the material fitted to its own");
+    }
+
+    /// <summary>
+    /// The same image on two items' materials is written once, and the second material points at it; two
+    /// items in different options each keep their own, since either option can be off.
+    /// </summary>
+    private static async Task ItemsShareTheirSameTextures(string root)
+    {
+        var midF = new RaceGender(PlayerRace.Midlander, PlayerGender.Female);
+        var diffuse = Path.Combine(root, "shared_d.png");
+        using (var image = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(8, 8, new SixLabors.ImageSharp.PixelFormats.Rgba32(40, 200, 40, 255)))
+            SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, diffuse);
+
+        ItemBuildRequest Item(EquipSlot slot, string name, string? place)
+        {
+            var subject = new GearSubject(new GameDataService.GameItem { RowId = (uint)slot, Name = name, ModelId = 6000, Slot = slot });
+            var source = Path.Combine(root, $"shared_{name}.mdl");
+            File.WriteAllBytes(source, ModCheckFixtures.Mdl(["/A.mtrl"]));
+            var material = MaterialSetup.FromPreset(MaterialPresets.All.First(p => p.Name == "Gear with Diffuse"), subject.DefaultMaterialName(1, midF));
+            material.Option = place;
+            foreach (var tex in material.Textures)
+            {
+                tex.Option = place;
+                if (tex.Type == TextureType.Diffuse) tex.SourcePath = diffuse; else tex.UseWhiteDummy = true;
+            }
+            return new()
+            {
+                Subject            = subject,
+                Option             = place ?? PackPlace.Default,
+                Models             = new List<RaceModelEntry> { new() { Race = midF.Race, Gender = midF.Gender, SourcePath = source, Option = place } },
+                Materials          = new List<MaterialSetup> { material },
+                ModelMaterialSlots = new List<ModelMaterialSlot> { new() { MaterialIndex = 0 } },
+                NativeRaces        = new HashSet<RaceGender> { midF },
+            };
+        }
+
+        async Task<(BuildReport Report, string Mod)> Build(string name, List<PackGroup> groups, params ItemBuildRequest[] items)
+        {
+            var modRoot = Path.Combine(root, name);
+            Directory.CreateDirectory(modRoot);
+            var report = await new BuildJob(new BuildRequest
+            {
+                ModRoot         = modRoot,
+                ModName         = name,
+                DisplayName     = name,
+                PluginDirectory = Path.Combine(AppContext.BaseDirectory, "Studio"),
+                Meta            = new ModMetaInfo(),
+                Groups          = groups,
+                Items           = items.ToList(),
+            }).Task;
+            Require(report.FatalError == null && report.Failed == 0,
+                $"{name}: the build runs ({report.FatalError}{string.Join("; ", report.Entries.Where(e => e.Outcome == BuildOutcome.Failed).Select(e => $"{e.Label}: {e.Detail}"))})");
+            return (report, Path.Combine(modRoot, name));
+        }
+
+        string DiffuseOf(string mod, string material)
+            => MtrlReader.Read(File.ReadAllBytes(Directory.EnumerateFiles(mod, material + ".mtrl", SearchOption.AllDirectories).Single()))
+                         .TextureOffsets.Select(t => t.Path).Single(p => p.EndsWith("_base.tex", StringComparison.Ordinal));
+
+        var (_, shared) = await Build("Shared", new List<PackGroup>(), Item(EquipSlot.Body, "Top", null), Item(EquipSlot.Legs, "Legs", null));
+        var top = DiffuseOf(shared, "mt_c0201e6000_top_a");
+        Require(DiffuseOf(shared, "mt_c0201e6000_dwn_a") == top && Directory.EnumerateFiles(shared, "*_base.tex", SearchOption.AllDirectories).Count() == 1,
+            $"the legs' material points at the top's diffuse, written once ({top})");
+
+        var group = new PackGroup { Name = "Pick", Options = { new PackOption { Name = "One" }, new PackOption { Name = "Two" } } };
+        var (_, apart) = await Build("Apart", new List<PackGroup> { group },
+            Item(EquipSlot.Body, "Top", PackPlace.Of(group.Id, group.Options[0].Id)), Item(EquipSlot.Legs, "Legs", PackPlace.Of(group.Id, group.Options[1].Id)));
+        Require(DiffuseOf(apart, "mt_c0201e6000_dwn_a") != DiffuseOf(apart, "mt_c0201e6000_top_a")
+                && Directory.EnumerateFiles(apart, "*_base.tex", SearchOption.AllDirectories).Count() == 2,
+            "items in two options of one group keep a diffuse each");
     }
 
     private static void AStoppedWatcherIsNoticed(string root)

@@ -17,9 +17,9 @@ namespace InstantEdit.Studio.Windows.UI;
 /// </summary>
 internal sealed class TextureSlotEditor
 {
-    private enum SourceMode { File, Variants, Dummy, Alpha, Diffuse }
+    private enum SourceMode { File, Variants, Dummy, Alpha, Diffuse, Maps }
 
-    private static readonly string[] SourceModeLabels = { "File", "Variants", "Dummy", "Add alpha", "From diffuse" };
+    private static readonly string[] SourceModeLabels = { "File", "Variants", "Dummy", "Add alpha", "From diffuse", "From maps" };
 
     private const string ImageFilter = "Image files{.png,.jpg,.jpeg,.tga,.dds,.tex}";
 
@@ -35,7 +35,7 @@ internal sealed class TextureSlotEditor
 
     private static SourceMode ModeOf(TextureSlot tex)
         => tex.UseWhiteDummy ? SourceMode.Dummy : tex.UseVariants ? SourceMode.Variants : tex.UseAlphaOverlay ? SourceMode.Alpha
-         : tex.UseDiffuseNormal ? SourceMode.Diffuse : SourceMode.File;
+         : tex.UseDiffuseNormal ? SourceMode.Diffuse : tex.UseMadeMask ? SourceMode.Maps : SourceMode.File;
 
     private static void SetMode(TextureSlot tex, SourceMode mode)
     {
@@ -49,16 +49,20 @@ internal sealed class TextureSlotEditor
         tex.UseWhiteDummy    = mode == SourceMode.Dummy;
         tex.UseAlphaOverlay  = mode == SourceMode.Alpha;
         tex.UseDiffuseNormal = mode == SourceMode.Diffuse;
+        tex.UseMadeMask      = mode == SourceMode.Maps;
     }
 
     /// <summary>
-    /// Add alpha is offered on the normal slot of a hair material, From diffuse on the normal slot of
-    /// a gear material; each is kept on a slot that already uses it.
+    /// Add alpha is offered on the normal slot of a hair or gear material, From diffuse on the normal
+    /// slot of a gear material, From maps on the mask slot of a gear material; each is kept on a slot
+    /// that already uses it.
     /// </summary>
     private static bool Offers(MaterialSetup? mat, TextureSlot tex, SourceMode mode) => mode switch
     {
-        SourceMode.Alpha   => tex.UseAlphaOverlay || tex.Type == TextureType.Normal && mat?.ShaderType == ShaderType.Hair,
+        SourceMode.Alpha   => tex.UseAlphaOverlay || tex.Type == TextureType.Normal
+                              && (mat?.ShaderType == ShaderType.Hair || GameNormal.ReadsBlueAsOpacity(mat?.ShaderType)),
         SourceMode.Diffuse => tex.UseDiffuseNormal || tex.Type == TextureType.Normal && mat?.ShaderType == ShaderType.Character,
+        SourceMode.Maps    => tex.UseMadeMask || tex.Type == TextureType.Mask && mat?.ShaderType == ShaderType.Character,
         _                  => true,
     };
 
@@ -80,9 +84,12 @@ internal sealed class TextureSlotEditor
         {
             SourceMode.File     => "One image file (png / jpeg / tga / dds), converted to .tex — or a .tex, used as it is.",
             SourceMode.Variants => "Several images — each becomes one option of a switch group in the mod.",
-            SourceMode.Alpha    => "A base normal map with an alpha map put into its alpha: black where there is no hair, white where there is.",
+            SourceMode.Alpha    => "A base normal map with an alpha map put into its opacity: black where there is no hair or cloth, "
+                                 + "white where there is. Hair keeps it in the alpha, gear in the blue.",
             SourceMode.Diffuse  => "A normal made from a diffuse texture's shading, for ports that come without a usable normal. "
                                  + "The diffuse's alpha becomes the opacity.",
+            SourceMode.Maps     => "A mask made from another game's maps, laid out like the game's own: roughness in green, "
+                                 + "ambient occlusion in red and blue.",
             _ => options.Count > 1
                 ? "A placeholder texture — pick which one. No source image needed."
                 : $"A placeholder texture ({DummyTextureLibrary.Resolve(tex.Type, tex.DummyPreset).Label}). No source image needed.",
@@ -98,7 +105,7 @@ internal sealed class TextureSlotEditor
         if (paths.Files.Count == 1 && paths.Folders.Count == 0 && ModeOf(tex) != SourceMode.Variants)
         {
             tex.SourcePath = paths.Files[0];
-            SetMode(tex, ModeOf(tex) is SourceMode.Alpha or SourceMode.Diffuse ? ModeOf(tex) : SourceMode.File);
+            SetMode(tex, ModeOf(tex) is SourceMode.Alpha or SourceMode.Diffuse or SourceMode.Maps ? ModeOf(tex) : SourceMode.File);
             _session.MarkDirty();
             _session.Notify($"{TextureTypeInfo.DisplayName(tex.Type)} ← {paths.Describe()}", Severity.Info);
             return;
@@ -235,6 +242,16 @@ internal sealed class TextureSlotEditor
         {
             edited |= DrawAlphaPicker(tex, "src", "alpha map — or drop one here", rightW);
         }
+        else if (mode == SourceMode.Maps)
+        {
+            var maps = GameMask.Maps(tex);
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(Theme.Muted, maps.Count == 0 ? "no maps yet" : $"made from {string.Join(", ", maps.Select(m => m.Role))}");
+            Gui.Tooltip(maps.Count == 0 ? "Select the texture to pick its maps." : GameMask.Describe(tex));
+            ImGui.SameLine();
+            float fill = ImGui.GetContentRegionAvail().X - rightW;
+            if (fill > 0) ImGui.Dummy(new Vector2(fill, 0));
+        }
         else
         {
             string src = tex.SourcePath;
@@ -280,7 +297,8 @@ internal sealed class TextureSlotEditor
                 tex.Postfix = MaterialNaming.DefaultPostfix(newType);
             tex.Type = newType;
             // These make a normal; any other role takes a file, From diffuse giving back the slot's own.
-            if (newType != TextureType.Normal && ModeOf(tex) is SourceMode.Diffuse or SourceMode.Alpha)
+            if (newType != TextureType.Normal && ModeOf(tex) is SourceMode.Diffuse or SourceMode.Alpha
+                || newType != TextureType.Mask && ModeOf(tex) == SourceMode.Maps)
                 SetMode(tex, SourceMode.File);
             edited = true;
         }
@@ -338,11 +356,21 @@ internal sealed class TextureSlotEditor
             Gui.Label("Files", "Each image becomes one option of a switch group in the mod, named after the file.");
             edited |= DrawVariantList(tex);
         }
+        else if (mode == SourceMode.Maps)
+        {
+            Gui.Label("Roughness", "Goes into the mask's green. A gloss or smoothness map (by its name) is turned around.");
+            edited |= DrawMapPicker(tex.SourcePath, p => tex.SourcePath = p, "mapsrough");
+            Gui.Label("Metallic", "Without a roughness map, metal is made glossy. Metalness itself comes from the colour set.");
+            edited |= DrawMapPicker(tex.MetallicSourcePath, p => tex.MetallicSourcePath = p, "mapsmetal");
+            Gui.Label("Occlusion", "Goes into the mask's red and blue. Without one they are white.");
+            edited |= DrawMapPicker(tex.OcclusionSourcePath, p => tex.OcclusionSourcePath = p, "mapsao");
+        }
         else
         {
             Gui.Label(mode switch { SourceMode.Alpha => "Base normal", SourceMode.Diffuse => "Diffuse", _ => "File" },
                 mode switch
                 {
+                    SourceMode.Alpha when mat.ShaderType != ShaderType.Hair => "The normal map the opacity is put into.",
                     SourceMode.Alpha   => "The normal map the hair starts from. New hair materials take the one set in Settings.",
                     SourceMode.Diffuse => "The diffuse whose shading becomes the bumps. Any colour variant works; they share their shading.",
                     _                  => null,
@@ -357,12 +385,26 @@ internal sealed class TextureSlotEditor
 
             if (mode == SourceMode.Alpha)
             {
-                Gui.Label("Alpha", "Black where there is no hair, white where there is. Written into the normal's alpha.");
+                Gui.Label("Alpha", mat.ShaderType == ShaderType.Hair
+                    ? "Black where there is no hair, white where there is. Written into the normal's alpha."
+                    : "Black where it is see-through, white where it is solid. Written into the normal's blue.");
                 edited |= DrawAlphaPicker(tex, "fullalpha", "png / jpeg / tga / dds / .tex file", 0);
             }
             else if (mode == SourceMode.File && tex.Type == TextureType.Normal && !TextureSources.IsTex(tex.SourcePath))   // a .tex is used as it is
             {
                 edited |= DrawGreenDirection(tex);
+                if (GameNormal.ReadsBlueAsOpacity(mat.ShaderType) && NormalGreen.Applies(tex) && System.IO.File.Exists(tex.SourcePath))
+                {
+                    Gui.Label("Blue", "The game reads a gear normal's blue as opacity. A normal from another game keeps "
+                                    + "something else there, so it is written solid; one made for the game is kept.");
+                    ImGui.AlignTextToFramePadding();
+                    ImGui.TextColored(Theme.Muted, GameNormal.PeekCarriesOpacity(tex.SourcePath) switch
+                    {
+                        true  => "kept, it holds an opacity",
+                        false => "made solid",
+                        null  => "checking",
+                    });
+                }
             }
             else if (mode == SourceMode.Diffuse)
             {
@@ -454,6 +496,30 @@ internal sealed class TextureSlotEditor
             ImGui.TextColored(Theme.Muted, why);
         }
         return edited;
+    }
+
+    /// <summary>One map of a From maps slot; one dropped image sets it, and it can be cleared.</summary>
+    private bool DrawMapPicker(string current, Action<string> set, string id)
+    {
+        var drop = new FileDropRule(FileDrop.RejectForTextureSlot, paths =>
+        {
+            if (paths.Files.Count != 1 || paths.Folders.Count > 0)
+            {
+                _session.Notify("Drop one image as the map.", Severity.Warning);
+                return;
+            }
+            set(paths.Files[0]);
+            _session.MarkDirty();
+        });
+
+        string path = current;
+        if (Gui.PathPicker(id, ref path, "none", PathKind.File, ImageFilter,
+                picked => { set(picked); _session.MarkDirty(); }, drop: drop))
+        {
+            set(path);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>The alpha map of an Add alpha slot; one dropped image sets it.</summary>

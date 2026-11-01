@@ -718,11 +718,13 @@ internal sealed partial class PortSession : ISetUpSession, IItemShelf
             }
             mat.Textures.AddRange(same);
         }
-        // Add alpha and From diffuse belong to one shader's normal (see TextureSlotEditor); the build applies them on any.
+        // Add alpha, From diffuse and From maps belong to some shaders' slots (see TextureSlotEditor); the build applies them on any.
         foreach (var slot in mat.Textures)
         {
-            if (preset.Shader != ShaderType.Hair)
+            if (preset.Shader != ShaderType.Hair && !GameNormal.ReadsBlueAsOpacity(preset.Shader))
                 slot.UseAlphaOverlay = false;
+            if (preset.Shader != ShaderType.Character)
+                slot.UseMadeMask = false;
             if (preset.Shader != ShaderType.Character && slot.UseDiffuseNormal)
             {
                 (slot.SourcePath, slot.NormalSourcePath) = (slot.NormalSourcePath, string.Empty);

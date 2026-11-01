@@ -88,6 +88,15 @@ interactive checks have not been performed by the implementation agent.
   item with no materials gets them, as when the model is dropped.
 - A material whose name matches no texture gets the set its UVs lie on. Open `F:\Downloads\sin tonic` and
   drop `top.mdl` on a Build item: material a ("4.0 Ribbon" in the model) gets the ASD textures.
+- Other games' textures (2026-10-31, pending): open `F:\Downloads\sin tonic` and drop `top.mdl`,
+  `bottoms.mdl`, `gloves.mdl` and `shoes.mdl` on four Build items. The ASA, ASD and ASW normals use
+  Add alpha with the set's Opacity map, ASB's normal says "Blue: made solid", every mask is From maps
+  (roughness, metallic, occlusion), and the ASW material is Translucent. Build and check in game:
+  - No holes on sloped or embossed parts (the damask on ASA).
+  - ASA's sheer parts show, the ASW piece is see-through rather than gone.
+  - Masks shade like vanilla gear: creases darker, glossy parts shiny.
+  - The build report says "same as …" for the ASA, ASB, ASW and ASD textures of the second and later
+    items, and the mod folder holds one copy of each.
 - Type a path into the Output field letter by letter: the window doesn't stutter.
 - Start over (top right) clears the modpack after its confirmation.
 - Weapons: add a weapon from Add from game > Weapons, drop a model and a texture,
