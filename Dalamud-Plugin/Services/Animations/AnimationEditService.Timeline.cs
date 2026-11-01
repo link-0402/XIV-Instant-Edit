@@ -813,25 +813,27 @@ internal sealed partial class AnimationEditService
     };
 
     /// <summary>
-    /// The capture to open <paramref name="journal"/>'s clip again with: the newest the listener saw of the
-    /// same clip in the same collection, the same character's first; else the one the edit was made from.
+    /// The capture to open <paramref name="journal"/>'s clip again with on the actor at <paramref name="actorIndex"/>: the newest
+    /// the listener saw of the same clip in the same collection on that actor; else the one the edit was made from, pointed at it.
     /// </summary>
-    internal static AnimationCapture EditAgainCapture(AnimationEditJournal journal, IEnumerable<AnimationCapture> history)
-        => LatestCapture(journal.Request.Capture, journal.Request.Timeline?.Startup == true, history);
+    internal static AnimationCapture EditAgainCapture(AnimationEditJournal journal, IEnumerable<AnimationCapture> history, ushort actorIndex)
+        => LatestCapture(journal.Request.Capture, journal.Request.Timeline?.Startup == true, history, actorIndex);
 
     /// <summary>
-    /// The capture to open <paramref name="saved"/>'s clip (its startup with <paramref name="startup"/>) again with: the newest the
-    /// listener saw of the same clip in the same collection, the same character's first; else <paramref name="saved"/>. Kept edits
-    /// come back on it, so a save after a game restart checks the character as it is now.
+    /// The capture to open <paramref name="saved"/>'s clip (its startup with <paramref name="startup"/>) again with on the actor at
+    /// <paramref name="actorIndex"/>: the newest the listener saw of the same clip in the same collection on that actor, the same
+    /// character's first; else <paramref name="saved"/> pointed at that actor, never another actor's capture. Kept edits come back
+    /// on it, so a save after a game restart checks the character as it is now.
     /// </summary>
-    internal static AnimationCapture LatestCapture(AnimationCapture saved, bool startup, IEnumerable<AnimationCapture> history)
+    internal static AnimationCapture LatestCapture(AnimationCapture saved, bool startup, IEnumerable<AnimationCapture> history, ushort actorIndex)
     {
         if ((startup ? saved.Startup : saved.Clip) is not { } clip)
-            return saved;
-        var same = history.Where(capture => capture.CollectionId == saved.CollectionId && (startup || capture.ExpressionTimeline == null) &&
+            return saved with { ActorIndex = actorIndex };
+        var same = history.Where(capture => capture.ActorIndex == actorIndex && capture.CollectionId == saved.CollectionId &&
+            (startup || capture.ExpressionTimeline == null) &&
             (startup ? capture.Startup : capture.Clip) is { } other && other.GamePath == clip.GamePath && other.Name == clip.Name &&
             other.BindingIndex == clip.BindingIndex).ToArray();
-        return same.FirstOrDefault(capture => capture.ActorId == saved.ActorId) ?? same.FirstOrDefault() ?? saved;
+        return same.FirstOrDefault(capture => capture.ActorId == saved.ActorId) ?? same.FirstOrDefault() ?? saved with { ActorIndex = actorIndex };
     }
 
     /// <summary>

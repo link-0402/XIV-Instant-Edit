@@ -147,22 +147,27 @@ internal static class EditAgainFixture
     {
         var clip = Clip();
         var journal = Journal(Capture("saved", 7, clip, index: 201));
-        check(AnimationEditService.EditAgainCapture(journal, []).Id == "saved",
+        check(AnimationEditService.EditAgainCapture(journal, [], 201) is { Id: "saved", ActorIndex: 201 },
             "with nothing heard since, the clip opens with the capture the edit was made from");
-        check(AnimationEditService.EditAgainCapture(journal, [Capture("other", 8, clip)]).Id == "other",
-            "a newer capture of the clip in the same collection is used, another character's too");
-        check(AnimationEditService.EditAgainCapture(journal, [Capture("other", 8, clip), Capture("mine", 7, clip)]).Id == "mine",
+        check(AnimationEditService.EditAgainCapture(journal, [Capture("other", 8, clip, index: 201)], 201).Id == "other",
+            "a newer capture of the clip in the same collection on the same actor is used, another character's too");
+        check(AnimationEditService.EditAgainCapture(journal, [Capture("other", 8, clip, index: 201), Capture("mine", 7, clip, index: 201)], 201).Id == "mine",
             "the same character's capture comes first");
+        check(AnimationEditService.EditAgainCapture(journal, [Capture("aria", 9, clip, index: 202), Capture("mine", 7, clip, index: 201)], 202).Id == "aria",
+            "a partner's workspace opens the clip on the partner's own capture");
+        check(AnimationEditService.EditAgainCapture(journal, [Capture("aria", 9, clip, index: 202), Capture("mine", 7, clip, index: 201)], 203)
+                is { Id: "saved", ActorIndex: 203 },
+            "with no capture on the workspace's actor, the saved capture is pointed at it, never another actor's");
         var smile = new AnimationResource("chara/action/facial/pose/smile.tmb", "smile.tmb", "x");
         check(AnimationEditService.EditAgainCapture(journal,
             [
-                Capture("away", 7, clip, collection: Guid.NewGuid()), Capture("entry", 7, Clip(binding: 1)),
-                Capture("name", 7, Clip("other")), Capture("face", 7, clip, expression: smile),
-            ]).Id == "saved",
+                Capture("away", 7, clip, collection: Guid.NewGuid(), index: 201), Capture("entry", 7, Clip(binding: 1), index: 201),
+                Capture("name", 7, Clip("other"), index: 201), Capture("face", 7, clip, expression: smile, index: 201),
+            ], 201).Id == "saved",
             "captures in another collection, of another entry of the file or of an expression are not the clip");
         var start = Clip("start", path: "chara/human/c0801/animation/a0001/bt_common/emote/dance_start.pap");
-        var startup = Journal(Capture("saved", 7, Clip(), start), true);
-        check(AnimationEditService.EditAgainCapture(startup, [Capture("loop only", 7, Clip()), Capture("with start", 7, Clip(), start)]).Id ==
+        var startup = Journal(Capture("saved", 7, Clip(), start, index: 201), true);
+        check(AnimationEditService.EditAgainCapture(startup, [Capture("loop only", 7, Clip(), index: 201), Capture("with start", 7, Clip(), start, index: 201)], 201).Id ==
               "with start",
             "a startup's edit opens with a capture that has the same startup");
     }

@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using InstantEdit.Models;
+using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Preview;
 using InstantEdit.Ui.Timeline;
 
@@ -11,6 +14,29 @@ internal static class PartnerTimelineFixture
     {
         Choice(check);
         SameFile(check);
+        Histories(check);
+    }
+
+    private static AnimationCapture Heard(string id, ulong actor, ushort index)
+    {
+        var clip = new AnimationClip("chara/human/c0801/animation/a0001/bt_common/emote/dance.pap", "dance", 0, 1, 0, "chara/test.sklb");
+        return new AnimationCapture(id, actor, 1, Guid.Empty, "Test", "Dance", clip, null, [clip.GamePath], [], DateTime.UtcNow, true, ActorIndex: index);
+    }
+
+    /// <summary>The listener keeps each actor's recent clips while it follows another, so a target switch loses none of them.</summary>
+    private static void Histories(Action<bool, string> check)
+    {
+        var histories = new CaptureHistories();
+        histories.Set(1, Enumerable.Range(0, 60).Select(i => Heard($"you {i}", 1, 201)).ToImmutableArray());
+        check(histories.Of(1).Length == CaptureHistories.PerActor && histories.Of(1)[0].Id == "you 0", "histories: 50 clips per actor, newest kept");
+        histories.Set(2, [Heard("aria", 2, 202)]);
+        check(histories.Of(1).Length == 50 && histories.Of(2).Single().Id == "aria", "histories: another actor's list leaves the first one's alone");
+        check(histories.At(202).Single().Id == "aria" && histories.At(201).Length == 50 && histories.At(203).IsEmpty,
+            "histories: found by the object index of their newest clip");
+        for (ulong actor = 3; actor <= 9; actor++)
+            histories.Set(actor, [Heard($"actor {actor}", actor, 210)]);
+        check(histories.Of(1).IsEmpty && !histories.Of(2).IsEmpty && !histories.Of(9).IsEmpty,
+            "histories: past 8 actors the one set longest ago goes");
     }
 
     /// <summary>Two actors on one collection can't both preview edits of one file: Penumbra gives a collection one file per game path.</summary>

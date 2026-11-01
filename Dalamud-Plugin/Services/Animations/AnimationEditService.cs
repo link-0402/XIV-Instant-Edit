@@ -82,7 +82,6 @@ internal sealed partial class AnimationEditService : IDisposable
         Files = new AnimationFiles(framework, objects, penumbra, resources, skeletons);
         HandShapes = new HandShapeLibrary(recoveryRoot, message => log.Warning("{Message}", message));
         PropTypes = new PropAttachTypes(recoveryRoot, message => log.Warning("{Message}", message));
-        Observer.CharacterChanged += Cancel;
     }
     public void Cancel() { if (CanCancel) cancellation?.Cancel(); }
 
@@ -436,7 +435,7 @@ internal sealed partial class AnimationEditService : IDisposable
     }
     public void Dispose()
     {
-        disposed = true; cancellation?.Cancel(); lifetime.Cancel(); Observer.CharacterChanged -= Cancel; Observer.Dispose();
+        disposed = true; cancellation?.Cancel(); lifetime.Cancel(); Observer.Dispose();
         baker.Dispose();
     }
 }

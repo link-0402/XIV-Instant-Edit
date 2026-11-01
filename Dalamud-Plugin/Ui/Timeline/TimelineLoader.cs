@@ -254,7 +254,7 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
         // Another clip may have opened meanwhile, or the actor went back to its own animation.
         AnimationClip? Played(AnimationCapture capture) => capture.Clip.Timeline == waiting.Item.Timeline ? capture.Clip
             : capture.Startup?.Timeline == waiting.Item.Timeline ? capture.Startup : null;
-        var playing = service.Observer.History.Where(capture => capture.Playing && capture.ActorIndex == waiting.Actor && Played(capture) != null).ToArray();
+        var playing = service.Observer.HistoryAt(waiting.Actor).Where(capture => capture.Playing && capture.ActorIndex == waiting.Actor && Played(capture) != null).ToArray();
         if (playing.Length == 0)
             return;
         // One timeline can play several clips, such as Dance's cbem_dance and its 6-bone cbep_e_dance: the one moving

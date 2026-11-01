@@ -128,7 +128,7 @@ internal sealed class PoseSourcePanel(TimelineSession session, MotionDecode deco
         if (session.Animations is not { } service)
             yield break;
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var capture in service.Observer.History)
+        foreach (var capture in session.History)
         {
             if (capture.ExpressionTimeline != null)
                 continue;

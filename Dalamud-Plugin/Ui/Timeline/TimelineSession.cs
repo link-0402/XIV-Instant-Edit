@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Plugin.Services;
 using InstantEdit.Models;
@@ -168,12 +169,29 @@ internal sealed class TimelineSession
         return ReferenceEquals(resolution, loop.Resolution) ? current.Capture : current.Capture with { Clip = loop with { Resolution = resolution } };
     }
 
+    /// <summary>The object index of the workspace's actor in GPose; null outside it or when its actor isn't there.</summary>
+    public ushort? ActorIndex
+    {
+        get
+        {
+            try { return Playback.ActorIndex(); }
+            catch (InvalidOperationException) { return null; }
+        }
+    }
+
+    /// <summary>
+    /// The listener's recent clips of this workspace's actor: as they come while the listener follows it, as they were
+    /// while it follows another; outside GPose your own character's.
+    /// </summary>
+    public ImmutableArray<AnimationCapture> History => Animations is not { } service ? []
+        : ActorIndex is { } index ? service.Observer.HistoryAt(index) : service.Observer.History;
+
     /// <summary>The listener's latest skeleton match for <paramref name="clip"/>, the loop or startup of capture <paramref name="captureId"/>; its own when there is none.</summary>
     private SkeletonResolution? LatestMatch(string captureId, AnimationClip clip, bool startup)
     {
         if (Animations == null)
             return clip.Resolution;
-        foreach (var capture in Animations.Observer.History)
+        foreach (var capture in History)
         {
             if (capture.Id != captureId)
                 continue;

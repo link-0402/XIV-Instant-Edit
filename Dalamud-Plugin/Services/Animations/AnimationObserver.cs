@@ -69,10 +69,21 @@ internal sealed class AnimationObserver : IDisposable
     private ulong actor;
     private int generation;
     private ImmutableArray<AnimationCapture> history = [];
+    // The other actors' lists, kept while the listener follows this one (framework thread only).
+    private readonly CaptureHistories histories = new();
+    /// <summary>The recent clips of the actor followed now.</summary>
     public ImmutableArray<AnimationCapture> History => history;
+    /// <summary>
+    /// The recent clips of the actor at <paramref name="objectIndex"/>: the followed one's as they come, another's as they were
+    /// when the listener last followed it. Framework thread.
+    /// </summary>
+    public ImmutableArray<AnimationCapture> HistoryAt(ushort objectIndex)
+    {
+        var followed = history;
+        return !followed.IsEmpty && followed[0].ActorIndex == objectIndex ? followed : histories.At(objectIndex);
+    }
     public ulong Actor => actor;
     public string Status { get; private set; } = "Waiting for the local player";
-    public event Action? CharacterChanged;
     /// <summary>The startup to loop fades measured while listening (<see cref="LoopFadeWatch"/>).</summary>
     public LoopFades LoopFades { get; }
     private readonly LoopFadeWatch fadeWatch;
@@ -200,9 +211,13 @@ internal sealed class AnimationObserver : IDisposable
         if (current != actor)
         {
             observation?.Cancel();
-            actor = current; generation++; history = []; CharacterChanged?.Invoke();
-            resolutions.Clear(); manualChoices.Clear(); operationErrors.Clear();
-            runtimeCache.Clear(); resourceCache.Clear(); parsedPaps.Clear(); motionCache.Clear(); durations.Clear();
+            // The actor left keeps its clips (no longer heard playing); the one followed now gets its own back. Skeleton
+            // choices, matches and errors are keyed by actor, parsed files by content: they stay. Pointers and the
+            // character's loaded paths don't.
+            if (actor != 0)
+                histories.Set(actor, history.Select(c => c with { Playing = false }).ToImmutableArray());
+            actor = current; generation++; history = histories.Of(current);
+            runtimeCache.Clear(); resourceCache.Clear();
             resourceCollection = Guid.Empty; resourceMapKey = null; resourcePaths = null;
             Volatile.Write(ref resourcesChangedAt, Environment.TickCount64);
         }

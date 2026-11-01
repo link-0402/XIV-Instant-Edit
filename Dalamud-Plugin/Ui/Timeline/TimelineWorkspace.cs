@@ -395,7 +395,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         // The start page stays until the clip loads (Load), so Keep editing stays on it.
         if (animations is not { } service || journal.Request.Timeline is not { } edit)
             return;
-        capture ??= AnimationEditService.EditAgainCapture(journal, service.Observer.History);
+        capture ??= AnimationEditService.EditAgainCapture(journal, session.History, session.ActorIndex ?? journal.Request.Capture.ActorIndex);
         if (HasUnsavedChanges)
         {
             pending = PendingAction.Switch;
@@ -415,7 +415,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         host.Show();
         startShown = false;
         // The kept capture names the character of the run that kept it; the clip is opened on the newest capture of it.
-        var capture = animations is { } service ? AnimationEditService.LatestCapture(kept.Capture, kept.Startup, service.Observer.History) : kept.Capture;
+        var capture = animations != null
+            ? AnimationEditService.LatestCapture(kept.Capture, kept.Startup, session.History, session.ActorIndex ?? kept.Capture.ActorIndex)
+            : kept.Capture;
         Load(capture, kept.Startup, false, afterUndo: kept.BaseHash != null);
         pendingRestore = kept;
     }
@@ -500,7 +502,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         if (animations == null || source is not { } current || reader.Busy || saveFooter.Working ||
             session.Preview.Active || session.Preview.Busy || timelinePreview.Building)
             return null;
-        return TimelineWindowViews.ChangedCapture(animations.Observer.History, current);
+        return TimelineWindowViews.ChangedCapture(session.History, current);
     }
 
     /// <summary>
