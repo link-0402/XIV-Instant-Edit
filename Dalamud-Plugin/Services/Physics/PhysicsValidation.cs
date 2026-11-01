@@ -73,7 +73,8 @@ internal static class PhysicsValidation
                 }
                 if (chain.Nodes[0].Bone.IsEmpty)
                     Add(PhysicsIssueLevel.Error, $"{label} starts without a bone.");
-                for (var n = 1; n < chain.Nodes.Count - 1; n++)
+                // The tip is the first point without a bone; a second one has no place the game knows.
+                for (var n = PhysicsKnobs.TipIndex(chain) + 1; n < chain.Nodes.Count; n++)
                     if (chain.Nodes[n].Bone.IsEmpty)
                         Add(PhysicsIssueLevel.Warning, $"{label}: point {n + 1} has no bone, so the points after it may not move as meant. Only the tip usually has none.");
                 if (!Finite(chain.Dampening) || !Finite(chain.MaxSpeed) || !Finite(chain.Friction) || !Finite(chain.CollisionDampening) ||

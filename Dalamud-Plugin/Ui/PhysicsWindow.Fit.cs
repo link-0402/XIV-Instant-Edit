@@ -26,6 +26,10 @@ internal sealed partial class PhysicsWindow
     private IReadOnlyList<string> fitWarnings = [];
     private string fitNote = string.Empty;
     private readonly HashSet<int> fitChosen = [];
+    // The fit's rows with the ticked sizes held 1 cm clear at rest (PhysicsFitClearance), and the fit and ticks they were held for.
+    private IReadOnlyList<PhysicsFitItem>? fitHeld;
+    private PhysicsFitResult? fitHeldOf;
+    private string fitHeldFor = string.Empty;
     private PhysicsDocument? fitDocument;
     private int fitRevision;
 
@@ -46,11 +50,12 @@ internal sealed partial class PhysicsWindow
             BustScalingNote);
     }
 
-    /// <summary> A fitted value in its own units. </summary>
+    /// <summary> A fitted value in its own units, whatever the system's language. Point sizes show the tip's; their tooltip lists every point. </summary>
     private static string FitValue(PhysicsFitItem item, float value) => item.Target switch
     {
-        PhysicsFitTarget.Swing => $"{value:0}°",
-        _ => $"{value * 100:0.0} cm",
+        PhysicsFitTarget.Swing => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{value:0}°"),
+        PhysicsFitTarget.Points => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"tip {value * 100:0.0} cm"),
+        _ => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{value * 100:0.0} cm"),
     };
 
     private void StartFit(PhysicsDocument current)
@@ -143,6 +148,8 @@ internal sealed partial class PhysicsWindow
         if (result.BreastTips)
             DrawTipChoice();
 
+        // The numbers follow the ticks: geometry only, so it runs again whenever they change.
+        var shown = HeldFit(result);
         var changing = Enumerable.Range(0, result.Items.Count).Where(i => result.Items[i].Changes).ToList();
         if (changing.Count > 0)
         {
@@ -155,7 +162,7 @@ internal sealed partial class PhysicsWindow
                 ImGui.TableHeadersRow();
                 foreach (var i in changing)
                 {
-                    var item = result.Items[i];
+                    var item = shown[i];
                     using var id = ImRaii.PushId(i);
                     ImGui.TableNextRow();
                     ImGui.TableNextColumn();
@@ -172,8 +179,10 @@ internal sealed partial class PhysicsWindow
                     ImGui.TextColored(Theme.Muted, item.Shape is { NewOn: not null } && item.Current <= 0 ? "none" : FitValue(item, item.Current));
                     ImGui.TableNextColumn();
                     // A tip's size follows its tip place while that's ticked.
-                    var fitted = item.FittedWith(PhysicsFit.MovesPlace(fitChosen.Select(chosen => result.Items[chosen]), item));
-                    var moved = item.Shape is { Distance: >= 0.005f } shape ? $", moved {shape.Distance * 100:0.0} cm" : "";
+                    var fitted = item.FittedWith(PhysicsFit.MovesPlace(fitChosen.Select(chosen => shown[chosen]), item));
+                    var moved = item.Shape is { Distance: >= 0.005f } shape
+                        ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $", moved {shape.Distance * 100:0.0} cm")
+                        : "";
                     ImGui.TextColored(fitted > item.Current ? Theme.Accent : Theme.Info, FitValue(item, fitted) + moved);
                 }
             }
@@ -207,6 +216,7 @@ internal sealed partial class PhysicsWindow
             fitMeasure = null;
             fitFile = null;
             fitOriginals = null;
+            fitHeld = null;
             ImGui.CloseCurrentPopup();
         }
     }
@@ -265,20 +275,40 @@ internal sealed partial class PhysicsWindow
 
     private static (PhysicsFitTarget, int, int, string) FitKey(PhysicsFitItem item) => (item.Target, item.Simulator, item.Chain, item.Name);
 
+    /// <summary>
+    /// The fit's rows with the ticked sizes kept 1 cm clear where physics runs, measured again when the ticks or the fit change
+    /// (a refit, or a test ticking rows in the builder's state). The rows as measured when the body is gone.
+    /// </summary>
+    private IReadOnlyList<PhysicsFitItem> HeldFit(PhysicsFitResult result)
+    {
+        if (fitFile is not { } file || fitMeasure is not { } measured)
+            return result.Items;
+        var ticks = string.Join(",", fitChosen.Order());
+        if (fitHeld is null || !ReferenceEquals(fitHeldOf, result) || fitHeldFor != ticks)
+        {
+            fitHeld = PhysicsFitClearance.Hold(file, result.Items, fitChosen, measured.Skeleton);
+            (fitHeldOf, fitHeldFor) = (result, ticks);
+        }
+        return fitHeld;
+    }
+
     private void ApplyFit(PhysicsDocument current, PhysicsFitResult result)
     {
-        var (measuredFile, originals) = (fitFile, fitOriginals);
+        var (measuredFile, originals, measured) = (fitFile, fitOriginals, fitMeasure);
         fit = null;
         fitMeasure = null;
         fitFile = null;
         fitOriginals = null;
+        fitHeld = null;
         // The sizes name shapes by name and chains by place, measured on the file as it was.
         if (!ReferenceEquals(current, fitDocument) || current.Revision != fitRevision || measuredFile is null)
         {
             Say(FeedbackSeverity.Warning, "Your physics changed while your body was measured. Fit again.");
             return;
         }
-        var chosen = fitChosen.Order().Select(i => result.Items[i]).ToList();
+        // Held once more on the rows as chosen, so the file written always keeps the 1 cm.
+        var held = measured is null ? result.Items : PhysicsFitClearance.Hold(measuredFile, result.Items, fitChosen, measured.Skeleton);
+        var chosen = fitChosen.Order().Select(i => held[i]).ToList();
         Change(current, () => PhysicsFit.Apply(current.File, chosen), FitLabel);
         // Remembered as soon as it's in the file: a later fit uses a record only while the shape is still exactly where this one put it.
         try { service.FitRecords.Record(measuredFile, current.Race, chosen, originals); }

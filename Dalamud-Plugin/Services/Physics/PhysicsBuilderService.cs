@@ -333,7 +333,8 @@ internal sealed class PhysicsBuilderService : IDisposable
     /// from the files your collection loads and reshaped for your race, standing in the skeleton's rest
     /// pose with your Customize+ profile and bust size (<see cref="PhysicsPose"/>). Your animation,
     /// physics and posing tools don't count, so measuring again gives the same body. Gear covering a
-    /// slot is measured as it is, with a warning, since the fit is for bare skin.
+    /// slot is measured as it is, with a warning, since the fit is for bare skin. Accessory models weighted
+    /// to a body area's bones are measured too, for that area only, like a member a body mod puts on a ring.
     /// </summary>
     public async Task<PhysicsBodyMeasure> MeasureBodyAsync(CancellationToken token)
     {
@@ -362,12 +363,14 @@ internal sealed class PhysicsBuilderService : IDisposable
         foreach (var drawn in capture.Models)
         {
             var slot = PhysicsPaths.SlotName(drawn.Slot);
+            var accessory = PhysicsPaths.IsAccessory(drawn.Slot);
             if (PhysicsPaths.ResolveDrawn(resolved, drawn.File, drawn.Slot) is not var (actual, gamePath))
             {
                 warnings.Add($"Penumbra doesn't list your {slot} model, so it wasn't measured. Redraw your character and try again.");
                 continue;
             }
-            if (!PhysicsPaths.IsBareBody(gamePath))
+            // Accessories are gear by nature: they count only where they move with a body area.
+            if (!accessory && !PhysicsPaths.IsBareBody(gamePath))
                 warnings.Add($"You're wearing {slot} gear, so the fit measured the gear, not your skin.");
             var bytes = await Task.Run(() => ReadModel(actual), token).ConfigureAwait(false);
             if (bytes is null)
@@ -375,10 +378,27 @@ internal sealed class PhysicsBuilderService : IDisposable
                 warnings.Add($"Your {slot} model couldn't be read, so it wasn't measured.");
                 continue;
             }
+            // A quick look first: an accessory weighted to no body area's bone (or the helper bones under one), like an earring, has nothing to measure.
+            // Read as the measure reads it, so one that passes here measures too.
+            if (accessory)
+            {
+                try
+                {
+                    var shapes = drawn.Shapes != 0;
+                    if (!await Task.Run(() => ModelMeshReader.Read(bytes, shapes: shapes, skin: true).Bones
+                            .Any(bone => PhysicsFit.PartBone(bone, capture.Character.Skeleton) != null), token).ConfigureAwait(false))
+                        continue;
+                }
+                catch (Exception e) when (e is InvalidDataException or NotSupportedException)
+                {
+                    warnings.Add($"Your {slot} model couldn't be read, so it wasn't measured.");
+                    continue;
+                }
+            }
             RacialDeformer? deformer = null;
             try { deformer = scaling?.For(gamePath.Length > 0 ? gamePath : Path.GetFileName(actual))?.Deformer; }
             catch (InvalidDataException e) { warnings.Add($"Your {slot} model was measured without racial scaling: {e.Message}"); }
-            models.Add(new PhysicsBodyModel(slot, bytes, deformer, drawn.Attributes, drawn.Shapes));
+            models.Add(new PhysicsBodyModel(slot, bytes, deformer, drawn.Attributes, drawn.Shapes, accessory ? slot : null));
         }
         if (models.Count == 0)
             throw new IOException("None of your body's models could be read.");
@@ -423,7 +443,8 @@ internal sealed class PhysicsBuilderService : IDisposable
             // The hand models without tip weights, for the line to name.
             var bareLeft = new List<string>();
             var bareRight = new List<string>();
-            foreach (var drawn in capture.Models)
+            // A ring or bracelet weighted to the fingers isn't the hand.
+            foreach (var drawn in capture.Models.Where(model => !PhysicsPaths.IsAccessory(model.Slot)))
             {
                 if (PhysicsPaths.ResolveDrawn(resolved, drawn.File, drawn.Slot) is not var (actual, gamePath))
                     continue;

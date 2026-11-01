@@ -34,9 +34,10 @@ internal readonly record struct PhysicsFrame(Vector3 Position, Quaternion Rotati
 /// <summary>
 /// A model the character draws, to measure: its file, the racial deformer that reshapes it for the
 /// character (null for the character's own race), and the parts and shapes it turns on (null parts
-/// counts every part).
+/// counts every part). <paramref name="Accessory"/> names its slot when it's an accessory's (5 to 9).
 /// </summary>
-internal sealed record PhysicsBodyModel(string Name, byte[] Bytes, RacialDeformer? Deformer, uint? EnabledAttributes, uint EnabledShapes);
+internal sealed record PhysicsBodyModel(string Name, byte[] Bytes, RacialDeformer? Deformer, uint? EnabledAttributes, uint EnabledShapes,
+    string? Accessory = null);
 
 /// <summary>
 /// The body as the game draws it this frame: every drawn part of the body models (skin, and the
@@ -54,7 +55,7 @@ internal sealed class PhysicsBody
     private readonly Dictionary<string, int> boneIndex;
 
     private PhysicsBody(string[] bones, Vector3[] points, Vector3[] normals, int[] pointBones, float[] pointWeights, float[] areas,
-        IReadOnlyDictionary<string, PhysicsFrame> pose, IReadOnlyList<string> models, int missingBones)
+        string?[] pointAccessory, IReadOnlyDictionary<string, PhysicsFrame> pose, IReadOnlyList<string> models, int missingBones)
     {
         Bones = bones;
         Points = points;
@@ -62,6 +63,7 @@ internal sealed class PhysicsBody
         PointBones = pointBones;
         PointWeights = pointWeights;
         Areas = areas;
+        PointAccessory = pointAccessory;
         Pose = pose;
         Models = models;
         MissingBones = missingBones;
@@ -88,6 +90,9 @@ internal sealed class PhysicsBody
     /// <summary> How much skin each point stands for: a third of its drawn triangles' area. </summary>
     public float[] Areas { get; }
 
+    /// <summary> The accessory slot each point's model is on ("right ring"), or null for the body, hands, legs and feet. </summary>
+    public string?[] PointAccessory { get; }
+
     /// <summary> The live skeleton, by bone name, as the game drew it. </summary>
     public IReadOnlyDictionary<string, PhysicsFrame> Pose { get; }
 
@@ -101,20 +106,26 @@ internal sealed class PhysicsBody
 
     /// <summary> A body from points already posed, such as a measurement kept from before or a test's. </summary>
     internal static PhysicsBody Of(IReadOnlyList<string> bones, Vector3[] points, int[] pointBones, float[] pointWeights, float[] areas,
-        IReadOnlyDictionary<string, PhysicsFrame> pose, Vector3[]? normals = null)
+        IReadOnlyDictionary<string, PhysicsFrame> pose, Vector3[]? normals = null, string?[]? accessory = null)
     {
         if (pointBones.Length != points.Length * Influences || pointWeights.Length != pointBones.Length || areas.Length != points.Length ||
-            normals is { } given && given.Length != points.Length)
+            normals is { } given && given.Length != points.Length || accessory is { } slots && slots.Length != points.Length)
             throw new ArgumentException("Each point needs its bones, weights and area.");
-        return new PhysicsBody(bones.ToArray(), points, normals ?? new Vector3[points.Length], pointBones, pointWeights, areas, pose, [], 0);
+        return new PhysicsBody(bones.ToArray(), points, normals ?? new Vector3[points.Length], pointBones, pointWeights, areas,
+            accessory ?? new string?[points.Length], pose, [], 0);
     }
 
     /// <summary> The bone that moves point <paramref name="point"/> most. </summary>
     public int Owner(int point) => PointBones[point * Influences];
 
-    /// <summary> How much of point <paramref name="point"/> these bones move, from 0 to 1. </summary>
-    public float WeightOn(int point, IReadOnlySet<int> bones)
+    /// <summary>
+    /// How much of point <paramref name="point"/> these bones move, from 0 to 1. A point of an accessory's model counts only
+    /// with <paramref name="accessories"/>, where an area measures its own part: a ring moves with the hand, but isn't its thickness.
+    /// </summary>
+    public float WeightOn(int point, IReadOnlySet<int> bones, bool accessories = false)
     {
+        if (!accessories && PointAccessory[point] != null)
+            return 0;
         var total = 0f;
         for (var i = 0; i < Influences; i++)
         {
@@ -140,13 +151,20 @@ internal sealed class PhysicsBody
         var pointBones = new List<int>();
         var pointWeights = new List<float>();
         var areas = new List<float>();
+        var accessory = new List<string?>();
         var names = new List<string>();
         var missing = new HashSet<string>(StringComparer.Ordinal);
         var heaviest = new int[Influences];
         var heaviestWeights = new float[Influences];
         foreach (var model in models)
         {
-            var mesh = ModelMeshReader.Read(model.Bytes, shapes: model.EnabledShapes != 0, skin: true);
+            ModelMesh mesh;
+            try { mesh = ModelMeshReader.Read(model.Bytes, shapes: model.EnabledShapes != 0, skin: true); }
+            // An accessory the reader can't read, like an old earring, only leaves out the bit of an area it may carry.
+            catch (Exception e) when (model.Accessory != null && e is InvalidDataException or NotSupportedException)
+            {
+                continue;
+            }
             if (mesh.Bones.Count == 0)
                 continue;
             names.Add(model.Name);
@@ -197,6 +215,7 @@ internal sealed class PhysicsBody
                     points.Add(posed);
                     normals.Add(Vector3.Zero);
                     areas.Add(0);
+                    accessory.Add(model.Accessory);
                     for (var i = 0; i < Influences; i++)
                     {
                         pointBones.Add(heaviest[i] >= 0 ? ids[heaviest[i]] : -1);
@@ -229,7 +248,7 @@ internal sealed class PhysicsBody
         for (var i = 0; i < normals.Count; i++)
             normals[i] = normals[i].LengthSquared() > 1e-20f ? Vector3.Normalize(normals[i]) : Vector3.Zero;
         return new PhysicsBody(bones.ToArray(), points.ToArray(), normals.ToArray(), pointBones.ToArray(), pointWeights.ToArray(), areas.ToArray(),
-            pose, names, missing.Count);
+            accessory.ToArray(), pose, names, missing.Count);
     }
 
     /// <summary> 1 when a triangle of the unposed model winds the way its vertex normals face, -1 when the other way. </summary>

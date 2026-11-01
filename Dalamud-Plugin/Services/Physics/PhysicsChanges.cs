@@ -130,11 +130,12 @@ internal static class PhysicsChanges
                 changes.Add(("Points", x.Nodes.Count.ToString(CultureInfo.InvariantCulture), y.Nodes.Count.ToString(CultureInfo.InvariantCulture), chain));
                 continue;
             }
+            var tip = PhysicsKnobs.TipIndex(y);
             for (var n = 0; n < x.Nodes.Count; n++)
             {
                 var p = x.Nodes[n];
                 var q = y.Nodes[n];
-                var where = n == y.Nodes.Count - 1 ? $"{chain} tip" : y.Nodes[n].Bone.IsEmpty ? $"{chain} point {n + 1}" : y.Nodes[n].Bone.Text;
+                var where = n == tip ? $"{chain} tip" : y.Nodes[n].Bone.IsEmpty ? $"{chain} point {n + 1}" : y.Nodes[n].Bone.Text;
                 Add(changes, PhysicsKnobs.Label(PhysicsKnob.Size), p.Radius * 100, q.Radius * 100, 1, " cm", where);
                 Add(changes, PhysicsKnobs.Label(PhysicsKnob.Follow), p.AttractByAnimation, q.AttractByAnimation, 3, "", where);
                 Add(changes, PhysicsKnobs.Label(PhysicsKnob.Wind), p.WindScale, q.WindScale, 4, "", where);

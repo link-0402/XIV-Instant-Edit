@@ -28,8 +28,8 @@ internal sealed record PhysicsDrawnModel(int Slot, string File, uint Attributes,
 internal readonly record struct PhysicsCustomize(int Clan, bool Female, int BodyType, int BustSize);
 
 /// <summary>
-/// The local player's body as the game drew it last frame: the models of its body, hands, legs and
-/// feet slots, and every body bone's place in model space after physics, pose plugins, Customize+ and
+/// The local player's body as the game drew it last frame: the models of its body, hands, legs, feet
+/// and accessory slots, and every body bone's place in model space after physics, pose plugins, Customize+ and
 /// the bust slider, which all change the pose before the next frame starts. The object index and
 /// address are the drawn character's: in GPose, your posed copy.
 /// </summary>
@@ -47,8 +47,11 @@ internal static unsafe class PhysicsLiveReader
     /// <summary> How many GPose slots Penumbra looks through for a posed copy. </summary>
     private const int PosedSlots = 42;
 
-    /// <summary> The model slots that draw the body: body, hands, legs and feet. </summary>
-    private static readonly int[] BodySlots = [1, 2, 3, 4];
+    /// <summary>
+    /// The model slots that can draw the body: body, hands, legs and feet, and the accessories (ears, neck, wrists and rings),
+    /// where a body mod may put a part such as a member.
+    /// </summary>
+    private static readonly int[] ModelSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
     /// <summary> The local player's drawn body and live pose, or why they can't be read. </summary>
     public static (PhysicsBodyCapture? Capture, string? Problem) ReadBody(IObjectTable objects, bool posing)
@@ -82,7 +85,7 @@ internal static unsafe class PhysicsLiveReader
 
         var models = new List<PhysicsDrawnModel>();
         if (drawObject->Models != null)
-            foreach (var slot in BodySlots)
+            foreach (var slot in ModelSlots)
             {
                 if (slot >= drawObject->SlotCount)
                     continue;

@@ -5,7 +5,8 @@ namespace InstantEdit.Services.Physics;
 
 /// <summary>
 /// What a fit sets: a collision shape's size, the size of one chain's moving points, a chain's swing
-/// limit, or where a breast's tip sits.
+/// limit, where a body area's tip sits, or each moving point's own size. Stored by name in fit records,
+/// so new values go last.
 /// </summary>
 internal enum PhysicsFitTarget
 {
@@ -14,6 +15,7 @@ internal enum PhysicsFitTarget
     Chain,
     Swing,
     Place,
+    Points,
 }
 
 /// <summary> Where the fit puts a breast's tip. </summary>
@@ -58,16 +60,20 @@ internal sealed record PhysicsWaistMove(string Bone, Vector3 Translation, float 
 /// model units (metres), swings degrees, tip places their tip length (the move itself in <see cref="Move"/>).
 /// A tip's size also has <see cref="FittedAtPlace"/>, the size that fills the part once the same chain's
 /// tip moves. A shape the skirt bumps into also has its place in <see cref="Shape"/>. <see cref="Optional"/>
-/// items start unticked.
+/// items start unticked. Point sizes have one size per moving point in <see cref="Points"/>, the tip's last (it is
+/// <see cref="Fitted"/>), and the sizes now in <see cref="PointsNow"/>.
 /// </summary>
 internal sealed record PhysicsFitItem(PhysicsFitTarget Target, string Name, int Simulator, int Chain, string Label, string Detail, float Current,
-    float Fitted, PhysicsTipMove? Move = null, float? FittedAtPlace = null, PhysicsShapeMove? Shape = null, bool Optional = false)
+    float Fitted, PhysicsTipMove? Move = null, float? FittedAtPlace = null, PhysicsShapeMove? Shape = null, bool Optional = false,
+    IReadOnlyList<float>? Points = null, IReadOnlyList<float>? PointsNow = null)
 {
     /// <summary> The fit differs from the file: half a millimetre, half a degree, a tip or shape moved half a centimetre, or a new shape. </summary>
     public bool Changes => Target switch
     {
         PhysicsFitTarget.Swing => MathF.Abs(Fitted - Current) >= 0.5f,
         PhysicsFitTarget.Place => Move is { Distance: >= 0.005f },
+        PhysicsFitTarget.Points => Points is { } sizes && PointsNow is { } now && sizes.Zip(now).Any(pair => MathF.Abs(pair.First - pair.Second) >= 0.0005f) ||
+                                   FittedAtPlace is { } moved && MathF.Abs(moved - Current) >= 0.0005f,
         _ => MathF.Abs(Fitted - Current) >= 0.0005f || FittedAtPlace is { } moved && MathF.Abs(moved - Current) >= 0.0005f ||
              Shape is { Distance: >= 0.005f } || Shape is { NewOn: not null } && Current <= 0,
     };
@@ -117,7 +123,8 @@ internal static class PhysicsFit
     /// <summary> How much of a point an area's bones must carry for it to move with the area. </summary>
     private const float PartWeight = 0.1f;
 
-    private const float Smallest = 0.005f;
+    /// <summary> The smallest size a fit writes, half a centimetre. </summary>
+    internal const float Smallest = 0.005f;
     private const float Largest = 0.5f;
 
     /// <summary> The names of the butt balls the fit adds for the skirt, by side. </summary>
@@ -141,6 +148,8 @@ internal static class PhysicsFit
         var notes = new List<string>();
         var users = ShapeUsers(file);
         var breastTips = false;
+        // Each accessory is named once per area kind it was measured for.
+        var accessoryNotes = new HashSet<(string Kind, string Slot)>();
         var rest = unshaped?.Pose ?? body.Pose;
 
         foreach (var capsule in file.Collision.Capsules)
@@ -156,6 +165,14 @@ internal static class PhysicsFit
             var (startOffset, endOffset) = Original(PhysicsFitTarget.Capsule, capsule.Name.Text, use) ?? (capsule.StartOffset, capsule.EndOffset);
             var a = start.Place(startOffset);
             var b = end.Place(endOffset);
+            if (capsule.StartBone.Equals(capsule.EndBone) && Vector3.Distance(a, b) < 0.01f &&
+                PartBall(body, skeleton, use, PhysicsFitTarget.Capsule, capsule.Name.Text, label, capsule.StartBone.Text, (a + b) / 2, capsule.Radius, notes,
+                    out var ball))
+            {
+                if (ball != null)
+                    items.Add(ball);
+                continue;
+            }
             var thickness = Vector3.Distance(a, b) < 0.01f
                 ? AroundPlace(body, skeleton, capsule.StartBone.Text, (a + b) / 2)
                 : AroundSegment(body, Region(body, skeleton, PathBones(capsule.StartBone.Text, capsule.EndBone.Text, skeleton)), a, b, 0.1f, 0.9f)
@@ -181,14 +198,20 @@ internal static class PhysicsFit
                 continue;
             }
             var centre = frame.Place(Original(PhysicsFitTarget.Sphere, sphere.Name.Text, use)?.Start ?? sphere.Offset);
+            var sphereLabel = PhysicsShapeNames.Label(file.Collision, sphere.Name.Text, skeleton);
+            if (PartBall(body, skeleton, use, PhysicsFitTarget.Sphere, sphere.Name.Text, sphereLabel, sphere.Bone.Text, centre, sphere.Thickness, notes, out var ball))
+            {
+                if (ball != null)
+                    items.Add(ball);
+                continue;
+            }
             if (AroundPlace(body, skeleton, sphere.Bone.Text, centre) is not { } measured)
             {
                 notes.Add($"{sphere.Name.Text}: none of your skin moves with {sphere.Bone.Text}.");
                 continue;
             }
             var move = ShapeMove(rest, use, notes, sphere.Name.Text, (sphere.Bone.Text, sphere.Offset, centre));
-            items.Add(Shape(PhysicsFitTarget.Sphere, sphere.Name.Text, PhysicsShapeNames.Label(file.Collision, sphere.Name.Text, skeleton),
-                sphere.Thickness, measured, use, move));
+            items.Add(Shape(PhysicsFitTarget.Sphere, sphere.Name.Text, sphereLabel, sphere.Thickness, measured, use, move));
         }
 
         var skirt = SkirtChains(file);
@@ -211,25 +234,42 @@ internal static class PhysicsFit
                 if (chain.Nodes.Count < 2 || PhysicsAreas.KindOf(chain.Nodes[0].Bone.Text) is not { Body: true } kind)
                     continue;
                 var collides = CollidesOutside(simulator, chain);
-                var breast = kind.Part is PhysicsPart.Chest or PhysicsPart.Pecs;
-                if (!collides && !breast)
+                var rule = RuleOf(kind);
+                if (!collides && rule == TipRule.None)
                     continue;
                 var root = chain.Nodes[0].Bone.Text;
                 var name = $"{kind.Label}{Side(root)}";
-                if (!body.Pose.TryGetValue(root, out var rootFrame) || TipPlace(body, chain) is not { } tip)
+                var tipIndex = PhysicsKnobs.TipIndex(chain);
+                if (!body.Pose.TryGetValue(root, out var rootFrame))
                 {
                     notes.Add($"{name}: your skeleton lacks {root}.");
                     continue;
                 }
+                // The tip sits on the bone before it, which may be missing too.
+                if (TipPlace(body, chain) is not { } tip)
+                {
+                    notes.Add($"{name}: your skeleton lacks {chain.Nodes[tipIndex - 1].Bone.Text}.");
+                    continue;
+                }
+                if (!chain.Nodes[tipIndex].Bone.IsEmpty && Vector3.Distance(tip, rootFrame.Position) < 0.001f)
+                {
+                    notes.Add($"{name}: its tip sits on its bone, so there's nothing to measure.");
+                    continue;
+                }
                 var bones = Region(body, skeleton, chain.Nodes.Select(node => node.Bone.Text).Where(bone => bone.Length > 0));
+                foreach (var slot in Accessories(body, bones))
+                    if (accessoryNotes.Add((kind.Label, slot)))
+                        notes.Add($"Your {slot}'s model moves with {root}, so it was measured for the {kind.Label.ToLowerInvariant()}.");
                 PhysicsTipMove? move = null;
                 float? middleSize = null;
-                if (breast && chain.Nodes[^1].Bone.IsEmpty)
+                // Breasts go where you choose, a member's tip to its end and a testicle's to its middle.
+                var toMiddle = rule == TipRule.Middle || rule == TipRule.Breast && tipAt == PhysicsTipAt.Middle;
+                if (rule != TipRule.None && chain.Nodes[tipIndex].Bone.IsEmpty)
                 {
-                    breastTips = true;
+                    breastTips |= rule == TipRule.Breast;
                     if (Front(body, bones, rootFrame.Position) is { } front)
                     {
-                        if (tipAt == PhysicsTipAt.Nipple)
+                        if (!toMiddle)
                             move = MoveTo(body, skeleton, chain, tip, front);
                         else if (Middle(body, bones, rootFrame.Position, front) is { } middle)
                         {
@@ -242,9 +282,17 @@ internal static class PhysicsFit
                 }
                 if (move != null)
                 {
-                    var to = tipAt == PhysicsTipAt.Nipple ? "onto the front of your breast, where the game's tips sit" : "into the middle of your breast, so its size covers the whole breast";
+                    var noun = PartNoun(kind);
+                    var to = rule switch
+                    {
+                        TipRule.Breast when tipAt == PhysicsTipAt.Nipple => "onto the front of your breast, where the game's tips sit",
+                        TipRule.Breast => "into the middle of your breast, so its size covers the whole breast",
+                        TipRule.End => $"to the end of your {noun}",
+                        _ => $"into the middle of your {noun}",
+                    };
                     items.Add(new PhysicsFitItem(PhysicsFitTarget.Place, root, s, c, $"{name}: tip place",
-                        $"Moves the tip {Centimetres(move.Distance)} cm {to}. {LeverText(chain.LastBoneOffset.Length(), move.Offset.Length())}",
+                        $"Moves the tip {Centimetres(move.Distance)} cm {to}. " +
+                        LeverText(chain.LastBoneOffset.Length(), move.Offset.Length(), rule == TipRule.Breast ? "breast" : noun),
                         chain.LastBoneOffset.Length(), move.Offset.Length(), move));
                 }
                 if (!collides)
@@ -263,20 +311,43 @@ internal static class PhysicsFit
                          AroundTip(body, bones, rootFrame.Position, front, AheadOfSkin(kind.Part), onSkin: true) is { } there)
                     moved = Clamp(there);
                 const string fills = "Fills the part around the tip.";
+                var current = chain.Nodes[tipIndex].Radius;
+                // The tip's size where it is now; a tip outside the skin keeps its size, unless the fit moves it onto the skin.
+                float? tipSize = null;
+                var onlyWithPlace = false;
                 if (measured is null)
                     notes.Add($"{name}: none of your skin moves with {root}.");
                 else if (float.IsPositiveInfinity(measured.Value))
                 {
-                    // A tip outside the skin keeps its size, unless the fit moves it onto the skin.
-                    if (moved is { } size)
-                        items.Add(new PhysicsFitItem(PhysicsFitTarget.Chain, root, s, c, $"{name}: tip size", fills + " Only changes with the tip place.",
-                            chain.Nodes[^1].Radius, chain.Nodes[^1].Radius, FittedAtPlace: size));
+                    if (moved is not null)
+                        (tipSize, onlyWithPlace) = (current, true);
                     else
                         notes.Add($"{name}: its tip sits outside your skin, so its size stays.");
                 }
                 else
-                    items.Add(new PhysicsFitItem(PhysicsFitTarget.Chain, root, s, c, $"{name}: tip size", fills,
-                        chain.Nodes[^1].Radius, Clamp(measured.Value), FittedAtPlace: moved));
+                    tipSize = Clamp(measured.Value);
+
+                // A member's or testicle's longer chain: every moving point takes the part's thickness around it, in one row.
+                if (rule is TipRule.End or TipRule.Middle && tipIndex >= 2)
+                {
+                    // Where the tip will be when its place moves, since the last point's thickness reaches halfway to it.
+                    var tipThere = move is { Distance: >= 0.005f } && TipPlace(body, chain, move.Offset) is { } newPlace ? newPlace : tip;
+                    var places = chain.Nodes.Take(tipIndex).Select(node => body.Pose.TryGetValue(node.Bone.Text, out var at) ? at.Position : (Vector3?)null)
+                        .Append(tipThere).ToList();
+                    var sizes = PointSizes(body, bones, places);
+                    if (tipSize is null && sizes.All(found => found is null))
+                        continue;
+                    var now = chain.Nodes.Skip(1).Take(tipIndex).Select(node => node.Radius).ToList();
+                    var fitted = sizes.Select((found, n) => found is { } thickness ? Clamp(thickness) : now[n]).Append(tipSize ?? current).ToList();
+                    var tipLast = moved ?? fitted[^1];
+                    var each = string.Join(", ", fitted.Select((value, n) =>
+                        $"point {n + 2}: {Centimetres(now[n])} to {Centimetres(n == fitted.Count - 1 ? tipLast : value)} cm"));
+                    items.Add(new PhysicsFitItem(PhysicsFitTarget.Points, root, s, c, $"{name}: point sizes", $"Fills the part around each point. {each}.",
+                        current, fitted[^1], FittedAtPlace: moved, Points: fitted, PointsNow: now));
+                }
+                else if (tipSize is { } size)
+                    items.Add(new PhysicsFitItem(PhysicsFitTarget.Chain, root, s, c, $"{name}: tip size", onlyWithPlace ? fills + " Only changes with the tip place." : fills,
+                        current, size, FittedAtPlace: moved));
             }
         }
         Swings(file, body, skeleton, items, notes);
@@ -303,6 +374,121 @@ internal static class PhysicsFit
             return null;
         }
         return new PhysicsShapeMove(offsets[0], offsets[^1], distance);
+    }
+
+    /// <summary>
+    /// A ball on a body part's own bone (a breast's j_mune, or iv_c_mune under it) that other body areas bump into, such as the
+    /// other breast, and the part's own chain doesn't: it stands for the part you see, so it moves to the part's middle (<see cref="Middle"/>) and takes its
+    /// size. The bone's root sits at the part's edge, where all the skin around it would swallow the other breast. False for
+    /// other shapes, which keep their rules; no <paramref name="item"/> when the part has no skin, with a note.
+    /// </summary>
+    private static bool PartBall(PhysicsBody body, PhysicsSkeleton skeleton, ShapeUse use, PhysicsFitTarget target, string name, string label, string bone,
+        Vector3 centre, float current, List<string> notes, out PhysicsFitItem? item)
+    {
+        item = null;
+        // A ball the part's own chain bumps into stays on its bone: moved into the part, it would sit on that chain's tip.
+        if (!use.Body || PartBone(bone, skeleton) is not { } part || use.BodyRoots.Contains(part) || PhysicsAreas.KindOf(part) is not { } kind ||
+            !body.Pose.TryGetValue(bone, out var frame) || !body.Pose.TryGetValue(part, out var root))
+            return false;
+        var region = Region(body, skeleton, [part]);
+        // A breast's bone carries most of it; a butt's, belly's or thigh's jiggle bone a third at most, as for the skirt's butt balls.
+        var weight = kind.Part is PhysicsPart.Chest or PhysicsPart.Pecs ? LimbWeight : PartWeight;
+        if (Front(body, region, root.Position, weight) is not { } front || Middle(body, region, root.Position, front) is not { } middle)
+        {
+            notes.Add($"{name}: none of your skin moves with {bone}, so it stays as it is.");
+            return true;
+        }
+        var offset = Local(frame, middle.Centre);
+        var noun = PartNoun(kind);
+        var sided = bone.EndsWith("_l", StringComparison.Ordinal) ? "left " : bone.EndsWith("_r", StringComparison.Ordinal) ? "right " : "";
+        var distance = Vector3.Distance(centre, middle.Centre);
+        item = new PhysicsFitItem(target, name, -1, -1, label,
+            $"Moves it {Centimetres(distance)} cm to the middle of your {sided}{noun} and sizes it to the {noun}.", current, Clamp(middle.Radius),
+            Shape: new PhysicsShapeMove(offset, offset, distance));
+        return true;
+    }
+
+    /// <summary>
+    /// The body area bone a shape's bone stands for: the bone itself when it is one (j_mune_l), else the first one up its
+    /// parents while they aren't joints (iv_c_mune_l under j_mune_l, the <see cref="Region"/> rule). Null for any other bone.
+    /// </summary>
+    internal static string? PartBone(string bone, PhysicsSkeleton skeleton)
+    {
+        var current = bone;
+        for (var depth = 0; current.Length > 0 && depth < 512; depth++)
+        {
+            if (PhysicsAreas.KindOf(current) is { Body: true })
+                return current;
+            if (current.StartsWith("j_", StringComparison.Ordinal))
+                return null;
+            current = skeleton.Get(current)?.Parent ?? string.Empty;
+        }
+        return null;
+    }
+
+    /// <summary> What a body area's part is called in a sentence: "breast", "pec", "butt cheek", "thigh", "penis", "testicle", or its label. </summary>
+    internal static string PartNoun(PhysicsAreaKind kind) => kind.Part switch
+    {
+        PhysicsPart.Chest => "breast",
+        PhysicsPart.Pecs => "pec",
+        PhysicsPart.Butt => "butt cheek",
+        PhysicsPart.Thighs => "thigh",
+        _ when kind.Key.StartsWith("penis", StringComparison.Ordinal) => "penis",
+        _ when kind.Key.StartsWith("testicles", StringComparison.Ordinal) => "testicle",
+        _ => kind.Label.ToLowerInvariant(),
+    };
+
+    /// <summary> Where an area's tip goes: a breast's where you choose, a member's to its end, a testicle's to its middle; others stay. </summary>
+    private enum TipRule
+    {
+        None,
+        Breast,
+        End,
+        Middle,
+    }
+
+    private static TipRule RuleOf(PhysicsAreaKind kind) => kind.Key switch
+    {
+        "chest" or "pecs-ivcs" => TipRule.Breast,
+        "penis-ivcs" or "penis-soft-ivcs" => TipRule.End,
+        "testicles-ivcs" or "testicles-jiggle-ivcs" => TipRule.Middle,
+        _ => TipRule.None,
+    };
+
+    /// <summary>
+    /// The thickness around each of a chain's points between its bone and its tip (<paramref name="places"/> 1 to the second
+    /// last; the last is the tip): the middle distance from the chain's line of the skin its bones carry a tenth or more of,
+    /// beside the half segments either side of the point. Null for a point without such skin, or whose place is missing.
+    /// </summary>
+    private static float?[] PointSizes(PhysicsBody body, IReadOnlySet<int> bones, IReadOnlyList<Vector3?> places)
+    {
+        var count = Math.Max(0, places.Count - 2);
+        var values = Enumerable.Range(0, count).Select(_ => new List<(float Value, float Area)>()).ToArray();
+        // How far along a segment a point lies (0 at its start, 1 at its end), and how far from its line.
+        static (float Along, float Away)? Beside(Vector3? from, Vector3? to, Vector3 point)
+        {
+            if (from is not { } a || to is not { } b || (b - a).LengthSquared() < 1e-10f)
+                return null;
+            var t = Vector3.Dot(point - a, b - a) / (b - a).LengthSquared();
+            return (t, Vector3.Distance(point, a + t * (b - a)));
+        }
+        for (var i = 0; i < body.Points.Length; i++)
+        {
+            if (body.WeightOn(i, bones, accessories: true) < PartWeight)
+                continue;
+            for (var n = 1; n <= count; n++)
+            {
+                // The second half of the segment before the point, or the first half of the one after it, the nearer line first.
+                float? away = null;
+                if (Beside(places[n - 1], places[n], body.Points[i]) is { Along: >= 0.5f and <= 1 } before)
+                    away = before.Away;
+                if (Beside(places[n], places[n + 1], body.Points[i]) is { Along: >= 0 and <= 0.5f } after && !(away <= after.Away))
+                    away = after.Away;
+                if (away is { } distance)
+                    values[n - 1].Add((distance, body.Areas[i]));
+            }
+        }
+        return values.Select(list => Percentile(list, 0.5f)).ToArray();
     }
 
     /// <summary> A model-space point as an offset from a bone, the way physics files give them: turned with the bone, never scaled. </summary>
@@ -428,17 +614,24 @@ internal static class PhysicsFit
         return Percentile(values, 0.9f);
     }
 
+    /// <summary> The accessory slots whose models these bones carry a tenth or more of somewhere, so an area measures them as its own part. </summary>
+    private static IEnumerable<string> Accessories(PhysicsBody body, IReadOnlySet<int> bones)
+        => Enumerable.Range(0, body.Points.Length)
+            .Where(i => body.PointAccessory[i] != null && body.WeightOn(i, bones, accessories: true) >= PartWeight)
+            .Select(i => body.PointAccessory[i]!)
+            .Distinct();
+
     private static string Centimetres(float metres) => (metres * 100).ToString("0.0", CultureInfo.InvariantCulture);
 
     /// <summary>
     /// What a new tip length does to the jiggle. The solver moves the tip by distances, which turn the bone
     /// less the further out the tip sits, so the same settings swing a shorter tip more, by the lengths' ratio.
     /// </summary>
-    internal static string LeverText(float from, float to)
+    internal static string LeverText(float from, float to, string part = "breast")
     {
         if (!(from > 1e-4f) || !(to > 1e-4f) || MathF.Abs(from / to - 1) < 0.1f)
             return "Tip length barely changes, so the jiggle stays the same.";
-        return $"Tip length {Centimetres(from)} to {Centimetres(to)} cm, so the same settings swing the breast about " +
+        return $"Tip length {Centimetres(from)} to {Centimetres(to)} cm, so the same settings swing the {part} about " +
                $"{(from / to).ToString("0.0", CultureInfo.InvariantCulture)}x as much.";
     }
 
@@ -510,7 +703,7 @@ internal static class PhysicsFit
                     if (item.Shape is { NewOn: not null })
                         PhysicsCollisions.Add(file, SkirtChains(file), item.Name);
                     break;
-                case PhysicsFitTarget.Chain or PhysicsFitTarget.Swing or PhysicsFitTarget.Place:
+                case PhysicsFitTarget.Chain or PhysicsFitTarget.Swing or PhysicsFitTarget.Place or PhysicsFitTarget.Points:
                     if (item.Simulator < 0 || item.Simulator >= file.Simulators.Count ||
                         item.Chain < 0 || item.Chain >= file.Simulators[item.Simulator].Chains.Count)
                         break;
@@ -522,6 +715,17 @@ internal static class PhysicsFit
                     {
                         if (item.Move is { } move)
                             MoveTip(simulator, item.Chain, move);
+                        break;
+                    }
+                    if (item.Target == PhysicsFitTarget.Points)
+                    {
+                        // Each point its own size; the tip's follows its place, as a tip size does.
+                        var tip = PhysicsKnobs.TipIndex(chain);
+                        if (item.Points is not { } sizes || sizes.Count != tip)
+                            break;
+                        for (var n = 1; n < tip; n++)
+                            chain.Nodes[n].Radius = sizes[n - 1];
+                        chain.Nodes[tip].Radius = item.FittedWith(MovesPlace(chosen, item));
                         break;
                     }
                     var knob = item.Target == PhysicsFitTarget.Swing ? PhysicsKnob.Swing : PhysicsKnob.Size;
@@ -553,11 +757,11 @@ internal static class PhysicsFit
             return;
         var turn = Between(from, to);
         var reach = to.Length() / from.Length();
-        var bone = chain.Nodes[^2];
+        var tip = PhysicsKnobs.TipIndex(chain);
+        var bone = chain.Nodes[tip - 1];
         if (Degrees(bone.ConeAxisOffset, from) <= PhysicsKnobs.SpringAimLimit)
             bone.ConeAxisOffset = Vector3.Transform(bone.ConeAxisOffset, turn);
-        foreach (var spring in simulator.Attracts.Where(attract => attract.Chain == index && attract.Node == chain.Nodes.Count - 1 &&
-                                                                   attract.Bone.Text == move.Parent))
+        foreach (var spring in simulator.Attracts.Where(attract => attract.Chain == index && attract.Node == tip && attract.Bone.Text == move.Parent))
         {
             var aim = spring.Offset - move.BonePosition;
             if (Degrees(aim, from) <= PhysicsKnobs.SpringAimLimit)
@@ -587,6 +791,8 @@ internal static class PhysicsFit
     {
         public bool Body;
         public float SkirtSize = -1;
+        /// <summary> The bones of the body area chains that bump into it. </summary>
+        public readonly HashSet<string> BodyRoots = new(StringComparer.Ordinal);
         public bool Fits => Body || SkirtSize >= 0;
     }
 
@@ -610,7 +816,10 @@ internal static class PhysicsFit
                         if (skirt)
                             use.SkirtSize = Math.Max(use.SkirtSize, chain.Nodes[n].Radius);
                         else
+                        {
                             use.Body = true;
+                            use.BodyRoots.Add(chain.Nodes[0].Bone.Text);
+                        }
                     }
             }
         return users;
@@ -638,10 +847,10 @@ internal static class PhysicsFit
 
     private static float Clamp(float size) => MathF.Round(Math.Clamp(size, Smallest, Largest), 3);
 
-    /// <summary> Where a chain's tip is: its bone, or the place the chain gives it from the bone before it. </summary>
+    /// <summary> Where a chain's tip (<see cref="PhysicsKnobs.TipIndex"/>) is: its bone, or the place the chain gives it from the bone before it. </summary>
     private static Vector3? TipPlace(PhysicsBody body, PhybChain chain)
     {
-        var tip = chain.Nodes[^1];
+        var tip = chain.Nodes[PhysicsKnobs.TipIndex(chain)];
         if (tip.Bone.Text.Length > 0 && body.Pose.TryGetValue(tip.Bone.Text, out var own))
             return own.Position;
         return TipPlace(body, chain, chain.LastBoneOffset);
@@ -649,7 +858,7 @@ internal static class PhysicsFit
 
     /// <summary> Where a chain's tip would be at <paramref name="offset"/> from the bone before it. </summary>
     private static Vector3? TipPlace(PhysicsBody body, PhybChain chain, Vector3 offset)
-        => body.Pose.TryGetValue(chain.Nodes[^2].Bone.Text, out var frame) ? frame.Place(offset) : null;
+        => body.Pose.TryGetValue(chain.Nodes[PhysicsKnobs.TipIndex(chain) - 1].Bone.Text, out var frame) ? frame.Place(offset) : null;
 
     /// <summary> The share of a breast's skin, furthest out along it, whose middle is its front. </summary>
     private const float FrontShare = 0.03f;
@@ -666,7 +875,7 @@ internal static class PhysicsFit
         var total = 0f;
         for (var i = 0; i < body.Points.Length; i++)
         {
-            if (body.WeightOn(i, bones) < weight)
+            if (body.WeightOn(i, bones, accessories: true) < weight)
                 continue;
             points.Add(i);
             middle += body.Points[i] * body.Areas[i];
@@ -709,7 +918,7 @@ internal static class PhysicsFit
             return null;
         var points = new List<(Vector3 Point, float Weight)>();
         for (var i = 0; i < body.Points.Length; i++)
-            if (body.WeightOn(i, bones) is var weight and >= PartWeight)
+            if (body.WeightOn(i, bones, accessories: true) is var weight and >= PartWeight)
                 points.Add((body.Points[i], weight * body.Areas[i]));
         if (points.Count == 0)
             return null;
@@ -744,9 +953,10 @@ internal static class PhysicsFit
     /// </summary>
     private static PhysicsTipMove? MoveTo(PhysicsBody body, PhysicsSkeleton skeleton, PhybChain chain, Vector3 tip, Vector3 place)
     {
-        if (!chain.Nodes[^1].Bone.IsEmpty)
+        var at = PhysicsKnobs.TipIndex(chain);
+        if (!chain.Nodes[at].Bone.IsEmpty)
             return null;
-        var before = chain.Nodes[^2].Bone.Text;
+        var before = chain.Nodes[at - 1].Bone.Text;
         if (!body.Pose.TryGetValue(before, out var frame) || skeleton.Get(before) is not { Parent.Length: > 0 } bone)
             return null;
         var offset = Vector3.Transform(place - frame.Position, Quaternion.Conjugate(frame.Rotation));
@@ -820,7 +1030,7 @@ internal static class PhysicsFit
         var side = new List<(float Value, float Area)>();
         for (var i = 0; i < body.Points.Length; i++)
         {
-            if (body.WeightOn(i, bones) < PartWeight)
+            if (body.WeightOn(i, bones, accessories: true) < PartWeight)
                 continue;
             var offset = body.Points[i] - root;
             var forward = Vector3.Dot(offset, axis);

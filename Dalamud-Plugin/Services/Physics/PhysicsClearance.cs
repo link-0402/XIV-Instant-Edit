@@ -110,7 +110,8 @@ internal static class PhysicsClearance
             .Concat(skeleton.Body.Select(bone => bone.Name).Where(name => PhysicsAreas.KindOf(name) is { Body: true })).Distinct());
         var points = new List<int>();
         for (var i = 0; i < body.Points.Length; i++)
-            if (torso.Contains(body.Owner(i)) && body.WeightOn(i, areas) < PartWeight && body.Normals[i] != Vector3.Zero)
+            // A necklace on the spine isn't the torso.
+            if (torso.Contains(body.Owner(i)) && body.PointAccessory[i] == null && body.WeightOn(i, areas) < PartWeight && body.Normals[i] != Vector3.Zero)
                 points.Add(i);
         return new Torso(body, points);
     }

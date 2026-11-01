@@ -14,6 +14,7 @@ internal static class PhysicsTuneScenarios
     public static void Run()
     {
         CheckKnobs();
+        CheckBonelessTip();
         CheckBust();
         CheckProfile();
         CheckReferencePose();
@@ -70,6 +71,57 @@ internal static class PhysicsTuneScenarios
         new PhysicsBone("j_sebo_b", "n_root", new Vector3(0, 1.05f, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2)),
         new PhysicsBone("j_mune_l", "j_sebo_b", new Vector3(0.05731833f, 0.004540924f, 0.033198476f), new Quaternion(-0.72570795f, -0.6785303f, -0.07961082f, 0.08128255f)),
     ]);
+
+    /// <summary> Bone names as a chain's points, an empty name for a point without a bone. </summary>
+    private static PhybChain Points(params string[] bones)
+        => new() { Nodes = bones.Select(bone => new PhybNode { Bone = PhybName.From(bone) }).ToList() };
+
+    /// <summary>
+    /// Ashley's chest chain, as VFXEditor makes it: the breast bone, a tip without a bone 12 cm out, and
+    /// iv_c_mune_l after it, resting on the breast bone. Its spring pulls the tip past where it rests.
+    /// </summary>
+    internal static (PhybSimulator Simulator, PhysicsSkeleton Skeleton) AshleyChest()
+    {
+        var skeleton = new PhysicsSkeleton([..GameChest().Body, new PhysicsBone("iv_c_mune_l", "j_mune_l", Vector3.Zero, Quaternion.Identity)]);
+        var chain = new PhybChain
+        {
+            LastBoneOffset = new Vector3(0.12f, 0, 0),
+            Nodes =
+            [
+                new PhybNode { Bone = PhybName.From("j_mune_l"), ConeMaxAngle = 0.2f, ConeAxisOffset = new Vector3(0.1f, 0, 0) },
+                new PhybNode { Radius = 0.05f, GravityScale = 0.1f, ConeMaxAngle = MathF.PI },
+                new PhybNode { Bone = PhybName.From("iv_c_mune_l"), Radius = 0.02f, GravityScale = 0.3f, ConeMaxAngle = MathF.PI },
+            ],
+        };
+        var bone = skeleton.Get("j_mune_l")!;
+        var simulator = new PhybSimulator { Group = PhysicsAreas.ChestGroup, Chains = [chain] };
+        simulator.Attracts.Add(new PhybAttract
+        {
+            Bone = PhybName.From("j_sebo_b"), Chain = 0, Node = 1, Stiffness = 0.015f,
+            Offset = bone.Position + Vector3.Transform(chain.LastBoneOffset, Quaternion.Normalize(bone.Rotation)) * PhysicsTemplates.SpringReach,
+        });
+        return (simulator, skeleton);
+    }
+
+    /// <summary> A chain whose tip is a point without a bone before its last point: its sliders, spring name and Add spring. </summary>
+    private static void CheckBonelessTip()
+    {
+        var (simulator, skeleton) = AshleyChest();
+        var ashley = simulator.Chains[0];
+        Require(PhysicsKnobs.TipIndex(ashley) == 1 && PhysicsKnobs.TipIndex(Points("a", "")) == 1 &&
+                PhysicsKnobs.TipIndex(Points("a", "b", "c", "")) == 3 && PhysicsKnobs.TipIndex(Points("a", "b", "c")) == 2,
+            "physics knobs: the tip is the first point without a bone, else the last point");
+        Require(PhysicsKnobs.Read(simulator, 0, PhysicsKnob.Size) is { } size && MathF.Abs(size - 5f) < 1e-4f &&
+                PhysicsKnobs.Read(simulator, 0, PhysicsKnob.Weight) is { } weight && MathF.Abs(weight - 0.1f) < 1e-6f,
+            "physics knobs: tip size reads the boneless tip");
+        PhysicsKnobs.Write(simulator, 0, PhysicsKnob.Size, 3f);
+        Require(MathF.Abs(ashley.Nodes[1].Radius - 0.03f) < 1e-6f && MathF.Abs(ashley.Nodes[2].Radius - 0.02f) < 1e-6f,
+            "physics knobs: tip size writes the tip and leaves points after it alone");
+        Require(PhysicsKnobs.SpringName(simulator, simulator.Attracts[0], skeleton) == "Firmness",
+            "physics knobs: a spring on the boneless tip, aimed at rest, reads Firmness");
+        Require(PhysicsTemplates.RestSpring(ashley, 0, skeleton, 0.04f) is { Node: 1 },
+            "physics templates: Add spring works on a chain whose tip is point 2 of 3");
+    }
 
     private static void CheckSpringAim()
     {

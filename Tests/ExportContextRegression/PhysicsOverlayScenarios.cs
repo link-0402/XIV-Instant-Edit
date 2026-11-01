@@ -12,6 +12,7 @@ internal static class PhysicsOverlayScenarios
     public static void Run()
     {
         CheckChain();
+        CheckBonelessTip();
         CheckShapes();
         CheckMissing();
         CheckFaceBones();
@@ -124,6 +125,37 @@ internal static class PhysicsOverlayScenarios
         var tipLit = PhysicsOverlayModel.Build(file, [(0, 0)], false, new PhysicsOverlayHover(PhysicsOverlayPart.Tip), skeleton, Frame);
         Require(tipLit.Circles.Single(circle => circle.Part == PhysicsOverlayPart.Tip).Lit && tipLit.Marks.Any(mark => mark is { Part: PhysicsOverlayPart.Tip, Lit: true, Label: "4.0 cm" }),
             "physics overlay: hovering the tip size lights the ball and says its size");
+    }
+
+    /// <summary> Ashley's chest chain: the bone, a tip without a bone at the chain's offset, then iv_c_mune_l resting on the bone. </summary>
+    private static void CheckBonelessTip()
+    {
+        var (chest, file, _) = Chest();
+        var skeleton = new PhysicsSkeleton([..chest.Body, new PhysicsBone("iv_c_mune_l", "j_mune_l", Vector3.Zero, Quaternion.Identity)]);
+        var frames = PhysicsBody.RestPose(skeleton);
+        PhysicsFrame? Frame(string bone) => frames.TryGetValue(bone, out var frame) ? frame : null;
+        var chain = file.Simulators[0].Chains[0];
+        chain.LastBoneOffset = new Vector3(0.12f, 0, 0);
+        chain.Nodes[1].Radius = 0.05f;
+        chain.Nodes.Add(new PhybNode { Bone = PhybName.From("iv_c_mune_l"), Radius = 0.03f, ConeMaxAngle = MathF.PI });
+        var shapes = PhysicsOverlayModel.Build(file, [(0, 0)], false, PhysicsOverlayHover.None, skeleton, Frame);
+        var bone = frames["j_mune_l"].Position;
+        var tip = frames["j_mune_l"].Place(new Vector3(0.12f, 0, 0));
+        var after = frames["iv_c_mune_l"].Position;
+
+        var lines = shapes.Segments.Where(segment => segment.Part == PhysicsOverlayPart.Chain).ToList();
+        Require(lines.Count == 2 && Vector3.Distance(lines[0].From, bone) < 1e-5f && Vector3.Distance(lines[0].To, tip) < 1e-5f &&
+                Vector3.Distance(lines[1].From, tip) < 1e-5f && Vector3.Distance(lines[1].To, after) < 1e-5f &&
+                shapes.Marks.Any(mark => mark.Part == PhysicsOverlayPart.Chain && Vector3.Distance(mark.At, tip) < 1e-5f && mark.Label == "12.0 cm"),
+            "physics overlay: a tip without a bone sits at the chain's offset from the bone, and the chain runs on to the points after it");
+        var balls = shapes.Circles.Where(circle => circle.Part == PhysicsOverlayPart.Tip).ToList();
+        Require(balls.Count == 2 && balls.Count(ball => Vector3.Distance(ball.Center, tip) < 1e-5f && MathF.Abs(ball.Radius - 0.05f) < 1e-6f) == 1 &&
+                balls.Count(ball => Vector3.Distance(ball.Center, after) < 1e-5f) == 1 &&
+                shapes.Marks.Any(mark => mark.Part == PhysicsOverlayPart.Tip && Vector3.Distance(mark.At, tip) < 1e-5f && mark.Label == "5.0 cm"),
+            "physics overlay: the boneless tip has its ball and size, and the point after it a ball of its own");
+        Require(shapes.Segments.SingleOrDefault(segment => segment.Part == PhysicsOverlayPart.Spring) is { } spring && Vector3.Distance(spring.From, tip) < 1e-5f &&
+                shapes.Circles.Any(circle => circle.Part == PhysicsOverlayPart.Cone),
+            "physics overlay: a spring on the boneless tip starts at the tip, and the bone's swing cone draws");
     }
 
     private static void CheckShapes()

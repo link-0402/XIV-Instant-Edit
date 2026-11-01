@@ -20,6 +20,11 @@ internal static class PhysicsFitScenarios
         CheckFit();
         CheckFitApply();
         CheckTipPlace();
+        CheckTipNotes();
+        CheckAccessories();
+        CheckPartBalls();
+        CheckGenitals();
+        CheckClearance();
         CheckMirror();
         CheckSkirtShapes();
         CheckSkirtButtAndWaist();
@@ -549,6 +554,658 @@ internal static class PhysicsFitScenarios
             "physics fit: a tip already in the middle keeps its place and the middle's size");
         Require(PhysicsFit.LeverText(0.17f, 0.168f).StartsWith("Tip length barely changes", StringComparison.Ordinal),
             "physics fit: a tip that barely moves along says the jiggle stays the same");
+    }
+
+    /// <summary> Notes name the bone that is really missing, and a tip resting on its own bone says there's nothing to measure. </summary>
+    private static void CheckTipNotes()
+    {
+        var (body, skeleton) = SyntheticBody();
+        // Lucina's skeleton has no iv_c_mune_l, the last point of Ashley's chest chain [j_mune_l, tip, iv_c_mune_l].
+        var lacking = new PhysicsSkeleton(skeleton.Body.Where(bone => bone.Name != "iv_c_mune_l").ToList());
+        var bare = InPose(body, body.Pose.Where(pair => pair.Key != "iv_c_mune_l").ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
+        var ashley = SyntheticFile(0.12f);
+        ashley.Simulators[1].Chains[0].Nodes.Add(new PhybNode { Bone = PhybName.From("iv_c_mune_l"), Radius = 0.05f, CollisionFlags = 3 });
+        var fit = PhysicsFit.Measure(ashley, bare, lacking);
+        Require(fit.Notes.All(note => !note.Contains("lacks", StringComparison.Ordinal)) &&
+                fit.Items.Any(item => item is { Target: PhysicsFitTarget.Place, Name: "j_mune_l" }),
+            "physics fit: a chest whose tip has no bone still places its tip when the bone of its last point is missing");
+
+        // Bad Decisions' skeleton: iv_c_mune_l rests exactly on j_mune_l.
+        var onBone = InPose(body, body.Pose.ToDictionary(pair => pair.Key, pair => pair.Key == "iv_c_mune_l" ? body.Pose["j_mune_l"] : pair.Value,
+            StringComparer.Ordinal));
+        var own = SyntheticFile(0.12f);
+        own.Simulators[1].Chains[0].Nodes[1].Bone = PhybName.From("iv_c_mune_l");
+        var sits = PhysicsFit.Measure(own, onBone, skeleton);
+        Require(sits.Notes.Contains("Chest, left: its tip sits on its bone, so there's nothing to measure.") &&
+                sits.Notes.All(note => !note.Contains("none of your skin moves with j_mune_l", StringComparison.Ordinal)) &&
+                !sits.Items.Any(item => item is { Name: "j_mune_l", Target: PhysicsFitTarget.Chain or PhysicsFitTarget.Place }),
+            "physics fit: a tip that sits on its own bone says there's nothing to measure");
+
+        var otherSide = SyntheticFile(0.12f);
+        otherSide.Simulators[1].Chains[0].Nodes[0].Bone = PhybName.From("j_mune_r");
+        var gap = SyntheticFile(0.12f);
+        gap.Simulators[1].Chains[0].Nodes.Insert(1, new PhybNode { Bone = PhybName.From("j_missing"), CollisionFlags = 3 });
+        Require(PhysicsFit.Measure(otherSide, body, skeleton).Notes.Contains("Chest, right: your skeleton lacks j_mune_r.") &&
+                PhysicsFit.Measure(gap, body, skeleton).Notes.Contains("Chest, left: your skeleton lacks j_missing."),
+            "physics fit: a missing bone note names the bone that is missing, the chain's own or the one before its tip");
+    }
+
+    /// <summary>
+    /// <paramref name="body"/> with more skin, standing in <paramref name="pose"/> (the body's own when null): each point with its
+    /// bones and weights, the skin it stands for and the accessory slot it comes from.
+    /// </summary>
+    private static PhysicsBody With(PhysicsBody body, IReadOnlyDictionary<string, PhysicsFrame>? pose,
+        params (Vector3 Point, (string Bone, float Weight)[] Weights, float Area, string? Accessory)[] added)
+    {
+        var bones = body.Bones.ToList();
+        var points = body.Points.ToList();
+        var pointBones = body.PointBones.ToList();
+        var pointWeights = body.PointWeights.ToList();
+        var areas = body.Areas.ToList();
+        var accessory = new List<string?>(new string?[body.Points.Length]);
+        foreach (var (point, weights, area, slot) in added)
+        {
+            points.Add(point);
+            areas.Add(area);
+            accessory.Add(slot);
+            for (var i = 0; i < PhysicsBody.Influences; i++)
+            {
+                if (i >= weights.Length)
+                {
+                    pointBones.Add(-1);
+                    pointWeights.Add(0);
+                    continue;
+                }
+                var index = bones.IndexOf(weights[i].Bone);
+                if (index < 0)
+                {
+                    index = bones.Count;
+                    bones.Add(weights[i].Bone);
+                }
+                pointBones.Add(index);
+                pointWeights.Add(weights[i].Weight);
+            }
+        }
+        return PhysicsBody.Of(bones, points.ToArray(), pointBones.ToArray(), pointWeights.ToArray(), areas.ToArray(), pose ?? body.Pose,
+            accessory: accessory.ToArray());
+    }
+
+    /// <summary> Models on accessory slots (5 to 9) count only where an area measures its own part, never for a limb's or shape's thickness. </summary>
+    private static void CheckAccessories()
+    {
+        Require(PhysicsPaths.IsAccessory(5) && PhysicsPaths.IsAccessory(9) && !PhysicsPaths.IsAccessory(4) && !PhysicsPaths.IsAccessory(10) &&
+                PhysicsPaths.SlotName(5) == "ears" && PhysicsPaths.SlotName(6) == "neck" && PhysicsPaths.SlotName(7) == "wrists" &&
+                PhysicsPaths.SlotName(8) == "right ring" && PhysicsPaths.SlotName(9) == "left ring",
+            "physics fit: slots 5 to 9 are the accessories, named as the game names them");
+        const string ring = @"G:\Penumbra\Some Ring\chara\accessory\a0001\model\c0201a0001_rir.mdl";
+        var rings = new Dictionary<string, HashSet<string>>
+        {
+            [ring] = ["chara/accessory/a0001/model/c0201a0001_rir.mdl", "chara/accessory/a0001/model/c0201a0001_ril.mdl"],
+        };
+        var drawnRing = InstantEdit.Services.Painter.PainterVisibility.NormalizePath(ring);
+        Require(PhysicsPaths.ResolveDrawn(rings, drawnRing, 8) is (ring, "chara/accessory/a0001/model/c0201a0001_rir.mdl") &&
+                PhysicsPaths.ResolveDrawn(rings, drawnRing, 9) is (ring, "chara/accessory/a0001/model/c0201a0001_ril.mdl"),
+            "physics fit: a ring model serving both hands is read with its own slot's game path");
+
+        var (body, skeleton) = SyntheticBody();
+        var file = SyntheticFile(0.12f);
+        var plain = PhysicsFit.Measure(file, body, skeleton);
+        static float Fitted(PhysicsFitResult fit, string name) => fit.Items.FirstOrDefault(item => item.Name == name)?.Fitted ?? float.NaN;
+
+        // A ring 5 cm up the forearm from the hand bone, all of it on the hand bone, with more skin than the forearm.
+        var ringPoints = Enumerable.Range(0, 16)
+            .Select(a => (new Vector3(0.6f, 1.2f + 0.01f * MathF.Cos(a * MathF.Tau / 16), 0.01f * MathF.Sin(a * MathF.Tau / 16)), new[] { ("j_te_l", 1f) }, 0.01f,
+                (string?)"left ring"))
+            .ToArray();
+        var ringed = PhysicsFit.Measure(file, With(body, null, ringPoints), skeleton);
+        Require(Fitted(ringed, "forearm_l") == Fitted(plain, "forearm_l") && Fitted(ringed, "elbow_l") == Fitted(plain, "elbow_l"),
+            "physics fit: a ring weighted to the hand changes neither the forearm nor the elbow, bit for bit");
+
+        // A member on the right ring slot: a 2 cm cylinder 15 cm long on iv_ochinko_a, which sits under the hips with its X axis forward.
+        var member = new PhysicsSkeleton([..skeleton.Body, new PhysicsBone("iv_ochinko_a", "j_kosi", Vector3.Zero, Quaternion.Identity)]);
+        var pose = new Dictionary<string, PhysicsFrame>(body.Pose, StringComparer.Ordinal)
+        {
+            ["iv_ochinko_a"] = PhysicsFrame.Rest(new Vector3(0, 0.95f, 0.08f), Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2)),
+        };
+        var cylinder = new List<(Vector3, (string, float)[], float, string?)>();
+        for (var z = 0.08f; z <= 0.2301f; z += 0.01f)
+            for (var a = 0; a < 16; a++)
+                cylinder.Add((new Vector3(0.02f * MathF.Cos(a * MathF.Tau / 16), 0.95f + 0.02f * MathF.Sin(a * MathF.Tau / 16), z), [("iv_ochinko_a", 1f)], 1e-4f,
+                    "right ring"));
+        var groin = SyntheticFile(0.12f);
+        groin.Simulators.Add(new PhybSimulator
+        {
+            Group = PhysicsAreas.ChestGroup,
+            Collisions = [new PhybCollisionRef { Name = PhybName.From("thigh_l"), Type = PhybCollisionType.Outside }],
+            Chains =
+            [
+                new PhybChain
+                {
+                    LastBoneOffset = new Vector3(0.35f, 0, 0),
+                    Nodes = [new PhybNode { Bone = PhybName.From("iv_ochinko_a") }, new PhybNode { Radius = 0.02f, CollisionFlags = 1 }],
+                },
+            ],
+        });
+        var measured = PhysicsFit.Measure(groin, With(body, pose, cylinder.ToArray()), member);
+        Require(measured.Notes.Contains("Your right ring's model moves with iv_ochinko_a, so it was measured for the penis.") &&
+                measured.Notes.All(note => !note.Contains("none of your skin moves with iv_ochinko_a", StringComparison.Ordinal)),
+            "physics fit: a member on a ring slot is measured for the penis, and the notes name the slot");
+
+        // A piercing on the neck slot, half on the hips and half on the thigh's jiggle bone, beside the thigh with more skin than it.
+        var pierced = PhysicsFit.Measure(file, With(body, null, (new Vector3(0.11f, 0.7f, 0), [("j_kosi", 0.5f), ("ya_daitai_phys_l", 0.5f)], 1f, "neck")), skeleton);
+        Require(plain.Items.Where(item => item.Target is PhysicsFitTarget.Capsule or PhysicsFitTarget.Sphere)
+                    .All(item => pierced.Items.FirstOrDefault(other => other.Name == item.Name && other.Target == item.Target)?.Fitted == item.Fitted),
+            "physics fit: an accessory weighted to the hips and a thigh's jiggle bone changes no shape's size");
+
+        // A belly piercing, half on the hips and half on the belly's jiggle bone: measured for the belly, never for the hips' thickness.
+        var belly = new PhysicsSkeleton([..skeleton.Body, new PhysicsBone("iv_fukubu_phys", "j_kosi", Vector3.Zero, Quaternion.Identity)]);
+        var bellyPose = new Dictionary<string, PhysicsFrame>(body.Pose, StringComparer.Ordinal)
+        {
+            ["iv_fukubu_phys"] = PhysicsFrame.Rest(new Vector3(0, 1.05f, 0.08f), Quaternion.Identity),
+        };
+        var hipsRing = Enumerable.Range(0, 24)
+            .Select(a => (new Vector3(0.09f * MathF.Cos(a * MathF.Tau / 24), 1f, 0.09f * MathF.Sin(a * MathF.Tau / 24)), new[] { ("j_kosi", 1f) }, 1e-4f, (string?)null))
+            .ToArray();
+        var hipsBody = With(body, bellyPose, hipsRing);
+        var bellyFile = SyntheticFile(0.12f);
+        bellyFile.Collision.Capsules.Add(new PhybCapsule
+        {
+            Name = PhybName.From("hips"), StartBone = PhybName.From("j_kosi"), EndBone = PhybName.From("j_kosi"), Radius = 0.05f,
+        });
+        bellyFile.Simulators.Add(new PhybSimulator
+        {
+            Group = PhysicsAreas.ChestGroup,
+            Collisions = [new PhybCollisionRef { Name = PhybName.From("hips"), Type = PhybCollisionType.Outside }],
+            Chains =
+            [
+                new PhybChain
+                {
+                    LastBoneOffset = new Vector3(0, 0, 0.04f),
+                    Nodes = [new PhybNode { Bone = PhybName.From("iv_fukubu_phys") }, new PhybNode { Radius = 0.02f, CollisionFlags = 1 }],
+                },
+            ],
+        });
+        var bellyPlain = PhysicsFit.Measure(bellyFile, hipsBody, belly);
+        var bellyPierced = PhysicsFit.Measure(bellyFile, With(hipsBody, null, (new Vector3(0, 1f, 0.01f), [("j_kosi", 0.5f), ("iv_fukubu_phys", 0.5f)], 1f, "neck")), belly);
+        Require(bellyPierced.Notes.Contains("Your neck's model moves with iv_fukubu_phys, so it was measured for the belly.") &&
+                Fitted(bellyPierced, "hips") == Fitted(bellyPlain, "hips") && !float.IsNaN(Fitted(bellyPlain, "hips")),
+            "physics fit: a belly piercing weighted to the hips too counts for the belly's part, never for the hips' thickness");
+
+        // An accessory model the reader can't read, like an old earring, is left out of the measure rather than ending it.
+        string? stopped = null;
+        try
+        {
+            PhysicsBody.Measure([new PhysicsBodyModel("ears", new byte[256], null, null, 0, "ears")], body.Pose, body.Pose);
+        }
+        catch (Exception e)
+        {
+            stopped = e.Message;
+        }
+        Require(stopped == "None of your body's skin is drawn, so there is nothing to measure.",
+            $"physics fit: an accessory model that can't be read is left out of the measure ({stopped})");
+    }
+
+    /// <summary> A file whose right chest chain bumps into a ball on the left breast's bone, as Ashley's does: a zero-length capsule, or a sphere. </summary>
+    private static PhybFile PartBallFile(Vector3 end = default, bool sphere = false, string ballBone = "j_mune_l", string chainBone = "j_mune_r")
+    {
+        var file = new PhybFile();
+        if (sphere)
+            file.Collision.Spheres.Add(new PhybSphere { Name = PhybName.From("left_breast"), Bone = PhybName.From(ballBone), Thickness = 0.025f });
+        else
+            file.Collision.Capsules.Add(new PhybCapsule
+            {
+                Name = PhybName.From("left_breast"), StartBone = PhybName.From("j_mune_l"), EndBone = PhybName.From("j_mune_l"), EndOffset = end, Radius = 0.025f,
+            });
+        file.Simulators.Add(new PhybSimulator
+        {
+            Group = PhysicsAreas.ChestGroup,
+            Collisions = [new PhybCollisionRef { Name = PhybName.From("left_breast"), Type = PhybCollisionType.Outside }],
+            Chains =
+            [
+                new PhybChain
+                {
+                    LastBoneOffset = new Vector3(0.12f, 0, 0),
+                    Nodes = [new PhybNode { Bone = PhybName.From(chainBone) }, new PhybNode { Radius = 0.04f, CollisionFlags = 1 }],
+                },
+            ],
+        });
+        return file;
+    }
+
+    /// <summary> <paramref name="body"/> with every point <paramref name="from"/> carries moved wholly onto <paramref name="to"/>. </summary>
+    private static PhysicsBody Reweighted(PhysicsBody body, string from, string to)
+    {
+        var bones = body.Bones.Append(to).ToList();
+        var source = body.BoneIndex(from);
+        var pointBones = (int[])body.PointBones.Clone();
+        var pointWeights = (float[])body.PointWeights.Clone();
+        for (var p = 0; p < body.Points.Length; p++)
+        {
+            if (Enumerable.Range(0, PhysicsBody.Influences).All(i => pointBones[p * PhysicsBody.Influences + i] != source))
+                continue;
+            for (var i = 0; i < PhysicsBody.Influences; i++)
+            {
+                pointBones[p * PhysicsBody.Influences + i] = i == 0 ? bones.Count - 1 : -1;
+                pointWeights[p * PhysicsBody.Influences + i] = i == 0 ? 1 : 0;
+            }
+        }
+        return PhysicsBody.Of(bones, body.Points, pointBones, pointWeights, body.Areas, body.Pose);
+    }
+
+    /// <summary> <paramref name="body"/> without the points <paramref name="bone"/> carries. </summary>
+    private static PhysicsBody Without(PhysicsBody body, string bone)
+    {
+        var index = body.BoneIndex(bone);
+        var keep = Enumerable.Range(0, body.Points.Length)
+            .Where(p => Enumerable.Range(0, PhysicsBody.Influences).All(i => body.PointBones[p * PhysicsBody.Influences + i] != index)).ToList();
+        return PhysicsBody.Of(body.Bones, keep.Select(p => body.Points[p]).ToArray(),
+            keep.SelectMany(p => body.PointBones.Skip(p * PhysicsBody.Influences).Take(PhysicsBody.Influences)).ToArray(),
+            keep.SelectMany(p => body.PointWeights.Skip(p * PhysicsBody.Influences).Take(PhysicsBody.Influences)).ToArray(),
+            keep.Select(p => body.Areas[p]).ToArray(), body.Pose);
+    }
+
+    /// <summary> Balls on a breast's own bone fit the breast you see, not all the skin around the bone at its root. </summary>
+    private static void CheckPartBalls()
+    {
+        var (body, skeleton) = SyntheticBody();
+        // The dome is a half ball of 6 cm around this point.
+        var middle = new Vector3(0.08f, 1.2f, 0.10f);
+        bool Fits(PhysicsFitResult fit, PhysicsFitTarget target)
+            => fit.Items.FirstOrDefault(item => item.Name == "left_breast") is { Shape: { } move } ball && ball.Target == target &&
+               Vector3.Distance(body.Pose["j_mune_l"].Place(move.Start), middle) < 0.005f && move.Start == move.End && MathF.Abs(ball.Fitted - 0.06f) < 0.005f &&
+               ball.Detail.Contains("middle of your left breast", StringComparison.Ordinal);
+        Require(Fits(PhysicsFit.Measure(PartBallFile(), body, skeleton), PhysicsFitTarget.Capsule) &&
+                Fits(PhysicsFit.Measure(PartBallFile(sphere: true), body, skeleton), PhysicsFitTarget.Sphere),
+            "physics fit: a ball on a breast bone that another area bumps into moves to the middle of the breast and takes its size");
+
+        var inner = PhysicsFit.Measure(PartBallFile(sphere: true, ballBone: "iv_c_mune_l"), body, skeleton).Items.FirstOrDefault(item => item.Name == "left_breast");
+        Require(inner is { Shape: { } fromInner } && Vector3.Distance(body.Pose["iv_c_mune_l"].Place(fromInner.Start), middle) < 0.005f &&
+                MathF.Abs(inner.Fitted - 0.06f) < 0.005f,
+            "physics fit: a ball on iv_c_mune_l, under the breast bone, fits the breast it belongs to");
+
+        // Only the left breast's own chain bumps into its ball: moved into the breast, it would sit on that chain's tip.
+        var own = PhysicsFit.Measure(PartBallFile(chainBone: "j_mune_l"), body, skeleton).Items.FirstOrDefault(item => item.Name == "left_breast");
+        Require(own is { Shape: null, Detail: "Your skin's thickness around it." },
+            "physics fit: a ball only its own breast's chain bumps into keeps the thickness rule and stays on its bone");
+
+        var puffy = PhysicsFit.Measure(PartBallFile(), Reweighted(body, "j_mune_l", "iv_c_mune_l"), skeleton).Items.FirstOrDefault(item => item.Name == "left_breast");
+        Require(puffy is { Shape: { } nips } && Vector3.Distance(body.Pose["j_mune_l"].Place(nips.Start), middle) < 0.005f && MathF.Abs(puffy.Fitted - 0.06f) < 0.005f,
+            "physics fit: breast skin carried only by iv_c_mune_l, as Puffy Nips weights it, still places and sizes the breast's ball");
+
+        var bare = PhysicsFit.Measure(PartBallFile(), Without(body, "j_mune_l"), skeleton);
+        Require(bare.Items.All(item => item.Name != "left_breast") && bare.Notes.Contains("left_breast: none of your skin moves with j_mune_l, so it stays as it is."),
+            "physics fit: a breast ball without breast skin stays as it is, and the fit says why");
+
+        // A butt ball the other cheek bumps into: the cheek's bone carries a third of its skin, as butt bones do.
+        var (hips, hipsSkeleton) = HipsBody(0.09f, new Vector3(0.1f, 1, 0));
+        var butt = new PhybFile();
+        butt.Collision.Spheres.Add(new PhybSphere { Name = PhybName.From("butt_l"), Bone = PhybName.From("iv_shiri_l"), Thickness = 0.03f });
+        butt.Simulators.Add(new PhybSimulator
+        {
+            Group = PhysicsAreas.ChestGroup,
+            Collisions = [new PhybCollisionRef { Name = PhybName.From("butt_l"), Type = PhybCollisionType.Outside }],
+            Chains =
+            [
+                new PhybChain
+                {
+                    LastBoneOffset = new Vector3(0.06f, 0, 0),
+                    Nodes = [new PhybNode { Bone = PhybName.From("iv_shiri_r") }, new PhybNode { Radius = 0.03f, CollisionFlags = 1 }],
+                },
+            ],
+        });
+        var cheek = PhysicsFit.Measure(butt, hips, hipsSkeleton).Items.FirstOrDefault(item => item.Name == "butt_l");
+        Require(cheek is { Shape: { } toCheek } && Vector3.Distance(hips.Pose["iv_shiri_l"].Place(toCheek.Start), new Vector3(0.07f, 0.95f, -0.08f)) < 0.01f &&
+                MathF.Abs(cheek.Fitted - 0.06f) < 0.01f && cheek.Detail.Contains("middle of your left butt cheek", StringComparison.Ordinal),
+            "physics fit: a ball on a butt bone, which carries only a third of the cheek, moves to the middle of the cheek and takes its size");
+
+        // 16 cm along the bone, so the dome lies beside it.
+        var along = PhysicsFit.Measure(PartBallFile(new Vector3(0.16f, 0, 0)), body, skeleton).Items.FirstOrDefault(item => item.Name == "left_breast");
+        Require(along is { Shape: null, Detail: "Your skin's thickness around it." },
+            "physics fit: a capsule along the breast bone keeps the thickness rule and stays where it is");
+    }
+
+    /// <summary>
+    /// <see cref="SyntheticBody"/> with a groin: a member 2 cm thick and 15 cm long on iv_ochinko_a, pointing forward; a flaccid one
+    /// on iv_funyachin_phy_a to _d, a cone from 2.5 to 1.5 cm over 16 cm; and a testicle ball 2.5 cm wide, 4 cm below iv_kougan_l.
+    /// </summary>
+    private static (PhysicsBody Body, PhysicsSkeleton Skeleton) GenitalBody()
+    {
+        var (body, skeleton) = SyntheticBody();
+        var forward = Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2);
+        var down = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, -MathF.PI / 2);
+        (string Name, string Parent, Vector3 At, Quaternion Turn)[] bones =
+        [
+            ("iv_ochinko_a", "j_kosi", new Vector3(0, 0.95f, 0.08f), forward),
+            ("iv_funyachin_phy_a", "j_kosi", new Vector3(-0.1f, 0.95f, 0.08f), forward),
+            ("iv_funyachin_phy_b", "iv_funyachin_phy_a", new Vector3(-0.1f, 0.95f, 0.12f), forward),
+            ("iv_funyachin_phy_c", "iv_funyachin_phy_b", new Vector3(-0.1f, 0.95f, 0.16f), forward),
+            ("iv_funyachin_phy_d", "iv_funyachin_phy_c", new Vector3(-0.1f, 0.95f, 0.20f), forward),
+            ("iv_kougan_l", "j_kosi", new Vector3(0.03f, 0.92f, 0.06f), down),
+        ];
+        var groin = new PhysicsSkeleton([..skeleton.Body, ..bones.Select(bone => new PhysicsBone(bone.Name, bone.Parent, Vector3.Zero, Quaternion.Identity))]);
+        var pose = new Dictionary<string, PhysicsFrame>(body.Pose, StringComparer.Ordinal);
+        foreach (var bone in bones)
+            pose[bone.Name] = PhysicsFrame.Rest(bone.At, bone.Turn);
+        var skin = new List<(Vector3, (string, float)[], float, string?)>();
+        for (var z = 0.08f; z <= 0.2301f; z += 0.01f)
+            for (var a = 0; a < 16; a++)
+                skin.Add((new Vector3(0.02f * MathF.Cos(a * MathF.Tau / 16), 0.95f + 0.02f * MathF.Sin(a * MathF.Tau / 16), z), [("iv_ochinko_a", 1f)], 1e-4f, null));
+        // Each ring of the cone on the bone it lies along.
+        string[] soft = ["iv_funyachin_phy_a", "iv_funyachin_phy_b", "iv_funyachin_phy_c", "iv_funyachin_phy_d"];
+        for (var s = 0f; s <= 0.1601f; s += 0.005f)
+        {
+            var radius = 0.025f - 0.01f * s / 0.16f;
+            var bone = soft[Math.Min(3, (int)(s / 0.04f))];
+            for (var a = 0; a < 16; a++)
+                skin.Add((new Vector3(-0.1f + radius * MathF.Cos(a * MathF.Tau / 16), 0.95f + radius * MathF.Sin(a * MathF.Tau / 16), 0.08f + s), [(bone, 1f)], 1e-4f,
+                    null));
+        }
+        for (var ring = 0; ring <= 12; ring++)
+        {
+            var polar = ring * MathF.PI / 12;
+            var count = ring is 0 or 12 ? 1 : 24;
+            for (var a = 0; a < count; a++)
+            {
+                var angle = a * MathF.Tau / count;
+                skin.Add((new Vector3(0.03f + 0.025f * MathF.Sin(polar) * MathF.Cos(angle), 0.88f + 0.025f * MathF.Cos(polar), 0.06f + 0.025f * MathF.Sin(polar) * MathF.Sin(angle)),
+                    [("iv_kougan_l", 1f)], 1e-4f, null));
+            }
+        }
+        return (With(body, pose, skin.ToArray()), groin);
+    }
+
+    /// <summary> <see cref="SyntheticFile"/> with a groin area: a penis, a flaccid penis of four bones and a testicle, each tip bumping into the thigh unless told not to. </summary>
+    private static PhybFile GenitalFile(uint flags = 1)
+    {
+        var file = SyntheticFile(0.12f);
+        PhybChain Chain(Vector3 tip, params string[] bones) => new()
+        {
+            LastBoneOffset = tip,
+            Nodes =
+            [
+                new PhybNode { Bone = PhybName.From(bones[0]) },
+                ..bones.Skip(1).Select(bone => new PhybNode { Bone = PhybName.From(bone), Radius = 0.01f, CollisionFlags = flags }),
+                new PhybNode { Radius = 0.01f, CollisionFlags = flags },
+            ],
+        };
+        file.Simulators.Add(new PhybSimulator
+        {
+            Group = PhysicsAreas.ChestGroup,
+            Collisions = [new PhybCollisionRef { Name = PhybName.From("thigh_l"), Type = PhybCollisionType.Outside }],
+            Chains =
+            [
+                Chain(new Vector3(0.35f, 0, 0), "iv_ochinko_a"),
+                Chain(new Vector3(0.02f, 0, 0), "iv_funyachin_phy_a", "iv_funyachin_phy_b", "iv_funyachin_phy_c", "iv_funyachin_phy_d"),
+                Chain(new Vector3(0.2f, 0, 0), "iv_kougan_l"),
+            ],
+        });
+        return file;
+    }
+
+    /// <summary> Genital areas: tips move to the end of the member or the middle of a testicle, and a longer chain's points take the part's thickness. </summary>
+    private static void CheckGenitals()
+    {
+        var (body, skeleton) = GenitalBody();
+        var fit = PhysicsFit.Measure(GenitalFile(), body, skeleton);
+        PhysicsFitItem? Find(string root, PhysicsFitTarget target) => fit.Items.FirstOrDefault(item => item.Name == root && item.Target == target);
+        Vector3? Moved(PhysicsFitItem? place, string before) => place?.Move is { } move ? body.Pose[before].Place(move.Offset) : null;
+
+        var penis = Find("iv_ochinko_a", PhysicsFitTarget.Place);
+        Require(Moved(penis, "iv_ochinko_a") is { } end && Vector3.Distance(end, new Vector3(0, 0.95f, 0.23f)) < 0.005f &&
+                penis!.Detail.Contains("swing the penis about", StringComparison.Ordinal) &&
+                Find("iv_ochinko_a", PhysicsFitTarget.Chain) is { FittedAtPlace: { } size } && MathF.Abs(size - 0.01f) <= 0.002f,
+            "physics fit: a penis's tip moves to the end of the member, sized to reach 1 cm past it, and the tooltip says how its swing changes");
+
+        var testicle = Find("iv_kougan_l", PhysicsFitTarget.Place);
+        Require(Moved(testicle, "iv_kougan_l") is { } centre && Vector3.Distance(centre, new Vector3(0.03f, 0.88f, 0.06f)) < 0.005f &&
+                Find("iv_kougan_l", PhysicsFitTarget.Chain) is { } ball && MathF.Abs(ball.FittedWith(true) - 0.025f) <= 0.003f,
+            "physics fit: a testicle's tip moves to the middle of the testicle and fills it");
+
+        var soft = Find("iv_funyachin_phy_a", PhysicsFitTarget.Points);
+        static float Cone(float along) => 0.025f - 0.01f * along / 0.16f;
+        Require(soft is { Points: [var b, var c, var d, var tip], Label: "Penis, flaccid: point sizes" } && MathF.Abs(b - Cone(0.04f)) <= 0.003f &&
+                MathF.Abs(c - Cone(0.08f)) <= 0.003f && MathF.Abs(d - Cone(0.12f)) <= 0.003f && tip == soft.Fitted &&
+                soft.Detail.Contains("point 2: 1.0 to ", StringComparison.Ordinal) &&
+                !fit.Items.Any(item => item is { Name: "iv_funyachin_phy_a", Target: PhysicsFitTarget.Chain }),
+            "physics fit: a flaccid chain gets one row of point sizes that follow its thickness, the tip's last");
+        var applied = GenitalFile();
+        PhysicsFit.Apply(applied, fit.Items);
+        var nodes = applied.Simulators[3].Chains[1].Nodes;
+        Require(soft is { Points: { Count: 4 } sizes } && nodes[0].Radius == 0 && nodes[1].Radius == sizes[0] && nodes[2].Radius == sizes[1] &&
+                nodes[3].Radius == sizes[2] && nodes[4].Radius == soft.FittedWith(true),
+            "physics fit: applying point sizes sets each moving point and leaves the bone");
+
+        var loose = PhysicsFit.Measure(GenitalFile(flags: 0), body, skeleton);
+        Require(loose.Items.Any(item => item is { Name: "iv_ochinko_a", Target: PhysicsFitTarget.Place }) &&
+                !loose.Items.Any(item => item is { Name: "iv_ochinko_a", Target: PhysicsFitTarget.Chain or PhysicsFitTarget.Points }),
+            "physics fit: a penis chain that bumps into nothing still gets its tip place, but no size");
+        var noBreasts = GenitalFile();
+        noBreasts.Simulators[1].Excluded = true;
+        Require(!PhysicsFit.Measure(noBreasts, body, skeleton).BreastTips, "physics fit: genital tips aren't breast tips, so the breast tip choice stays hidden");
+    }
+
+    /// <summary> Two breast bones 6.6 cm apart under the spine, X axis forward, with real rest places, as Ashley's skeleton has them. </summary>
+    private static PhysicsSkeleton ChestSkeleton()
+    {
+        var forward = Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2);
+        return new PhysicsSkeleton(
+        [
+            new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_kosi", "n_root", new Vector3(0, 1, 0), Quaternion.Identity),
+            new PhysicsBone("j_sebo_b", "j_kosi", new Vector3(0, 0.18f, 0), Quaternion.Identity),
+            new PhysicsBone("j_mune_l", "j_sebo_b", new Vector3(0.033f, 0, 0), forward),
+            new PhysicsBone("j_mune_r", "j_sebo_b", new Vector3(-0.033f, 0, 0), forward),
+        ]);
+    }
+
+    /// <summary> Both chest chains, each bumping into a ball on the other breast's bone, as Ashley's do, their tips 14 cm out. </summary>
+    private static PhybFile ChestFile(float ball = 0.025f)
+    {
+        var file = new PhybFile();
+        foreach (var (name, bone) in new[] { ("left_breast", "j_mune_l"), ("right_breast", "j_mune_r") })
+            file.Collision.Capsules.Add(new PhybCapsule { Name = PhybName.From(name), StartBone = PhybName.From(bone), EndBone = PhybName.From(bone), Radius = ball });
+        var simulator = new PhybSimulator { Group = PhysicsAreas.ChestGroup };
+        simulator.Collisions.Add(new PhybCollisionRef { Name = PhybName.From("left_breast"), Type = PhybCollisionType.Outside });
+        simulator.Collisions.Add(new PhybCollisionRef { Name = PhybName.From("right_breast"), Type = PhybCollisionType.Outside });
+        // The left breast bumps into the right one's ball (bit 1), the right into the left's (bit 0).
+        foreach (var (bone, bit) in new[] { ("j_mune_l", 2u), ("j_mune_r", 1u) })
+            simulator.Chains.Add(new PhybChain
+            {
+                LastBoneOffset = new Vector3(0.14f, 0, 0),
+                Nodes = [new PhybNode { Bone = PhybName.From(bone) }, new PhybNode { Radius = 0.04f, CollisionFlags = bit }],
+            });
+        file.Simulators.Add(simulator);
+        return file;
+    }
+
+    /// <summary> The fit's rows for <see cref="ChestFile"/>: both balls to <paramref name="ball"/>, then each tip's place and its size. </summary>
+    private static List<PhysicsFitItem> ChestItems(PhysicsSkeleton skeleton, float ball, Vector3 left, Vector3 right, float size)
+    {
+        var items = new List<PhysicsFitItem>();
+        foreach (var name in new[] { "left_breast", "right_breast" })
+            items.Add(new PhysicsFitItem(PhysicsFitTarget.Capsule, name, -1, -1, name, "Moves it to the middle of the breast.", 0.025f, ball));
+        for (var c = 0; c < 2; c++)
+        {
+            var bone = skeleton.Get(c == 0 ? "j_mune_l" : "j_mune_r")!;
+            var tip = c == 0 ? left : right;
+            items.Add(new PhysicsFitItem(PhysicsFitTarget.Place, bone.Name, 0, c, "tip place", "Moves the tip.", 0.14f, tip.Length(),
+                new PhysicsTipMove(tip, Vector3.Distance(tip, new Vector3(0.14f, 0, 0)), bone.Parent, bone.Position, Quaternion.Normalize(bone.Rotation))));
+            items.Add(new PhysicsFitItem(PhysicsFitTarget.Chain, bone.Name, 0, c, "tip size", "Fills the part around the tip.", 0.04f, size, FittedAtPlace: size));
+        }
+        return items;
+    }
+
+    /// <summary> Every moving point's surface gap to each capsule it stays out of, where physics runs: in the rest pose. </summary>
+    private static List<float> Gaps(PhybFile file, PhysicsSkeleton skeleton)
+    {
+        var rest = PhysicsBody.RestPose(skeleton);
+        var gaps = new List<float>();
+        foreach (var simulator in file.Simulators.Where(simulator => !simulator.Excluded))
+            foreach (var chain in simulator.Chains)
+                for (var n = 1; n < chain.Nodes.Count; n++)
+                {
+                    var node = chain.Nodes[n];
+                    Vector3? at = !node.Bone.IsEmpty ? rest.TryGetValue(node.Bone.Text, out var own) ? own.Position : null
+                        : rest.TryGetValue(chain.Nodes[n - 1].Bone.Text, out var before) ? before.Place(chain.LastBoneOffset) : null;
+                    if (at is not { } point)
+                        continue;
+                    foreach (var shape in PhysicsCollisions.Shapes(simulator, chain, node).Where(shape => shape.Type != PhybCollisionType.Inside))
+                        foreach (var capsule in file.Collision.Capsules.Where(capsule => capsule.Name.Text == shape.Name.Text))
+                        {
+                            var a = rest[capsule.StartBone.Text].Place(capsule.StartOffset);
+                            var b = rest[capsule.EndBone.Text].Place(capsule.EndOffset);
+                            var t = (b - a).LengthSquared() < 1e-12f ? 0 : Math.Clamp(Vector3.Dot(point - a, b - a) / (b - a).LengthSquared(), 0, 1);
+                            gaps.Add(Vector3.Distance(point, a + t * (b - a)) - node.Radius - capsule.Radius);
+                        }
+                }
+        return gaps;
+    }
+
+    /// <summary>
+    /// Two breast domes like <see cref="SyntheticBody"/>'s, 6 cm wide and 10 to 16 cm in front of their bones on <see cref="ChestSkeleton"/>,
+    /// grown <paramref name="scale"/> times about their bones in the measuring pose, as Customize+ grows them.
+    /// </summary>
+    private static PhysicsBody BreastsBody(float scale)
+    {
+        var pose = PhysicsBody.RestPose(ChestSkeleton());
+        string[] bones = ["j_mune_l", "j_mune_r", "j_sebo_b"];
+        var points = new List<Vector3>();
+        var pointBones = new List<int>();
+        var pointWeights = new List<float>();
+        foreach (var (bone, side) in new[] { (0, "j_mune_l"), (1, "j_mune_r") })
+        {
+            var root = pose[side].Position;
+            for (var ring = 0; ring <= 12; ring++)
+            {
+                var polar = ring * (MathF.PI / 2) / 12;
+                var count = ring == 0 ? 1 : 24;
+                for (var a = 0; a < count; a++)
+                {
+                    var angle = a * MathF.Tau / count;
+                    var point = root + new Vector3(0.06f * MathF.Sin(polar) * MathF.Cos(angle), 0.06f * MathF.Sin(polar) * MathF.Sin(angle), 0.1f + 0.06f * MathF.Cos(polar));
+                    points.Add(root + (point - root) * scale);
+                    pointBones.AddRange([bone, 2, -1, -1]);
+                    pointWeights.AddRange([0.6f, 0.4f, 0, 0]);
+                }
+            }
+        }
+        return PhysicsBody.Of(bones, points.ToArray(), pointBones.ToArray(), pointWeights.ToArray(), Enumerable.Repeat(1e-4f, points.Count).ToArray(), pose);
+    }
+
+    /// <summary> Fitted sizes keep 1 cm clear where physics runs, the shape giving way first, settling in one pass. </summary>
+    private static void CheckClearance()
+    {
+        var skeleton = ChestSkeleton();
+        var file = ChestFile();
+        // Both balls at 6 cm on their bones, both tips 11 cm forward at 6 cm: each tip comes within 0.8 cm of the other side's ball.
+        var items = ChestItems(skeleton, 0.06f, new Vector3(0.11f, 0, 0), new Vector3(0.11f, 0, 0), 0.06f);
+        var all = Enumerable.Range(0, items.Count).ToHashSet();
+        var held = PhysicsFitClearance.Hold(file, items, all, skeleton);
+        var applied = file.Clone();
+        PhysicsFit.Apply(applied, all.Order().Select(i => held[i]));
+        Require(held.Count == items.Count && Gaps(applied, skeleton) is { Count: 2 } gaps && gaps.All(gap => gap >= PhysicsFitClearance.Margin - 1e-4f),
+            "physics fit: after clearance no point comes within 1 cm of a shape it bumps into, at rest");
+        Require(Enumerable.Range(0, held.Count).Where(i => held[i].Target == PhysicsFitTarget.Chain).All(i => held[i].FittedWith(true) == items[i].FittedWith(true)) &&
+                held[0].Fitted < 0.06f,
+            "physics fit: the shape gives way before the tip");
+        Require(PhysicsFitClearance.Hold(file, held, all, skeleton).SequenceEqual(held), "physics fit: clearance settles: a second pass changes nothing");
+        Require(held.First(item => item.Name == "right_breast").Detail.EndsWith("Kept 1 cm off the left breast's tip, which it would push all the time.", StringComparison.Ordinal),
+            "physics fit: a held-back size says why");
+
+        // The left chain also bumps into its own breast's ball: that pair is held too, or the ball would push its own tip all the time.
+        var both = ChestFile();
+        both.Simulators[0].Chains[0].Nodes[1].CollisionFlags = 3;
+        var ownHeld = PhysicsFitClearance.Hold(both, items, all, skeleton);
+        var ownApplied = both.Clone();
+        PhysicsFit.Apply(ownApplied, all.Order().Select(i => ownHeld[i]));
+        Require(Gaps(ownApplied, skeleton) is { Count: 3 } ownGaps && ownGaps.All(gap => gap >= PhysicsFitClearance.Margin - 1e-4f),
+            "physics fit: a chain bumping into a ball on its own breast keeps 1 cm from it too");
+
+        // A flaccid chain's middle point beside a ball on the hips: the ball goes down to 0.5 cm, then that point gives way.
+        var forward = Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2);
+        var groin = new PhysicsSkeleton(
+        [
+            new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_kosi", "n_root", new Vector3(0, 1, 0), Quaternion.Identity),
+            new PhysicsBone("iv_funyachin_phy_a", "j_kosi", new Vector3(0, -0.05f, 0.08f), forward),
+            new PhysicsBone("iv_funyachin_phy_b", "iv_funyachin_phy_a", new Vector3(0.04f, 0, 0), Quaternion.Identity),
+        ]);
+        var soft = new PhybFile();
+        soft.Collision.Capsules.Add(new PhybCapsule
+        {
+            Name = PhybName.From("hip_ball"), StartBone = PhybName.From("j_kosi"), EndBone = PhybName.From("j_kosi"),
+            StartOffset = new Vector3(0.03f, -0.05f, 0.12f), EndOffset = new Vector3(0.03f, -0.05f, 0.12f), Radius = 0.02f,
+        });
+        soft.Simulators.Add(new PhybSimulator
+        {
+            Group = PhysicsAreas.ChestGroup,
+            Collisions = [new PhybCollisionRef { Name = PhybName.From("hip_ball"), Type = PhybCollisionType.Outside }],
+            Chains =
+            [
+                new PhybChain
+                {
+                    LastBoneOffset = new Vector3(0.04f, 0, 0),
+                    Nodes =
+                    [
+                        new PhybNode { Bone = PhybName.From("iv_funyachin_phy_a") },
+                        new PhybNode { Bone = PhybName.From("iv_funyachin_phy_b"), Radius = 0.01f, CollisionFlags = 1 },
+                        new PhybNode { Radius = 0.01f, CollisionFlags = 1 },
+                    ],
+                },
+            ],
+        });
+        List<PhysicsFitItem> softItems =
+        [
+            new(PhysicsFitTarget.Capsule, "hip_ball", -1, -1, "Hip ball (hip_ball)", "Your skin's thickness around it.", 0.02f, 0.02f),
+            new(PhysicsFitTarget.Points, "iv_funyachin_phy_a", 0, 0, "Penis, flaccid: point sizes", "Fills the part around each point.", 0.01f, 0.02f,
+                Points: [0.02f, 0.02f], PointsNow: [0.01f, 0.01f]),
+        ];
+        var softHeld = PhysicsFitClearance.Hold(soft, softItems, new HashSet<int> { 0, 1 }, groin);
+        var softApplied = soft.Clone();
+        PhysicsFit.Apply(softApplied, softHeld);
+        Require(MathF.Abs(softHeld[0].Fitted - 0.005f) < 1e-5f && softHeld[1] is { Points: [var softMiddle, var softTip] } softRow &&
+                MathF.Abs(softMiddle - 0.015f) < 1e-4f && softTip == softRow.Fitted && softRow.Fitted == 0.02f &&
+                softRow.Detail.Contains("hip_ball", StringComparison.Ordinal) && softRow.Detail.EndsWith("which would push it all the time.", StringComparison.Ordinal) &&
+                Gaps(softApplied, groin).All(gap => gap >= PhysicsFitClearance.Margin - 1e-4f),
+            "physics fit: a point-sizes row gives way at the point a shape at its smallest still sits too close to");
+
+        // Customize+ grows both breasts 1.7 times: the fit measures what you see, and clearance keeps it apart where physics runs.
+        var body = BreastsBody(1.7f);
+        var fit = PhysicsFit.Measure(ChestFile(), body, skeleton);
+        var ticked = Enumerable.Range(0, fit.Items.Count).Where(i => fit.Items[i].Changes && !fit.Items[i].Optional).ToHashSet();
+        var grown = PhysicsFitClearance.Hold(ChestFile(), fit.Items, ticked, skeleton);
+        var grownFile = ChestFile();
+        PhysicsFit.Apply(grownFile, ticked.Order().Select(i => grown[i]));
+        Require(fit.Items.Any(item => item.Name == "left_breast") && Enumerable.Range(0, grown.Count).Any(i => grown[i].Fitted < fit.Items[i].Fitted) &&
+                Gaps(grownFile, skeleton).All(gap => gap >= PhysicsFitClearance.Margin - 1e-4f),
+            "physics fit: breasts Customize+ grows 1.7 times keep 1 cm apart where physics runs");
+
+        // The tip places unticked: the tips stay 14 cm out, clear of the balls, which keep their size.
+        var unplaced = all.Where(i => items[i].Target != PhysicsFitTarget.Place).ToHashSet();
+        var kept = PhysicsFitClearance.Hold(file, items, unplaced, skeleton);
+        Require(ReferenceEquals(kept[0], items[0]) && ReferenceEquals(kept[1], items[1]) && kept[0].Fitted == 0.06f,
+            "physics fit: with the tip place unticked, clearance is measured from the tip where it is");
+
+        // The balls unticked but 10 cm in the file: they stay, and the tips give way instead.
+        var thick = ChestFile(0.1f);
+        var unballed = all.Where(i => items[i].Target != PhysicsFitTarget.Capsule).ToHashSet();
+        var tipsOnly = PhysicsFitClearance.Hold(thick, items, unballed, skeleton);
+        var thickApplied = thick.Clone();
+        PhysicsFit.Apply(thickApplied, unballed.Order().Select(i => tipsOnly[i]));
+        Require(ReferenceEquals(tipsOnly[0], items[0]) && thickApplied.Collision.Capsules.All(capsule => capsule.Radius == 0.1f) &&
+                tipsOnly.Where(item => item.Target == PhysicsFitTarget.Chain).All(item => item.FittedWith(true) < 0.06f) &&
+                Gaps(thickApplied, skeleton).All(gap => gap >= PhysicsFitClearance.Margin - 1e-4f),
+            "physics fit: a shape the fit doesn't change is never touched, even when it overlaps");
+
+        // Tips moved in to the middle between the breasts: the balls go down to 0.5 cm, the rest comes off the tips.
+        var close = ChestItems(skeleton, 0.06f, new Vector3(0.02f, 0, 0.033f), new Vector3(0.02f, 0, -0.033f), 0.06f);
+        var floor = PhysicsFitClearance.Hold(file, close, all, skeleton);
+        var floorApplied = file.Clone();
+        PhysicsFit.Apply(floorApplied, all.Order().Select(i => floor[i]));
+        Require(floor.Where(item => item.Target == PhysicsFitTarget.Capsule).All(item => MathF.Abs(item.Fitted - 0.005f) < 1e-5f) &&
+                floor.Where(item => item.Target == PhysicsFitTarget.Chain).All(item => item.FittedWith(true) < 0.06f) &&
+                Gaps(floorApplied, skeleton).All(gap => gap >= PhysicsFitClearance.Margin - 1e-4f),
+            "physics fit: a shape stops at the smallest size, and the rest lowers the tip");
     }
 
     private static void CheckMirror()

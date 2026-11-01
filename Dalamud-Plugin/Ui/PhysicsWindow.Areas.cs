@@ -585,6 +585,7 @@ internal sealed partial class PhysicsWindow
             ImGui.TableSetupColumn("Axis", ImGuiTableColumnFlags.WidthStretch, 2.4f);
             ImGui.TableHeadersRow();
             var mirror = bothSides ? PhysicsAreas.MirrorChain(file, index, c) : null;
+            var tip = PhysicsKnobs.TipIndex(chain);
             for (var n = 0; n < chain.Nodes.Count; n++)
             {
                 using var row = ImRaii.PushId(n);
@@ -595,8 +596,8 @@ internal sealed partial class PhysicsWindow
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
                 ImGui.AlignTextToFramePadding();
-                ImGui.TextColored(n == chain.Nodes.Count - 1 ? Theme.Muted : Theme.Text,
-                    n == chain.Nodes.Count - 1 ? node.Bone.IsEmpty ? "Tip" : $"Tip ({node.Bone.Text})" : node.Bone.Text);
+                ImGui.TextColored(n == tip ? Theme.Muted : Theme.Text,
+                    n == tip ? node.Bone.IsEmpty ? "Tip" : $"Tip ({node.Bone.Text})" : node.Bone.Text);
                 Cell(current, "##size", node.Radius * 100, 0.05f, 0, 50, "%.1f", value => { node.Radius = value / 100; if (twin != null) twin.Radius = value / 100; });
                 Cell(current, "##follow", node.AttractByAnimation, 0.001f, 0, 1, "%.3f", value => { node.AttractByAnimation = value; if (twin != null) twin.AttractByAnimation = value; });
                 Cell(current, "##wind", node.WindScale, 0.0005f, 0, 1, "%.4f", value => { node.WindScale = value; if (twin != null) twin.WindScale = value; });
@@ -750,11 +751,12 @@ internal sealed partial class PhysicsWindow
         if (moved)
         {
             var rest = RestPose();
-            var from = first.Nodes[^2].Bone.Text;
+            // The bone before each chain's tip, which its offset is in: not always the second last point (VFXEditor's chests).
+            var from = first.Nodes[PhysicsKnobs.TipIndex(first) - 1].Bone.Text;
             foreach (var (s, c) in targets)
             {
                 var chain = file.Simulators[s].Chains[c];
-                var to = chain.Nodes[^2].Bone.Text;
+                var to = chain.Nodes[PhysicsKnobs.TipIndex(chain) - 1].Bone.Text;
                 // The offset is in the last bone's space: chains ending in the same bone take it as it
                 // is, the other side's twin the mirrored place, and chains of other bones (a skirt's
                 // other panels, other hair strands) keep their own.

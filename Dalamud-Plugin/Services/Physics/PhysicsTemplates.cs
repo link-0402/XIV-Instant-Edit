@@ -107,8 +107,8 @@ internal static class PhysicsTemplates
     {
         if (chain.Nodes.Count < 2 || skeleton.Get(chain.Nodes[0].Bone.Text) is not { Parent.Length: > 0 } bone)
             return null;
-        // Only a two-node chain's tip hangs straight from the bone; longer chains keep their own springs.
-        if (chain.Nodes.Count != 2)
+        // Only a tip right after the bone hangs straight from it, whatever points follow; longer chains keep their own springs.
+        if (PhysicsKnobs.TipIndex(chain) != 1)
             return null;
         var rest = Vector3.Transform(chain.LastBoneOffset, Quaternion.Normalize(bone.Rotation));
         return new PhybAttract

@@ -296,3 +296,25 @@ that uses the game's j_sk bones.
   "+ Butt (YAS)" is offered as a template, not from the game, and builds ya_shiri_phys_l/r with the template's cones and
   springs measured on that skeleton; Earrings, Hair and Front hair have no template, and each, deleted, comes back from the
   game's c0801 file with its own bones (n_ear_b_l/r, j_kami_a, j_kami_f_l, j_kami_f_r), chains and tip places.)
+
+## Fit: parts and any slot (2026-11-01, pending)
+
+Balls on a breast's own bone fit the breast you see, fitted sizes keep 1 cm clear where physics runs, models on any
+slot count for the areas they move with, and genital tips are placed. Use a test copy of Ashley Jiggles Customized
+(its chest is VFXEditor's: the bone, a tip without a bone, then iv_c_mune_l).
+
+- [x] The game aims a chain's bone at its first point without a bone, so that point is the tip.
+  (XIV Bridge physics/37, 2026-11-01, Lucina standing: Ashley's spring on that point, pulled 30 cm to the left, turned
+  j_mune_l 29.6°; the same spring on iv_c_mune_l turned it 2.2°.)
+- [ ] On a character whose Customize+ grows the breasts: Fit to my body (Middle of the breast), then Preview. The breasts
+  rest where they did before the fit: j_mune_l and j_mune_r within 2° standing. (XIV Bridge physics/38.)
+- [ ] The breast balls read "Moves it N cm to the middle of your left breast and sizes it to the breast." and stay under
+  10 cm. A row the fit holds back ends "Kept 1 cm off ..., which it would push all the time." (physics/38 checks the
+  sizes and that no body area's point comes within 1 cm of a shape at rest; the sentences by eye.)
+- [ ] The chest overlay shows the tip, the cone and the spring. (physics/38.)
+- [ ] On a character whose member is a ring model: the fit lists "Penis: tip place" and the testicles' tip place and size,
+  and its notes say "Your right ring's model moves with iv_ochinko_a, so it was measured for the penis." (physics/39.)
+- [ ] Applied, the penis tip sits at the end of the member and the testicles' in their middle; the sizes look right (by
+  eye). (physics/39 checks the penis tip.)
+- [ ] Walk and run: the arms stop at the breasts and the breasts don't knock each other apart (by eye).
+- [ ] Both sides: Tip place on Ashley's chest moves both tips, the other side mirrored (by hand).

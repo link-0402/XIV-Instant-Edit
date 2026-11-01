@@ -292,10 +292,20 @@ internal static class PhysicsScenarios
         var errors = found.Where(issue => issue.Level == PhysicsIssueLevel.Error).Select(issue => issue.Text).ToList();
         Require(errors.Count == 2 && errors.Any(text => text.Contains("isn't a number")) && errors.Any(text => text.Contains("needs its bone and a tip")),
             "physics: values that aren't numbers and chains without a tip are errors");
-        Require(found.Any(issue => issue.Level == PhysicsIssueLevel.Warning && issue.Text.Contains("point 2 has no bone")) &&
+        Require(found.Any(issue => issue.Level == PhysicsIssueLevel.Warning && issue.Text.Contains("point 3 has no bone")) &&
                 found.Single(issue => issue.Fix == PhysicsFix.RemoveBroken) is { Level: PhysicsIssueLevel.Warning } links &&
                 links.Text.StartsWith("2 links", StringComparison.Ordinal) && links.Text.Contains("forearm_l"),
-            "physics: links past a chain's end, missing shapes and a point without a bone before the tip are warnings, as presets ship them");
+            "physics: links past a chain's end, missing shapes and a second point without a bone after the tip are warnings, as presets ship them");
+
+        // VFXEditor's chests: the tip is the first point without a bone, so only a second one is warned about.
+        var ashley = Sample();
+        ashley.Simulators[0].Chains[0].Nodes.Add(new PhybNode { Bone = PhybName.From("iv_c_mune_l") });
+        var twice = Sample();
+        twice.Simulators[0].Chains[0].Nodes.AddRange([new PhybNode { Bone = PhybName.From("x") }, new PhybNode()]);
+        var twiceIssues = PhysicsValidation.Check(twice, null).Where(issue => issue.Text.Contains("has no bone")).ToList();
+        Require(!PhysicsValidation.Check(ashley, null).Any(issue => issue.Text.Contains("has no bone")) &&
+                twiceIssues.Count == 1 && twiceIssues[0].Text.Contains("point 4 has no bone"),
+            "physics: a tip without a bone before the chain's last point is fine, and a second point without one is warned about");
 
         // Removing broken links keeps every remaining shape's collision bit on the nodes.
         var links2 = Sample();

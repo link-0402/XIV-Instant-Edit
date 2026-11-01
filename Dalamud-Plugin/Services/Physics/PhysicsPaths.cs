@@ -34,13 +34,21 @@ internal static class PhysicsPaths
     /// <summary> Whether a model's game path is bare body: smallclothes or the Emperor's New gear. </summary>
     public static bool IsBareBody(string gamePath) => BareBody.IsMatch(gamePath.Replace('\\', '/'));
 
-    /// <summary> "body", "hands", "legs" or "feet" for a human's model slot 1 to 4. </summary>
+    /// <summary> Whether a human's model slot is an accessory's: ears, neck, wrists or a ring (5 to 9). </summary>
+    public static bool IsAccessory(int slot) => slot is >= 5 and <= 9;
+
+    /// <summary> The name of a human's model slot 1 to 9: "body", "hands", "legs", "feet", "ears", "neck", "wrists", "right ring" or "left ring". </summary>
     public static string SlotName(int slot) => slot switch
     {
         1 => "body",
         2 => "hands",
         3 => "legs",
         4 => "feet",
+        5 => "ears",
+        6 => "neck",
+        7 => "wrists",
+        8 => "right ring",
+        9 => "left ring",
         _ => $"slot {slot}",
     };
 
@@ -50,6 +58,11 @@ internal static class PhysicsPaths
         2 => "_glv.mdl",
         3 => "_dwn.mdl",
         4 => "_sho.mdl",
+        5 => "_ear.mdl",
+        6 => "_nek.mdl",
+        7 => "_wrs.mdl",
+        8 => "_rir.mdl",
+        9 => "_ril.mdl",
         _ => ".mdl",
     };
 

@@ -122,6 +122,7 @@ internal static class PhysicsOverlayModel
     {
         var chain = simulator.Chains[index];
         var places = Places(chain, frame);
+        var tipIndex = PhysicsKnobs.TipIndex(chain);
         var chainLit = hover.Part == PhysicsOverlayPart.Chain;
         var tipLit = hover.Part == PhysicsOverlayPart.Tip;
         for (var n = 0; n < places.Count; n++)
@@ -130,7 +131,7 @@ internal static class PhysicsOverlayModel
                 continue;
             if (n > 0 && places[n - 1] is { } before)
                 shapes.Segments.Add(new PhysicsOverlaySegment(before, at, PhysicsOverlayPart.Chain, chainLit));
-            var tip = n == places.Count - 1;
+            var tip = n == tipIndex;
             shapes.Marks.Add(new PhysicsOverlayMark(at, PhysicsOverlayPart.Chain, chainLit,
                 tip && n > 0 ? Centimetres(Vector3.Distance(places[n - 1] ?? at, at)) : null));
             if (n > 0 && chain.Nodes[n].Radius > 1e-5f)
@@ -151,16 +152,20 @@ internal static class PhysicsOverlayModel
         }
     }
 
-    /// <summary> Where each of a chain's points is: its bone's place, or for the empty tip the chain's offset from the bone before it. </summary>
+    /// <summary>
+    /// Where each of a chain's points is: its bone's place, or for the empty tip the chain's offset from the bone before it.
+    /// Points after the tip sit on their bones.
+    /// </summary>
     private static List<Vector3?> Places(PhybChain chain, Func<string, PhysicsFrame?> frame)
     {
         var places = new List<Vector3?>(chain.Nodes.Count);
+        var tip = PhysicsKnobs.TipIndex(chain);
         for (var n = 0; n < chain.Nodes.Count; n++)
         {
             var node = chain.Nodes[n];
             if (!node.Bone.IsEmpty)
                 places.Add(frame(node.Bone.Text)?.Position);
-            else if (n == chain.Nodes.Count - 1 && n > 0 && !chain.Nodes[n - 1].Bone.IsEmpty)
+            else if (n == tip && n > 0 && !chain.Nodes[n - 1].Bone.IsEmpty)
                 places.Add(frame(chain.Nodes[n - 1].Bone.Text)?.Place(chain.LastBoneOffset));
             else
                 places.Add(null);

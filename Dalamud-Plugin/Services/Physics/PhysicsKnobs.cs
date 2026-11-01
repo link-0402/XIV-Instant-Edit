@@ -54,7 +54,7 @@ internal static class PhysicsKnobs
         if (chain < 0 || chain >= simulator.Chains.Count || simulator.Chains[chain].Nodes.Count < 2)
             return null;
         var own = simulator.Chains[chain];
-        var tip = own.Nodes[^1];
+        var tip = own.Nodes[TipIndex(own)];
         return knob switch
         {
             PhysicsKnob.Firmness => MainSpring(simulator, chain) is { } spring ? MathF.Abs(spring.Stiffness) : null,
@@ -121,6 +121,19 @@ internal static class PhysicsKnobs
                 own.RepulsionStrength = value;
                 break;
         }
+    }
+
+    /// <summary>
+    /// The point that is a chain's tip: the first one after its bone without a bone of its own, which the
+    /// game places at <see cref="PhybChain.LastBoneOffset"/> from the bone before it, else the last point.
+    /// Points after it are extra points on their bones (VFXEditor's chests). 1 for a chain without moving points.
+    /// </summary>
+    public static int TipIndex(PhybChain chain)
+    {
+        for (var n = 1; n < chain.Nodes.Count; n++)
+            if (chain.Nodes[n].Bone.IsEmpty)
+                return n;
+        return Math.Max(1, chain.Nodes.Count - 1);
     }
 
     /// <summary> The spring that holds a chain's tip: its strongest one on a moving point. </summary>
@@ -195,9 +208,10 @@ internal static class PhysicsKnobs
         var chain = simulator.Chains[spring.Chain];
         if (spring.Node < 1 || spring.Node >= chain.Nodes.Count || chain.Nodes.Count < 2)
             return null;
+        var tip = TipIndex(chain);
         Vector3? Rest(int node)
         {
-            if (node < chain.Nodes.Count - 1 || !chain.Nodes[node].Bone.IsEmpty)
+            if (node != tip || !chain.Nodes[node].Bone.IsEmpty)
                 return RestFrame(skeleton, chain.Nodes[node].Bone.Text)?.Position;
             // The tip sits at the chain's last offset from the bone before it.
             return RestFrame(skeleton, chain.Nodes[node - 1].Bone.Text)?.Place(chain.LastBoneOffset);
@@ -226,21 +240,22 @@ internal static class PhysicsKnobs
         return frame;
     }
 
-    /// <summary> Sets the bone's swing limit; the points between bone and tip keep their share of it. </summary>
+    /// <summary> Sets the bone's swing limit; the points between bone and tip keep their share of it, and points after the tip their own. </summary>
     public static void SetSwing(PhybChain chain, float radians)
     {
         var old = chain.Nodes[0].ConeMaxAngle;
         chain.Nodes[0].ConeMaxAngle = radians;
-        for (var n = 1; n < chain.Nodes.Count - 1; n++)
+        for (var n = 1; n < TipIndex(chain); n++)
             chain.Nodes[n].ConeMaxAngle = old > 1e-6f ? Math.Clamp(chain.Nodes[n].ConeMaxAngle * radians / old, 0, MathF.PI) : radians;
     }
 
-    /// <summary> Sets a value on the tip; the points between bone and tip keep their share of it. </summary>
+    /// <summary> Sets a value on the tip; the points between bone and tip keep their share of it, and points after the tip their own. </summary>
     public static void SetMoving(PhybChain chain, Func<PhybNode, float> get, Action<PhybNode, float> set, float value)
     {
-        var tip = chain.Nodes[^1];
+        var at = TipIndex(chain);
+        var tip = chain.Nodes[at];
         var old = get(tip);
-        for (var n = 1; n < chain.Nodes.Count - 1; n++)
+        for (var n = 1; n < at; n++)
             set(chain.Nodes[n], MathF.Abs(old) > 1e-9f ? get(chain.Nodes[n]) * value / old : value);
         set(tip, value);
     }

@@ -165,8 +165,8 @@ internal sealed class PhybCollisionRef
 
 /// <summary>
 /// One point of a chain. The first node is the chain's bone, which the animation places; the others
-/// move. The last node is the chain's tip: no bone (or a name the skeleton lacks), placed at the
-/// chain's <see cref="PhybChain.LastBoneOffset"/> from the bone before it.
+/// move. The chain's tip is its first node without a bone, else its last (<see cref="PhysicsKnobs.TipIndex"/>),
+/// placed at the chain's <see cref="PhybChain.LastBoneOffset"/> from the bone before it.
 /// </summary>
 internal sealed class PhybNode
 {
