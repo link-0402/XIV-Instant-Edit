@@ -53,6 +53,8 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private string? shownPartner;
     // Each partner workspace's spawn its clip is tied to; none while the partner is despawned.
     private readonly Dictionary<WorkspaceKey, int> tied = [];
+    // Presets deleted since the last framework update, whose workspaces go then.
+    private readonly List<Guid> deleted = [];
     // The window's close waits for the question about unsaved changes; Discard confirms it.
     private bool closeAsked;
     private bool closeConfirmed;
@@ -199,23 +201,11 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     /// <summary>Whether the preset's workspace has unsaved edits, for the Partners page's Delete question.</summary>
     internal bool HasUnsaved(Guid preset) => workspaces.TryGetValue(new WorkspaceKey(preset), out var workspace) && workspace.HasUnsavedChanges;
 
-    /// <summary>The preset was deleted: its workspace, its kept edits and its services go.</summary>
-    internal void PresetDeleted(Guid preset)
-    {
-        var key = new WorkspaceKey(preset);
-        if (workspaces.Remove(key, out var workspace))
-        {
-            if (ReferenceEquals(Shown, workspace))
-                Shown = Workspace(WorkspaceKey.Self);
-            workspace.Session.Group?.Remove(workspace.Preview);
-            workspace.Close();
-            workspace.Dispose();
-        }
-        tied.Remove(key);
-        try { Animations?.Journals.ClearAutosave(key.Id); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { selfServices.Log.Warning(e, "Could not remove a partner's kept timeline edits."); }
-        services.Release(key);
-    }
+    /// <summary>
+    /// The preset was deleted (from the Partners page, inside a workspace's draw): its workspace, its kept edits and its services
+    /// go on the next framework update.
+    /// </summary>
+    internal void PresetDeleted(Guid preset) => deleted.Add(preset);
 
     /// <summary>The workspace of <paramref name="key"/>, made with what the plugin attached the first time it is asked for.</summary>
     private TimelineWorkspace Workspace(WorkspaceKey key)
@@ -242,16 +232,56 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     // Every workspace keeps running while the window is open, collapsed or not, shown or not.
     private void OnUpdate(IFramework _)
     {
+        DropDeleted();
         if (!IsOpen || Animations is not { } animations)
             return;
         // The listener runs while this window is open: the loader and the clip's skeleton choice read it.
         animations.StartObservation();
         TieActors();
         SyncShown();
+        TellShown(Shown.Key.IsSelf ? null : NameOf(Shown.Key));
         foreach (var workspace in workspaces.Values)
             workspace.Tick();
         // After every workspace's own update, so every clip it plays again starts on this framework frame.
         selfServices.Group.Update();
+    }
+
+    /// <summary>Tells the main window which partner shows, null for you: Playing now names it and the recorder records it.</summary>
+    private void TellShown(string? partner)
+    {
+        if (partner == shownPartner)
+            return;
+        shownPartner = partner;
+        showingPartner?.Invoke(partner);
+    }
+
+    /// <summary>
+    /// The workspaces of presets deleted since the last update go, outside any draw: the actor is already despawned, so
+    /// first as a despawn, then closed, leaving the shared Bones window and pose browser alone unless that workspace showed.
+    /// </summary>
+    private void DropDeleted()
+    {
+        if (deleted.Count == 0)
+            return;
+        foreach (var preset in deleted)
+        {
+            var key = new WorkspaceKey(preset);
+            if (workspaces.Remove(key, out var workspace))
+            {
+                var shown = ReferenceEquals(Shown, workspace);
+                if (shown)
+                    Shown = Workspace(WorkspaceKey.Self);
+                workspace.Session.Group?.Remove(workspace.Preview);
+                workspace.ActorGone();
+                workspace.Close(shown);
+                workspace.Dispose();
+            }
+            tied.Remove(key);
+            try { Animations?.Journals.ClearAutosave(key.Id); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { selfServices.Log.Warning(e, "Could not remove a partner's kept timeline edits."); }
+            services.Release(key);
+        }
+        deleted.Clear();
     }
 
     /// <summary>Shows the GPose target's workspace, made the first time that partner is the target.</summary>
@@ -414,6 +444,8 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         // Every Preview and Live ends, and every workspace's clip closes.
         foreach (var workspace in workspaces.Values)
             workspace.Close();
+        // The main window's recorder and Playing now are yours again.
+        TellShown(null);
         // The listener stays on while the Send character card still waits on it.
         if (mainListens?.Invoke() != true)
             Animations?.StopObservation();
@@ -446,12 +478,6 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         // At the window's own level, so a dialog opened from a page inside a child keeps its popup.
         if (Animations != null)
             drawDialogs?.Invoke();
-        var partner = Shown.Key.IsSelf ? null : NameOf(Shown.Key);
-        if (partner != shownPartner)
-        {
-            shownPartner = partner;
-            showingPartner?.Invoke(partner);
-        }
         if (closeAsked)
             DrawCloseQuestion();
         using (ImRaii.PushId(Shown.Key.Id))

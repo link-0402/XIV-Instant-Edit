@@ -19,7 +19,7 @@ internal static class PlayGroupFixture
         public string ActorName => name;
         public float? PlayedSeconds { get; set; }
         public float? TimeSeconds { get; set; }
-        public bool AtEnd { get; set; }
+        public bool? AtEnd { get; set; } = false;
         public bool Paused { get; set; }
         public bool Restarted;
         public bool TakeStarted()
@@ -54,11 +54,19 @@ internal static class PlayGroupFixture
             "play group: a second clip joining while playing takes the group's speed and restarts both together", calls);
 
         calls.Clear();
+        you.TimeSeconds = 2;
+        aria.TimeSeconds = 2;
+        group.Update();
         you.TimeSeconds = 7.33f;
         you.AtEnd = true;
         aria.TimeSeconds = 2.33f;
         group.Update();
-        check(calls.SequenceEqual(["you again", "aria again"]), "play group: at the leader's end both play again on one update", calls);
+        check(calls.Where(call => !call.Contains("hold")).SequenceEqual(["you again", "aria again"]),
+            "play group: at the leader's end both play again on one update", calls);
+
+        calls.Clear();
+        group.Update();
+        check(!calls.Contains("you again"), "play group: the old control still at its end the frame after doesn't restart them again", calls);
 
         calls.Clear();
         you.AtEnd = false;
@@ -82,8 +90,8 @@ internal static class PlayGroupFixture
         check(!group.Grouped && calls.Count == 0, "play group: a clip that leaves drops out; the one left plays alone", calls);
     }
 
-    private static GroupMember Member(int key, float length, float? time, bool atEnd = false, bool started = false, bool held = false) =>
-        new(key, length, time, atEnd, started, held);
+    private static GroupMember Member(int key, float length, float? time, bool? atEnd = false, bool started = false, bool held = false, bool armed = true) =>
+        new(key, length, time, atEnd, started, held, armed);
 
     private static string Text(IEnumerable<GroupOrder> orders) =>
         string.Join(" ", orders.Select(o => FormattableString.Invariant($"{o.Key}:{o.Act}:{o.Seconds:0.##}")));
@@ -125,5 +133,13 @@ internal static class PlayGroupFixture
 
         var paused = PlayGroupRules.Step(false, 4f, [Member(0, 7.33f, 4f), Member(1, 2.33f, 2.33f)]);
         check(paused.Orders.IsEmpty && paused.Shared == 4f, "play group: paused, nothing moves by itself");
+
+        var dropped = PlayGroupRules.Step(true, 7.3f, [Member(0, 7.33f, null, atEnd: null), Member(1, 2.33f, 2.33f, held: true)]);
+        check(Text(dropped.Orders) == "0:PlayAgain:0 1:PlayAgain:0",
+            "play group: a leader that doesn't loop and that the game dropped at its end counts as ended", Text(dropped.Orders));
+
+        var unarmed = PlayGroupRules.Step(true, 0.1f, [Member(0, 7.33f, 7.33f, atEnd: true, armed: false), Member(1, 2.33f, 0.1f)]);
+        check(!unarmed.Orders.Any(order => order.Act == GroupAct.PlayAgain),
+            "play group: an end not seen playing since the last start (the old control, a GPose freeze) restarts nothing", Text(unarmed.Orders));
     }
 }

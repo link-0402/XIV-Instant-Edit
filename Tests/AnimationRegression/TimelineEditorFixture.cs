@@ -889,6 +889,9 @@ internal static class TimelineEditorFixture
               editor.Key(TimelineKey.Left, shift: true) && editor.GroupFrame == 101 && editor.Key(TimelineKey.Left) && editor.GroupFrame == null &&
               editor.Playhead == 100,
             "group end: steps past the end move the shared frame by the usual amounts");
+        editor.MoveTo(150);
+        check(editor.Key(TimelineKey.End) && editor.Playhead == 100 && editor.GroupFrame == null,
+            "group end: End from past the end goes to this clip's end");
         editor.GroupEnd = null;
         editor.MoveTo(150);
         check(editor.Playhead == 100 && editor.GroupFrame == null, "group end: alone a clip's playhead stops at its end, as before");

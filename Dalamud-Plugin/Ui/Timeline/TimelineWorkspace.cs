@@ -429,9 +429,10 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
 
     /// <summary>
     /// The window closes (the window asked about unsaved changes first) or the preset went: everything this workspace runs
-    /// ends and its clip closes.
+    /// ends and its clip closes. <paramref name="shared"/> closes the window's Bones window and pose browser too and stops a
+    /// sound playing to listen to; a hidden workspace leaves them to the one shown.
     /// </summary>
-    internal void Close()
+    internal void Close(bool shared = true)
     {
         pending = PendingAction.None;
         pendingOpen = null;
@@ -440,11 +441,14 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         autosaver.Closed();
         loader.Reset();
         livePose.ForgetNote();
-        // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
-        bonesWindow.IsOpen = false;
-        // So does the pose browser, which keys into it.
-        poseBrowserWindow.IsOpen = false;
-        poseBrowser.Forget();
+        if (shared)
+        {
+            // The Bones window poses this window's clip; it goes with it, and so do its bones on the character.
+            bonesWindow.IsOpen = false;
+            // So does the pose browser, which keys into it.
+            poseBrowserWindow.IsOpen = false;
+            poseBrowser.Forget();
+        }
         EndGizmo(true);
         timelinePreview.Stop();
         blenderMotion.Forget();
@@ -459,7 +463,8 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         effectLooks.Forget();
         ForgetSounds();
         // A sound played to listen to stops being served with the window.
-        _ = soundPlayer?.StopAsync();
+        if (shared)
+            _ = soundPlayer?.StopAsync();
     }
 
     /// <summary>Another workspace shows now: a gizmo drag on this one's actor ends.</summary>

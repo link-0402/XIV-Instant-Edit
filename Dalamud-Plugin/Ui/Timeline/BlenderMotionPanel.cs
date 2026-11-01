@@ -72,7 +72,7 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
     {
         if (delivery == null || session.Animations == null)
             return "Blender isn't available.";
-        if (session.Source is not { } loaded || session.ReadOnly)
+        if (session.Source is not { } loaded || session.Busy)
             return "Wait for the timeline to finish.";
         if (loaded.Standalone)
             return "An expression has no motion.";
@@ -260,7 +260,7 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
             Message("The clip changed while reading. Read it again.", true);
         else if (read.Result.Motion is not { } replacement)
             Message(TimelineWindowViews.BlenderUnchangedLine(read.Result.ScaleIgnored), false);
-        else if (session.ReadOnly || !(hold switch
+        else if (session.Busy || !(hold switch
                  {
                      Hold.Still => current.HoldStill(replacement),
                      Hold.Face => current.HoldFace(replacement),

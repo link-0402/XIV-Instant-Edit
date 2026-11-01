@@ -30,6 +30,13 @@ internal sealed class CaptureHistories
         }
     }
 
+    /// <summary>Changes every actor's list the same way, such as a save's new file versions; their order stays.</summary>
+    public void Map(Func<ImmutableArray<AnimationCapture>, ImmutableArray<AnimationCapture>> change)
+    {
+        foreach (var actor in order)
+            lists[actor] = change(lists[actor]);
+    }
+
     /// <summary>The list whose newest clip was heard on object <paramref name="objectIndex"/>; empty when none was.</summary>
     public ImmutableArray<AnimationCapture> At(ushort objectIndex)
     {

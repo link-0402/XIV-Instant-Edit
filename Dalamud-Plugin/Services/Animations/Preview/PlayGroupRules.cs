@@ -4,10 +4,11 @@ namespace InstantEdit.Services.Animations.Preview;
 
 /// <summary>
 /// One clip of the play group as a frame finds it, in seconds: how long it plays (<paramref name="Length"/>), where its
-/// control stands (null when none holds it), whether it played to its end, whether it is new or reloaded this frame, and
-/// whether it already holds its last frame.
+/// control stands (null when none holds it), whether it played to its end (null when the game dropped it, as it does a clip
+/// that doesn't loop), whether it is new or reloaded this frame, whether it already holds its last frame, and whether it was
+/// seen playing before its end since it last started (<paramref name="Armed"/>), so an end counts only then.
 /// </summary>
-internal readonly record struct GroupMember(int Key, float Length, float? Time, bool AtEnd, bool Started, bool Held);
+internal readonly record struct GroupMember(int Key, float Length, float? Time, bool? AtEnd, bool Started, bool Held, bool Armed = true);
 
 /// <summary>What a member is told: seek to a time, hold its last frame (pause there), play again from 0, or pause.</summary>
 internal enum GroupAct : byte
@@ -59,7 +60,9 @@ internal static class PlayGroupRules
             return (shared, []);
         var key = Leader(members);
         var leader = members.First(member => member.Key == key);
-        if (leader.AtEnd || leader.Time < shared - Looped)
+        // At its end, or dropped there: only once it was seen playing since it started, as RepeatAtEnd does, so neither a clip
+        // not on the character yet nor a GPose freeze at the end restarts every frame.
+        if (leader.Armed && leader.AtEnd != false || leader.Time < shared - Looped)
             return (0, [.. members.Select(member => new GroupOrder(member.Key, GroupAct.PlayAgain))]);
         var now = leader.Time ?? shared;
         foreach (var member in members)

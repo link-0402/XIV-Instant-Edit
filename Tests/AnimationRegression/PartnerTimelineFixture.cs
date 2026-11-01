@@ -18,6 +18,23 @@ internal static class PartnerTimelineFixture
         Histories(check);
         Retarget(check);
         Questions(check);
+        PastEndKeepsRunning(check);
+    }
+
+    /// <summary>
+    /// Past a shorter clip's end in the play group its edits wait, but nothing stops: Live, the autosave and a finished read
+    /// go on, or the clip would leave the group every time the longer one runs past it.
+    /// </summary>
+    private static void PastEndKeepsRunning(Action<bool, string> check)
+    {
+        var source = BlenderMotionFixture.Source();
+        var editor = new TimelineEditor(source.Document!) { GroupEnd = source.Document!.Length + 100 };
+        var session = new TimelineSession(null, null!, null!, null!, null, null!, null!, null!) { Source = source, Editor = editor };
+        check(!session.ReadOnly && !session.Busy, "past end: inside the clip nothing waits");
+        editor.MoveTo(source.Document.Length + 50);
+        check(session.ReadOnly && !session.Busy, "past end: edits wait, but the session isn't busy, so Live and the autosave go on");
+        session.KeepReadOnlyWhile(() => true);
+        check(session.Busy, "past end: a save running still makes it busy");
     }
 
     /// <summary>The inline questions that cover a partner's workspace: deleting its preset and closing the window.</summary>
@@ -67,6 +84,9 @@ internal static class PartnerTimelineFixture
             histories.Set(actor, [Heard($"actor {actor}", actor, 210)]);
         check(histories.Of(1).IsEmpty && !histories.Of(2).IsEmpty && !histories.Of(9).IsEmpty,
             "histories: past 8 actors the one set longest ago goes");
+        histories.Map(list => [.. list.Select(capture => capture with { DisplayName = "saved" })]);
+        check(histories.Of(2).Single().DisplayName == "saved" && histories.Of(9).Single().DisplayName == "saved",
+            "histories: a save that ends after a switch updates the captures of the actor it was for too");
     }
 
     /// <summary>Two actors on one collection can't both preview edits of one file: Penumbra gives a collection one file per game path.</summary>

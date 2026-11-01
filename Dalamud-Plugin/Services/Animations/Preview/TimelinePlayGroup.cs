@@ -11,7 +11,8 @@ internal interface IPlayGroupMember
 
     float? TimeSeconds { get; }
 
-    bool AtEnd { get; }
+    /// <summary>Whether it played to its end; null when no control holds it (the game dropped a clip that doesn't loop).</summary>
+    bool? AtEnd { get; }
 
     bool Paused { get; }
 
@@ -46,6 +47,8 @@ internal sealed class TimelinePlayGroup
     // The members that played last update, and those holding their last frame.
     private HashSet<int> known = [];
     private readonly HashSet<int> held = [];
+    // The members seen playing before their end since they last started: only their end counts.
+    private readonly HashSet<int> armed = [];
     private float speedPercent = 100;
 
     /// <summary>Two or more members play: the group holds the shared frame.</summary>
@@ -85,18 +88,31 @@ internal sealed class TimelinePlayGroup
         {
             known.Remove(key);
             held.Remove(key);
+            armed.Remove(key);
         }
     }
 
     private List<IPlayGroupMember> Active() => keys.Keys.Where(member => member.PlayedSeconds != null).ToList();
 
+    private GroupMember Fact(IPlayGroupMember member)
+    {
+        var key = keys[member];
+        var started = member.TakeStarted() || !known.Contains(key);
+        if (started)
+            armed.Remove(key);
+        var atEnd = member.AtEnd;
+        if (atEnd == false)
+            armed.Add(key);
+        return new GroupMember(key, member.PlayedSeconds!.Value, member.TimeSeconds, atEnd, started, held.Contains(key), armed.Contains(key));
+    }
+
     public void Update()
     {
         var active = Active();
-        var facts = active.Select(member => (Member: member, Fact: new GroupMember(keys[member], member.PlayedSeconds!.Value, member.TimeSeconds,
-            member.AtEnd, member.TakeStarted() || !known.Contains(keys[member]), held.Contains(keys[member])))).ToList();
+        var facts = active.Select(member => (Member: member, Fact: Fact(member))).ToList();
         known = facts.Select(pair => pair.Fact.Key).ToHashSet();
         held.IntersectWith(known);
+        armed.IntersectWith(known);
         Grouped = facts.Count >= 2;
         if (!Grouped)
         {
@@ -137,6 +153,7 @@ internal sealed class TimelinePlayGroup
             case GroupAct.PlayAgain:
                 member.PlayAgain();
                 held.Remove(order.Key);
+                armed.Remove(order.Key);
                 break;
             case GroupAct.Pause:
                 member.Pause();
@@ -173,6 +190,7 @@ internal sealed class TimelinePlayGroup
         Playing = true;
         SharedSeconds = 0;
         held.Clear();
+        armed.Clear();
         foreach (var member in Active())
             member.PlayAgain();
     }

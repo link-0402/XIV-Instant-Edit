@@ -104,7 +104,7 @@ internal sealed class TimelineAutosaver(TimelineSession session, Action<Timeline
 
     // Whether the open clip has unsaved edits that aren't kept yet.
     private bool Unkept(TimelineEditor? editor) =>
-        editor is { Dirty: true } && session.Source is { Document: not null } && !session.ReadOnly && !ReferenceEquals(editor.Document, kept);
+        editor is { Dirty: true } && session.Source is { Document: not null } && !session.Busy && !ReferenceEquals(editor.Document, kept);
 
     /// <summary>The open clip's edits as kept edits: also what Edit face parks its timeline's edits as until Back.</summary>
     internal TimelineAutosave Snapshot(TimelineEditor editor) => Snapshot(session.Source!, editor.Document, session.Imports.Values);

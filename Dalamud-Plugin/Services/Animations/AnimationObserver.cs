@@ -614,6 +614,8 @@ internal sealed class AnimationObserver : IDisposable
     public void UpdateSources(string captureId, ImmutableArray<AnimationResource> updatedResources)
     {
         history = ApplyUpdatedSources(history, captureId, updatedResources);
+        // A job outlives a target switch: the actor it saved for may be one the listener follows no longer.
+        histories.Map(list => ApplyUpdatedSources(list, captureId, updatedResources));
         // Timelines are kept with the file they were read from, which a save in place just replaced.
         motionCache.Clear();
     }
@@ -647,7 +649,10 @@ internal sealed class AnimationObserver : IDisposable
     {
         var key = ChoiceKey(clip);
         if (error == null) operationErrors.TryRemove(key, out _); else operationErrors[key] = error;
-        history = history.Select(c => ChoiceKey(c.Clip) == key ? c with { Clip = c.Clip with { LastOperationError = error } } : c).ToImmutableArray();
+        ImmutableArray<AnimationCapture> Marked(ImmutableArray<AnimationCapture> list) =>
+            list.Select(c => ChoiceKey(c.Clip) == key ? c with { Clip = c.Clip with { LastOperationError = error } } : c).ToImmutableArray();
+        history = Marked(history);
+        histories.Map(Marked);
     }
     /// <summary>The latest skeleton match for this clip from this file, or null when none is kept.</summary>
     public SkeletonResolution? LatestResolution(AnimationClip clip)

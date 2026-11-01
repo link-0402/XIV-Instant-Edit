@@ -1065,7 +1065,7 @@ internal sealed class TimelineEditor
                 MoveTo(0);
                 return true;
             case TimelineKey.End:
-                Playhead = Document.Length;
+                MoveTo(Document.Length);
                 return true;
             case TimelineKey.Escape:
                 var had = selected.Count > 0 || SelectedLayer != null;

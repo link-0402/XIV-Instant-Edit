@@ -31,6 +31,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private float? memberLength;
     // It started again by itself since the group last looked (a new Preview, Live, a look or sound reload).
     private bool memberStarted;
+    // A clip the loader plays, as a member: its binding and the timeline playing it (LoaderFingerprint).
+    private string? loaderFingerprint;
+    private ushort loaderTimeline;
     // The frame the editor's playhead was last set to from the group's, so a step or scrub is told from it; and the shared
     // frame past this clip's end it was last set to.
     private int lastMirror = -1;
@@ -167,7 +170,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     float? IPlayGroupMember.TimeSeconds => memberFingerprint is { } fingerprint ? Safely(() => session.Playback.CurrentTime(fingerprint)) : null;
 
-    bool IPlayGroupMember.AtEnd => memberFingerprint is { } fingerprint && Safely(() => session.Playback.AtEnd(fingerprint)) == true;
+    bool? IPlayGroupMember.AtEnd => memberFingerprint is { } fingerprint ? Safely(() => session.Playback.AtEnd(fingerprint)) : null;
 
     bool IPlayGroupMember.Paused => session.Playback.Paused;
 
@@ -195,9 +198,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         if (memberFingerprint is not { } fingerprint)
             return;
         repeatArmed = false;
-        // A preview or Live plays its own timeline; a clip the loader played, the one playing.
-        var timeline = previewFingerprint != null ? previewTimeline : session.Playback.Timeline;
-        PlaybackCall(() => session.Playback.Play(timeline, fingerprint, previewActor ?? session.ActorIndex, previewFace));
+        // A preview or Live plays its own timeline on its own actor; a clip the loader played, the one playing on the
+        // workspace's actor, on the body.
+        var own = previewFingerprint != null;
+        var timeline = own ? previewTimeline : session.Playback.Timeline;
+        var actor = own ? previewActor ?? session.ActorIndex : session.ActorIndex;
+        var face = own && previewFace;
+        PlaybackCall(() => session.Playback.Play(timeline, fingerprint, actor, face));
         if (Math.Abs(speedPercent - 100) > .1f && session.Playback.Active)
             PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
     }
@@ -236,18 +243,40 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     {
         memberFingerprint = null;
         memberLength = null;
+        loaderFingerprint = null;
+    }
+
+    /// <summary>
+    /// The binding of a clip the loader plays (a session with no preview or Live), once its control was seen. It stays a
+    /// member while that playback runs the same timeline, also on a frame its control isn't there (right after a play), so
+    /// it doesn't leave and join again, which would restart every member.
+    /// </summary>
+    private string? LoaderFingerprint(AnimationTimelineSource loaded)
+    {
+        var fingerprint = loaded.Clip.BindingFingerprint;
+        if (fingerprint.Length == 0)
+            return null;
+        if (loaderFingerprint == fingerprint && loaderTimeline == session.Playback.Timeline)
+            return fingerprint;
+        if (session.Playback.CurrentTime(fingerprint) == null)
+            return null;
+        loaderFingerprint = fingerprint;
+        loaderTimeline = session.Playback.Timeline;
+        return fingerprint;
     }
 
     private void UpdateMember(TimelineEditor current, AnimationTimelineSource loaded)
     {
-        ClearMember();
+        memberFingerprint = null;
+        memberLength = null;
         try
         {
             if (!session.Playback.Active)
+            {
+                loaderFingerprint = null;
                 return;
-            var fingerprint = previewFingerprint ??
-                              (loaded.Clip.BindingFingerprint.Length > 0 && session.Playback.CurrentTime(loaded.Clip.BindingFingerprint) != null
-                                  ? loaded.Clip.BindingFingerprint : null);
+            }
+            var fingerprint = previewFingerprint ?? LoaderFingerprint(loaded);
             if (fingerprint == null)
                 return;
             var frames = liveStarted && LiveLength(current.Document) is > 0 and var live ? live : builtDocument?.Length ?? current.Document.Length;
@@ -263,7 +292,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         var available = PlaybackAvailable(out var reason);
         return !available ? reason
             : session.Editor?.PastEnd == true ? PastEnd
-            : session.ReadOnly ? "Wait for the save to finish."
+            : session.Busy ? "Wait for the save to finish."
             : previewJob ? "The preview is being built."
             : session.Animations!.Busy ? "Another edit is running. Wait for it to end."
             : session.Preview.Busy ? "The preview is busy."
@@ -410,7 +439,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         // The preview plays the built file through a temporary mod; Live's swapped motion must go first, and comes back over the build.
         // With live (a face opened on its own) Live starts over it once it plays.
         var relive = liveWanted || live;
-        StopLive();
+        // Live stops only once the preview is sure to start: a refusal below leaves it on.
         ushort? actor;
         try { actor = session.Playback.ActorIndex(); }
         catch (InvalidOperationException e)
@@ -471,6 +500,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             previewError = PreviewFiles.Refusal(holder);
             return;
         }
+        StopLive();
         session.Files?.Set(session.WorkspaceId, session.ActorName(), target.Capture.CollectionId, gamePaths, () => previewJob || session.Preview.Active);
         var speed = speedPercent / 100f;
         var generation = ++previewGeneration;
@@ -638,6 +668,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         ClearMember();
         var redraw = previewRedrawn ? previewActor : null;
         previewRedrawn = false;
+        // A clip the loader plays later replays on the workspace's actor, never this preview's.
+        previewActor = null;
+        previewFace = false;
         StopTemporaryMod(redraw);
     }
 
@@ -833,7 +866,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             return loaded.FaceProblem ?? "This expression's face can't be edited.";
         if (!available)
             return reason;
-        if (session.ReadOnly)
+        // Busy, not ReadOnly: past this clip's end in the play group Live keeps showing its last frame.
+        if (session.Busy)
             return "Wait for the save to finish.";
         if (loaded.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
             return loaded.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source first.";
