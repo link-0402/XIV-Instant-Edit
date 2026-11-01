@@ -3190,3 +3190,17 @@ only).
   (missing) within 5 seconds.
 - [x] 9 In Penumbra, give "Aria Rose" its own Individual assignment to None; Spawn the preset (its collection applies
   while spawned), then Despawn: the Individual entry for "Aria Rose" is None again, not removed.
+
+## Partner Timeline (pending)
+
+Target a spawned partner in GPose and the Timeline window shows its own workspace: its own clip, unsaved edits, Preview
+and Live, under one playhead with yours. Spec: docs/superpowers/specs/2026-10-31-partner-timeline-design.md (local
+only).
+
+- [ ] 1 Open a partner mod's two halves, one on you and one on the partner, with Live on both: pausing and stepping puts
+  both on one frame, and the contact points line up.
+- [ ] 2 Save the partner's half in place: the file in its preset's collection changes, and the partner is redrawn with it.
+- [ ] 3 Save the partner's half as a new mod: it lands in the partner's collection.
+- [ ] 4 Record the partner: the recorded bones are unscaled, and its Customize+ proportions come back afterwards.
+- [ ] 5 Despawn with unsaved edits, then spawn again: the clip and edits come back; saving works.
+- [ ] 6 Target the partner, then back to you with edits on both: closing the window asks once, naming both.
