@@ -33,15 +33,13 @@ public static class EffectPresets
         return new PresetResult(doc, changes, warnings, textures);
     }
 
-    /// <summary>Switches the shader and fits the material to it; the fitting notes become changes.</summary>
-    private static MaterialDocument Switch(MaterialDocument doc, string package, List<string> changes)
+    /// <summary>Switches the shader, fits the material to it and fills the slots it leaves empty; the fitting notes become changes.</summary>
+    private static MaterialDocument Switch(PresetContext context, MaterialDocument doc, string package, List<string> changes, List<PresetTexture> textures)
     {
         if (doc.ShaderPackage.Equals(package, StringComparison.OrdinalIgnoreCase) || ShaderPackages.Get(package) is not { } facts)
             return doc;
-        var (switched, notes) = MaterialSession.Reconcile(doc.WithShaderPackage(package), facts);
         changes.Add($"Shader is now {package}.");
-        changes.AddRange(notes);
-        return switched;
+        return SwitchShader(context, doc, facts, changes, textures);
     }
 
     private sealed class Metal : MaterialEffectPreset
@@ -124,7 +122,7 @@ public static class EffectPresets
             var changes = new List<string>();
             var textures = new List<PresetTexture>();
             var (doc, madeIndex) = WithMissingTextures(context, context.Doc, [NormalSampler, MaskSampler, IndexSampler], changes, textures);
-            doc = Switch(doc, "characterscroll.shpk", changes);
+            doc = Switch(context, doc, "characterscroll.shpk", changes, textures);
             doc = doc.WithKey(ReflectionSource, Catchlight);
             var existing = doc.Slots.FirstOrDefault(slot => slot.SamplerId == CatchlightSampler && slot.Path.Length > 0);
             if (existing == null)
@@ -159,7 +157,7 @@ public static class EffectPresets
             var changes = new List<string>();
             var textures = new List<PresetTexture>();
             var (doc, _) = WithMissingTextures(context, context.Doc, [NormalSampler, MaskSampler, IndexSampler], changes, textures);
-            doc = Switch(doc, "characterglass.shpk", changes);
+            doc = Switch(context, doc, "characterglass.shpk", changes, textures);
             doc = doc.WithConstant(0x7801E004, [1.5f]).WithConstant(0xC4647F37, [0.1f]).WithFlags(doc.ShaderFlags | Translucent);
             changes.Add("Refraction 1.5, glass thickness 0.1, translucent.");
             return Result(doc, changes, [], null, [.. textures]);
@@ -203,9 +201,10 @@ public static class EffectPresets
             var changes = new List<string>();
             var textures = new List<PresetTexture>();
             var (doc, _) = WithMissingTextures(context, context.Doc, [NormalSampler], changes, textures);
-            doc = Switch(doc, "characterreflection.shpk", changes);
+            // Before the switch, so the switch keeps it rather than filling the slot itself.
             doc = WithSamplerPath(doc, CatchlightSampler, MaterialPatcher.MatcapLibraryDefault);
             changes.Add($"The catchlight texture is {MaterialPatcher.MatcapLibraryDefault}. Pick another from the matcap library in Textures.");
+            doc = Switch(context, doc, "characterreflection.shpk", changes, textures);
             return Result(doc, changes, [], null, [.. textures]);
         }
     }

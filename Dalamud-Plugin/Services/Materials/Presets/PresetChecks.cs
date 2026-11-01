@@ -1,5 +1,6 @@
 using System.Numerics;
 using InstantEdit.Services.Previews;
+using InstantEdit.Studio.Services;
 
 namespace InstantEdit.Services.Materials.Presets;
 
@@ -10,6 +11,10 @@ public static class PresetChecks
     public const uint MaskSampler = 0x8A4E82B6;
     public const uint IndexSampler = 0x565F8FD8;
     public const uint CatchlightSampler = 0xFEA0F3D2;
+    public const uint DiffuseSampler = 0x115306BE;
+    public const uint FlowSampler = 0xA7E197F6;
+    public const uint Normal2Sampler = 0x0261CDCB;
+    public const uint WrinklesSampler = 0xB3F13975;
     public const uint EmissiveColor = 0x38A64362;
     public const uint TileIndex = 0x4255F2F4;
     public const uint TileScale = 0x2E60B071;
@@ -124,26 +129,63 @@ public static class PresetChecks
     public static (MaterialDocument Doc, bool MadeIndex) WithMissingTextures(PresetContext context, MaterialDocument doc, uint[] samplers, List<string> changes,
         List<PresetTexture> textures)
     {
-        var madeIndex = false;
+        var missing = samplers.Where(sampler => !doc.Slots.Any(slot => slot.SamplerId == sampler && slot.Path.Length > 0)).ToArray();
+        return (WithPlainTextures(context, doc, missing, changes, textures), missing.Contains(IndexSampler));
+    }
+
+    /// <summary>
+    /// Switches the material to <paramref name="facts"/>' shader and fits it (<see cref="MaterialSession.Reconcile"/>),
+    /// then gives every slot the new shader samples a plain texture when it has none: also the index slot
+    /// the fitting points at a file nothing has. The fitting notes become changes.
+    /// </summary>
+    public static MaterialDocument SwitchShader(PresetContext context, MaterialDocument doc, ShaderPackageFacts facts, List<string> changes, List<PresetTexture> textures)
+    {
+        var (switched, notes) = MaterialSession.Reconcile(doc.WithShaderPackage(facts.Name), facts);
+        var taken = context.PathTaken ?? (_ => false);
+        var missing = facts.Samplers.Select(sampler => sampler.Id)
+            .Where(id => facts.Samples(id, switched.Keys) && !switched.Slots.Any(slot => slot.SamplerId == id && slot.Path.Length > 0
+                && (doc.Slots.Any(old => old.SamplerId == id && old.Path == slot.Path) || taken(slot.Path))))
+            .ToArray();
+        changes.AddRange(missing.Contains(IndexSampler)
+            ? notes.Where(note => !note.Contains("Make that texture", StringComparison.Ordinal) && !note.Contains("needs an Index texture", StringComparison.Ordinal))
+            : notes);
+        return WithPlainTextures(context, switched, missing, changes, textures);
+    }
+
+    /// <summary>Points each of <paramref name="samplers"/> at a plain texture made beside the material; samplers with none are left as they are.</summary>
+    private static MaterialDocument WithPlainTextures(PresetContext context, MaterialDocument doc, uint[] samplers, List<string> changes, List<PresetTexture> textures)
+    {
         foreach (var sampler in samplers)
         {
-            if (doc.Slots.Any(slot => slot.SamplerId == sampler && slot.Path.Length > 0))
-                continue;
-            var (label, suffix, bytes, note) = sampler switch
+            if (sampler == CatchlightSampler && NoPixelAlpha(doc.ShaderPackage))
             {
-                NormalSampler => ("Flat normal", "_n.tex", Solid(255, 128, 128), "a flat normal map"),
-                MaskSampler => ("Neutral mask", "_m.tex", Solid(255, 128, 255), "a neutral mask"),
-                IndexSampler => ("Pair 1 index", "_id.tex", Solid(0, 255, 0), "an index texture that shows pair 1 everywhere"),
-                _ => throw new ArgumentOutOfRangeException(nameof(samplers), $"No plain texture for sampler 0x{sampler:X8}."),
-            };
+                doc = WithSamplerPath(doc, sampler, MaterialPatcher.MatcapLibraryDefault);
+                changes.Add($"The catchlight texture is {MaterialPatcher.MatcapLibraryDefault}. Pick another from the matcap library in Textures.");
+                continue;
+            }
+            if (PlainTexture(sampler) is not var (label, suffix, bytes, note))
+                continue;
             var path = NewTexturePath(context, suffix);
             doc = WithSamplerPath(doc, sampler, path);
             textures.Add(new PresetTexture(label, path, bytes));
             changes.Add($"Added {note} ({path}). Replace it with your own later.");
-            madeIndex |= sampler == IndexSampler;
         }
-        return (doc, madeIndex);
+        return doc;
     }
+
+    /// <summary>The plain texture a slot gets when a setup or shader switch leaves it empty; null for slots with none.</summary>
+    private static (string Label, string Suffix, byte[] Bytes, string Note)? PlainTexture(uint sampler) => sampler switch
+    {
+        NormalSampler => ("Flat normal", "_n.tex", Solid(255, 128, 128), "a flat normal map"),
+        MaskSampler => ("Neutral mask", "_m.tex", Solid(255, 128, 255), "a neutral mask"),
+        IndexSampler => ("Pair 1 index", "_id.tex", Solid(0, 255, 0), "an index texture that shows pair 1 everywhere"),
+        DiffuseSampler => ("White diffuse", "_d.tex", Solid(255, 255, 255), "a white diffuse texture"),
+        FlowSampler => ("Still flow", "_f.tex", Solid(0, 128, 128), "a flow map that doesn't move"),
+        Normal2Sampler => ("Flat second normal", "_n2.tex", Solid(255, 128, 128), "a flat second normal map"),
+        WrinklesSampler => ("No wrinkles", "_wm.tex", Solid(0, 0, 0), "an empty wrinkles mask"),
+        CatchlightSampler => ("Black catchlight", "_fx.tex", Solid(0, 0, 0), "a black catchlight texture"),
+        _ => null,
+    };
 
     /// <summary>A 4 x 4 texture of one colour, BGRA with mipmaps.</summary>
     private static byte[] Solid(byte blue, byte green, byte red)

@@ -199,9 +199,11 @@ internal static partial class MaterialEditorScenarios
     }
 
     /// <summary>The Mask material with no textures at all, on the matcap shader (no colour rows), like a bare matcap mod.</summary>
-    private static MaterialDocument BareMatcapDocument()
+    private static MaterialDocument BareMatcapDocument() => BareMaterial(PresetDocument(MaskPreset).WithShaderPackage("characterreflection.shpk").WithTable(null));
+
+    /// <summary>The material with every texture slot removed.</summary>
+    private static MaterialDocument BareMaterial(MaterialDocument doc)
     {
-        var doc = PresetDocument(MaskPreset).WithShaderPackage("characterreflection.shpk").WithTable(null);
         while (doc.Slots.Count > 0)
             doc = doc.WithoutSlot(doc.Slots.Count - 1);
         return doc;
@@ -240,6 +242,38 @@ internal static partial class MaterialEditorScenarios
         var taken = PresetNamed("Matcap").Apply(Context(bare) with { PathTaken = path => path == normalPath }, RowTarget.All);
         Require(taken.Doc.ShaderPackage == "characterreflection.shpk" && taken.NewTextures.Single().GamePath == normalPath[..^4] + "_ie.tex",
             "Matcap makes only the normal map, beside a path that's taken");
+        var matcap = PresetNamed("Matcap").Apply(Context(BareMaterial(PresetDocument(MaskPreset))), RowTarget.All);
+        Require(matcap.Doc.ShaderPackage == "characterreflection.shpk" && matcap.NewTextures.Count == 2
+                && matcap.NewTextures.Any(texture => texture.GamePath.EndsWith("_m.tex", StringComparison.Ordinal))
+                && matcap.Doc.Slots.Single(slot => slot.SamplerId == CatchlightSampler).Path == InstantEdit.Studio.Services.MaterialPatcher.MatcapLibraryDefault
+                && matcap.Changes.Count(change => change.Contains("catchlight", StringComparison.Ordinal)) == 1,
+            "Matcap from another shader also makes the mask the matcap shader samples, and names the library catchlight once");
+
+        // A switch from the Shader list fills the slots the new shader samples, and the index the fitting points at a missing file (2026-10-31).
+        var switchChanges = new List<string>();
+        var switchTextures = new List<PresetTexture>();
+        var hairDoc = PresetDocument(HairPreset);
+        var toCharacter = PresetChecks.SwitchShader(Context(hairDoc), hairDoc, ShaderPackages.Get("character.shpk")!, switchChanges, switchTextures);
+        var madeIndex = switchTextures.SingleOrDefault(texture => texture.GamePath.EndsWith("_id.tex", StringComparison.Ordinal));
+        Require(toCharacter.ShaderPackage == "character.shpk" && madeIndex != null
+                && toCharacter.Slots.Single(slot => slot.SamplerId == PresetChecks.IndexSampler).Path == madeIndex.GamePath
+                && !switchChanges.Any(change => change.Contains("Make that texture", StringComparison.Ordinal)),
+            "switching hair to character.shpk makes the index texture instead of pointing at one nothing has");
+        var keptChanges = new List<string>();
+        var keptTextures = new List<PresetTexture>();
+        var keptIndex = PresetChecks.SwitchShader(Context(hairDoc) with { PathTaken = _ => true }, hairDoc, ShaderPackages.Get("character.shpk")!, keptChanges, keptTextures);
+        Require(keptTextures.All(texture => !texture.GamePath.Contains("_id", StringComparison.Ordinal))
+                && keptIndex.Slots.Single(slot => slot.SamplerId == PresetChecks.IndexSampler).Path == "chara/human/c0101/obj/hair/h0001/texture/c0101h0001_hir_id.tex",
+            "an index the mod or game already has is kept");
+        var bareChanges = new List<string>();
+        var bareTextures = new List<PresetTexture>();
+        var bareSwitch = PresetChecks.SwitchShader(Context(bare), bare, ShaderPackages.Get("character.shpk")!, bareChanges, bareTextures);
+        Require(bareTextures.Count == 3 && bareTextures.All(texture => bareSwitch.Slots.Any(slot => slot.Path == texture.GamePath))
+                && !bareChanges.Any(change => change.Contains("needs an Index texture", StringComparison.Ordinal)),
+            "switching a bare material makes its normal, mask and index textures");
+        var fullTextures = new List<PresetTexture>();
+        _ = PresetChecks.SwitchShader(Context(PresetDocument(MaskPreset)), PresetDocument(MaskPreset), ShaderPackages.Get("characterglass.shpk")!, [], fullTextures);
+        Require(fullTextures.Count == 0, "a switch makes no textures when the material has them all");
         var glass = PresetNamed("Glass").Apply(Context(bare), RowTarget.All);
         Require(glass.Doc.ShaderPackage == "characterglass.shpk" && glass.NewTextures.Count == 3 && glass.Doc.Table != null,
             "Glass on a bare material makes normal, mask and index textures and gets a colour table");

@@ -71,7 +71,7 @@ public static class ShaderLabels
     private static readonly ConstantLabel[] ConstantTable =
     [
         C(0x2C2A34DD, "g_DiffuseColor", "Base colour", "Tints the base colour.", ValueKind.Color, Surface, 0, 4),
-        C(0x29AC0223, "g_AlphaThreshold", "Alpha cutoff", "Pixels under this alpha are not drawn.", ValueKind.Percent, Alpha, 0, 1),
+        C(0x29AC0223, "g_AlphaThreshold", "Alpha cutoff", "Pixels under this alpha are not drawn.",ValueKind.Percent, Alpha, 0, 2),
         C(0xCB0338DC, "g_SpecularColorMask", "Shine colour", "Tints the shine.", ValueKind.Color, Surface, 0, 4),
         C(0xD925FF32, "g_ShadowAlphaThreshold", "Shadow cutoff", "Pixels under this alpha cast no shadow.", ValueKind.Float, Shadows, 0, 2),
         C(0x11C90091, "g_WhiteEyeColor", "Eye white colour", "Colour of the white of the eye.", ValueKind.Color, Iris, 0, 4),

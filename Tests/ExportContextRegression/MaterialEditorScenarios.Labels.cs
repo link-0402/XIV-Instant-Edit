@@ -67,8 +67,8 @@ internal static partial class MaterialEditorScenarios
     private static void CheckKinds()
     {
         Require(ShaderLabels.Constant(0x2C2A34DD).Kind == ValueKind.Color, "the diffuse colour is a colour");
-        Require(ShaderLabels.Constant(0x29AC0223) is { Kind: ValueKind.Percent or ValueKind.Float, Min: 0f, Max: 1f, Group: "Alpha" },
-            "the alpha cutoff runs from 0 to 1 in the Alpha group");
+        Require(ShaderLabels.Constant(0x29AC0223) is { Kind: ValueKind.Percent or ValueKind.Float, Min: 0f, Max: 2f, Group: "Alpha" },
+            "the alpha cutoff runs from 0 to 2 in the Alpha group, since values over 1 still change it");
         Require(ShaderLabels.Constant(0x4255F2F4).Kind == ValueKind.TileIndex && ShaderLabels.Constant(0x59BDA0B1).Kind == ValueKind.ShaderId,
             "tile index and shader id get their own pickers");
         uint[] scrollIds = [0x43345395, 0x4172EDCC, 0x738A241C, 0x71CC9A45, 0xDA3D022F, 0xD87BBC76, 0xEA8375A6, 0xE8C5CBFF];

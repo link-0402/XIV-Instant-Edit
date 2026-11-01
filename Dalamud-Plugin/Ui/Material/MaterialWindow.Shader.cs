@@ -2,6 +2,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Materials;
+using InstantEdit.Services.Materials.Presets;
 using InstantEdit.Studio.Models;
 
 namespace InstantEdit.Ui.Material;
@@ -120,13 +121,15 @@ internal sealed partial class MaterialWindow
     {
         if (ShaderPackages.Get(def.ShaderPackName) is not { } facts)
             return;
-        IReadOnlyList<string> notes = [];
-        _ = current.Apply(doc =>
-        {
-            var (switched, changed) = MaterialSession.Reconcile(doc.WithShaderPackage(def.ShaderPackName), facts);
-            notes = changed;
-            return switched;
-        }, "Shader");
+        var doc = current.Current;
+        var source = current.Source;
+        var context = new PresetContext(doc, facts, usage, selectedPair, mask, source.GamePath) { PathTaken = path => TextureTaken(current, source, path) };
+        var notes = new List<string>();
+        var textures = new List<PresetTexture>();
+        var switched = PresetChecks.SwitchShader(context, doc, facts, notes, textures);
+        foreach (var texture in textures)
+            current.AddNewFile(texture.GamePath, texture.Bytes);
+        _ = current.Apply(_ => switched, "Shader");
         Say(notes.Count == 0 ? FeedbackSeverity.Info : FeedbackSeverity.Warning,
             $"Shader is now {def.DisplayName}." + (notes.Count == 0 ? string.Empty : " " + string.Join(" ", notes)));
     }

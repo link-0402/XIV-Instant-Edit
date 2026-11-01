@@ -347,6 +347,27 @@ is the glow colour times the scene's glow scale only.
   colour; no row's base colour or base brightness changes, so no base swatch gets brighter; one undo
   step.)
 
+## Alpha cutoff range and plain textures on a shader switch (2026-10-31, pending)
+
+- [x] The Alpha cutoff slider goes to 200%; on a cut-out material, values over 100% still hide more
+  of it, and the saved material keeps the value.
+  (XIV Bridge materials/21, Release 2026-10-31 22:03: the slider's range is 0 to 200 %, and 150 % saved into a test mod
+  reads back as 1.5. Hiding more of a cut-out material over 100 %: by eye.)
+- [x] Picking another shader in the Shader list fills every slot the new shader samples with a plain
+  texture (flat normal, neutral mask, pair 1 index, white diffuse and so on), named after the
+  material; the message lists each one. Hair to Character: the index is made instead of the old
+  "Make that texture" note. The textures preview and save with the material; undo drops them.
+  (XIV Bridge materials/21, Release 2026-10-31: from a gear material and a hair material to every other shader, each slot
+  the new shader samples has a texture; the hair material gets a pair 1 index named after it on each character shader,
+  named in the message; Undo drops it from the save; the preview shows it and Save writes it beside the material, mapped
+  by the mod. Hair to Character makes the index with no "Make that texture" note. Note: an undone switch's plain texture
+  keeps its name taken, so switching again names the next one _ie, _ie2 and so on, up to _ie7 in the test.)
+- [x] Shader setups from another shader do the same for slots they didn't add themselves (Matcap
+  from Character: normal and mask, the library catchlight named once).
+  (XIV Bridge materials/21, Release 2026-10-31: Matcap on a character.shpk gear material keeps its normal map and mask,
+  every slot the reflection shader samples has a texture, the catchlight is chara/common/texture/matcaplib_a.tex and the
+  message names it once.)
+
 ## Finish (Task 13, pending)
 
 - [x] Dots menu > Clean up ignored settings lists what it would remove first; Clean up applies it as
