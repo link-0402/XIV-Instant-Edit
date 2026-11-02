@@ -578,6 +578,35 @@ internal static class LinkLayerFixture
         links.UpdateViews(unreadable, true, _ => true);
         check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.Unreadable && mySession.Links.For("m1") == null && !mySession.LinksBuilding &&
               warned.Count == 1, "service: a track that can't be built leaves the link off, logged once");
+
+        // A look at the partner's hand: its track from the partner's own layers but links and looks at a partner, at the partner's own size.
+        var look = new MotionLayer("m1", MotionLayerKind.LookAt, "Look at 1", 0, 30, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear,
+            Bones: [.. MotionLooks.Chain], Look: new MotionLook("j_te_l", 80, new MotionLookPartner(Partner, Hug, 1)));
+        var lookBack = look with { Key = "m2", Look = new MotionLook("j_te_r", 80, new MotionLookPartner(null, Hug, 1)) };
+        var looking = Targets(mine with { Motion = [look] }, theirs with { Motion = [nudge, lookBack, Layer(new MotionLink("j_te_l", null, "j_te_r", Hug, 1), key: "m3")] },
+            theirSize: 1.2f);
+        links.UpdateViews(looking, true, _ => true);
+        for (var until = Environment.TickCount64 + 10_000; (mySession.LinksBuilding || theirSession.LinksBuilding) && Environment.TickCount64 < until;)
+        {
+            Thread.Sleep(5);
+            links.UpdateViews(looking, true, _ => true);
+        }
+        var expectedLook = MotionLinks.Track(theirPlayed, [nudge], "j_te_l", 1.2f, default);
+        var unscaled = MotionLinks.Track(theirPlayed, [nudge], "j_te_l", 1, default);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.On && mySession.Links.For("m1") is { } lookTrack &&
+              lookTrack.After.SequenceEqual(expectedLook.After) && lookTrack.Before.SequenceEqual(expectedLook.Before) &&
+              Vector3.Distance(lookTrack.After[0].Position, unscaled.After[0].Position * 1.2f) < 1e-5f && lookTrack.After[0] != unscaled.After[0],
+            "service: a look at a partner gets its track from the partner's own edits, at the partners' size ratio");
+        check(theirSession.LinkStates.GetValueOrDefault("m2") == LinkState.On && theirSession.Links.For("m2") is { } backTrack &&
+              backTrack.After.SequenceEqual(MotionLinks.Track(played, [], "j_te_r", 1 / 1.2f, default).After),
+            "service: two looks at each other each read the other without its look");
+        var lookMissing = Targets(mine with { Motion = [look with { Look = look.Look! with { Follow = "j_nothing" } }] }, theirs);
+        Settle(lookMissing);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.NoBone && mySession.Links.For("m1") == null,
+            "service: a look at a bone the partner lacks is off as no bone");
+        links.UpdateViews([Target(you, mine with { Motion = [look] }, played, 1, mySession)], true, _ => true);
+        check(mySession.LinkStates.GetValueOrDefault("m1") == LinkState.NotOpen && mySession.Links.For("m1") == null,
+            "service: a look whose partner isn't open is off as not open");
     }
 
     /// <summary>A link layer added to a document, as a link back is: the document's own next key, and both feet for the hips.</summary>
@@ -982,6 +1011,12 @@ internal static class LinkLayerFixture
         check(own.Length == 2 && ReferenceEquals(own[0], above) && ReferenceEquals(own[1], nudge), "links and layers below the link back aren't the partner's own");
         check(MotionLinks.Own(partner, null).SequenceEqual([above, nudge, below]) && MotionLinks.Own([], null).IsEmpty,
             "without a link back every layer but the links is the partner's own");
+        // A look at a partner rides a partner track too, so a link carries none: a link and a look can't feed each other.
+        var lookBack = new MotionLayer("m10", MotionLayerKind.LookAt, "Look at 1", 0, 30, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear,
+            Bones: [.. MotionLooks.Chain], Look: new MotionLook("j_te_r", 80, new MotionLookPartner(null, Hug, 0)));
+        var lookOwn = lookBack with { Key = "m11", Look = new MotionLook("j_te_l") };
+        check(MotionLinks.Own([above, lookBack, lookOwn, nudge], null).SequenceEqual([above, lookOwn, nudge]),
+            "a link carries no look at a partner, and keeps a look at the partner's own bone");
 
         // Tracks from the partner's clip as played: its bone's model transforms, without and with its own edits.
         var clip = Reaching();

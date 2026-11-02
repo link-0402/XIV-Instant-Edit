@@ -119,7 +119,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                     else if (layer.Kind == MotionLayerKind.Noise)
                         SwingFields.DrawNoise(current, layer);
                     else if (layer.Kind == MotionLayerKind.LookAt)
-                        LookFields.Draw(current, layer, skeleton);
+                        LookFields.Draw(current, layer, skeleton, session);
                     else if (layer.Kind == MotionLayerKind.Repeat)
                         RepeatFields.Draw(current, layer);
                     else if (layer.Kind == MotionLayerKind.Spring)
@@ -187,6 +187,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         }
         else if (layer.Kind == MotionLayerKind.LookAt)
         {
+            LookFields.DrawState(layer, session);
             DrawPosing(layer);
             if (layer.Look?.Follow == null)
             {

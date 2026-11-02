@@ -3293,3 +3293,15 @@ game's own update. Plan: tasks/freecam.md (local only).
 - [ ] 7 A Spring layer over a whole looping clip: no jump where the loop starts over. One ending mid-clip without a fade-out
   doesn't pop at its end.
 - [ ] 8 The panel shows Lag, Bounce and Strength and no Turn/Move ticks; with no bones it says "Select bones to spring.".
+
+## Look-at partner (pending)
+
+The target and the partner tracks are covered offline (LookAtFixture, LinkLayerFixture); these checks are the picker, Live and the
+save, with a partner workspace open in GPose.
+
+- [ ] 1 A Look at layer whose Looks at picks "<partner>: Right hand": in Live the head follows the partner's hand as it moves, and the
+  saved clip does too. The overlay draws the target dot on the partner's hand, with no gizmo.
+- [ ] 2 Close the partner's clip: the layer is off, its panel says the partner's clip isn't open, and the save footer says
+  "A look-at follows a partner clip that isn't open.". Open it again: the head follows again.
+- [ ] 3 Two heads looking at each other (each workspace's Look at on the other's head): both turn, and nothing flickers or drifts.
+- [ ] 4 Edit the partner's arm: the look follows the edited hand, and this clip shows as unsaved until saved again.

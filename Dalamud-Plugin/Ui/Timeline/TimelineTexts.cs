@@ -34,8 +34,8 @@ internal sealed class TimelineTexts(TimelineSession session)
     private (TimelineDocument? Document, IReadOnlyDictionary<string, LinkState>? States, string? Text) linkOff;
 
     /// <summary>
-    /// The save footer's line when a link of the open document is off now, so the save leaves that partner's edits out
-    /// (<see cref="TimelineWindowViews.LinkOffWarning"/>); null when none is.
+    /// The save footer's line when a link or a look at a partner of the open document is off now, so the save leaves that partner
+    /// out (<see cref="TimelineWindowViews.LinkOffWarning"/>); null when none is.
     /// </summary>
     public string? LinkOffWarning
     {

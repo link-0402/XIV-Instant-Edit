@@ -108,8 +108,8 @@ internal static class MotionLinks
     public static readonly ImmutableDictionary<string, string> NoPrints = ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
 
     /// <summary>
-    /// The <see cref="LinkTrack.Print"/> of each link layer of <paramref name="motion"/> that is active with <paramref name="links"/>, by
-    /// layer key: what a save or a preview bakes the links as. Links that are off have none.
+    /// The <see cref="LinkTrack.Print"/> of each layer of <paramref name="motion"/> that follows a partner track (<see cref="Tracked"/>) and
+    /// is active with <paramref name="links"/>, by layer key: what a save or a preview bakes the links as. Layers that are off have none.
     /// </summary>
     public static ImmutableDictionary<string, string> Prints(IReadOnlyList<MotionLayer> motion, MotionLinkSet? links)
     {
@@ -117,27 +117,31 @@ internal static class MotionLinks
             return NoPrints;
         var prints = NoPrints.ToBuilder();
         foreach (var layer in motion)
-            if (layer.Kind == MotionLayerKind.Link && MotionEvaluator.Active(layer, links))
+            if (Tracked(layer) && MotionEvaluator.Active(layer, links))
                 prints[layer.Key] = links.For(layer.Key)!.Print;
         return prints.Count == 0 ? NoPrints : prints.ToImmutable();
     }
+
+    /// <summary>Whether <paramref name="layer"/> follows a partner track: a link layer, or a look-at layer that follows a partner.</summary>
+    public static bool Tracked(MotionLayer layer) => layer.Kind == MotionLayerKind.Link || MotionLooks.FollowsPartner(layer);
 
     /// <summary>Whether two sets of prints hold the same links with the same content.</summary>
     public static bool SamePrints(IReadOnlyDictionary<string, string> a, IReadOnlyDictionary<string, string> b) =>
         ReferenceEquals(a, b) || a.Count == b.Count && a.All(pair => b.TryGetValue(pair.Key, out var print) && print == pair.Value);
 
     /// <summary>
-    /// Whether an active link layer of <paramref name="motion"/> follows a track in <paramref name="links"/> whose content isn't the
-    /// print <paramref name="saved"/> holds for it, or has no saved print (it was off when saved) and carries something: the partner
-    /// changed since. A link that is off now counts for nothing.
+    /// Whether an active layer of <paramref name="motion"/> that follows a partner track (<see cref="Tracked"/>) follows one in
+    /// <paramref name="links"/> whose content isn't the print <paramref name="saved"/> holds for it, or has no saved print (it was off
+    /// when saved) and carries something, or is a look at a partner, which turns the head whether or not the partner has edits: the
+    /// partner changed since. A layer that is off now counts for nothing.
     /// </summary>
     public static bool Unsaved(IReadOnlyList<MotionLayer> motion, MotionLinkSet links, IReadOnlyDictionary<string, string> saved)
     {
         if (links.Tracks.IsEmpty)
             return false;
         foreach (var layer in motion)
-            if (layer.Kind == MotionLayerKind.Link && MotionEvaluator.Active(layer, links) && links.For(layer.Key)! is var track &&
-                (saved.TryGetValue(layer.Key, out var print) ? print != track.Print : track.Carries))
+            if (Tracked(layer) && MotionEvaluator.Active(layer, links) && links.For(layer.Key)! is var track &&
+                (saved.TryGetValue(layer.Key, out var print) ? print != track.Print : track.Carries || MotionLooks.FollowsPartner(layer)))
                 return true;
         return false;
     }
@@ -213,7 +217,8 @@ internal static class MotionLinks
 
     /// <summary>
     /// The partner's own edits, what a link carries: its layers above <paramref name="linkBack"/> (all of them when it is null), in
-    /// order, without links. Links never carry links, so two links between the same clips can't feed each other.
+    /// order, without links or looks at a partner. Links never carry what follows a partner track, so two links between the same
+    /// clips, or a link and a look, can't feed each other.
     /// </summary>
     public static ImmutableArray<MotionLayer> Own(IReadOnlyList<MotionLayer> partnerLayers, MotionLayer? linkBack)
     {
@@ -222,7 +227,7 @@ internal static class MotionLinks
         {
             if (linkBack != null && ReferenceEquals(layer, linkBack))
                 break;
-            if (layer.Kind != MotionLayerKind.Link)
+            if (layer.Kind != MotionLayerKind.Link && !MotionLooks.FollowsPartner(layer))
                 own.Add(layer);
         }
         return own.ToImmutable();

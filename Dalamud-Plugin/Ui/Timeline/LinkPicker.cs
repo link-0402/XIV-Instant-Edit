@@ -45,6 +45,9 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
     /// <summary>The other workspaces' ready views. Asking keeps their motion read for a couple of seconds, so ask only where it is shown.</summary>
     public IReadOnlyList<LinkView> Partners() => host.LinkPartners(key);
 
+    /// <summary>The other workspaces with an editable body clip, whose motion may not be read yet; asking reads nothing.</summary>
+    public IReadOnlyList<LinkCandidate> Candidates() => host.LinkCandidates(key);
+
     /// <summary>The ready view of the workspace <paramref name="preset"/> names (null for You); null while it isn't ready.</summary>
     public LinkView? Partner(Guid? preset) => Partners().FirstOrDefault(view => view.Key.Preset == preset);
 

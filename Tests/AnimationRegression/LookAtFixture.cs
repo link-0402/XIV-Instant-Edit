@@ -33,7 +33,137 @@ internal static class LookAtFixture
         Strength(check);
         Follow(check);
         Keyed(check);
+        Partners(check, reject);
+        PartnerTimeline(check);
         Edits(check);
+    }
+
+    private static readonly Guid Aria = new("6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d");
+    private const string Hug = "chara/human/c0101/animation/a0001/bt_common/emote/hug.pap";
+
+    /// <summary>A look at a partner's hand: on Aria's clip, as the link convention names a partner.</summary>
+    private static MotionLook AtPartner(string bone = "j_te_l") => new(bone, 80, new MotionLookPartner(Aria, Hug, 1));
+
+    /// <summary>A partner track whose bone sits at <paramref name="at"/>'s spot at each of <paramref name="samples"/> samples over <paramref name="seconds"/>.</summary>
+    private static LinkTrack PartnerTrack(int samples, float seconds, Func<int, Vector3> at) =>
+        new([.. Enumerable.Range(0, samples).Select(_ => MotionTransform.From(T(Vector3.Zero)))],
+            [.. Enumerable.Range(0, samples).Select(i => MotionTransform.From(T(at(i))))], seconds);
+
+    private static MotionLinkSet Tracks(string key, LinkTrack track) =>
+        new(ImmutableDictionary<string, LinkTrack>.Empty.WithComparers(StringComparer.Ordinal).Add(key, track));
+
+    /// <summary>A look that follows a partner's bone: its target from the partner track, off without one, and what it reads of the partner.</summary>
+    private static void Partners(Action<bool, string> check, Action<Action, string> reject)
+    {
+        void Refused(MotionLayer layer, string what) => reject(() => MotionEvaluator.Validate(layer), what);
+        var layer = Look(AtPartner());
+        MotionEvaluator.Validate(layer);
+        Refused(Look(new MotionLook(null, 80, new MotionLookPartner(Aria, Hug, 1))), "a look at a partner without a bone is refused");
+        Refused(Look(AtPartner(), Spot(0, Vector3.UnitZ)), "a look at a partner with keys is refused");
+        Refused(Look(new MotionLook("j_te_l", 80, new MotionLookPartner(Aria, "", 1))), "a look at a partner without its clip is refused");
+        check(MotionLooks.FollowsPartner(layer) && !MotionLooks.FollowsPartner(Look(new MotionLook("j_te_r"))) && !MotionLooks.FollowsPartner(Look(new MotionLook())),
+            "partner: only a look with a partner follows one");
+        // The partner's bone is the partner's: this skeleton lacks it, or has it under the head, and that's fine.
+        MotionEvaluator.CheckBones([Look(AtPartner("j_nope"))], Rig());
+        MotionEvaluator.CheckBones([Look(AtPartner("j_ago"))], Rig());
+
+        var link = MotionLooks.AsLink(layer);
+        check(link is { Bone: MotionLooks.KeyBone, PartnerBone: "j_te_l", PartnerClip: Hug, PartnerBinding: 1 } && link.Partner == Aria,
+            "partner: a look's track is built as a link from the head to the partner's bone on its clip");
+
+        // PartnerTarget: the partner's bone 1 m to the side and 2 m ahead of the head.
+        var head = HeadAt(Rest());
+        var target = head + new Vector3(1, 0, 2);
+        var track = PartnerTrack(61, 2, _ => target);
+        var links = Tracks("m1", track);
+        check(MotionEvaluator.Active(layer, links) && MotionLooks.MayChange(layer), "partner: a look at a partner is on with its track");
+        var looked = Still().Clone();
+        MotionEvaluator.Apply(looked, [layer], links: links);
+        foreach (var sample in new[] { 0, 30, 60 })
+            check(Off(Pose(looked, sample), target) < 2, $"partner: the head turns toward the partner's bone at frame {sample} ({Off(Pose(looked, sample), target):0.###} degrees off)");
+        var at = MotionEvaluator.ApplyAt(Rig(), Rest(), [layer], 30, 0, 60, links: links);
+        check(Enumerable.Range(0, Rest().Length).All(b => Near(at[b], looked.Get(30, b))), "partner: a look at a partner at a frame is the look over the clip there");
+
+        // PartnerOff: without its track the layer is off.
+        check(!MotionEvaluator.Active(layer) && !MotionEvaluator.Active(layer, MotionLinkSet.Empty) && !MotionEvaluator.Active(layer, Tracks("m2", track)),
+            "partner: without its track a look at a partner is off");
+        var off = Still().Clone();
+        MotionEvaluator.Apply(off, [layer]);
+        check(Enumerable.Range(0, off.Samples).All(i => Enumerable.Range(0, off.Bones).All(b => off.Get(i, b) == Still().Get(i, b))),
+            "partner: without its track the clip stays as it was");
+        check(!MotionLooks.MayChange(layer with { Enabled = false }) && !MotionLooks.MayChange(layer with { Amount = 0 }) &&
+              !MotionLooks.MayChange(layer with { Bones = [] }) && !MotionLooks.MayChange(Look(new MotionLook("j_te_r"))),
+            "partner: a look at a partner that is off itself may change nothing, and a look without one isn't asked");
+
+        // PartnerShorter: a partner clip half as long holds its last sample from its end on.
+        var shorter = PartnerTrack(31, 1, i => head + new Vector3(-1 + i / 15f, 0, 2));
+        var last = head + new Vector3(1, 0, 2);
+        var held = Still().Clone();
+        MotionEvaluator.Apply(held, [layer], links: Tracks("m1", shorter));
+        check(Off(Pose(held, 60), last) < 2 && Off(Pose(held, 45), last) < 2 && Off(Pose(held, 15), head + new Vector3(0, 0, 2)) < 2,
+            $"partner: past a shorter partner's end the head holds on its last sample ({Off(Pose(held, 60), last):0.###} degrees off)");
+
+        // The partner's own layers a look reads: no links and no looks at a partner, so two looks at each other don't feed each other.
+        var nudge = new MotionLayer("p1", MotionLayerKind.Offset, "Offset 1", 0, 60, 0, 0, 1, PoseComponents.All, MotionInterpolation.Linear,
+            Keys: [new MotionKey(0, ImmutableDictionary<string, BoneTransform>.Empty.Add("j_te_r", T(new Vector3(.05f, 0, 0))))]);
+        var theirLink = new MotionLayer("p2", MotionLayerKind.Link, "Link 1", 0, 60, 0, 0, 1, PoseComponents.None, MotionInterpolation.Linear,
+            Link: new MotionLink("j_te_r", null, "j_te_l", Hug, 1));
+        var theirLook = Look(new MotionLook("j_kao", 80, new MotionLookPartner(null, Hug, 1))) with { Key = "p3" };
+        var ownLook = Look(new MotionLook("j_te_r")) with { Key = "p4" };
+        var later = nudge with { Key = "p5" };
+        var own = MotionLooks.PartnerOwn([nudge, theirLink, theirLook, ownLook, later]);
+        check(own.Length == 3 && ReferenceEquals(own[0], nudge) && ReferenceEquals(own[1], ownLook) && ReferenceEquals(own[2], later) && MotionLooks.PartnerOwn([]).IsEmpty,
+            "partner: a look reads every partner layer but links and looks at a partner, in order");
+
+        // What a save bakes the look as: its track's print, as a link's.
+        var prints = MotionLinks.Prints([layer], links);
+        check(prints.Count == 1 && prints["m1"] == track.Print && MotionLinks.Prints([layer], MotionLinkSet.Empty).Count == 0 &&
+              MotionLinks.Unsaved([layer], links, MotionLinks.NoPrints) && !MotionLinks.Unsaved([layer], links, prints),
+            "partner: a look at a partner is saved with its track's print, as a link is");
+        // A partner without edits still gives the head a target: a look off at the save is unsaved once its track comes.
+        var unedited = new LinkTrack(track.After, track.After, track.Duration);
+        check(!unedited.Carries && MotionLinks.Unsaved([layer], Tracks("m1", unedited), MotionLinks.NoPrints),
+            "partner: a look saved while off is unsaved once its partner opens, edits or not");
+        var doc = new TimelineDocument(60, 60, null, [], 1) { Motion = [layer] };
+        check(doc.MotionChanged && !(doc with { Motion = [layer with { Enabled = false }] }).MotionChanged,
+            "partner: a document with a look at a partner changes the motion, track or not");
+        var animated = MotionSymmetry.Animated(Rig(), [0], [layer], 1);
+        check(animated != null && animated.Contains(Head) && animated.Contains(Neck), "partner: a symmetry after a look at a partner counts the head chain as moving");
+    }
+
+    /// <summary>A look at a partner in the Timeline: its save warning, and its track inputs kept apart from a link's.</summary>
+    private static void PartnerTimeline(Action<bool, string> check)
+    {
+        var layer = Look(AtPartner());
+        var doc = new TimelineDocument(60, 60, null, [], 1) { Motion = [layer] };
+        ImmutableDictionary<string, LinkState> States(LinkState state) => ImmutableDictionary<string, LinkState>.Empty.Add("m1", state);
+        string? Names(Guid? preset) => preset == Aria ? "Aria Rose" : null;
+        check(TimelineWindowViews.LinkOffWarning(doc, States(LinkState.NotOpen), Names) == "A look-at follows a partner clip that isn't open." &&
+              TimelineWindowViews.LinkOffWarning(doc, States(LinkState.NoBone), Names) == "A look-at follows a partner clip that isn't open.",
+            "partner: the save footer says when a look at a partner is off");
+        check(TimelineWindowViews.LinkOffWarning(doc, States(LinkState.On), Names) == null &&
+              TimelineWindowViews.LinkOffWarning(doc with { Motion = [layer with { Enabled = false }] }, States(LinkState.NotOpen), Names) == null,
+            "partner: no warning while the look follows its partner, or is off itself");
+        var link = new MotionLayer("m2", MotionLayerKind.Link, "Link 1", 0, 60, 0, 0, 1, PoseComponents.None, MotionInterpolation.Linear,
+            Link: new MotionLink("j_te_r", Aria, "j_te_l", Hug, 1));
+        check(TimelineWindowViews.LinkOffWarning(doc with { Motion = [layer, link] }, States(LinkState.NotOpen).Add("m2", LinkState.NotOpen), Names) ==
+              "The link to Aria Rose is off. Aria Rose's edits aren't in this save.", "partner: a link's warning comes before a look's");
+
+        // The planner: a look's inputs are its link at a ratio of 1, marked as a look.
+        var played = Still();
+        var theirs = new TimelineDocument(60, 60, null, [], 1);
+        var me = new LinkView(WorkspaceKey.Self, "You", Hug, 1, played, doc, false, 1);
+        var partner = new LinkView(new WorkspaceKey(Aria), "Aria Rose", Hug, 1, played, theirs, false, 1.25f);
+        var (state, inputs) = PartnerLinks.Plan(WorkspaceKey.Self, layer, me, partner, true, true);
+        check(state == LinkState.On && inputs is { Look: true, Ratio: 1.25f } && LinkInputs.SameJoin(inputs.Link, MotionLooks.AsLink(layer)) && ReferenceEquals(inputs.PartnerDocument, theirs),
+            "partner: a look plans as a link from the head, at the partners' size ratio");
+        check(!inputs!.Equals(inputs with { Look = false }) && inputs.Equals(inputs with { }) && inputs.GetHashCode() == (inputs with { }).GetHashCode(),
+            "partner: a look's inputs differ from a link's of the same bones");
+        check(PartnerLinks.Plan(WorkspaceKey.Self, layer, me, null, true, true).State == LinkState.NotOpen &&
+              PartnerLinks.Plan(WorkspaceKey.Self, layer, me, partner with { GamePath = "chara/other.pap" }, true, true).State == LinkState.OtherClip,
+            "partner: a look whose partner clip isn't open is off as a link would be");
+        check(PartnerLinks.Plan(WorkspaceKey.Self, Look(new MotionLook("j_te_r")), me, partner, true, true) is { State: LinkState.NotOpen, Inputs: null },
+            "partner: a look without a partner plans nothing");
     }
 
     private static void Validation(Action<bool, string> check, Action<Action, string> reject)
@@ -102,6 +232,19 @@ internal static class LookAtFixture
             try { MotionEvaluator.Validate(older); }
             catch (InvalidDataException) { refused = true; }
             check(older.Look == null && refused && !MotionEvaluator.Active(older), "a look-at layer without Look loads with none and is refused");
+
+            // A look at a partner keeps its partner; a journal from before partners loads with none.
+            var partner = Look(new MotionLook("j_te_l", 70, new MotionLookPartner(Guid.NewGuid(), resource.GamePath, 2)));
+            var partnerRequest = request with { Id = Guid.NewGuid(), Timeline = new AnimationTimelineEdit(true, 0, null, [partner]) };
+            new AnimationJournalStore(temp).Save(new AnimationEditJournal { Id = partnerRequest.Id, Request = AnimationCommitService.RecoveryRequest(partnerRequest) });
+            var partnerLoaded = new AnimationJournalStore(temp).Load().Single(journal => journal.Id == partnerRequest.Id).Request.Timeline!.Motion.Single();
+            check(partnerLoaded.Look == partner.Look && MotionEdits.Same(partnerLoaded, partner), "a journal keeps a look's partner");
+            var partnerPath = Path.Combine(temp, "AnimationEdits", partnerRequest.Id.ToString("N"), "journal.json");
+            var partnerJson = JsonNode.Parse(File.ReadAllText(partnerPath))!.AsObject();
+            check(partnerJson["Request"]!["Timeline"]!["Motion"]![0]!["Look"]!.AsObject().Remove("Partner"), "a journal stores a look's partner as Partner");
+            File.WriteAllText(partnerPath, partnerJson.ToJsonString());
+            var before = new AnimationJournalStore(temp).Load().Single(journal => journal.Id == partnerRequest.Id).Request.Timeline!.Motion.Single();
+            check(before.Look == new MotionLook("j_te_l", 70), "a look from before partners loads with none");
         }
         finally { Directory.Delete(temp, true); }
 
@@ -109,6 +252,11 @@ internal static class LookAtFixture
         check(MotionEdits.Same(a, a with { Look = new MotionLook() }) && !MotionEdits.Same(a, a with { Look = new MotionLook(Limit: 60) }) &&
               !MotionEdits.Same(a, a with { Look = new MotionLook("j_te_r") }) && !MotionEdits.Same(a, a with { Look = null }),
             "layers differ by their look's limit and followed bone");
+        var p = Look(new MotionLook("j_te_r", 80, new MotionLookPartner(null, "chara/a.pap", 1)));
+        check(MotionEdits.Same(p, p with { Look = p.Look! with { Partner = new MotionLookPartner(null, "chara/a.pap", 1) } }) &&
+              !MotionEdits.Same(p, p with { Look = p.Look! with { Partner = p.Look.Partner! with { Binding = 2 } } }) &&
+              !MotionEdits.Same(p, p with { Look = p.Look! with { Partner = null } }),
+            "layers differ by their look's partner");
     }
 
     private static void Axes(Action<bool, string> check)

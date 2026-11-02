@@ -189,11 +189,13 @@ internal static partial class TimelineWindowViews
     /// <summary>
     /// The save footer's line when a link of <paramref name="doc"/> that may change the motion is off now (its state in
     /// <paramref name="states"/> isn't On): the save leaves that partner's edits out. It names the first such partner, one with a
-    /// name before one whose preset is gone. Null when every link is on or off itself.
+    /// name before one whose preset is gone. Then, when only a look-at that follows a partner is off, that one's line. Null when every
+    /// link and look at a partner is on or off itself.
     /// </summary>
     public static string? LinkOffWarning(TimelineDocument doc, IReadOnlyDictionary<string, LinkState> states, Func<Guid?, string?> nameOf)
     {
         var off = false;
+        var lookOff = false;
         foreach (var layer in doc.Motion)
             if (MotionLinks.MayChange(layer) && states.TryGetValue(layer.Key, out var state) && state != LinkState.On)
             {
@@ -203,7 +205,11 @@ internal static partial class TimelineWindowViews
                         : $"The link to {name} is off. {name}'s edits aren't in this save.";
                 off = true;
             }
-        return off ? "The link to a partner is off. A partner's edits aren't in this save." : null;
+            else
+                lookOff |= MotionLooks.MayChange(layer) && states.TryGetValue(layer.Key, out var looking) && looking != LinkState.On;
+        return off ? "The link to a partner is off. A partner's edits aren't in this save."
+            : lookOff ? "A look-at follows a partner clip that isn't open."
+            : null;
     }
 
     /// <summary>
@@ -820,11 +826,12 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
-    /// Whether <paramref name="layer"/> may change the motion as the views read it: a link once it is on with a pull, whether or not
-    /// its partner's track is there (<see cref="MotionLinks.MayChange"/>), any other kind when it is active.
+    /// Whether <paramref name="layer"/> may change the motion as the views read it: a link, or a look at a partner, once it is on with
+    /// a pull, whether or not its partner's track is there (<see cref="MotionLinks.MayChange"/>, <see cref="MotionLooks.MayChange"/>),
+    /// any other kind when it is active.
     /// </summary>
     private static bool MayChange(MotionLayer layer) =>
-        layer.Kind == MotionLayerKind.Link ? MotionLinks.MayChange(layer) : MotionEvaluator.Active(layer);
+        layer.Kind == MotionLayerKind.Link ? MotionLinks.MayChange(layer) : MotionEvaluator.Active(layer) || MotionLooks.MayChange(layer);
 
     /// <summary>
     /// What stops saving with <paramref name="doc"/>'s bones left out and a repair onto <paramref name="repair"/>,

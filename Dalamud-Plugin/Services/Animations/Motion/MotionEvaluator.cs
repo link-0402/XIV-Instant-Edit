@@ -36,8 +36,8 @@ internal static class MotionEvaluator
 
     /// <summary>
     /// Whether <paramref name="layer"/> changes anything when applied with <paramref name="links"/>. Weight points holding it at 0
-    /// all along leave it out: all at 0, with one on its first frame and one on its last. A link layer needs its track in
-    /// <paramref name="links"/>.
+    /// all along leave it out: all at 0, with one on its first frame and one on its last. A link layer, and a look-at layer that
+    /// follows a partner, needs its track in <paramref name="links"/>.
     /// </summary>
     public static bool Active(MotionLayer layer, MotionLinkSet? links) => Weighted(layer) && layer.Kind switch
     {
@@ -60,8 +60,7 @@ internal static class MotionEvaluator
         MotionLayerKind.Noise => layer.Amount > 0 && layer.Noise is { } noise && !layer.Bones.IsEmpty &&
                                  ((noise.Tilt > 0 || noise.Twist > 0) && layer.Components.HasFlag(PoseComponents.Rotation) ||
                                   noise.Slide > 0 && layer.Components.HasFlag(PoseComponents.Position)),
-        MotionLayerKind.LookAt => layer.Amount > 0 && layer.Look is { Limit: > 0 } look && !layer.Bones.IsEmpty &&
-                                  (look.Follow != null || layer.Keys.Any(key => key.Bones.ContainsKey(MotionLooks.KeyBone))),
+        MotionLayerKind.LookAt => MotionLooks.Turns(layer) && (!MotionLooks.FollowsPartner(layer) || links?.For(layer.Key) != null),
         MotionLayerKind.Link => layer.Amount > 0 && layer.Link != null && links?.For(layer.Key) != null,
         MotionLayerKind.Repeat => layer.Amount > 0 && layer.Repeat is { } repeat && MotionRepeats.Length(repeat) >= 2 &&
                                   (layer.Components & PoseComponents.All) != PoseComponents.None,
@@ -384,8 +383,8 @@ internal static class MotionEvaluator
     /// layers covering it wrap their keys round (<see cref="Wraps"/>), and layers reaching its end cover its
     /// last samples (<see cref="ReachesEnd"/>). On a clip whose hips' move goes onto <c>n_hara</c> (<see cref="MotionClip.HipsOnHara"/>),
     /// what each layer moves the hips by moves <c>n_hara</c> instead, and the clip's own hips stay as they were.
-    /// Link layers apply with their partner tracks in <paramref name="links"/>; without one a link is left out.
-    /// Throws for a layer naming a bone the clip's skeleton does not have.
+    /// Link layers, and look-at layers that follow a partner, apply with their partner tracks in <paramref name="links"/>; without
+    /// one such a layer is left out. Throws for a layer naming a bone the clip's skeleton does not have.
     /// </summary>
     public static void Apply(MotionClip clip, IReadOnlyList<MotionLayer> layers, CancellationToken token = default, MotionLinkSet? links = null)
     {
@@ -444,7 +443,7 @@ internal static class MotionEvaluator
                     MotionNoises.Apply(clip, layer, index, loop, end, token);
                     break;
                 case MotionLayerKind.LookAt:
-                    MotionLooks.Apply(clip, layer, index, LookTrack(layer, index), WrapOf(layer, loop), end, token);
+                    MotionLooks.Apply(clip, layer, index, LookTrack(layer, index), links?.For(layer.Key), WrapOf(layer, loop), end, token);
                     break;
                 case MotionLayerKind.Smooth:
                     MotionSmoothing.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), loop, end, token);
@@ -826,8 +825,9 @@ internal static class MotionEvaluator
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
     /// unknown. <paramref name="trackedBones"/> are the bones the clip has tracks for, as a decode gives them
     /// (<see cref="MotionClip.SourceTracks"/>), so symmetry layers skip the same pairs they do over the clip.
-    /// <paramref name="hipsOnHara"/> is the clip's <see cref="MotionClip.HipsOnHara"/>. Link layers apply with their partner tracks in
-    /// <paramref name="links"/>, as <see cref="Apply"/> applies them; without one a link is left out.
+    /// <paramref name="hipsOnHara"/> is the clip's <see cref="MotionClip.HipsOnHara"/>. Link layers, and look-at layers that follow a
+    /// partner, apply with their partner tracks in <paramref name="links"/>, as <see cref="Apply"/> applies them; without one such a
+    /// layer is left out.
     /// Throws for a layer naming a bone the skeleton does not have.
     /// </summary>
     public static MotionTransform[] ApplyAt(SkeletonDescription skeleton, ReadOnlySpan<MotionTransform> local, IReadOnlyList<MotionLayer> layers,
@@ -874,8 +874,8 @@ internal static class MotionEvaluator
             }
             if (layer.Kind == MotionLayerKind.LookAt)
             {
-                MotionLooks.ApplyAt(skeleton, pose, layer, MotionLooks.Plan(skeleton, layer, index), LookTrack(layer, index), frame, WrapOf(layer, loop),
-                    Weight(layer, frame, end));
+                MotionLooks.ApplyAt(skeleton, pose, layer, MotionLooks.Plan(skeleton, layer, index), LookTrack(layer, index), links?.For(layer.Key), frame,
+                    WrapOf(layer, loop), Weight(layer, frame, end));
                 continue;
             }
             if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Repeat or MotionLayerKind.Spring)

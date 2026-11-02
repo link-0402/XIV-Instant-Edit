@@ -588,8 +588,9 @@ internal sealed partial class TimelineWorkspace
     }
 
     /// <summary>
-    /// A look-at layer's target on the character: a dot at its spot, or the followed bone's dot, with a faint line from the head.
-    /// The spot is drawn where it is in character space; the followed bone where the game shows it.
+    /// A look-at layer's target on the character: a dot at its spot or at a partner's bone, or the followed bone's dot, with a faint
+    /// line from the head. The spot and the partner's bone (its partner track, where the solve aims) are drawn where they are in
+    /// character space; this actor's followed bone where the game shows it.
     /// </summary>
     private void DrawLookTarget(AnimationTimelineSource loaded, TimelineDocument doc, SkeletonDescription skeleton, MotionLayer layer, int frame,
         Matrix4x4 toClip, ImGuiViewportPtr viewport)
@@ -597,7 +598,9 @@ internal sealed partial class TimelineWorkspace
         if (!actorPose.Index.TryGetValue(MotionLooks.KeyBone, out var head) ||
             !PoseGizmo.Project(actorPose.Positions[head], toClip, viewport.Pos, viewport.Size, out var from))
             return;
-        var spot = layer.Look?.Follow is { } follow
+        var partner = MotionLooks.FollowsPartner(layer);
+        var spot = partner ? session.Links.For(layer.Key)?.At(frame).After.Position
+            : layer.Look?.Follow is { } follow
             ? actorPose.Index.TryGetValue(follow, out var followed) ? actorPose.Positions[followed] : (Vector3?)null
             : LookSpot(loaded, doc, skeleton, layer, frame);
         if (spot is not { } target || !PoseGizmo.Project(target, toClip, viewport.Pos, viewport.Size, out var to))
@@ -605,7 +608,8 @@ internal sealed partial class TimelineWorkspace
         var drawList = ImGui.GetWindowDrawList();
         var colour = TimelineWindowViews.LayerColour(MotionLayerKind.LookAt);
         drawList.AddLine(from, to, ImGui.GetColorU32(Theme.WithAlpha(colour, .35f)), Theme.Scaled(1.5f));
-        if (layer.Look?.Follow != null)
+        // This actor's followed bone has its own dot.
+        if (layer.Look?.Follow != null && !partner)
             return;
         var radius = Theme.Scaled(6);
         drawList.AddCircleFilled(to, radius + Theme.Scaled(1.5f), ImGui.GetColorU32(new Vector4(0, 0, 0, .5f)));

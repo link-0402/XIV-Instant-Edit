@@ -5,10 +5,18 @@ using InstantEdit.Models;
 namespace InstantEdit.Services.Animations.Motion;
 
 /// <summary>
+/// The partner workspace whose bone a look-at follows: <paramref name="Workspace"/> null for You (the partner's side), as
+/// <see cref="MotionLink.Partner"/>. <paramref name="Clip"/> and <paramref name="Binding"/> are the clip the look expects open
+/// there (<see cref="AnimationClip.GamePath"/>, <see cref="AnimationClip.BindingIndex"/>), as a link records them.
+/// </summary>
+internal sealed record MotionLookPartner(Guid? Workspace, string Clip, int Binding);
+
+/// <summary>
 /// What a look-at layer looks at: <paramref name="Follow"/>, a bone followed each frame, or null for the spots its keys
 /// hold in character space. <paramref name="Limit"/> is the most, in degrees, the chain turns the head from the motion's.
+/// With <paramref name="Partner"/>, <paramref name="Follow"/> names the partner's bone, read from its partner track.
 /// </summary>
-internal sealed record MotionLook(string? Follow = null, float Limit = 80);
+internal sealed record MotionLook(string? Follow = null, float Limit = 80, MotionLookPartner? Partner = null);
 
 /// <summary>
 /// Look-at layers: their settings checked, and the head turned toward the target on a pose or a whole clip. The head's
@@ -43,7 +51,43 @@ internal static class MotionLooks
             throw new InvalidDataException($"{name} has a look limit out of range.");
         if (look.Follow is { } follow && (follow.Length == 0 || follow.Length > MaxFollowName))
             throw new InvalidDataException($"{name} follows a bone that can't be read.");
+        if (look.Partner is { } partner)
+        {
+            if (look.Follow == null)
+                throw new InvalidDataException($"{name} follows a partner but no bone of theirs.");
+            if (string.IsNullOrEmpty(partner.Clip))
+                throw new InvalidDataException($"{name} follows a partner clip that can't be read.");
+        }
     }
+
+    /// <summary>Whether <paramref name="layer"/> is a look-at layer that follows a partner's bone.</summary>
+    public static bool FollowsPartner(MotionLayer layer) => layer is { Kind: MotionLayerKind.LookAt, Look.Partner: not null };
+
+    /// <summary>
+    /// Whether a look-at layer that follows a partner may change the motion once its partner track is there: on, with some weight,
+    /// a limit and a bone to turn. What code that has no tracks asks, as <see cref="MotionLinks.MayChange"/>; false for other layers.
+    /// </summary>
+    public static bool MayChange(MotionLayer layer) => FollowsPartner(layer) && MotionEvaluator.Weighted(layer) && Turns(layer);
+
+    /// <summary>Whether a look-at layer turns anything, its partner track aside: some strength, a limit, a bone to turn, and a bone or a keyed spot to look at.</summary>
+    internal static bool Turns(MotionLayer layer) => layer.Amount > 0 && layer.Look is { Limit: > 0 } look && !layer.Bones.IsEmpty &&
+                                                     (look.Follow != null || layer.Keys.Any(key => key.Bones.ContainsKey(KeyBone)));
+
+    /// <summary>
+    /// The link a look at a partner's bone builds its track as: from the head (<see cref="KeyBone"/>) to the followed bone on the
+    /// partner's clip. Only for the track builder: its bend settings mean nothing. Throws for a layer without a partner.
+    /// </summary>
+    public static MotionLink AsLink(MotionLayer layer) =>
+        layer.Look is { Follow: { } follow, Partner: { } partner }
+            ? new MotionLink(KeyBone, partner.Workspace, follow, partner.Clip, partner.Binding)
+            : throw new ArgumentException("The layer doesn't follow a partner.", nameof(layer));
+
+    /// <summary>
+    /// The partner's layers a look at it reads, in order: every one but links and looks at a partner, so two looks at each other,
+    /// or a look and a link, never depend on each other's result.
+    /// </summary>
+    public static ImmutableArray<MotionLayer> PartnerOwn(IReadOnlyList<MotionLayer> partnerLayers) =>
+        [.. partnerLayers.Where(layer => layer.Kind != MotionLayerKind.Link && !FollowsPartner(layer))];
 
     /// <summary>A bone's share of the turn before the picked bones' shares are made to add up to 1; 0 off the chain.</summary>
     public static float Share(string bone) => Chain.IndexOf(bone) is var at and >= 0 ? Shares[at] : 0;
@@ -62,13 +106,13 @@ internal static class MotionLooks
     /// The layer resolved on <paramref name="skeleton"/>: its picked bones the head hangs from (or the head), bottom first,
     /// with their shares made to add up to 1, and its followed bone. Null when the skeleton has no head or no picked bone
     /// turns it. Throws for a bone the skeleton lacks, and for a followed bone that turns with the head: one of the chain's,
-    /// or one hanging from the head.
+    /// or one hanging from the head. A partner's bone isn't this skeleton's: the follow stays -1 and the partner track gives the target.
     /// </summary>
     public static LookPlan? Plan(SkeletonDescription skeleton, MotionLayer layer, Dictionary<string, int> index)
     {
         var picked = layer.Bones.Select(name => index.TryGetValue(name, out var at) ? at : throw MotionEvaluator.Missing(name)).ToArray();
         var follow = -1;
-        if (layer.Look?.Follow is { } followed)
+        if (layer.Look is { Follow: { } followed, Partner: null })
             follow = index.TryGetValue(followed, out var at) ? at : throw MotionEvaluator.Missing(followed);
         if (!index.TryGetValue(KeyBone, out var head))
             return null;
@@ -176,22 +220,23 @@ internal static class MotionLooks
 
     /// <summary>
     /// A look on one pose (local transforms of the whole skeleton) at <paramref name="frame"/>, at <paramref name="weight"/>
-    /// (the layer's amount through its fades and weight): toward its followed bone where the pose has it, else toward its
-    /// keys' spot (<paramref name="track"/>, round a loop <paramref name="wrap"/> frames long when the layer wraps it).
+    /// (the layer's amount through its fades and weight): toward its partner's bone on <paramref name="partner"/> when it follows a
+    /// partner, toward its followed bone where the pose has it, else toward its keys' spot (<paramref name="track"/>, round a loop
+    /// <paramref name="wrap"/> frames long when the layer wraps it).
     /// </summary>
     public static void ApplyAt(SkeletonDescription skeleton, MotionTransform[] pose, MotionLayer layer, LookPlan? plan, MotionEvaluator.Track? track,
-        float frame, float wrap, float weight)
+        LinkTrack? partner, float frame, float wrap, float weight)
     {
-        if (plan == null || weight <= 0 || plan.Follow < 0 && track == null)
+        if (plan == null || weight <= 0 || !Aims(layer, plan, track, partner))
             return;
-        Look(skeleton, pose, MotionEvaluator.ModelSpace(skeleton, pose), layer, plan, track, frame, wrap, weight);
+        Look(skeleton, pose, MotionEvaluator.ModelSpace(skeleton, pose), layer, plan, track, partner, frame, wrap, weight);
     }
 
     /// <summary>A look over the whole clip, sample by sample; only the bones it turns are written.</summary>
-    public static void Apply(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, MotionEvaluator.Track? track, float wrap, float end,
-        CancellationToken token)
+    public static void Apply(MotionClip clip, MotionLayer layer, Dictionary<string, int> index, MotionEvaluator.Track? track, LinkTrack? partner,
+        float wrap, float end, CancellationToken token)
     {
-        if (Plan(clip.Skeleton, layer, index) is not { } plan || plan.Follow < 0 && track == null)
+        if (Plan(clip.Skeleton, layer, index) is not { } plan || !Aims(layer, plan, track, partner))
             return;
         var local = new MotionTransform[clip.Bones];
         for (var i = 0; i < clip.Samples; i++)
@@ -204,20 +249,30 @@ internal static class MotionLooks
                 continue;
             for (var b = 0; b < local.Length; b++)
                 local[b] = clip.Get(i, b);
-            Look(clip.Skeleton, local, MotionEvaluator.ModelSpace(clip.Skeleton, local), layer, plan, track, frame, wrap, weight);
+            Look(clip.Skeleton, local, MotionEvaluator.ModelSpace(clip.Skeleton, local), layer, plan, track, partner, frame, wrap, weight);
             foreach (var bone in plan.Bones)
                 clip.Set(i, bone.Bone, local[bone.Bone]);
         }
     }
 
+    /// <summary>Whether the layer has a target: its partner track when it follows a partner, else its followed bone or keyed spots.</summary>
+    private static bool Aims(MotionLayer layer, LookPlan plan, MotionEvaluator.Track? track, LinkTrack? partner) =>
+        FollowsPartner(layer) ? partner != null : plan.Follow >= 0 || track != null;
+
     /// <summary>
-    /// Turns the pose toward the layer's target. A followed bone that hangs from a bone the turn moves (a hand under the upper
+    /// Turns the pose toward the layer's target. A partner's bone is where the partner track has it after the partner's edits, in
+    /// character space, both actors on the same spot. A followed bone that hangs from a bone the turn moves (a hand under the upper
     /// back) moves with it: the pose is turned again from where it was, toward where the last turn left that bone.
     /// </summary>
     private static void Look(SkeletonDescription skeleton, MotionTransform[] local, MotionTransform[] model, MotionLayer layer, LookPlan plan,
-        MotionEvaluator.Track? track, float frame, float wrap, float weight)
+        MotionEvaluator.Track? track, LinkTrack? partner, float frame, float wrap, float weight)
     {
         var limit = layer.Look?.Limit ?? 0;
+        if (FollowsPartner(layer))
+        {
+            Turn(skeleton, local, model, plan, partner!.At(frame).After.Position, limit, weight);
+            return;
+        }
         if (plan.Follow < 0)
         {
             Turn(skeleton, local, model, plan, MotionEvaluator.Sample(track!.Frames, track.Values, track.Curves, frame, wrap).Position, limit, weight);

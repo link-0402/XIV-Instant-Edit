@@ -115,8 +115,8 @@ internal static class MotionSymmetry
         for (var i = 0; i < Math.Min(at, layers.Count); i++)
         {
             var layer = layers[i];
-            // A link counts while it may move its bones, track or not: a hand it follows with while off just copies the hand's own motion.
-            if (!MotionEvaluator.Active(layer) && !MotionLinks.MayChange(layer))
+            // A link, or a look at a partner, counts while it may move its bones, track or not: a hand it follows with while off just copies the hand's own motion.
+            if (!MotionEvaluator.Active(layer) && !MotionLinks.MayChange(layer) && !MotionLooks.MayChange(layer))
                 continue;
             switch (layer.Kind)
             {

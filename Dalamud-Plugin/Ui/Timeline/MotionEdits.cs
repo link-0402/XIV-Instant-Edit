@@ -1401,7 +1401,12 @@ internal static class MotionEdits
         if (layer.Look is { } look)
             layer = layer with
             {
-                Look = look with { Limit = float.IsFinite(look.Limit) ? Math.Clamp(look.Limit, 0, MotionLooks.MaxLimit) : new MotionLook().Limit },
+                // A partner names whose bone is followed: with no bone it means nothing.
+                Look = look with
+                {
+                    Limit = float.IsFinite(look.Limit) ? Math.Clamp(look.Limit, 0, MotionLooks.MaxLimit) : new MotionLook().Limit,
+                    Partner = look.Follow != null ? look.Partner : null,
+                },
                 Keys = look.Follow != null ? [] : layer.Keys,
             };
         var start = Math.Clamp(layer.Start, 0, TimelineDocument.MaxFrames - 1);

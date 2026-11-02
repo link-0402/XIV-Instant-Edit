@@ -46,17 +46,18 @@ internal sealed record LinkView(WorkspaceKey Key, string Name, string GamePath, 
 
 /// <summary>
 /// What a link's track is built from: the partner's document and played clip, compared by reference, and the link, the size ratio
-/// (partner over this actor) and this workspace's preset (null for You), compared by value. Equal inputs give the same track.
+/// (partner over this actor), this workspace's preset (null for You) and whether it is a look-at's track (<see cref="MotionLooks.AsLink"/>,
+/// read from <see cref="MotionLooks.PartnerOwn"/>), compared by value. Equal inputs give the same track.
 /// </summary>
-internal sealed record LinkInputs(TimelineDocument PartnerDocument, MotionClip Played, MotionLink Link, float Ratio, Guid? Self)
+internal sealed record LinkInputs(TimelineDocument PartnerDocument, MotionClip Played, MotionLink Link, float Ratio, Guid? Self, bool Look = false)
 {
     public bool Equals(LinkInputs? other) =>
         other is not null && (ReferenceEquals(this, other) ||
             ReferenceEquals(PartnerDocument, other.PartnerDocument) && ReferenceEquals(Played, other.Played) && SameLink(Link, other.Link) &&
-            Ratio.Equals(other.Ratio) && Self == other.Self);
+            Ratio.Equals(other.Ratio) && Self == other.Self && Look == other.Look);
 
     public override int GetHashCode() =>
-        HashCode.Combine(RuntimeHelpers.GetHashCode(PartnerDocument), RuntimeHelpers.GetHashCode(Played), Link.Bone, Link.PartnerBone, Ratio, Self);
+        HashCode.Combine(RuntimeHelpers.GetHashCode(PartnerDocument), RuntimeHelpers.GetHashCode(Played), Link.Bone, Link.PartnerBone, Ratio, Self, Look);
 
     /// <summary>The links field by field, holds by sequence (a record compares the holds' arrays by reference).</summary>
     private static bool SameLink(MotionLink a, MotionLink b) => ReferenceEquals(a, b) ||
@@ -136,12 +137,15 @@ internal sealed class PartnerLinks : IDisposable
     /// its partner's view <paramref name="partner"/>, and the track's inputs when it is on. A link to its own workspace is never on.
     /// <paramref name="presetExists"/> says whether the partner's preset still exists (always true for You). <paramref name="selfFailed"/>
     /// and <paramref name="partnerFailed"/> say that reading this clip's or the partner's motion failed (<see cref="LinkCandidate.ReadFailed"/>),
-    /// so a missing view won't come. This side's states come before the partner's. Pure.
+    /// so a missing view won't come. This side's states come before the partner's. A look-at layer that follows a partner plans
+    /// as its link (<see cref="MotionLooks.AsLink"/>) with the same states and size ratio, its inputs marked as a look: the
+    /// partner's bone sits at its model position times the partner's size over this actor's, in this character's space. Pure.
     /// </summary>
     public static (LinkState State, LinkInputs? Inputs) Plan(WorkspaceKey self, MotionLayer layer, LinkView? me, LinkView? partner, bool gposing,
         bool presetExists, bool selfFailed = false, bool partnerFailed = false)
     {
-        if (layer.Link is not { } link)
+        var look = layer.Link == null && MotionLooks.FollowsPartner(layer);
+        if ((layer.Link ?? (look ? MotionLooks.AsLink(layer) : null)) is not { } link)
             return (LinkState.NotOpen, null);
         var partnerKey = new WorkspaceKey(link.Partner);
         if (partnerKey == self)
@@ -161,8 +165,15 @@ internal sealed class PartnerLinks : IDisposable
             return (LinkState.OtherClip, null);
         if (partner.Size is not { } theirs)
             return (LinkState.Despawned, null);
-        return (LinkState.On, new LinkInputs(partner.Document, partner.Played, link, theirs / mine, self.Preset));
+        return (LinkState.On, new LinkInputs(partner.Document, partner.Played, link, theirs / mine, self.Preset, look));
     }
+
+    /// <summary>
+    /// The link a layer that may change the motion follows its partner by: a link layer's own, or a look at a partner's as a link
+    /// (<see cref="MotionLooks.AsLink"/>). Null for every other layer, and for one that is off itself.
+    /// </summary>
+    private static MotionLink? Followed(MotionLayer layer) =>
+        MotionLinks.MayChange(layer) ? layer.Link : MotionLooks.MayChange(layer) ? MotionLooks.AsLink(layer) : null;
 
     /// <summary>The workspaces with an editable body clip from the last update, whose motion may not be read yet.</summary>
     public IReadOnlyList<LinkCandidate> Candidates { get; private set; } = [];
@@ -202,10 +213,10 @@ internal sealed class PartnerLinks : IDisposable
             if (target.Candidate is not { } candidate)
                 continue;
             foreach (var layer in candidate.Document.Motion)
-                if (MotionLinks.MayChange(layer))
+                if (Followed(layer) is { } link)
                 {
                     wanted.Add(target.Key);
-                    wanted.Add(new WorkspaceKey(layer.Link!.Partner));
+                    wanted.Add(new WorkspaceKey(link.Partner));
                 }
         }
         foreach (var (self, until) in pickers.ToArray())
@@ -248,9 +259,9 @@ internal sealed class PartnerLinks : IDisposable
             if (target.Candidate is { } candidate)
                 foreach (var layer in candidate.Document.Motion)
                 {
-                    if (!MotionLinks.MayChange(layer))
+                    if (Followed(layer) is not { } followed)
                         continue;
-                    var partnerKey = new WorkspaceKey(layer.Link!.Partner);
+                    var partnerKey = new WorkspaceKey(followed.Partner);
                     var (state, inputs) = Plan(target.Key, layer, views.GetValueOrDefault(target.Key), views.GetValueOrDefault(partnerKey), gposing,
                         partnerKey.Preset is not { } preset || presetExists(preset), candidate.ReadFailed, failed.Contains(partnerKey));
                     // A view nobody asked for (alone, no partner to link to) isn't being read: the partner's clip isn't open.
@@ -304,11 +315,14 @@ internal sealed class PartnerLinks : IDisposable
             }
     }
 
-    /// <summary>Builds the track of <paramref name="inputs"/> on a worker: the partner's own edits above its link back, at its bone.</summary>
+    /// <summary>
+    /// Builds the track of <paramref name="inputs"/> on a worker, at the partner's bone: for a link the partner's own edits above its
+    /// link back, for a look every partner layer but links and looks at a partner.
+    /// </summary>
     private static void Start(Entry entry, LinkInputs inputs)
     {
         var layers = inputs.PartnerDocument.Motion;
-        var own = MotionLinks.Own(layers, MotionLinks.LinkBack(layers, inputs.Link, inputs.Self));
+        var own = inputs.Look ? MotionLooks.PartnerOwn(layers) : MotionLinks.Own(layers, MotionLinks.LinkBack(layers, inputs.Link, inputs.Self));
         var cancel = new CancellationTokenSource();
         var token = cancel.Token;
         entry.Cancel = cancel;
