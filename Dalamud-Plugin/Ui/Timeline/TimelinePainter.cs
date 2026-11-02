@@ -153,8 +153,11 @@ internal static class TimelinePainter
         var line = Math.Max(1, MathF.Floor(Theme.Scale));
         var fontSize = ImGui.GetFontSize();
         var pickedFrames = current.PickedKeys.Frames;
+        MotionRepeat? source = null;
         for (var index = 0; index < layout.LayerCount; index++)
         {
+            if (doc.Motion[index] is { Repeat: { } repeat } shown && current.SelectedLayer == shown.Key)
+                source = repeat;
             var layer = MotionEdits.Shown(doc.Motion[index], doc.Length);
             var top = min.Y + geometry.RowTop(layout.LayerRow(index));
             if (top + geometry.Row >= rowsTop && top <= max.Y)
@@ -217,6 +220,15 @@ internal static class TimelinePainter
                 drawList.AddCircleFilled(new Vector2(fadeOutX, y0), radius,
                     TimelineUi.U32(hot && hit.Part == TimelinePart.LayerFadeOut ? Theme.Accent : Theme.WithAlpha(Theme.Text, .8f)));
             }
+        }
+        // A selected repeat's source: the frames it plays, shaded faintly over the rows.
+        if (source != null)
+        {
+            var shadeLeft = Math.Max(trackLeft + view.X(source.From), trackLeft);
+            var shadeRight = Math.Min(trackLeft + view.X(source.To), max.X);
+            if (shadeRight > shadeLeft)
+                drawList.AddRectFilled(new Vector2(shadeLeft, rowsTop), new Vector2(shadeRight, max.Y),
+                    TimelineUi.U32(Theme.WithAlpha(TimelineWindowViews.LayerColour(MotionLayerKind.Repeat), .08f)));
         }
         DrawBoneRows(drawList, current, doc, layout, geometry, view, min, max, trackLeft, rowsTop, hit);
         if (current.KeyBox is var (from, to, first, last))

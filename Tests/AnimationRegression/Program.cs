@@ -48,6 +48,7 @@ Scenarios.Run(() => FixLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => SwingLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => SmoothMotionFixture.Run(Check, Reject));
 Scenarios.Run(() => NoiseLayerFixture.Run(Check, Reject));
+Scenarios.Run(() => RepeatLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => LookAtFixture.Run(Check, Reject));
 Scenarios.Run(() => LinkLayerFixture.Run(Check, Reject));
 Scenarios.Run(() => LayerWeightFixture.Run(Check, Reject));

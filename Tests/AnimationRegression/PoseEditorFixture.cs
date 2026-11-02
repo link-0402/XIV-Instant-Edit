@@ -223,6 +223,9 @@ internal static class PoseEditorFixture
             "a swing or a smooth motion changes the bones it is limited to");
         var noise = swing with { Kind = MotionLayerKind.Noise, Swing = null, Noise = new MotionNoise() };
         check(PoseEdits.Changes(noise, Twin) && !PoseEdits.Changes(noise, Hand), "a noise changes the bones it is limited to");
+        var repeat = swing with { Kind = MotionLayerKind.Repeat, Swing = null, Repeat = new MotionRepeat(0, 10) };
+        check(PoseEdits.Changes(repeat, Twin) && !PoseEdits.Changes(repeat, Hand) && PoseEdits.Changes(repeat with { Bones = [] }, Twin) &&
+              PoseEdits.Changes(repeat with { Bones = [] }, Hand), "a repeat changes the bones it is limited to, or every bone");
     }
 
     /// <summary>Two bones' frames, the rotations from character space to the spaces their values turn in, pointing different ways.</summary>

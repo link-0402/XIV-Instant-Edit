@@ -120,9 +120,11 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         SwingFields.DrawNoise(current, layer);
                     else if (layer.Kind == MotionLayerKind.LookAt)
                         LookFields.Draw(current, layer, skeleton);
+                    else if (layer.Kind == MotionLayerKind.Repeat)
+                        RepeatFields.Draw(current, layer);
                     // A look that follows a bone has no keys to go between.
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                        MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Link) && layer.Look?.Follow == null)
+                        MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat) && layer.Look?.Follow == null)
                         DrawInterpolation(current, layer);
                 }
             }
@@ -169,7 +171,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             Widgets.MutedWrapped("Changes the root bone only, so the whole body turns with it.");
             DrawPosing(layer);
         }
-        else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Symmetry)
+        else if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Symmetry or MotionLayerKind.Repeat)
             DrawPosing(layer);
         else if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise)
         {
@@ -242,7 +244,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     }
 
     /// <summary>
-    /// One line on the bones the layer works on: how many it is limited to, keys, copies, turns, swings, wobbles or smooths,
+    /// One line on the bones the layer works on: how many it is limited to, keys, copies, turns, swings, wobbles, smooths or repeats,
     /// or how many pins it has; for a link the bones it joins, its partner named by <paramref name="nameOf"/>. Null for a hand shape or
     /// a root reset, whose bones are set by what they do.
     /// </summary>
@@ -261,6 +263,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             MotionLayerKind.Noise => $"Wobbles {Count(bones, "bone")}",
             MotionLayerKind.Swing => $"Swings {Count(bones, "bone")}",
             MotionLayerKind.Smooth => bones == 0 ? "Smooths every bone" : $"Smooths {Count(bones, "bone")}",
+            MotionLayerKind.Repeat => bones == 0 ? "Repeats every bone" : $"Repeats {Count(bones, "bone")}",
             MotionLayerKind.Link => layer.Link is { } link ? TimelineWindowViews.LinkSummary(link, nameOf ?? (_ => null)) : null,
             _ => null,
         };
@@ -627,7 +630,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         {
             MotionLayerKind.Link => TimelineWindowViews.LinkPullLabel,
             MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-                MotionLayerKind.LookAt => "Strength",
+                MotionLayerKind.LookAt or MotionLayerKind.Repeat => "Strength",
             MotionLayerKind.Amplitude => "Movement",
             MotionLayerKind.Pin => "Pull",
             _ => "Blend",
@@ -653,6 +656,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 MotionLayerKind.Noise => "How much of the wobble applies. Ctrl+click to type.",
                 MotionLayerKind.LookAt => "How far the head turns toward the target. Ctrl+click to type.",
                 MotionLayerKind.Smooth => "How far the bones go to the smoothed motion. Ctrl+click to type.",
+                MotionLayerKind.Repeat => "How far the bones go to the repeated motion. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
     }

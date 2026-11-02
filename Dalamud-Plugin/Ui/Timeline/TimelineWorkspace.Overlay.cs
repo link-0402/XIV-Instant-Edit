@@ -532,7 +532,7 @@ internal sealed partial class TimelineWorkspace
             return null;
         }
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                MotionLayerKind.Smooth or MotionLayerKind.Noise || ReadOnly)
+                MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Repeat || ReadOnly)
             return null;
         if (frame < layer.Start || frame > layer.End)
         {

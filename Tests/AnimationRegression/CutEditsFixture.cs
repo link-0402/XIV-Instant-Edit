@@ -49,6 +49,27 @@ internal static class CutEditsFixture
         Blends(check);
         Bake(check);
         Stretched(check);
+        Repeats(check);
+    }
+
+    /// <summary>A repeat's source moves with the motion it plays when frames go, come or play slower; dragging the layer leaves it.</summary>
+    private static void Repeats(Action<bool, string> check)
+    {
+        var layer = new MotionLayer("m1", MotionLayerKind.Repeat, "Repeat 1", 60, 150, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear,
+            Repeat: new MotionRepeat(30, 60));
+        var doc = Doc(200) with { Motion = [layer] };
+        var before = CutEdits.RemoveRange(doc, 0, 20, out _);
+        check(before.Motion is [{ Start: 40, End: 130, Repeat: { From: 10, To: 40, Blend: 4 } }], "a cut before the source moves it back with the motion");
+        var inserted = CutEdits.Ripple(doc, 10, 15, out _);
+        check(inserted.Motion is [{ Start: 75, End: 165, Repeat: { From: 45, To: 75, Blend: 4 } }], "frames inserted before the source move it on");
+        var inside = CutEdits.RemoveRange(doc, 40, 50, out _);
+        check(inside.Motion is [{ Start: 50, End: 140, Repeat: { From: 30, To: 50, Blend: 4 } }], "a cut inside the source shortens it");
+        var stretched = CutEdits.StretchPart(CutEdits.CutAt(doc, 100), 0, 100, out _);
+        check(stretched.Motion is [{ Start: 120, Repeat: { From: 60, To: 120 } }],
+            $"a part played slower stretches the source with it ({stretched.Motion.Single().Repeat})");
+        check(MotionEdits.Find(MotionEdits.Move(doc, "m1", 10), "m1") is { Start: 70, Repeat: { From: 30, To: 60 } }, "dragging the layer leaves its source where it is");
+        foreach (var moved in new[] { before, inserted, inside, stretched }.SelectMany(d => d.Motion))
+            MotionEvaluator.Validate(moved);
     }
 
     /// <summary>Cut edits on a clip whose middle part plays at a third of the speed: frames convert through the piecewise map.</summary>

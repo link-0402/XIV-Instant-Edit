@@ -3257,3 +3257,14 @@ over the frames typed in its popup. Spec: docs/superpowers/specs/2026-11-01-inst
 - [ ] 6 A startup made instant before this (the held idle) still plays.
 - [ ] 7 A loop whose file names another race than its path (a Midlander loop under a Miqo'te path): the character doesn't rise
   or grow during the wind-up or as the loop takes over.
+
+## Spring, Repeat and Balance (pending)
+
+The repeat's maths is covered offline (RepeatLayerFixture); these checks are the panel, Live and the save.
+
+- [ ] 1 Key a wave once on the right arm, add a Repeat layer after it over three times its length, From and To round the
+  wave: Live plays the wave 3 times, and the saved clip does too.
+- [ ] 2 Blend 4: no pop where each repeat starts over. Blend 0 shows the jump.
+- [ ] 3 A clip with a sound or an effect in the repeated stretch: the sound plays once, where it was, not on each repeat.
+- [ ] 4 With the layer selected the canvas shades From to To. The From and To buttons set them to the playhead; the count
+  reads 3 repeats, and on a looping clip a count that isn't whole shows in the warning colour.

@@ -134,6 +134,7 @@ internal static class MotionSymmetry
                 case MotionLayerKind.Swing:
                 case MotionLayerKind.Noise:
                 case MotionLayerKind.LookAt:
+                case MotionLayerKind.Repeat:
                     foreach (var name in layer.Bones)
                         if (index.TryGetValue(name, out var swung))
                             animated.Add(swung);

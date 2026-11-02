@@ -64,6 +64,8 @@ internal static class TimelineChromeFixture
         check(LayerPanel.Summary(Kind(MotionLayerKind.Noise, bones: ["a"])) == "Wobbles 1 bone", "Summary: noise, one bone");
         check(LayerPanel.Summary(Kind(MotionLayerKind.Swing)) == "Swings no bones", "Summary: swing without a list");
         check(LayerPanel.Summary(Kind(MotionLayerKind.Smooth)) == "Smooths every bone", "Summary: smooth without a list");
+        check(LayerPanel.Summary(Kind(MotionLayerKind.Repeat)) == "Repeats every bone" && LayerPanel.Summary(Kind(MotionLayerKind.Repeat, bones: ["a"])) == "Repeats 1 bone",
+            "Summary: repeat, with and without a list");
     }
 
     /// <summary>

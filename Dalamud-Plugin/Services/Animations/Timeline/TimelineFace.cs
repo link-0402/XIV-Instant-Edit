@@ -52,13 +52,13 @@ internal sealed record TimelineFace(int Anchor, int SourceFrames, int Frames)
     public static bool Allows(MotionLayerKind kind, MotionFixKind? fix) => kind switch
     {
         MotionLayerKind.Offset or MotionLayerKind.Amplitude or MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Swing
-            or MotionLayerKind.Smooth or MotionLayerKind.Noise => true,
+            or MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Repeat => true,
         MotionLayerKind.Fix => fix == MotionFixKind.SmoothJitter,
         _ => false,
     };
 
     /// <summary>
-    /// <paramref name="layers"/> in the face's own frames: their spans and keys moved back by <paramref name="anchor"/>,
+    /// <paramref name="layers"/> in the face's own frames: their spans, keys and repeat sources moved back by <paramref name="anchor"/>,
     /// as the face's motion starts there. What lies before the face's first frame never plays: a layer starting earlier
     /// covers the face from its first frame, its fade in shortened by as much, and the last of its keys before it holds
     /// there; a layer over earlier frames only is left out. A layer a face doesn't take is refused.
@@ -95,7 +95,8 @@ internal sealed record TimelineFace(int Anchor, int SourceFrames, int Frames)
             {
                 Start = start, End = end, FadeIn = fadeIn, FadeOut = Math.Min(layer.FadeOut, end - start - fadeIn), Keys = [.. keys],
             };
-            face.Add(moved with { Weights = MotionEvaluator.FitWeights(moved, weights) });
+            // A repeat's source moves back with them; one before the face's first frame starts there.
+            face.Add(MotionRepeats.Moved(moved with { Weights = MotionEvaluator.FitWeights(moved, weights) }, (frame, _) => frame - anchor));
         }
         return face.ToImmutable();
     }

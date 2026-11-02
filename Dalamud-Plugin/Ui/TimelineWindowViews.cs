@@ -41,7 +41,7 @@ internal static partial class TimelineWindowViews
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
         [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
-            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Pin];
+            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Repeat, MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Pin];
 
     /// <summary>The bone layer items a face's Add menu has: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
     public static readonly ImmutableArray<MotionLayerKind> FaceLayerKinds = [.. LayerKinds.Where(kind => TimelineFace.Allows(kind, null))];
@@ -335,6 +335,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Noise => Theme.IndexTexture,
         MotionLayerKind.LookAt => Theme.AnimationKind,
         MotionLayerKind.Link => Theme.OtherTexture,
+        MotionLayerKind.Repeat => Theme.RepeatLayer,
         _ => Theme.Important,
     };
 
@@ -352,6 +353,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Noise => "Random wobble on bones.",
         MotionLayerKind.LookAt => "Turn the head toward a spot.",
         MotionLayerKind.Link => "Moves a bone with a partner's bone.",
+        MotionLayerKind.Repeat => "Play a stretch of the motion again and again.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -427,8 +429,9 @@ internal static partial class TimelineWindowViews
                 moved.UnionWith(MotionIdles.Moved(layer));
                 continue;
             }
-            // A swing, a noise or a look gives its bones motion, a smooth motion only reshapes what is there.
-            if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.LookAt)
+            // A swing, a noise, a look or a repeat gives its bones motion, a smooth motion only reshapes what is there. A repeat over
+            // every bone only plays motion the clip has, so it names none.
+            if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Repeat)
             {
                 moved.UnionWith(layer.Bones);
                 continue;
@@ -483,7 +486,8 @@ internal static partial class TimelineWindowViews
             return hand.Side switch { MotionHandSide.Left => "Left hand", MotionHandSide.Right => "Right hand", _ => "Both hands" };
         if (layer.Fix is { Kind: MotionFixKind.ResetRoot, Axes: var axes })
             return axes == MotionAxes.None ? "Root · no axes" : "Root · " + string.Join(", ", ResetAxes.Where(a => axes.HasFlag(a.Axis)).Select(a => a.Label));
-        var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise;
+        var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
+            MotionLayerKind.Repeat;
         var bones = limited
             ? layer.Bones.Length
             : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct(StringComparer.Ordinal).Count();
@@ -835,7 +839,7 @@ internal static partial class TimelineWindowViews
                     MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot =>
                         editing?.Bones.Where(bone => bone.Parent < 0).Select(bone => bone.Name) ?? Enumerable.Empty<string>(),
                     MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-                        MotionLayerKind.LookAt => layer.Bones.AsEnumerable(),
+                        MotionLayerKind.LookAt or MotionLayerKind.Repeat => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
                     MotionLayerKind.Pin => PinnedBones(layer, editing),
                     MotionLayerKind.Idle => MotionIdles.Moved(layer),

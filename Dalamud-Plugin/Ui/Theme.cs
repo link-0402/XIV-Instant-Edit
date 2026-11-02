@@ -82,6 +82,9 @@ internal static class Theme
     public static readonly Vector4 TrackProp = MaskTexture;
     public static readonly Vector4 TrackOther = OtherTexture;
 
+    /// <summary> Bone layer kinds past the kind palette: a repeat. </summary>
+    public static readonly Vector4 RepeatLayer = new(.70f, .52f, 1f, 1);
+
     /// <summary> The timeline's current frame: its line and the marker on the ruler. </summary>
     public static readonly Vector4 Playhead = Accent;
 

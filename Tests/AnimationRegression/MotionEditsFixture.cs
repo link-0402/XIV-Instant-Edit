@@ -295,8 +295,8 @@ internal static class MotionEditsFixture
               MotionEdits.Find(smooth, smoothKey) is { Name: "Smooth motion 1", Amount: 1, Window: MotionSmoothing.DefaultWindow, Swing: null },
             "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
         check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
-                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.LookAt, MotionLayerKind.Link,
-                  MotionLayerKind.Pin]) &&
+                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Repeat, MotionLayerKind.LookAt,
+                  MotionLayerKind.Link, MotionLayerKind.Pin]) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
               TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&
@@ -325,6 +325,24 @@ internal static class MotionEditsFixture
         check(TimelineWindowViews.LayerContent(noisy) == "No bones" && TimelineWindowViews.LayerContent(noisy with { Bones = ["j_kosi"] }) == "1 bone" &&
               !TimelineLayout.Unfolds(noisy) && ReferenceEquals(MotionEdits.SetKey(noise, noiseKey, 10, "j_kosi", rest), noise),
             "a noise without bones says so, has no bone rows and takes no keys");
+        var repeat = MotionEdits.Add(Empty(), MotionLayerKind.Repeat, 40, 100, out var repeatKey, out _);
+        var repeated = MotionEdits.Find(repeat, repeatKey)!;
+        check(repeated is { Name: "Repeat 1", Amount: 1, Components: PoseComponents.Rotation | PoseComponents.Position, Window: 0, Noise: null } &&
+              repeated.Repeat == new MotionRepeat(10, 40) && MotionEdits.MaxAmount(MotionLayerKind.Repeat) == 1 &&
+              MotionEdits.Find(MotionEdits.Add(Empty(), MotionLayerKind.Repeat, 10, 100, out var early, out _), early)!.Repeat == new MotionRepeat(0, 30),
+            "a repeat starts on the 30 frames before it, from frame 0 at the earliest, at full strength");
+        check(!MotionEdits.Same(repeated, repeated with { Repeat = repeated.Repeat! with { Blend = 2 } }) &&
+              ReferenceEquals(MotionEdits.SetKey(repeat, repeatKey, 50, "j_kosi", rest), repeat),
+            "layers differ by a repeat's blend, and a repeat takes no keys");
+        check(MotionEdits.KindName(MotionLayerKind.Repeat) == "Repeat" &&
+              TimelineWindowViews.LayerKindHint(MotionLayerKind.Repeat) == "Play a stretch of the motion again and again." &&
+              TimelineUi.LayerIcons.Distinct().Count() == TimelineUi.LayerIcons.Length && TimelineUi.LayerIcons.Length == Enum.GetValues<MotionLayerKind>().Length &&
+              Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.Repeat).All(kind => TimelineWindowViews.LayerColour(kind) != TimelineWindowViews.LayerColour(MotionLayerKind.Repeat)),
+            "the Add menu offers Repeat after Noise, with its own hint, icon and colour");
+        check(TimelineWindowViews.LayerContent(repeated) == "Every bone" && TimelineWindowViews.LayerContent(repeated with { Bones = ["j_kosi"] }) == "1 bone" &&
+              !TimelineLayout.Unfolds(repeated) && LayerPanel.Summary(repeated) == "Repeats every bone" &&
+              LayerPanel.Summary(repeated with { Bones = ["j_kosi", "j_sebo_a"] }) == "Repeats 2 bones" && TimelineFace.Allows(MotionLayerKind.Repeat, null),
+            "a repeat without bones repeats every bone, has no bone rows, and a face takes one");
         var full = Empty() with { Motion = [.. Enumerable.Range(0, MotionEvaluator.MaxLayers).Select(i => layer with { Key = "m" + i })] };
         var refused = MotionEdits.Add(full, MotionLayerKind.Offset, 0, 10, out _, out var tooMany);
         check(ReferenceEquals(refused, full) && tooMany != null, "a layer past the most an animation may have is refused with a reason");

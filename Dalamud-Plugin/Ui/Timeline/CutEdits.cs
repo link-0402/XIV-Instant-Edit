@@ -409,7 +409,8 @@ internal static class CutEdits
                 droppedKeys += layer.Keys.Length - keys.Length;
                 // Weight points go as keys do: inside the range they go, after it they move back.
                 var weights = layer.Weights.Where(w => w.Frame < y || w.Frame >= z).Select(w => w.Frame >= z ? w with { Frame = w.Frame - gap } : w);
-                var next = Fit(layer with { Start = Shift(layer.Start, false), End = Shift(layer.End, true), Keys = keys }, weights);
+                // A repeat's source moves with the motion it plays, as the layer's own span does.
+                var next = MotionRepeats.Moved(Fit(layer with { Start = Shift(layer.Start, false), End = Shift(layer.End, true), Keys = keys }, weights), Shift);
                 if (next.End <= next.Start)
                 {
                     layers.RemoveAt(i);
@@ -445,7 +446,8 @@ internal static class CutEdits
                     Keys = [.. layer.Keys.Select(k => k.Frame >= at ? k with { Frame = k.Frame + delta } : k)],
                 };
                 // A point on the layer's last frame stays with its end, which moves only when the layer goes on past the insert.
-                layers[i] = Fit(next, layer.Weights.Select(w => w.Frame > at || w.Frame == at && layer.End > at ? w with { Frame = w.Frame + delta } : w));
+                layers[i] = MotionRepeats.Moved(Fit(next, layer.Weights.Select(w => w.Frame > at || w.Frame == at && layer.End > at ? w with { Frame = w.Frame + delta } : w)),
+                    (frame, end) => end ? frame > at ? frame + delta : frame : frame >= at ? frame + delta : frame);
             }
         }
         removed = new CutRemoval(deletedEvents, droppedKeys);
@@ -511,7 +513,7 @@ internal static class CutEdits
             // Weight points scale as keys do; two landing on one frame keep the later one.
             var next = Fit(layer with { Start = layerStart, End = Math.Max(Map(layer.End), layerStart + 1), Keys = keys.ToImmutable() },
                 layer.Weights.Select(w => w with { Frame = Inside(w.Frame) }));
-            layers[i] = next;
+            layers[i] = MotionRepeats.Moved(next, (frame, end) => end ? Map(frame) : Inside(frame));
         }
         return doc with { Length = length, Events = events.ToImmutable(), Motion = layers.ToImmutable() };
     }

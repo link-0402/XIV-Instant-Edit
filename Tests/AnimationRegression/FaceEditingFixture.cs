@@ -430,11 +430,20 @@ internal static class FaceEditingFixture
         check(!moving.Still && moving.End == 630 && moving.FaceFrame(330) == 300 && moving.FaceFrame(10) == 0 && moving.ShownLength(150) == 630,
             "a moving face plays from its anchor and the canvas covers all of it");
         check(TimelineFace.Allows(MotionLayerKind.Pose, null) && TimelineFace.Allows(MotionLayerKind.Swing, null) && TimelineFace.Allows(MotionLayerKind.Noise, null) &&
-              TimelineFace.Allows(MotionLayerKind.Fix, MotionFixKind.SmoothJitter) && !TimelineFace.Allows(MotionLayerKind.Pin, null) &&
+              TimelineFace.Allows(MotionLayerKind.Repeat, null) && TimelineFace.Allows(MotionLayerKind.Fix, MotionFixKind.SmoothJitter) && !TimelineFace.Allows(MotionLayerKind.Pin, null) &&
               !TimelineFace.Allows(MotionLayerKind.Idle, null) && !TimelineFace.Allows(MotionLayerKind.Fix, MotionFixKind.HandShape),
             "a face offers only layers that don't rely on body bones");
         var shifted = TimelineFace.ToFace([Layer(start: 30, end: 90, keyFrame: 45)], 30).Single();
         check(shifted is { Start: 0, End: 60 } && shifted.Keys.Single().Frame == 15, "layers move into the face's own frames");
+        var repeat = new MotionLayer("m1", MotionLayerKind.Repeat, "Repeat 1", 60, 120, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear,
+            Repeat: new MotionRepeat(30, 60));
+        var onFace = TimelineFace.ToFace([repeat], 30).Single();
+        var back = TimelineFace.ToFace([onFace], -30).Single();
+        check(onFace is { Start: 30, End: 90, Repeat: { From: 0, To: 30, Blend: 4 } } && back.Repeat == repeat.Repeat && MotionEdits.Same(back, repeat),
+            "a repeat's source moves into the face's frames with the layer, and back on the timeline when the face is restored");
+        var before = TimelineFace.ToFace([repeat with { Repeat = new MotionRepeat(10, 40, 12) }], 30).Single();
+        MotionEvaluator.Validate(before);
+        check(before.Repeat == new MotionRepeat(0, 10, 5), "a source starting before the face starts at its first frame, its blend fitting what is left");
         reject(() => TimelineFace.ToFace([PinLayer()], 0), "a pin layer can't go onto a face");
         var opened = TimelineFace.Open(Empty(150), 0, 1, 150);
         check(opened.Face == new TimelineFace(0, 1, 1) && opened is { Length: 150, LengthChanged: false }, "opening a face is not a length change");

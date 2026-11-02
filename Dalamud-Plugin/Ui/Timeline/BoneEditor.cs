@@ -518,6 +518,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
                 MotionLayerKind.Swing => "Add the selected bones to the ones this layer swings.",
                 MotionLayerKind.Noise => "Add the selected bones to the ones this layer wobbles.",
                 MotionLayerKind.Smooth => "Add the selected bones to the ones this layer smooths. With none listed, it smooths every bone.",
+                MotionLayerKind.Repeat => "Add the selected bones to the ones this layer repeats. With none listed, it repeats every bone.",
                 _ => "Add the selected bones to the ones this layer scales. With none listed, it scales every bone.",
             });
         ImGui.SameLine();

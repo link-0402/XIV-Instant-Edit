@@ -49,7 +49,7 @@ internal static class MotionPaths
         var frames = new HashSet<int>();
         // The kinds the Bones window never shows as keyed (BonePosing.StateOf) mark no frame either.
         if (layer == null || layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or
-                MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Link)
+                MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Link or MotionLayerKind.Repeat)
             return frames;
         foreach (var key in layer.Keys)
             if (key.Bones.ContainsKey(bone))

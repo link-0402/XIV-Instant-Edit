@@ -90,6 +90,7 @@ internal static class MotionEdits
         MotionLayerKind.Noise => "Noise",
         MotionLayerKind.LookAt => "Look at",
         MotionLayerKind.Link => "Link",
+        MotionLayerKind.Repeat => "Repeat",
         _ => "Pose",
     };
 
@@ -100,8 +101,8 @@ internal static class MotionEdits
     /// Adds a layer of <paramref name="kind"/> from <paramref name="start"/> to <paramref name="end"/> after
     /// the others, so it applies last, named "Offset 2" and so on, with no fades, so a loop
     /// stays seamless. An amplitude starts at 150%, every other kind at full strength; a swing starts with the
-    /// default swing, a smooth motion with the default window, a noise with the default noise and a look turning the
-    /// head, neck and upper back with the default limit. A link needs its partner, so it is refused here (see <see cref="AddLink"/>).
+    /// default swing, a smooth motion with the default window, a noise with the default noise, a look turning the
+    /// head, neck and upper back with the default limit and a repeat playing the 30 frames before it. A link needs its partner, so it is refused here (see <see cref="AddLink"/>).
     /// </summary>
     public static TimelineDocument Add(TimelineDocument doc, MotionLayerKind kind, int start, int end, out string key, out string? error)
     {
@@ -144,7 +145,8 @@ internal static class MotionEdits
             Swing: kind == MotionLayerKind.Swing ? new MotionSwing() : null,
             Window: kind == MotionLayerKind.Smooth ? MotionSmoothing.DefaultWindow : 0,
             Noise: kind == MotionLayerKind.Noise ? new MotionNoise() : null,
-            Look: kind == MotionLayerKind.LookAt ? new MotionLook() : null);
+            Look: kind == MotionLayerKind.LookAt ? new MotionLook() : null,
+            Repeat: kind == MotionLayerKind.Repeat ? new MotionRepeat(Math.Max(0, start - 30), Math.Max(0, start - 30) + 30) : null);
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
     }
 
@@ -1115,11 +1117,11 @@ internal static class MotionEdits
     {
         frame = KeyFrame(doc, frame);
         var index = IndexOf(doc, key);
-        // Symmetry, fix, idle-motion, swing, smooth motion, noise and link layers never hold keys; a pin layer keys only its keyed pins,
+        // Symmetry, fix, idle-motion, swing, smooth motion, noise, link and repeat layers never hold keys; a pin layer keys only its keyed pins,
         // a look only the head's spot, and none while it follows a bone.
         if (index < 0 || string.IsNullOrEmpty(bone) ||
             doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
-                MotionLayerKind.Noise or MotionLayerKind.Link ||
+                MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat ||
             doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted) ||
             doc.Motion[index].Kind == MotionLayerKind.LookAt && (bone != MotionLooks.KeyBone || doc.Motion[index].Look?.Follow != null))
             return doc;
@@ -1372,11 +1374,12 @@ internal static class MotionEdits
 
     /// <summary>
     /// The layer kept valid: on the timeline, a frame long or more, fades that fit, an amount in range, a short name, only the
-    /// weight points inside it, a look's limit in range, its keyed spots dropped once it follows a bone, and a link's bend within a
-    /// half turn, with holds and no top only on the hips.
+    /// weight points inside it, a look's limit in range, its keyed spots dropped once it follows a bone, a link's bend within a
+    /// half turn, with holds and no top only on the hips, and a repeat's source at least two frames long with a blend that fits it.
     /// </summary>
     private static MotionLayer Normalize(MotionLayer layer)
     {
+        layer = MotionRepeats.Moved(layer, (frame, _) => frame);
         if (layer.Link is { } link)
         {
             var hips = link.Bone == PinChains.Hips;
@@ -1424,7 +1427,7 @@ internal static class MotionEdits
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade && a.Fix.Axes == b.Fix.Axes && a.Fix.Placement == b.Fix.Placement &&
               SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&
         SameIdle(a.Idle, b.Idle) && Equals(a.Markers, b.Markers) && Equals(a.Swing, b.Swing) && a.Window == b.Window && Equals(a.Noise, b.Noise) && Equals(a.Look, b.Look) &&
-        a.Keys.Length == b.Keys.Length &&
+        Equals(a.Repeat, b.Repeat) && a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));
 
