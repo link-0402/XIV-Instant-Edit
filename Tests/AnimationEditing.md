@@ -3268,3 +3268,18 @@ The repeat's maths is covered offline (RepeatLayerFixture); these checks are the
 - [ ] 3 A clip with a sound or an effect in the repeated stretch: the sound plays once, where it was, not on each repeat.
 - [ ] 4 With the layer selected the canvas shades From to To. The From and To buttons set them to the playhead; the count
   reads 3 repeats, and on a looping clip a count that isn't whole shows in the warning colour.
+
+## Free camera (pending)
+
+Free camera on the Timeline's action bar (left of Bones) flies the GPose camera: a hook on the camera's update moves it after the
+game's own update. Plan: tasks/freecam.md (local only).
+
+- [ ] 1 Outside GPose the button is greyed out and says why. In GPose, on: the view stays where it was, no jump.
+- [ ] 2 Right after the click, W/S fly where the camera looks, A/D slide, Space/Ctrl rise and sink, Shift is faster; the character
+  doesn't move, the game's camera doesn't react to these keys and no Timeline shortcut fires.
+- [ ] 3 Right-drag over the game turns the view; drag over a window doesn't. Looking straight up and down stops just short.
+- [ ] 4 The wheel over the game changes the speed (the tooltip shows it); over a window it scrolls that window.
+- [ ] 5 Typing in a Timeline field or the game's chat doesn't move the camera; neither do keys typed into another program.
+- [ ] 6 Off, closing the Timeline, or leaving GPose: the game's camera is back where it was before, zoom included.
+- [ ] 7 The bones overlay and gizmo stay on the bones while the free camera flies.
+- [ ] 8 Unloading the plugin with the free camera on gives the game its camera back.

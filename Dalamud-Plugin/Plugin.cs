@@ -77,7 +77,8 @@ public sealed class Plugin : IDalamudPlugin
         ITargetManager targets,
         ICondition condition,
         IDragDropManager dragDrop,
-        IKeyState keyState)
+        IKeyState keyState,
+        IGameInteropProvider interop)
     {
         _pi       = pi;
         _commands = commands;
@@ -219,7 +220,7 @@ public sealed class Plugin : IDalamudPlugin
                 _soundPlayer, previewFiles, () => partners.Find(preset)?.Name ?? partners.Store.Presets.FirstOrDefault(p => p.Id == preset)?.Name ?? "Partner",
                 playGroup);
         });
-        _timelineWindow = new TimelineWindow(_workspaceServices, animationError, framework, textureProvider, keyState, objects, clientState, targets);
+        _timelineWindow = new TimelineWindow(_workspaceServices, animationError, framework, textureProvider, keyState, objects, clientState, targets, interop);
         _exportServer = new ExportServer(_config, _penumbra.ModelExports, _penumbra.RaceExports, _penumbra.SizesExports,
             _penumbra.ModelBackups, _penumbra.Mashups, _penumbra.Scanner, _contexts, log);
         var painterStore = new Services.Painter.PainterJobStore(configDirectory);

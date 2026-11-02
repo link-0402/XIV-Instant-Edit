@@ -41,6 +41,7 @@ internal interface ITimelineHost
     BonesWindow Bones { get; }
     PoseBrowserWindow Poses { get; }
     ShortcutKeys Keys { get; }
+    FreeCamera FreeCamera { get; }
     PoseThumbnails Thumbnails { get; }
     string? AnimationError { get; }
 
@@ -223,7 +224,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             new ClipView(session, posing, timelinePreview, blenderMotion, Open));
         startPage = new StartPage(session, loader, recentEdits, () => sidePanel.Recorder);
         livePose = new LivePosePanel(session);
-        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar, host.FreeCamera);
         menus = new TimelineMenus(session, canvas, toolbar, blenderMotion, curveView, bonesWindow, timelinePreview, ShowStart, Reload, Open);
         bonesPanel = new BonesPanel(session, host.AnimationError, posing, boneEditor, poseSources, timelinePreview, playBar, () => saveFooter.RepairTarget,
             this, services.Textures, keys, () =>

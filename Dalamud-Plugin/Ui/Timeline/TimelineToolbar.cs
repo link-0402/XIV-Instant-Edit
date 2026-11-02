@@ -10,25 +10,30 @@ using InstantEdit.Services.Animations.Timeline;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The action bar above the lanes, on one row: undo, redo, Add, the play bar and on the right the Bones window.
-/// Also the Add menu's items and the status line's notes.
+/// The action bar above the lanes, on one row: undo, redo, Add, the play bar and on the right the free camera and the Bones
+/// window. Also the Add menu's items and the status line's notes.
 /// </summary>
 internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
-    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, PlayBar playBar)
+    TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, PlayBar playBar, FreeCamera freeCamera)
 {
     private const string AddMenu = "##timeline-add-menu";
 
     /// <summary>The Add button's tooltip, which the Add menu repeats.</summary>
     public const string AddTip = "Add an expression, lip sync, sound, effect or prop at the playhead, a bone layer, or a .livepose file";
 
-    // The Bones button's width last frame, to right-align it; 0 before it was drawn.
-    private float bonesWidth;
-    // Bones is on a line of its own, the bar leaving no room for it.
-    private bool bonesBelow;
+    // The right end's width last frame and whether Bones was in it, to right-align it; 0 before it was drawn.
+    private float rightWidth;
+    private bool rightBones;
+    // The right end is on a line of its own, the bar leaving no room for it.
+    private bool rightBelow;
+
+    /// <summary> The free camera's tooltip: its keys and its speed now, in metres a second. </summary>
+    internal static string FreeCameraTip(float speed) =>
+        $"Fly the GPose camera with WASD, Space and Ctrl.\nDrag to look. The wheel sets the speed ({speed:0.#} m/s), Shift goes faster.";
 
     /// <summary>
-    /// Draws the bar for <paramref name="current"/>, the timeline of <paramref name="loaded"/>. Bones keeps to the right
-    /// and moves to a line of its own when the bar leaves no room for it.
+    /// Draws the bar for <paramref name="current"/>, the timeline of <paramref name="loaded"/>. Free camera and Bones keep to the
+    /// right and move to a line of their own when the bar leaves no room for them.
     /// </summary>
     public void Draw(TimelineEditor current, AnimationTimelineSource loaded)
     {
@@ -53,27 +58,63 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
         ImGui.SameLine(0, Theme.Scaled(12));
         playBar.Draw(current, loaded, saveFooter.RepairTarget, "##timeline-play");
 
-        // An expression's own timeline takes no bone layers, so it has no bones to pose; its face does.
-        if (current.Document.Layered)
-            DrawBonesButton(current);
+        DrawRight(current);
     }
 
-    /// <summary> Bones, icon and label, filled while the Bones window is open: on the bar's right, or on a line of its own when the bar is full. </summary>
-    private void DrawBonesButton(TimelineEditor current)
+    /// <summary>
+    /// The bar's right end: Free camera, and Bones when the document takes bone layers (an expression's own timeline has no bones
+    /// to pose; its face does). On the bar's right, or on a line of its own when the bar is full.
+    /// </summary>
+    private void DrawRight(TimelineEditor current)
     {
-        var width = bonesWidth > 0 ? bonesWidth : ImGui.CalcTextSize("Bones").X + ImGui.GetFrameHeight() * 2;
+        var bones = current.Document.Layered;
+        var width = rightWidth > 0 && rightBones == bones ? rightWidth
+            : ButtonWidth("Free camera") + (bones ? ImGui.GetStyle().ItemSpacing.X + ButtonWidth("Bones") : 0);
         var after = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + Theme.Scaled(12);
         var right = ImGui.GetContentRegionMax().X - width;
         // Some room to spare before it comes back up, so a playhead time a digit longer doesn't make it jump.
-        bonesBelow = bonesBelow ? right < after + Theme.Scaled(24) : right < after;
-        if (!bonesBelow)
+        rightBelow = rightBelow ? right < after + Theme.Scaled(24) : right < after;
+        if (!rightBelow)
             ImGui.SameLine(right);
         else
             ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), right));
+        DrawFreeCamera();
+        var start = ImGui.GetItemRectMin().X;
+        if (bones)
+        {
+            ImGui.SameLine();
+            DrawBonesButton(current);
+        }
+        rightWidth = ImGui.GetItemRectMax().X - start;
+        rightBones = bones;
+    }
+
+    private static float ButtonWidth(string label) => ImGui.CalcTextSize(label).X + ImGui.GetFrameHeight() * 2;
+
+    /// <summary> Free camera, icon and label, filled while it flies; it comes on only in GPose. </summary>
+    private void DrawFreeCamera()
+    {
+        var blocked = freeCamera.On ? null : freeCamera.Blocked;
+        bool clicked;
+        using (ImRaii.PushId("##timeline-free-camera"))
+        using (ImRaii.Disabled(blocked != null))
+            clicked = Widgets.TabButton(FontAwesomeIcon.Camera, "Free camera", freeCamera.On);
+        TimelineUi.Tip(blocked ?? FreeCameraTip(freeCamera.Speed));
+        if (clicked && blocked == null)
+        {
+            freeCamera.Toggle();
+            // The keys fly it at once: the game gets the keyboard, not this window and its shortcuts.
+            if (freeCamera.On)
+                ImGuiP.FocusWindow(default(ImGuiWindowPtr));
+        }
+    }
+
+    /// <summary> Bones, icon and label, filled while the Bones window is open. </summary>
+    private void DrawBonesButton(TimelineEditor current)
+    {
         bool clicked;
         using (ImRaii.PushId("##timeline-bones"))
             clicked = Widgets.TabButton(FontAwesomeIcon.Child, "Bones", bonesWindow.IsOpen);
-        bonesWidth = ImGui.GetItemRectSize().X;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(TimelineUi.BonesWindowTip(bonesWindow.IsOpen, current.Document.Face != null));
         if (clicked)

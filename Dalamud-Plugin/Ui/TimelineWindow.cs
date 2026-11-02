@@ -33,6 +33,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private readonly PoseBrowserWindow poseBrowserWindow;
     private readonly PoseThumbnails poseThumbnails;
     private readonly ShortcutKeys keys;
+    private readonly FreeCamera freeCamera;
     private readonly string? animationError;
     private Func<bool>? mainListens;
     // The dialogs the start page's rows open, such as Send animation to Blender; drawn every frame.
@@ -66,7 +67,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private bool disposed;
 
     internal TimelineWindow(WorkspaceServiceFactory services, string? animationError, IFramework framework, ITextureProvider textures, IKeyState keyState,
-        IObjectTable objects, IClientState clientState, ITargetManager targets)
+        IObjectTable objects, IClientState clientState, ITargetManager targets, IGameInteropProvider interop)
         : base("Timeline (Beta)###XIVInstantEditTimeline")
     {
         this.services = services;
@@ -82,6 +83,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         poseBrowserWindow = new PoseBrowserWindow(this);
         poseThumbnails = new PoseThumbnails(textures);
         keys = new ShortcutKeys(keyState, framework);
+        freeCamera = new FreeCamera(interop, framework, clientState, keyState, selfServices.Log);
         Shown = Workspace(WorkspaceKey.Self);
 
         Size = new Vector2(1000, 560);
@@ -106,6 +108,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     BonesWindow ITimelineHost.Bones => bonesWindow;
     PoseBrowserWindow ITimelineHost.Poses => poseBrowserWindow;
     ShortcutKeys ITimelineHost.Keys => keys;
+    FreeCamera ITimelineHost.FreeCamera => freeCamera;
     PoseThumbnails ITimelineHost.Thumbnails => poseThumbnails;
     string? ITimelineHost.AnimationError => animationError;
 
@@ -501,6 +504,8 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         }
         closeConfirmed = false;
         closeAsked = false;
+        // The game gets its camera back.
+        freeCamera.Off();
         // Every Preview and Live ends, and every workspace's clip closes.
         foreach (var workspace in workspaces.Values)
             workspace.Close();
@@ -524,6 +529,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         foreach (var workspace in workspaces.Values)
             workspace.Dispose();
         keys.Dispose();
+        freeCamera.Dispose();
         poseThumbnails.Dispose();
     }
 

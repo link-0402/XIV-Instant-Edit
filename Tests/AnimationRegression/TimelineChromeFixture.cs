@@ -29,6 +29,44 @@ internal static class TimelineChromeFixture
         Summary(check);
         Strip(check);
         Breakdown(check);
+        FreeCamera(check);
+    }
+
+    /// <summary>
+    /// The free camera's motion: its pose from the game camera's spot and look-at, turns, moves and the wheel's speed steps.
+    /// The hook and the keys are checked in game.
+    /// </summary>
+    private static void FreeCamera(Action<bool, string> check)
+    {
+        static bool Near(Vector3 a, Vector3 b) => Vector3.Distance(a, b) < 1e-4f;
+        var at = new Vector3(1, 2, 3);
+        var look = Vector3.Normalize(new Vector3(-2, 1, -4));
+        var pose = FreeCameraMotion.From(at, at + look * 3);
+        check(pose.Position == at && Near(FreeCameraMotion.Forward(pose), look), "Free camera: looks where the game camera looked");
+        check(Near(FreeCameraMotion.LookAt(pose), at + look), "Free camera: its look-at is a metre ahead");
+        check(FreeCameraMotion.From(at, at) == new FreeCameraPose(at, 0, 0), "Free camera: a look-at on the spot looks level along +Z");
+        var level = pose with { Pitch = 0 };
+        check(Near(FreeCameraMotion.Right(level), Vector3.Normalize(Vector3.Cross(FreeCameraMotion.Forward(level), Vector3.UnitY))),
+            "Free camera: right is forward × up, as on the game's camera");
+
+        var turned = FreeCameraMotion.Turn(pose, 0.5f, 0.1f);
+        check(MathF.Abs(turned.Yaw - pose.Yaw - 0.5f) < 1e-5f && MathF.Abs(turned.Pitch - pose.Pitch - 0.1f) < 1e-5f, "Free camera: turns as the game's angles do");
+        check(FreeCameraMotion.Turn(pose, 0, 10).Pitch == FreeCameraMotion.MaxPitch && FreeCameraMotion.Turn(pose, 0, -10).Pitch == -FreeCameraMotion.MaxPitch,
+            "Free camera: never looks straight up or down");
+        check(MathF.Abs(FreeCameraMotion.Turn(pose with { Yaw = 3 }, 1, 0).Yaw - (4 - MathF.Tau)) < 1e-5f, "Free camera: the yaw stays within a turn");
+        check(FreeCameraMotion.Turn(pose, float.NaN, 0) == pose, "Free camera: a broken turn is ignored");
+
+        var ahead = FreeCameraMotion.Step(pose, new FreeCameraInput(1, 0, 0, false), 2, 1);
+        check(Near(ahead.Position, at + look * 2), "Free camera: W flies where it looks");
+        check(Near(FreeCameraMotion.Step(pose, new FreeCameraInput(1, 0, 0, true), 2, 1).Position, at + look * 2 * FreeCameraMotion.FastFactor), "Free camera: Shift goes faster");
+        check(Near(FreeCameraMotion.Step(pose, new FreeCameraInput(0, 0, -1, false), 2, 0.5f).Position, at - Vector3.UnitY), "Free camera: Ctrl goes straight down");
+        var slant = FreeCameraMotion.Step(pose, new FreeCameraInput(1, 1, 1, false), 2, 1);
+        check(MathF.Abs(Vector3.Distance(slant.Position, at) - 2) < 1e-4f, "Free camera: a slant isn't faster");
+        check(FreeCameraMotion.Step(pose, new FreeCameraInput(1, 0, 0, false), 2, -1) == pose, "Free camera: no time, no move");
+
+        check(MathF.Abs(FreeCameraMotion.Speed(2, 1) - 2 * FreeCameraMotion.WheelStep) < 1e-5f && FreeCameraMotion.Speed(2, 0) == 2, "Free camera: a wheel notch steps the speed");
+        check(FreeCameraMotion.Speed(40, 10) == FreeCameraMotion.MaxSpeed && FreeCameraMotion.Speed(0.2f, -10) == FreeCameraMotion.MinSpeed, "Free camera: the speed keeps to its limits");
+        check(!TimelineToolbar.FreeCameraTip(1.5f).Contains("...") && !TimelineToolbar.FreeCameraTip(1.5f).Contains('…'), "Free camera: no ellipsis in its tooltip");
     }
 
     /// <summary> The Bones window's breakdown row shows only for the layers whose keys it reads. </summary>

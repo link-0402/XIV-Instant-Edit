@@ -104,10 +104,11 @@ internal sealed partial class ShortcutKeys : IDisposable
         }
     }
 
-    private static bool Down(VirtualKey key) => (GetAsyncKeyState((int)key) & 0x8000) != 0;
+    /// <summary> Whether the key is held down now, wherever the keyboard is. </summary>
+    internal static bool Down(VirtualKey key) => (GetAsyncKeyState((int)key) & 0x8000) != 0;
 
-    // A game text field (chat, a search box) has the keyboard. Game thread only.
-    private static unsafe bool GameTyping()
+    /// <summary> A game text field (chat, a search box) has the keyboard. Game thread only. </summary>
+    internal static unsafe bool GameTyping()
     {
         var module = RaptureAtkModule.Instance();
         return module != null && module->AtkModule.IsTextInputActive();
