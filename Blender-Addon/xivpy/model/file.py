@@ -1,4 +1,6 @@
 
+import os
+import uuid
 from io           import BytesIO
 from numpy        import ushort, single, empty
 from struct       import pack
@@ -282,10 +284,22 @@ class XIVModel:
         return model
     
     def to_file(self, file_path: str) -> None:
-        # Serialise and validate first, so a failure can't leave the target truncated.
+        # Serialise and validate first, then write beside the target and replace it in one step, so a failure
+        # while writing (a full disk, a killed Blender) can't leave an existing model truncated.
         data = self.to_bytes()
-        with open(file_path, 'wb') as model:
-            model.write(data)
+        temporary = f"{file_path}.{uuid.uuid4().hex}.tmp"
+        try:
+            with open(temporary, 'wb') as model:
+                model.write(data)
+                model.flush()
+                os.fsync(model.fileno())
+            os.replace(temporary, file_path)
+        except BaseException:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            raise
 
     def to_bytes(self) -> bytes:
 

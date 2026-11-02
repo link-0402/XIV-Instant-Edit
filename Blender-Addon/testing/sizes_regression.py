@@ -522,6 +522,25 @@ def _run_stand_in(addon, plugin) -> None:
             props.export_sizes = True
             api.picks = [("Large", True), ("Medium", False)]
 
+        # An empty Export Folder is not the folder Blender was started from.
+        started_in = os.getcwd()
+        with tempfile.TemporaryDirectory(prefix="xiv-ie-empty-export-folder-") as elsewhere:
+            os.chdir(elsewhere)
+            try:
+                settings.export_directory = ""
+                settings.export_name = "Top"
+                props.export_sizes = False
+                try:
+                    result = bpy.ops.xiv_ie.simple_export()
+                except RuntimeError:
+                    result = {"CANCELLED"}
+                _require(result == {"CANCELLED"} and not any(Path(elsewhere).iterdir()),
+                         "Simple Export with no Export Folder writes nothing into the working directory")
+            finally:
+                os.chdir(started_in)
+        props.export_sizes = True
+        api.picks = [("Large", True), ("Medium", False)]
+
     props.export_sizes = False
 
 

@@ -1908,6 +1908,19 @@ class SelectExportContext(Operator):
         return {"FINISHED"}
 
 
+def mod_folder_to_open(path: str) -> Path | None:
+    """The mod folder a Context names, or None when it is not a plain local folder.
+
+    The path is stored in the .blend, so a shared file decides it. wm.path_open hands whatever exists
+    at the path to the system's "open" verb, which starts an executable as readily as it shows a
+    folder, and a network path would be contacted by the open itself.
+    """
+    if not isinstance(path, str) or not path or path.replace("/", "\\").startswith("\\\\"):
+        return None
+    folder = Path(path)
+    return folder if folder.is_absolute() and folder.is_dir() else None
+
+
 class OpenContextFolder(Operator):
     bl_idname = "xiv_ie.open_context_folder"
     bl_label = "Open Mod Folder"
@@ -1926,7 +1939,12 @@ class OpenContextFolder(Operator):
         return True
 
     def execute(self, context: Context):
-        folder = export_destination_context(context, persist=False).source_mod_root_path
+        path = export_destination_context(context, persist=False).source_mod_root_path
+        folder = mod_folder_to_open(path)
+        if folder is None:
+            self.report({"ERROR"}, "The Context's mod folder is not a folder on this computer.")
+            return {"CANCELLED"}
+        folder = str(folder)
         try:
             result = bpy.ops.wm.path_open(filepath=folder)
         except RuntimeError as error:

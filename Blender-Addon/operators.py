@@ -330,8 +330,11 @@ class XIVIE_OT_simple_export(Operator):
                 self.report({"ERROR"}, f"Can't use the cache folder: {error}")
                 return {"CANCELLED"}
         else:
-            directory = Path(bpy.path.abspath(settings.export_directory)).resolve()
-            if not directory.is_dir():
+            # abspath("") (an empty setting, or "//" in a file that was never saved) is "", and Path("") is the
+            # directory Blender was started from: the model would be written there, over whatever has its name.
+            chosen = bpy.path.abspath((settings.export_directory or "").strip())
+            directory = Path(chosen).resolve() if chosen else None
+            if directory is None or not directory.is_dir():
                 self.report({"ERROR"}, "Choose an existing export folder.")
                 return {"CANCELLED"}
         if not name or name in {".", ".."} or Path(name).name != name or (to_stash and not _stash_name(name)):
@@ -543,12 +546,15 @@ class XIVIE_OT_simple_import(Operator):
         """Import one file. Returns (its objects, skeleton note); on failure removes what it
         created and raises."""
         imported_objects = []
+        tracker = None
         skeleton_note = ""
         try:
             if import_format == "MDL":
                 from .io.model import ModelImport
 
-                created_objects = []
+                # The importer appends each object to this list as it makes it, so the list is what a failure part-way
+                # has to remove; imported_objects is only reassigned once the importer has returned.
+                created_objects = imported_objects = []
                 imported = ModelImport.from_file(
                     str(file_path),
                     file_path.stem,
@@ -594,7 +600,8 @@ class XIVIE_OT_simple_import(Operator):
                 if obj.type == "MESH":
                     obj["instant_edit_source_file"] = str(file_path)
         except Exception:
-            _simple_import_remove_objects(imported_objects)
+            # The tracker records what the FBX/glTF importer made when it was left, by an exception too.
+            _simple_import_remove_objects(tracker.created if tracker is not None and not imported_objects else imported_objects)
             raise
         return imported_objects, skeleton_note
 

@@ -309,6 +309,17 @@ def run_parse_cases(animation):
     broken[2][3][6] = float("nan")
     rejects(animation.parse_take, take_body(times=times, frames=broken), "invalid_animation_values",
             "non-finite samples are refused")
+    # Numbers no float64 can hold and JSON nested past Python's recursion limit used to escape the
+    # parser as OverflowError/RecursionError: the handler thread died and the client got an empty reply.
+    huge_reference = [list(reference) for _, _, reference in SKELETON]
+    huge_reference[0][0] = 10 ** 400
+    rejects(animation.parse_take, take_body(references=huge_reference, times=times, frames=frames),
+            "invalid_animation_values", "a reference value too large for a float is refused, not raised")
+    rejects(animation.parse_take, take_body(times=[0.0, 10 ** 400], frames=frames[:2]), "invalid_animation_times",
+            "a frame time too large for a float is refused, not raised")
+    nested = b"[" * 20000 + b"]" * 20000
+    rejects(animation.parse_take, b"XIEA" + struct.pack("<II", 1, len(nested)) + nested, "invalid_animation_header",
+            "a header nested past the recursion limit is refused, not raised")
     header = json.loads(body[12:12 + struct.unpack_from("<I", body, 8)[0]])
     header["kind"] = "pose"
     data = json.dumps(header).encode()
@@ -835,6 +846,10 @@ def run_read_cases(animation, reader):
     rejects(reader.parse_read_request, read_request(schema="instant-edit.animation"), "unsupported_read_schema",
             "a read request with another schema is refused")
     rejects(reader.parse_read_request, read_request(rate=0), "invalid_read_rate", "a read rate of zero is refused")
+    rejects(reader.parse_read_request, read_request(rate=10 ** 400), "invalid_read_rate",
+            "a read rate too large for a float is refused, not raised")
+    rejects(reader.parse_read_request, b"[" * 20000 + b"]" * 20000, "invalid_read_request",
+            "a read request nested past the recursion limit is refused, not raised")
     rejects(reader.parse_read_request, read_request(parents=[-1, 0, 1, 2, 5, 4, 5]), "invalid_animation_hierarchy",
             "a read request listing a bone before its parent is refused")
 
@@ -873,6 +888,31 @@ def run_failure_cases(animation):
                 pass
         require(rig.animation_data is None, "an armature that had no animation data gets none from a failed animation")
         bpy.data.actions.remove(before)
+
+    with temporary_scene_data():
+        # In NLA tweak mode the armature's action cannot be replaced; the take must be refused before
+        # it creates an action that nothing could ever be keyed into or removed again.
+        rig = build_armature()
+        animation_data = rig.animation_data_create()
+        tweaked = bpy.data.actions.new("Tweaked action")
+        animation_data.action = tweaked
+        curve = tweaked.fcurve_ensure_for_datablock(rig, f'pose.bones["{NAMES[0]}"].location', index=0)
+        curve.keyframe_points.insert(1, 1.0)
+        animation_data.nla_tracks.new().strips.new("Strip", 1, tweaked)
+        animation_data.action = None
+        animation_data.use_tweak_mode = True
+        require(animation_data.use_tweak_mode, "the fixture's armature is in NLA tweak mode")
+        actions_before = sorted(action.name for action in bpy.data.actions)
+        try:
+            animation.apply_take(take)
+        except animation.AnimationApplyError as error:
+            require(error.code == "animation_target_tweak_mode" and "NLA" in error.remedy,
+                    "an armature in NLA tweak mode is refused with a message that says how to leave it")
+        else:
+            raise AssertionError("a take was applied to an armature in NLA tweak mode")
+        require(sorted(action.name for action in bpy.data.actions) == actions_before,
+                "the refused take leaves no action behind")
+        animation_data.use_tweak_mode = False
 
 
 def run_target_cases(animation):

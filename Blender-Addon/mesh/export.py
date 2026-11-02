@@ -614,6 +614,27 @@ def get_export_settings(format: str) -> dict[str, str | int | bool]:
         }
     
 
+@contextmanager
+def _hidden_outside_export(export_objs):
+    """Hide the visible meshes that are not part of this export while Blender's FBX or glTF exporter runs.
+
+    Those exporters write every visible object, not the list the MDL writer is given, so a mesh the chosen
+    Parts leave out ("Visible except mannequin", "Context collection only") would be written into the file.
+    """
+    keep = set(export_objs)
+    hidden = []
+    for obj in bpy.context.view_layer.objects:
+        if obj.type == "MESH" and obj not in keep and obj.visible_get():
+            obj.hide_set(True)
+            hidden.append(obj)
+    try:
+        yield
+    finally:
+        for obj in hidden:
+            if obj.name in bpy.data.objects:
+                obj.hide_set(False)
+
+
 class FileExport:
     def __init__(self, file_path: Path, file_format: str, batch=False, export_objects=None):
         self.file_format = file_format
@@ -637,19 +658,21 @@ class FileExport:
                 heels_offset = apply_calculated_heels_offset(scene_handler.export_objs)
 
             if self.file_format == 'GLTF':
-                bpy.ops.export_scene.gltf(
-                                    filepath=str(self.file_path) + ".gltf", 
-                                    **get_export_settings('GLTF')
-                                )
+                with _hidden_outside_export(scene_handler.export_objs):
+                    bpy.ops.export_scene.gltf(
+                                        filepath=str(self.file_path) + ".gltf", 
+                                        **get_export_settings('GLTF')
+                                    )
 
             elif self.file_format == 'FBX':
                 settings = get_settings()
                 if settings.backup_models_on_export:
                     create_backup(self.file_path.parent, self.file_path.name + ".fbx")
-                bpy.ops.export_scene.fbx(
-                                    filepath=str(self.file_path) + ".fbx", 
-                                    **get_export_settings('FBX')
-                                )
+                with _hidden_outside_export(scene_handler.export_objs):
+                    bpy.ops.export_scene.fbx(
+                                        filepath=str(self.file_path) + ".fbx", 
+                                        **get_export_settings('FBX')
+                                    )
                 
             else:
                 settings = get_settings()

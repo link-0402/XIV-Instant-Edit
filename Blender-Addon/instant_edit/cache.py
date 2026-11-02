@@ -243,12 +243,12 @@ def create_job(kind: str, job_id: str | None = None) -> Path:
     return job
 
 
-def _owned_job(path: str | Path) -> Path | None:
+def _owned_job(path: str | Path, root: Path | None = None) -> Path | None:
     raw_candidate = Path(path)
     if raw_candidate.is_symlink():
         return None
     candidate = raw_candidate.resolve()
-    root = cache_root()
+    root = cache_root() if root is None else root
     try:
         relative = candidate.relative_to(root)
     except ValueError:
@@ -264,8 +264,8 @@ def _owned_job(path: str | Path) -> Path | None:
     return candidate
 
 
-def remove_job(path: str | Path) -> bool:
-    job = _owned_job(path)
+def remove_job(path: str | Path, root: Path | None = None) -> bool:
+    job = _owned_job(path, root)
     if job is None or not job.is_dir():
         return False
     with _lock:
@@ -276,13 +276,21 @@ def remove_job(path: str | Path) -> bool:
 
 def finish_job(path: str | Path) -> bool:
     """Mark a job inactive and remove it immediately when auto-cleanup is enabled."""
-    job = _owned_job(path)
+    raw_candidate = Path(path)
+    if raw_candidate.is_symlink():
+        return False
+    candidate = raw_candidate.resolve()
+    # The plugin can move the cache folder while a job runs (it posts the folder with every request).
+    # The job then lives in the previous folder: it is still finished there, by the same ownership
+    # checks against that folder's own marker, instead of staying "active" until Blender restarts.
+    root = cache_root()
+    job = _owned_job(candidate, root) or _owned_job(candidate, candidate.parent.parent)
     if job is None:
         return False
     with _lock:
         _active_jobs.discard(job)
         automatic = _automatic_cleanup
-    return remove_job(job) if automatic else True
+    return remove_job(job, job.parent.parent) if automatic else True
 
 
 def _directory_size(path: Path) -> int:

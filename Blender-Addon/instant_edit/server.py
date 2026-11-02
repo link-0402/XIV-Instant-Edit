@@ -974,7 +974,9 @@ class _ImportHandler(BaseHTTPRequestHandler):
                 "Update both XIV Instant Edit components and retry.") from error
 
         return {
-            **data,
+            # skeletonPath is written by stage_skeleton inside the cache job, after this validation; one
+            # that arrives in the request would make the queued import read a file the plugin never staged.
+            **{key: value for key, value in data.items() if key != "skeletonPath"},
             **context,
             "pluginVersion": plugin_version,
             "filePath": file_path,
@@ -1178,7 +1180,7 @@ def parse_import_files(body: bytes) -> list[Path]:
 
     try:
         data = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         raise refuse("invalid_json", "The file import request body is not valid JSON.") from error
     if not isinstance(data, dict) or data.get("schema") != "instant-edit.import-files" or data.get("version") != 1:
         raise refuse("unsupported_schema", "The file import request uses an unsupported schema.")
@@ -1187,7 +1189,7 @@ def parse_import_files(body: bytes) -> list[Path]:
         raise refuse("invalid_files", f"files must list 1 to {MAX_IMPORT_FILES} paths.")
     files = []
     for name in names:
-        if not isinstance(name, str) or not name or len(name) > 4096 or name.startswith(("\\\\", "//")):
+        if not isinstance(name, str) or not name or len(name) > 4096 or name.replace("/", "\\").startswith("\\\\"):
             raise refuse("invalid_file_path", "Each file must be a local absolute path.")
         path = Path(name)
         if not path.is_absolute():

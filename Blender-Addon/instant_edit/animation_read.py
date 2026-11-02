@@ -78,7 +78,7 @@ def parse_read_request(body) -> ReadRequest:
     """Validate a read request from the plugin. Raises BridgeRequestError for bad input."""
     try:
         data = json.loads(bytes(body).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         _reject("invalid_read_request", "The read request is not valid UTF-8 JSON.")
     if not isinstance(data, dict):
         _reject("invalid_read_request", "The read request is not a JSON object.")
@@ -86,6 +86,8 @@ def parse_read_request(body) -> ReadRequest:
         _reject("unsupported_read_schema", "The read request uses an unsupported schema.",
                 "Install matching versions of the Dalamud plugin and Blender add-on.")
     rate = data.get("rate")
+    if isinstance(rate, int) and not isinstance(rate, bool) and abs(rate) > MAX_RATE:
+        rate = float("inf")      # math.isfinite raises OverflowError for an integer too large for a float
     if (isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate)
             or not MIN_RATE <= rate <= MAX_RATE):
         _reject("invalid_read_rate", "The read request's sample rate is invalid.")

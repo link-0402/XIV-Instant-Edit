@@ -918,7 +918,7 @@ def assign_material_path(objects, value: str) -> str:
         _keep_imported_preview(obj)
         obj["xiv_material"] = path
         obj.pop(MASHUP_SOURCE_MATERIAL_PROPERTY, None)
-        if "instant_edit_xiv_material" in obj or context_id_for_object(obj):
+        if "instant_edit_xiv_material" in obj or _context_of(obj):
             obj["instant_edit_xiv_material"] = path
         if preview is not None:
             _set_preview_material(obj, preview)
@@ -960,10 +960,10 @@ def preview_material_for(path: str, objects):
     plain material named after the path."""
     target = (path,)
     group = {obj.as_pointer() for obj in objects}
-    contexts = {context_id_for_object(obj) for obj in objects}
+    contexts = {_context_of(obj) for obj in objects}
     candidates = sorted(
         (obj for obj in bpy.data.objects if obj.type == "MESH"),
-        key=lambda obj: (context_id_for_object(obj) not in contexts, obj.as_pointer() not in group, obj.name),
+        key=lambda obj: (_context_of(obj) not in contexts, obj.as_pointer() not in group, obj.name),
     )
     for obj in candidates:
         if matching_material_path(imported_material_path(obj), target):
@@ -991,11 +991,20 @@ def imported_material_path(obj) -> str:
         return ""
 
 
+def _context_of(obj) -> str:
+    """The object's Context, or "" when it is linked to several. Used where the answer only decides what a panel or
+    a menu offers; the export path keeps the strict check."""
+    try:
+        return context_id_for_object(obj)
+    except ContextValidationError:
+        return ""
+
+
 def shared_base_contexts(objects) -> dict:
     """Map the Contexts of ``objects`` to (source mod name, collection) when two or
     more of them were imported from the same base model, such as two faces that
     both replace Miqo'te face 2. Other Contexts are left out."""
-    context_ids = {context_id_for_object(obj) for obj in objects} - {"", None}
+    context_ids = {_context_of(obj) for obj in objects} - {"", None}
     by_model = defaultdict(dict)
     for collection in bpy.data.collections:
         context_id = _property(collection, "context_id", "")
@@ -1033,7 +1042,7 @@ def material_sources(group_objects, objects, shared=None) -> list[tuple[str, str
         if not path:
             continue
         key = _material_identity_key(path)
-        own = context_id_for_object(obj)
+        own = _context_of(obj)
         candidates = [own] + [context_id for context_id in shared if context_id != own]
         source = next((context_id for context_id in candidates if key in imported.get(context_id, ())), own)
         sources.setdefault(key, (path, shared.get(source, ("", None))[0]))
@@ -1046,8 +1055,8 @@ def same_context_objects(objects, group: MaterialGroup) -> list:
     A Context's mod only has its own materials, so another Context's material
     would not load for these parts and would fail a mashup.
     """
-    contexts = {context_id_for_object(obj) for obj in group.objects}
-    return [obj for obj in objects if context_id_for_object(obj) in contexts]
+    contexts = {_context_of(obj) for obj in group.objects}
+    return [obj for obj in objects if _context_of(obj) in contexts]
 
 
 def material_suggestions(group: MaterialGroup, shared=None) -> list[tuple[str, str]]:
@@ -1060,7 +1069,7 @@ def material_suggestions(group: MaterialGroup, shared=None) -> list[tuple[str, s
     for obj in group.objects:
         path = imported_material_path(obj)
         if path:
-            mods.setdefault(path, shared.get(context_id_for_object(obj), ("", None))[0])
+            mods.setdefault(path, shared.get(_context_of(obj), ("", None))[0])
     imported = sorted(mods, key=str.casefold)
     current = _current_material_suggestions(group)
     suggestions = []

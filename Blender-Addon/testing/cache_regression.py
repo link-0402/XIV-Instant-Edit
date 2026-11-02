@@ -404,6 +404,28 @@ def run() -> None:
         assert working_texture.is_file()
         assert (foreign / "keep.txt").is_file()
 
+        # A job still running when the plugin moves the cache folder is finished in the folder it lives in.
+        cache.configure_cache(base, True)
+        moved_job = cache.create_job("imports")
+        (moved_job / "model.mdl").write_bytes(b"model")
+        moved_root = base / "moved cache base"
+        cache.configure_cache(moved_root, True)
+        assert moved_job.resolve() in cache._active_jobs
+        assert cache.finish_job(moved_job)
+        assert moved_job.resolve() not in cache._active_jobs and not moved_job.exists()
+        cache.configure_cache(base, False)
+        kept_job = cache.create_job("exports")
+        cache.configure_cache(moved_root, False)
+        assert cache.finish_job(kept_job) and kept_job.is_dir() and kept_job.resolve() not in cache._active_jobs
+        cache.configure_cache(base, False)
+        assert cache.clean_cache()[0] >= 1 and not kept_job.exists()
+        # Only a job of a cache that carries its marker is finished: the same layout elsewhere is left alone.
+        impostor = base / "impostor" / "imports" / uuid.uuid4().hex
+        impostor.mkdir(parents=True)
+        assert not cache.finish_job(impostor) and impostor.is_dir()
+        print("[PASS] a job outlives a change of the cache folder and is still finished in the folder it lives in")
+        cache.configure_cache(base, True)
+
         # The plugin keeps a hair model backup's EST entries beside it; they expire together.
         history = root / "backups" / ("e" * 64)
         history.mkdir(parents=True, exist_ok=True)

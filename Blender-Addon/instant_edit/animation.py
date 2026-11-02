@@ -127,7 +127,11 @@ def _source(value) -> dict:
 
 
 def _transforms(values, count: int, what: str) -> np.ndarray:
-    array = np.asarray(values, dtype=np.float64).reshape(count, STRIDE)
+    try:
+        array = np.asarray(values, dtype=np.float64).reshape(count, STRIDE)
+    except (OverflowError, ValueError, TypeError):
+        # A JSON integer of hundreds of digits does not fit a float64; numpy raises OverflowError.
+        _reject("invalid_animation_values", f"The animation's {what} are not numbers.")
     if not np.isfinite(array).all():
         _reject("invalid_animation_values", f"The animation's {what} contain values that are not finite.")
     norms = np.linalg.norm(array[:, 3:7], axis=1)
@@ -179,7 +183,7 @@ def parse_take(body) -> Take:
         _reject("invalid_animation_header", "The animation header is truncated or too large.")
     try:
         header = json.loads(bytes(view[12:12 + header_length]).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         _reject("invalid_animation_header", "The animation header is not valid UTF-8 JSON.")
     if not isinstance(header, dict) or header.get("schema") != SCHEMA or header.get("version") != FORMAT_VERSION:
         _reject("unsupported_animation_schema",
@@ -206,7 +210,10 @@ def parse_take(body) -> Take:
     if (not isinstance(times, list) or not times
             or not all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in times)):
         _reject("invalid_animation_times", "The animation has no valid frame times.")
-    times = np.asarray(times, dtype=np.float64)
+    try:
+        times = np.asarray(times, dtype=np.float64)
+    except OverflowError:
+        _reject("invalid_animation_times", "The animation's frame times are out of range.")
     if (not np.isfinite(times).all() or (np.diff(times) <= 0).any()
             or times[-1] - times[0] > MAX_DURATION_SECONDS):
         _reject("invalid_animation_times",
@@ -712,6 +719,12 @@ def apply_take(take: Take, context=None) -> dict:
         raise AnimationApplyError(
             "animation_target_not_editable", f'Armature "{armature.name}" is linked and cannot be animated here.',
             "Make the armature local (Object > Library Override > Make) and send the animation again.")
+    if armature.animation_data is not None and armature.animation_data.use_tweak_mode:
+        # In NLA tweak mode AnimData.action is read-only: assigning the new action below would raise
+        # after the action had been created and given a fake user, leaving it behind in the file.
+        raise AnimationApplyError(
+            "animation_target_tweak_mode", f'Armature "{armature.name}" is in NLA tweak mode and cannot take a new action.',
+            "Leave NLA tweak mode (Tab in the NLA editor) and send the animation again.")
     if armature.mode == "EDIT":
         armature.update_from_editmode()
 

@@ -9,9 +9,11 @@ import http.client
 import importlib
 import json
 import ntpath
+import os
 import struct
 import sys
 import tempfile
+import types
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import URLError
@@ -107,6 +109,72 @@ def assert_manifest_status(server, addon_root):
             server._load_addon_version(invalid_manifest) is None,
             "an invalid Blender manifest produces an unknown add-on version",
         )
+
+
+def assert_model_file_safety(package_name):
+    validators = importlib.import_module(f"{package_name}.io.model.exp.validators")
+    model_file = importlib.import_module(f"{package_name}.xivpy.model.file")
+
+    clean = validators.clean_material_path
+    _require(
+        clean("mt_c0101e0001_top_a") == "/mt_c0101e0001_top_a.mtrl" and clean("/mt_a.mtrl") == "/mt_a.mtrl" and
+        clean("mt_a.mtrl.001") == "/mt_a.mtrl" and clean("mt_a.mtrl [Some Mod]") == "/mt_a.mtrl",
+        "a bare material name is relative to the model's material folder: it gets the leading slash",
+    )
+    full = "chara/monster/m0001/obj/body/b0001/material/v0001/mt_m0001b0001_a.mtrl"
+    _require(
+        clean(full) == full and clean(full + ".001") == full and clean("bgcommon/hou/indoor/mt_x.mtrl") == "bgcommon/hou/indoor/mt_x.mtrl",
+        "a full game material path is left as the model had it, not turned into a path under the model's folder",
+    )
+
+    # A model written over an existing one is written beside it and swapped in: a failure leaves the old file.
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-model-write-") as folder:
+        target = Path(folder) / "model.mdl"
+        target.write_bytes(b"old model")
+        stub = types.SimpleNamespace(to_bytes=lambda: b"new model")
+        model_file.XIVModel.to_file(stub, str(target))
+        _require(target.read_bytes() == b"new model" and [path.name for path in Path(folder).iterdir()] == ["model.mdl"],
+                 "writing a model replaces the file and leaves nothing beside it")
+        original_replace = os.replace
+
+        def failing_replace(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        os.replace = failing_replace
+        try:
+            try:
+                model_file.XIVModel.to_file(stub, str(target))
+            except OSError:
+                pass
+            else:
+                raise AssertionError("a failed replace did not surface")
+        finally:
+            os.replace = original_replace
+        _require(target.read_bytes() == b"new model" and [path.name for path in Path(folder).iterdir()] == ["model.mdl"],
+                 "a write that fails leaves the existing model as it was and removes its temporary file")
+
+
+def assert_ambiguous_context_panels(package_name):
+    """An object linked to two Instant Edit collections must not stop the Mesh Groups panel or the Material dialog from drawing."""
+    materials_module = importlib.import_module(f"{package_name}.materials")
+    mesh = bpy.data.meshes.new("Ambiguous mesh")
+    obj = bpy.data.objects.new("0.0 Ambiguous", mesh)
+    collections = [bpy.data.collections.new(f"Context {name}") for name in "AB"]
+    try:
+        for index, collection in enumerate(collections):
+            collection["collection_kind"] = "instant_edit"
+            collection["context_id"] = f"ambiguous-context-{index}"
+            bpy.context.scene.collection.children.link(collection)
+            collection.objects.link(obj)
+        _require(
+            materials_module._context_of(obj) == "" and materials_module.shared_base_contexts([obj]) == {},
+            "an object in two Instant Edit collections is ambiguous to the panels without stopping them",
+        )
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.meshes.remove(mesh)
+        for collection in collections:
+            bpy.data.collections.remove(collection)
 
 
 def assert_model_stream_options(package_name):
@@ -756,6 +824,8 @@ def run_staging_isolation_regression(addon) -> None:
             "an empty scene retains the permanent Context sentinel",
         )
         assert_model_stream_options(package_name)
+        assert_model_file_safety(package_name)
+        assert_ambiguous_context_panels(package_name)
 
         base_import = {
             "schema": "instant-edit.context",
@@ -779,6 +849,21 @@ def run_staging_isolation_regression(addon) -> None:
             "resourceManifestStatus": "capture_failed",
         }
         validated = server._ImportHandler._validate_import(base_import)
+        _require(
+            "skeletonPath" not in server._ImportHandler._validate_import(
+                {**base_import, "skeletonPath": "/etc/passwd"}),
+            "a skeletonPath sent with an import is dropped: only the staging step may name the skeleton file",
+        )
+        with tempfile.TemporaryDirectory(prefix="xiv-ie-open-folder-") as mod_root:
+            a_file = Path(mod_root) / "payload.exe"
+            a_file.write_bytes(b"")
+            _require(
+                ops.mod_folder_to_open(mod_root) == Path(mod_root)
+                and all(ops.mod_folder_to_open(bad) is None
+                        for bad in ("", str(a_file), str(Path(mod_root) / "missing"), "relative/folder",
+                                    "\\\\host\\share\\mod", "//host/share/mod", "/\\host\\share\\mod", r"D:\Penumbra\Not\Here")),
+                "Open Mod Folder only opens an existing local folder, never a file or a network path stored in a .blend",
+            )
         try:
             server._ImportHandler._validate_import({**base_import, "schema": "instant-edit.import"})
         except ValueError:
@@ -974,6 +1059,10 @@ def run_staging_isolation_regression(addon) -> None:
             context_module.VERSION == protocol["currentVersion"] and
             context_module.SUPPORTED_VERSIONS == set(protocol["supportedVersions"]),
             "the add-on's context fields, schema and versions match Tests/TestSupport/context-protocol.json",
+        )
+        _require(
+            server.MAX_IMPORT_FILES == protocol["importFilesLimit"],
+            "the add-on's /import/files limit matches the plugin's (Tests/TestSupport/context-protocol.json)",
         )
         operator = bpy.ops.xiv_ie.instant_import.get_rna_type().properties
         mismatched = [

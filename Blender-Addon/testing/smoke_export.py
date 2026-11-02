@@ -486,6 +486,18 @@ def assert_import_files_endpoint(addon):
             relative = post(["hair_a.glb"])
             unsupported = post([str(folder / "notes.txt")])
             missing = post([str(folder / "gone.glb")])
+            # Windows reads "/\host\share" as the network path \\host\share, so it is refused like "\\host\share".
+            mixed_network = post(["/\\host\\share\\hair.glb"])
+            if mixed_network.get("status") != 400 or mixed_network["body"]["code"] != "invalid_file_path":
+                raise AssertionError(f"/import/files accepted a network path written with mixed slashes: {mixed_network}")
+            diagnostics = importlib.import_module(f"{addon.__name__}.instant_edit.diagnostics")
+            try:
+                server.parse_import_files(b"[" * 20000 + b"]" * 20000)
+            except diagnostics.BridgeRequestError as error:
+                if error.code != "invalid_json":
+                    raise AssertionError(f"a deeply nested /import/files body was refused as {error.code}") from error
+            else:
+                raise AssertionError("a deeply nested /import/files body was accepted")
             if (relative.get("status") != 400 or relative["body"]["code"] != "invalid_file_path"
                     or unsupported.get("status") != 400 or unsupported["body"]["code"] != "unsupported_file_type"
                     or missing.get("status") != 400 or missing["body"]["code"] != "file_not_found"):
@@ -3434,6 +3446,53 @@ def run() -> None:
         if abs(smoke_shape.value - 0.65) > 1e-6:
             raise AssertionError("Shape-key value was not restored after a failed export")
         print("[PASS] Failed export restores shape-key values")
+
+        # An export needs a mesh for LOD 0, and a submesh holds its attributes in a 32-bit mask.
+        with tempfile.TemporaryDirectory(prefix="xiv-instant-edit-limits-") as limits_dir:
+            for case, expected in (("lod1", "No mesh could be exported"), ("attributes", "at most 32")):
+                probe = obj.copy()
+                probe.data = obj.data.copy()
+                bpy.context.scene.collection.objects.link(probe)
+                try:
+                    if case == "lod1":
+                        probe.name = "0.0 Smoke LOD1"
+                    else:
+                        for index in range(33):
+                            probe[f"atrx_limit{index}"] = True
+                    try:
+                        export_module.export_result(Path(limits_dir) / case, "MDL", export_objects=[probe])
+                    except Exception as error:
+                        if expected not in str(error):
+                            raise
+                    else:
+                        raise AssertionError(f"An export with {case} was not refused")
+                finally:
+                    probe_mesh = probe.data
+                    bpy.data.objects.remove(probe, do_unlink=True)
+                    bpy.data.meshes.remove(probe_mesh)
+            if any(Path(limits_dir).iterdir()):
+                raise AssertionError("A refused export left a file behind")
+        print("[PASS] A model with no LOD 0 mesh, or more than 32 attributes, is refused instead of written broken")
+
+        # FBX and glTF are written by Blender's scene exporters, which take every visible object: the meshes
+        # left out of the export's scope (second, added_group) must stay out of the file and come back visible.
+        with tempfile.TemporaryDirectory(prefix="xiv-instant-edit-scope-") as scope_dir:
+            visible_before = [item.name for item in (second, added_group) if item.visible_get()]
+            export_module.export_result(Path(scope_dir) / "scoped", "FBX", export_objects=[obj])
+            before_import = set(bpy.data.objects)
+            bpy.ops.import_scene.fbx(filepath=str(Path(scope_dir) / "scoped.fbx"))
+            in_file = [item for item in bpy.data.objects if item not in before_import]
+            file_meshes = [item for item in in_file if item.type == "MESH"]
+            for item in in_file:
+                item_data = item.data
+                bpy.data.objects.remove(item, do_unlink=True)
+                if item_data is not None and item_data.users == 0 and isinstance(item_data, bpy.types.Mesh):
+                    bpy.data.meshes.remove(item_data)
+            if len(file_meshes) != 1:
+                raise AssertionError(f"The FBX holds {len(file_meshes)} meshes, not the one exported: {[m.name for m in file_meshes]}")
+            if [item.name for item in (second, added_group) if item.visible_get()] != visible_before:
+                raise AssertionError("A mesh hidden for the FBX export did not come back visible")
+        print("[PASS] An FBX export holds only the meshes of its scope, and the others stay visible afterwards")
 
         for selected in bpy.context.selected_objects:
             selected.select_set(False)

@@ -580,6 +580,25 @@ def check_simple_import(addon, context):
                 patch.object(module("instant_edit.ops"), "refresh_variant_targets_after_operation", lambda _context: None), \
                 patch.object(plugin_http, "post_json", answer(200, {"ok": True, "skeleton": payload()})):
             result = bpy.ops.xiv_ie.simple_import(filepath=str(model_file))
+    # An importer that fails after creating some objects: what it had made is removed, not left in the scene.
+    def failing_import(file_path, import_name, **kwargs):
+        obj = mesh_object("0.0 Partial Import", vertices, {"j_kao": [(0, 1.0), (1, 1.0), (2, 1.0)]})
+        kwargs["created_objects"].append(obj)
+        raise RuntimeError("the second mesh is damaged")
+
+    with tempfile.TemporaryDirectory(prefix="xiv-ie-failed-import-") as folder:
+        broken_file = Path(folder) / "c0101e0002_top.mdl"
+        broken_file.write_bytes(b"model")
+        with patch.object(importer.ModelImport, "from_file", staticmethod(failing_import)), \
+                patch.object(module("instant_edit.ops"), "refresh_variant_targets_after_operation", lambda _context: None):
+            try:
+                failed = bpy.ops.xiv_ie.simple_import(filepath=str(broken_file))
+            except RuntimeError:
+                failed = {"CANCELLED"}
+    require(failed == {"CANCELLED"} and not any(obj.name.startswith("0.0 Partial Import") for obj in bpy.data.objects) and
+            not any(mesh.name.startswith("0.0 Partial Import") for mesh in bpy.data.meshes),
+            "an import that fails part-way removes the objects and meshes it had made")
+
     armature = next(obj for obj in bpy.data.objects if obj.name.startswith("0.0 Simple Skeleton")).parent
     require(result == {"FINISHED"} and armature is not None and armature.type == "ARMATURE" and
             max_difference(armature.data.bones["j_kao"].matrix_local, rigid_model(SKELETON)["j_kao"]) < 1e-5,

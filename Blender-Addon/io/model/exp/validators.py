@@ -15,7 +15,10 @@ def clean_material_path(name: str):
     name = re.sub(r'(\.mtrl)\s+\[.*$', r'\1', name, flags=re.IGNORECASE)
     if not name.endswith(".mtrl"):
         name = name + ".mtrl"
-    if not name.startswith("/"):
+    # A bare file name is relative to the model's own material folder, which a leading "/" says. A path with a
+    # directory in it is a full game path (monsters, bgcommon, ...) and stays as the model had it: with a "/" in
+    # front the game would look for it under the model's material folder.
+    if "/" not in name:
         name = "/" + name
     return name
 

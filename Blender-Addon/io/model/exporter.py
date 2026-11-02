@@ -5,9 +5,11 @@ from collections      import defaultdict
 from .exp.scene      import prepare_submeshes
 from .com.exceptions  import XIVMeshError
 from .exp.constructor import CreateLOD
-
 from ...xivpy.model   import (XIVModel, NeckMorph,
                               ModelFlags1, ModelFlags2, ModelFlags3)
+
+# A submesh records the attributes it carries as a 32-bit mask.
+MAX_ATTRIBUTES = 32
 
 
 def get_lod_range(lod_level: int) -> float:
@@ -57,6 +59,11 @@ class ModelExport:
             sorted_meshes = prepare_submeshes(export_obj, self.model.attributes, lod_level)
             if not sorted_meshes:
                 break
+            if len(self.model.attributes) > MAX_ATTRIBUTES:
+                # A submesh records the attributes it carries as a 32-bit mask.
+                raise XIVMeshError(
+                    f"The model has {len(self.model.attributes)} different attributes, but a model file holds at most "
+                    f"{MAX_ATTRIBUTES}. Remove the surplus atr_, heels_offset or skin_suffix properties.")
 
             active_lod.mesh_idx = len(self.model.meshes)
 
@@ -72,6 +79,9 @@ class ModelExport:
             self.model.set_lod_count(lod_level + 1)
 
         lod_count = self.model.header.lod_count
+        if lod_count == 0:
+            # Nothing was written for LOD 0, which would leave a file the game cannot draw.
+            raise XIVMeshError("No mesh could be exported: every mesh is empty, or named as a lower level of detail (LOD1, LOD2).")
         for lod_level, active_lod in enumerate(self.model.lods[:lod_count]):
             lod_range = 0 if lod_level == (lod_count - 1) else get_lod_range(lod_level)
             active_lod.model_lod_range   = lod_range
