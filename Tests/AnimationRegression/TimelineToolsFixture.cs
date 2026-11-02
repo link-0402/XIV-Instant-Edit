@@ -120,6 +120,8 @@ internal static class TimelineToolsFixture
             "an all-zero rotation reads as none, IK is kept as on, and a missing Propogate reaches the children as LivePose's default");
         reject(() => LivePoseLayer.ReadFile("{ \"Bones\": {} }"), "a .pose file is not a LivePose file");
         reject(() => LivePoseLayer.ReadFile("not json"), "text that isn't JSON");
+        reject(() => LivePoseLayer.ReadFile("""{ "Data": [ 1 ] }"""), "a bone entry that isn't an object is refused as a file that is not a LivePose file");
+        reject(() => LivePoseLayer.ReadFile("""{ "Data": [ { "BonePoseInfoId": { "BoneName": 7 } } ] }"""), "a bone name that isn't text is refused the same way");
         reject(() => LivePoseLayer.ReadFile("""{ "Data": [ { "BonePoseInfoId": { "BoneName": "a" }, "Stacks": [ { "Transform": { "Rotation": { "X": "x" } } } ] } ] }"""),
             "an adjustment that can't be read");
     }

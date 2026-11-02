@@ -83,6 +83,13 @@ public static class ModelMeshReader
 
     private readonly record struct Element(byte Stream, byte Offset, byte Type);
 
+    /// <summary>
+    /// The most vertices all the LOD-0 meshes of one model may decode to. A mesh holds 65535 at most and a
+    /// file may declare 256 meshes that all read the same vertex stream, so the file's size alone does not
+    /// bound what is decoded; the game's own models have a few hundred thousand at the very most.
+    /// </summary>
+    private const long MaxModelVertices = 2_000_000;
+
     /// <param name="shapes">Also read the shapes and their LOD-0 index replacements.</param>
     /// <param name="skin">Also read each vertex's bones and weights, and the model's bone names.</param>
     public static ModelMesh Read(byte[] bytes, bool shapes = false, bool skin = false)
@@ -172,6 +179,11 @@ public static class ModelMeshReader
 
         var parts = new List<ModelMeshPart>();
         var meshStarts = new Dictionary<uint, (int Mesh, uint IndexCount, int VertexCount)>();
+        // The submeshes of a model split its index buffer, so together they read about as many indices as it
+        // holds. Ranges may overlap in a corrupt or hostile file (65535 submeshes of one mesh, each over the
+        // whole buffer), which would copy the buffer that many times; twice what it holds is already generous.
+        long totalVertices = 0, emittedIndices = 0;
+        var indexBudget = 2L * indexTotal + 65536;
         for (var m = lod0MeshIndex; m < lod0MeshIndex + lod0MeshCount; m++)
         {
             var mesh = meshTable + m * MeshSize;
@@ -183,6 +195,9 @@ public static class ModelMeshReader
             var startIndex = U32(bytes, mesh + 16);
             if (vertexCount == 0 || indexCount < 3)
                 continue;
+            totalVertices += vertexCount;
+            if (totalVertices > MaxModelVertices)
+                throw new InvalidDataException("The model has more vertices than any model of the game.");
             if (materialIndex >= materials.Count)
                 throw new InvalidDataException("A mesh uses a material outside the material table.");
             if (m >= declarationCount || positions[m] is not { } position)
@@ -221,6 +236,9 @@ public static class ModelMeshReader
                     continue;
                 if (start + count > indexTotal)
                     throw new InvalidDataException("A submesh reads past the index buffer.");
+                emittedIndices += count - count % 3;
+                if (emittedIndices > indexBudget)
+                    throw new InvalidDataException("The submeshes read the index buffer many times over.");
                 var triangleIndices = new int[count - count % 3];
                 for (var i = 0; i < triangleIndices.Length; i++)
                 {

@@ -409,12 +409,25 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             }
             catch (Exception error)
             {
-                journal.State = "RecoveryRequired"; journal.Message = error.Message; store.Save(journal);
+                journal.State = "RecoveryRequired"; journal.Message = error.Message;
+                // The rollback is what puts back the files already changed, so it runs even when the record cannot be written
+                // (the same full disk or locked config folder that failed the commit can fail this too).
+                TrySave(journal);
                 try { await UndoFilesCoreAsync(journal); }
-                catch (Exception rollback) { journal.Message += " Rollback needs attention: " + rollback.Message; store.Save(journal); }
+                catch (Exception rollback) { journal.Message += " Rollback needs attention: " + rollback.Message; TrySave(journal); }
                 throw new IOException(journal.Message, error);
             }
         }, token);
+    }
+
+    /// <summary> Saves the record on a failure path, where a second failure must not hide the first one. </summary>
+    private void TrySave(AnimationEditJournal journal)
+    {
+        try { store.Save(journal); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            journal.Message += $" (The recovery record could not be saved: {e.Message})";
+        }
     }
 
     internal static async Task VerifyActivationAsync(IEnumerable<AnimationFileChange> files,

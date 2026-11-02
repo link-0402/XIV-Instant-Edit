@@ -1601,7 +1601,7 @@ public sealed partial class ExportServer : IDisposable
         try
         {
             if (string.IsNullOrWhiteSpace(filePath) || filePath.Length > 4096 || filePath.Contains('\0') ||
-                !Path.IsPathRooted(filePath) || filePath.StartsWith("\\\\", StringComparison.Ordinal) ||
+                !Path.IsPathRooted(filePath) || PathRules.IsNetworkPath(filePath) ||
                 !string.Equals(Path.GetExtension(filePath), ".mdl", StringComparison.OrdinalIgnoreCase) ||
                 filePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Any(segment => segment is "." or ".."))
                 return (null, (ResultCode.UnsafeFilePath, "filePath must be a local absolute .mdl path"));

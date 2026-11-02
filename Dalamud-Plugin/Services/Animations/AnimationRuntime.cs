@@ -271,7 +271,8 @@ internal static unsafe class AnimationRuntime
                 for (var i = 0; i < animated->AnimationControls.Length; i++)
                 {
                     var control = animated->AnimationControls[i].Value;
-                    if (control == null || control->Weight <= 0 || control->Binding.ptr == null) continue;
+                    // A binding without an animation would be read through a null pointer below, which .NET cannot catch.
+                    if (control == null || control->Weight <= 0 || control->Binding.ptr == null || control->Binding.ptr->Animation.ptr == null) continue;
                     var resource = p->SkeletonResourceHandle->FileName.Utf8();
                     RuntimeBinding? captured;
                     try

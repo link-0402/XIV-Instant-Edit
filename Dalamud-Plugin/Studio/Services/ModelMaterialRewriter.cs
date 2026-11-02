@@ -249,11 +249,13 @@ public static class ModelMaterialRewriter
         // New slots each add an entry to the material offset table, which sits inside the model data.
         int grown = (materials.Length - mdl.Materials.Length) * 4;
 
-        // Pad to the block's own 4 bytes, then on until the whole file after the material table has
-        // moved by a multiple of 16 — every alignment further down is measured from the start of the
-        // file. What sits between the block and the table is 4-byte data, which stays 4-aligned.
+        // Pad until the whole file after the material table has moved by a multiple of 16 — every
+        // alignment further down is measured from the start of the file. The block keeps the 4-byte
+        // alignment the file had: a game file's block is a multiple of 4 and `grown` is, so the new
+        // size is too. A block some other exporter left unaligned is kept unaligned the same way;
+        // asking for a multiple of 4 as well would never be satisfiable then and the loop would not end.
         int size = blob.Count;
-        while (size % 4 != 0 || (size - (int)mdl.StringSize + grown) % 16 != 0)
+        while ((size - (int)mdl.StringSize + grown) % 16 != 0)
             size++;
         int head  = size - (int)mdl.StringSize;      // how far the model data up to the material table moves
         int delta = head + grown;                     // how far everything after it moves

@@ -111,6 +111,16 @@ internal static class PreviewModScenarios
             "preview mods: an unreadable list is set aside, so the next save doesn't write over the previews it held");
         broken.Remove(preview.Id);
 
+        // The list cannot be written (here: its folder is a file). The preview's mod is already active in Penumbra,
+        // so adding it must not throw; it stays tracked this session and the error is reported.
+        var blocker = Path.Combine(folder, "not-a-folder");
+        File.WriteAllText(blocker, "x");
+        var unwritable = new PreviewModStore<PreviewMod>(Path.Combine(blocker, "config"), "SharedPreviews.json", "shared previews");
+        unwritable.Load();
+        unwritable.Add(preview);
+        Require(unwritable.Previews.Count == 1 && unwritable.LoadError.Contains("could not be saved", StringComparison.Ordinal),
+            "preview mods: a list that cannot be written is reported, and the preview is still tracked");
+
         var entry = PreviewModEntry.At("/chara\\x\\--y.tex", [1]);
         Require(entry.RelativePath == "Files/chara/x/--y.tex" && entry.GamePaths.SequenceEqual(["chara/x/--y.tex"]),
             "preview mods: a file mapped from one game path sits at Files/<game path>");

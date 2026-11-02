@@ -125,16 +125,21 @@ public sealed class MaterialDocument
     /// <summary>Changes slot <paramref name="index"/>'s sampler, settings, texture path and DX11 flag.</summary>
     public MaterialDocument WithSlot(int index, MaterialSlot slot) => Edit(m =>
     {
+        // A file whose shader section was not fully read is written with its raw sampler table (Write ->
+        // WritePathsOnly): only the path of a texture it already has can change, nothing about the samplers.
         var sampler = m.Samplers[index];
-        sampler.Id = slot.SamplerId;
-        sampler.Settings = slot.SamplerSettings;
+        if (m.ShaderDataParsed)
+        {
+            sampler.Id = slot.SamplerId;
+            sampler.Settings = slot.SamplerSettings;
+        }
         if (sampler.HasTexture && sampler.TextureIndex < m.TextureOffsets.Length)
         {
             var old = m.TextureOffsets[sampler.TextureIndex];
             var flags = (ushort)(slot.Dx11 ? old.Flags | 0x8000 : old.Flags & ~0x8000);
             m.TextureOffsets[sampler.TextureIndex] = new MtrlTextureOffset(slot.Path, flags);
         }
-        else if (slot.Path.Length > 0)
+        else if (m.ShaderDataParsed && slot.Path.Length > 0)
         {
             m.TextureOffsets = [.. m.TextureOffsets, new MtrlTextureOffset(slot.Path, (ushort)(slot.Dx11 ? 0x8000 : 0))];
             sampler.TextureIndex = (byte)(m.TextureOffsets.Length - 1);
@@ -143,7 +148,7 @@ public sealed class MaterialDocument
     });
 
     /// <summary>Adds a texture and a sampler reading it, with the normal map's sampler settings when there is one.</summary>
-    public MaterialDocument WithAddedSlot(uint samplerId, string path) => Edit(m =>
+    public MaterialDocument WithAddedSlot(uint samplerId, string path) => !Editable ? this : Edit(m =>
     {
         var settings = m.Samplers.FirstOrDefault(sampler => sampler.Id == NormalSampler)?.Settings ?? DefaultSamplerSettings;
         m.TextureOffsets = [.. m.TextureOffsets, new MtrlTextureOffset(path, 0)];
@@ -152,7 +157,7 @@ public sealed class MaterialDocument
     });
 
     /// <summary>Removes slot <paramref name="index"/>; its texture goes too unless another sampler reads it.</summary>
-    public MaterialDocument WithoutSlot(int index) => Edit(m =>
+    public MaterialDocument WithoutSlot(int index) => !Editable ? this : Edit(m =>
     {
         var sampler = m.Samplers[index];
         m.Samplers.RemoveAt(index);

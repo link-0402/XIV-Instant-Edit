@@ -69,6 +69,11 @@ internal static class AnimationClipExport
                 var duration = animation->Duration;
                 // A pose-only clip has no length: one frame describes it.
                 var count = duration > 0 ? AnimationPoseRules.SampleCount(duration, AnimationNative.SourceFrameCount(animation)) : 1;
+                // The samples are held twice (as sampled, then copied into the take) and a take over this size is refused,
+                // so say so now instead of after sampling a clip of minutes.
+                var needed = (long)count * description.Bones.Length * AnimationTake.Stride * sizeof(float);
+                if (needed > AnimationTakeFormat.MaximumBytes)
+                    throw new InvalidDataException($"The take needs {needed / (1024 * 1024)} MiB, more than Blender accepts. Pick a shorter animation.");
                 times = Enumerable.Range(0, count)
                     .Select(i => count == 1 ? 0d : i == count - 1 ? duration : (double)duration * i / (count - 1)).ToArray();
             }

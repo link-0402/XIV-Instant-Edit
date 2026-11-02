@@ -24,16 +24,16 @@ internal enum SearchIn { Name, Author, Tag, Folder, Anything, Item, Emote, Face,
 /// </summary>
 internal static partial class ChangesIndex
 {
-    [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/obj/face/f(?<face>\d{4})/", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^chara/human/c(?<race>[0-9]{4})/obj/face/f(?<face>[0-9]{4})/", RegexOptions.IgnoreCase)]
     private static partial Regex FaceRegex();
 
-    [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/obj/hair/h(?<hair>\d{4})/", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^chara/human/c(?<race>[0-9]{4})/obj/hair/h(?<hair>[0-9]{4})/", RegexOptions.IgnoreCase)]
     private static partial Regex HairRegex();
 
-    [GeneratedRegex(@"^chara/human/c(?<race>\d{4})/animation/a0001/bt_common/(?:resident/(?<base>idle)\.pap|emote/(?<prefix>s_|j_|l_)?pose(?<pose>\d{2})_(?:loop|start)\.pap|emote/(?<emote>[a-z0-9_]+)\.pap)$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^chara/human/c(?<race>[0-9]{4})/animation/a0001/bt_common/(?:resident/(?<base>idle)\.pap|emote/(?<prefix>s_|j_|l_)?pose(?<pose>[0-9]{2})_(?:loop|start)\.pap|emote/(?<emote>[a-z0-9_]+)\.pap)$", RegexOptions.IgnoreCase)]
     private static partial Regex AnimationRegex();
 
-    [GeneratedRegex(@"^chara/(?<type>equipment|accessory|weapon)/(?<id>[eaw]\d{4})/", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^chara/(?<type>equipment|accessory|weapon)/(?<id>[eaw][0-9]{4})/", RegexOptions.IgnoreCase)]
     private static partial Regex GearRegex();
 
     /// <summary>The tags of a mod's redirected game paths and Penumbra's changed items, without repeats, sorted by kind and label.</summary>

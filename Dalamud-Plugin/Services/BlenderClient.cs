@@ -323,6 +323,9 @@ public sealed class BlenderClient : IDisposable
     /// Has Blender import model files from disk with its Simple Import, which puts files with a
     /// matching armature on one armature. Returns Blender's report once its main thread is done.
     /// </summary>
+    /// <summary>The most files one /import/files request may name: the add-on's MAX_IMPORT_FILES, kept in step by context-protocol.json.</summary>
+    public const int MaxImportFiles = 64;
+
     public async Task<BlenderFileImportResult> SendImportFilesAsync(int port, IReadOnlyList<string> files,
         CancellationToken cancellationToken = default)
     {

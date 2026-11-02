@@ -685,7 +685,7 @@ internal static partial class HairSkeletonFiles
         var temporary = Path.Combine(folder, $".instant-edit-{Guid.NewGuid():N}.tmp");
         try
         {
-            File.WriteAllBytes(temporary, bytes);
+            DurableFile.WriteAllBytes(temporary, bytes);
             File.Move(temporary, path, true);
         }
         finally

@@ -179,6 +179,13 @@ internal static class FileLocations
                 }
             })).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            // Stopped part-way through the copies. meta.json is untouched at this point and no backup is
+            // committed, so the copies made so far would be stray duplicates nothing records or restores.
+            DeleteCreated(created);
+            throw;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
         {
             DeleteCreated(created);

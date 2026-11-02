@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using InstantEdit.Services.TextureCompression;
 
 namespace InstantEdit.Studio.Services;
 
@@ -16,6 +17,10 @@ namespace InstantEdit.Studio.Services;
 /// timestamp) and the settings used. Editing the image changes its timestamp, so the next update
 /// converts it again; nothing has to be invalidated by hand. Entries live in the plugin's own
 /// config folder and are pruned oldest-first once they pass <see cref="MaxBytes"/>.
+///
+/// An entry is written to a ".part" file and renamed into place, and one whose length falls short of
+/// what its own header describes is dropped when it is read, so an update that was cut short (a full
+/// drive, a crash) never hands a truncated texture to a mod.
 ///
 /// Used from the update worker, which is the only thread that touches it while it runs.
 /// </summary>
@@ -61,6 +66,11 @@ internal sealed class TextureCache
         try
         {
             var data = File.ReadAllBytes(path);
+            if (!IsComplete(data, data.Length))
+            {
+                Discard(path);
+                return null;
+            }
             File.SetLastWriteTimeUtc(path, DateTime.UtcNow);   // keeps what is in use from being pruned
             return data;
         }
@@ -76,6 +86,12 @@ internal sealed class TextureCache
         var path = PathFor(key);
         if (path == null || !File.Exists(path))
             return null;
+
+        if (!IsComplete(path))
+        {
+            Discard(path);
+            return null;
+        }
 
         try
         {
@@ -95,15 +111,18 @@ internal sealed class TextureCache
         if (path == null)
             return null;
 
+        var part = PartFor(path);
         try
         {
             Directory.CreateDirectory(_directory!);
-            File.WriteAllBytes(path, data);
+            File.WriteAllBytes(part, data);
+            File.Move(part, path, overwrite: true);
             return path;
         }
         catch (Exception)
         {
-            return null;   // nothing to do about it: the caller has the bytes either way
+            Discard(part);   // never leave half an entry under a name that is read back as a hit
+            return null;     // nothing to do about it: the caller has the bytes either way
         }
     }
 
@@ -114,17 +133,24 @@ internal sealed class TextureCache
         if (path == null)
             return null;
 
+        var part = PartFor(path);
         try
         {
             Directory.CreateDirectory(_directory!);
-            File.Move(file, path, overwrite: true);
+            // Copied beside the entry and renamed into place: a move from another drive is a copy and a
+            // delete, which can be cut short at any point, and the caller still needs the file if this fails.
+            File.Copy(file, part, overwrite: true);
+            File.Move(part, path, overwrite: true);
             File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
-            return path;
         }
         catch (Exception)
         {
+            Discard(part);
             return null;
         }
+
+        Discard(file);
+        return path;
     }
 
     /// <summary>Drops the oldest entries once the folder grows past its limit. Called after each update.</summary>
@@ -137,6 +163,11 @@ internal sealed class TextureCache
 
         try
         {
+            // Left behind by a write the process did not survive.
+            foreach (var stale in new DirectoryInfo(_directory).GetFiles("*.part"))
+                if (stale.LastWriteTimeUtc < DateTime.UtcNow.AddDays(-1))
+                    Discard(stale.FullName);
+
             var files = new DirectoryInfo(_directory).GetFiles("*.tex");
             long total = files.Sum(f => f.Length);
             if (total <= maxBytes)
@@ -167,6 +198,46 @@ internal sealed class TextureCache
 
     private string? PathFor(string key)
         => _directory == null ? null : Path.Combine(_directory, $"{key}.tex");
+
+    private static string PartFor(string path) => $"{path}.{Guid.NewGuid():N}.part";
+
+    private static void Discard(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception)
+        {
+            // In use, say; pruning or the next write gets it.
+        }
+    }
+
+    /// <summary>
+    /// False for a texture shorter than its own header says: 80 bytes of header and every mip level of
+    /// the format. Longer is fine (the converter may pad), and anything this cannot size is let through.
+    /// </summary>
+    private static bool IsComplete(ReadOnlySpan<byte> head, long length)
+    {
+        if (length < TextureCost.HeaderSize || head.Length < TextureCost.HeaderSize)
+            return false;
+        return TextureCost.Read(head) is { } info && (info.Vram is not { } vram || length >= TextureCost.HeaderSize + vram);
+    }
+
+    private static bool IsComplete(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            Span<byte> head = stackalloc byte[TextureCost.HeaderSize];
+            return stream.ReadAtLeast(head, head.Length, throwOnEndOfStream: false) == head.Length &&
+                   IsComplete(head, stream.Length);
+        }
+        catch (Exception)
+        {
+            return false;   // a cache that cannot be read is simply a miss
+        }
+    }
 
     /// <summary>
     /// Part of every key, raised whenever the converter's output changes for the same input, so

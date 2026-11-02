@@ -20,6 +20,7 @@ internal static class MeshMaterialScenarios
         SameMaterialRenamesInPlace();
         KeptMeshStaysOnItsSlot();
         AutomaticMatchFollowsDistinctNames();
+        UnalignedStringBlockStillRewrites();
         SavedSlotLinksBecomeMeshLinks();
         EditModeReadsMaterialsPerMesh();
         EditModeSlotNamesBecomeMeshNames();
@@ -102,6 +103,31 @@ internal static class MeshMaterialScenarios
         var again = ModelMaterialRewriter.RewriteMeshes(result, new[] { "/c.mtrl", "/c.mtrl" });
         Require(ModelMaterialRewriter.ReadMeshMaterialsStrict(again).SequenceEqual(new[] { "/c.mtrl", "/c.mtrl" }),
             "a split file can be rewired again");
+    }
+
+    private static void UnalignedStringBlockStillRewrites()
+    {
+        // A model whose string block some other exporter did not pad to 4 bytes. The rewrite used to
+        // wait for a size that was a multiple of 4 and of 16 apart from the block's own size, which
+        // cannot exist, and never returned: the build could not be cancelled and the edit never finished.
+        var source = TwoMeshModel(alignStrings: false);
+        Require(BitConverter.ToUInt32(source, 68 + 2 * 136 + 4) % 4 != 0, "the fixture's string block is not a multiple of 4");
+
+        var rewrite = Task.Run(() => ModelMaterialRewriter.RewriteMeshes(source, new[] { "/a.mtrl", "/b.mtrl" }));
+        var finished = rewrite.Wait(TimeSpan.FromSeconds(10));
+        Require(finished, "a model with an unaligned string block is rewritten instead of hanging");
+        if (!finished)
+            return;   // reading the result would wait for the loop that never ends
+        var result = rewrite.Result;
+
+        Require(ModelMaterialRewriter.ReadMeshMaterialsStrict(result).SequenceEqual(new[] { "/a.mtrl", "/b.mtrl" })
+                && ModelMaterialRewriter.ReadMaterialsStrict(result).SequenceEqual(new[] { "/a.mtrl", "/b.mtrl" }),
+            "its meshes load the materials they were given");
+        uint oldVertex = BitConverter.ToUInt32(source, 16), newVertex = BitConverter.ToUInt32(result, 16);
+        Require((newVertex - oldVertex) % 16 == 0 && newVertex > oldVertex,
+            "the data after the material table still moves by a multiple of 16");
+        Require(result.AsSpan((int)newVertex).SequenceEqual(source.AsSpan((int)oldVertex)),
+            "vertex and index data come through unchanged");
     }
 
     private static void SameMaterialRenamesInPlace()

@@ -699,7 +699,7 @@ internal static class ModMetadata
         var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
         try
         {
-            File.WriteAllText(tempPath, value.ToJsonString(JsonOpts));
+            DurableFile.WriteAllText(tempPath, value.ToJsonString(JsonOpts));
             File.Move(tempPath, path, true);
         }
         finally

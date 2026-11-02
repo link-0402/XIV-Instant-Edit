@@ -840,9 +840,12 @@ internal sealed class MashupService
                 AuthorOrDefault(_author()),
                 description,
                 "",
+                // The manipulations the staged mod is checked against below, not the source's raw ones: a source
+                // exported before 2.0.0 keeps its hair/face toggles on the invalid Unknown slot, and staging those
+                // as they are would never match the converted list this mashup reports.
                 CreateMashupDefaultData(
                     prepared.Mappings,
-                    activeContext.ResourceManifest?.Manipulations,
+                    outputManipulations,
                     prepared.FileSwaps)));
             if (createAttributeGroups && attributeTags is { Count: > 0 })
             {

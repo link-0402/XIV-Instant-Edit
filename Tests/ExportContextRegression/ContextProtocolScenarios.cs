@@ -16,6 +16,8 @@ internal static class ContextProtocolScenarios
         var protocol = Protocol();
         ContextCarriesEveryField(protocol);
         VersionsAgree(protocol);
+        Require(protocol["importFilesLimit"]?.GetValue<int>() == BlenderClient.MaxImportFiles,
+            "the most files one import request may name is the same number in the plugin and in the shared protocol file");
         RepliesNameTheirStatus();
         MashupPassesOnlyBodyMaterialsThrough();
     }

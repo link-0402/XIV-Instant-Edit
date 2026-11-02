@@ -61,8 +61,12 @@ internal static class HalfPacking
     public static float Get(ReadOnlySpan<byte> row, int half)
         => (float)BitConverter.Int16BitsToHalf(BinaryPrimitives.ReadInt16LittleEndian(row[(half * 2)..]));
 
+    /// <summary>The largest finite half float. A float beyond it converts to infinity, which the game's lighting reads as a blow-out.</summary>
+    public const float MaxHalf = 65504f;
+
     public static void Set(Span<byte> row, int half, float value)
-        => BinaryPrimitives.WriteInt16LittleEndian(row[(half * 2)..], BitConverter.HalfToInt16Bits((Half)value));
+        => BinaryPrimitives.WriteInt16LittleEndian(row[(half * 2)..],
+            BitConverter.HalfToInt16Bits((Half)(float.IsNaN(value) ? 0f : Math.Clamp(value, -MaxHalf, MaxHalf))));
 
     public static Vector3 Get3(ReadOnlySpan<byte> row, int half) => new(Get(row, half), Get(row, half + 1), Get(row, half + 2));
 

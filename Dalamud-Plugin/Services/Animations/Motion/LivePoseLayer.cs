@@ -136,8 +136,11 @@ internal static class LivePoseLayer
             var bones = new List<PoseBone>();
             foreach (var entry in data.EnumerateArray())
             {
-                if (!entry.TryGetProperty("BonePoseInfoId", out var id) || !id.TryGetProperty("BoneName", out var nameValue) ||
-                    nameValue.GetString() is not { Length: > 0 } name)
+                // TryGetProperty throws InvalidOperationException on an element that is not an object, GetString on one
+                // that is not text: valid JSON of the wrong shape is "not a LivePose file" like any other.
+                if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("BonePoseInfoId", out var id) ||
+                    id.ValueKind != JsonValueKind.Object || !id.TryGetProperty("BoneName", out var nameValue) ||
+                    nameValue.ValueKind != JsonValueKind.String || nameValue.GetString() is not { Length: > 0 } name)
                     throw new InvalidDataException("A bone in the LivePose file has no name.");
                 var partial = id.TryGetProperty("Partial", out var p) && Int(p) is { } pi ? pi : 0;
                 var slot = id.TryGetProperty("Slot", out var s) && Int(s) is { } si ? si : 0;

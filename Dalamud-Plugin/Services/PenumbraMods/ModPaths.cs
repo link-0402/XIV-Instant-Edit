@@ -71,7 +71,7 @@ internal static class ModPaths
         try
         {
             if (string.IsNullOrWhiteSpace(filePath) || filePath.Length > 4096 || filePath.Contains('\0') ||
-                !Path.IsPathRooted(filePath) || filePath.StartsWith("\\\\", StringComparison.Ordinal) ||
+                !Path.IsPathRooted(filePath) || PathRules.IsNetworkPath(filePath) ||
                 !string.Equals(Path.GetExtension(filePath), ".mdl", StringComparison.OrdinalIgnoreCase))
                 return false;
 
@@ -187,12 +187,7 @@ internal static class ModPaths
             !string.Equals(modName, modName!.Trim(), StringComparison.Ordinal) ||
             modName.EndsWith(".", StringComparison.Ordinal) || modName.Any(char.IsControl))
             return false;
-        var device = modName.Split('.', 2)[0];
-        return !device.Equals("CON", StringComparison.OrdinalIgnoreCase) &&
-               !device.Equals("PRN", StringComparison.OrdinalIgnoreCase) &&
-               !device.Equals("AUX", StringComparison.OrdinalIgnoreCase) &&
-               !device.Equals("NUL", StringComparison.OrdinalIgnoreCase) &&
-               !Regex.IsMatch(device, @"^(?:COM|LPT)[1-9]$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return !PathRules.IsReservedDeviceName(modName);
     }
 
     internal static bool TryNormalizeRelativeModPath(string? value, out string path)

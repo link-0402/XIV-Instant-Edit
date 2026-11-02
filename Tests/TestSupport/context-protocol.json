@@ -3,6 +3,7 @@
   "schema": "instant-edit.context",
   "currentVersion": 3,
   "supportedVersions": [1, 2, 3],
+  "importFilesLimit": 64,
   "fields": [
     "contextId",
     "schema",

@@ -16,6 +16,8 @@ internal sealed class SeamSpace
     private const float Cell = 0.01f;
     /// <summary> Triangles spanning more cells than this along an axis (64 cm) are left out; nothing on a character is that big. </summary>
     private const int MaxSpan = 64;
+    /// <summary> Coordinates beyond a kilometre are not a character; they are also where the grid keys stop fitting an int. </summary>
+    private const float MaxCoordinate = 1000f;
     private readonly Dictionary<(int X, int Y, int Z), List<int>> _cells = new();
     private readonly int[] _seen;
     private int _stamp;
@@ -33,9 +35,13 @@ internal sealed class SeamSpace
         for (var t = 0; t < triangles.Length / 3; t++)
         {
             Vector3 a = positions[triangles[3 * t]], b = positions[triangles[3 * t + 1]], c = positions[triangles[3 * t + 2]];
+            // A vertex at infinity (a half float 0x7C00) or far out would key to int.MaxValue; the loops below would
+            // then never end, and the span check as ints wraps around for a triangle reaching from below zero to there.
+            if (!InRange(a) || !InRange(b) || !InRange(c))
+                continue;
             var low = Key(Vector3.Min(a, Vector3.Min(b, c)));
             var high = Key(Vector3.Max(a, Vector3.Max(b, c)));
-            if (high.X - low.X > MaxSpan || high.Y - low.Y > MaxSpan || high.Z - low.Z > MaxSpan)
+            if ((long)high.X - low.X > MaxSpan || (long)high.Y - low.Y > MaxSpan || (long)high.Z - low.Z > MaxSpan)
                 continue;
             for (var x = low.X; x <= high.X; x++)
                 for (var y = low.Y; y <= high.Y; y++)
@@ -63,11 +69,16 @@ internal sealed class SeamSpace
         return new SeamSpace(positions.ToArray(), triangles.ToArray());
     }
 
+    private static bool InRange(Vector3 p)
+        => MathF.Abs(p.X) <= MaxCoordinate && MathF.Abs(p.Y) <= MaxCoordinate && MathF.Abs(p.Z) <= MaxCoordinate;   // false for NaN too
+
     private static (int X, int Y, int Z) Key(Vector3 p) => ((int)MathF.Floor(p.X / Cell), (int)MathF.Floor(p.Y / Cell), (int)MathF.Floor(p.Z / Cell));
 
     /// <summary> The nearest point of the triangles within <paramref name="reach"/> of <paramref name="p"/>, or null. </summary>
     public SurfacePoint? Nearest(Vector3 p, float reach)
     {
+        if (!InRange(p) || !(reach >= 0f && reach <= MaxCoordinate))
+            return null;
         var low = Key(p - new Vector3(reach));
         var high = Key(p + new Vector3(reach));
         var stamp = ++_stamp;
@@ -95,7 +106,7 @@ internal sealed class SeamSpace
     /// <summary> Whether a ray from <paramref name="origin"/> along the unit <paramref name="direction"/> hits a triangle within <paramref name="length"/>. </summary>
     public bool Hits(Vector3 origin, Vector3 direction, float length)
     {
-        if (Empty)
+        if (Empty || !InRange(origin) || !InRange(direction) || !(length >= 0f && length <= MaxCoordinate))
             return false;
         var (x, y, z) = Key(origin);
         int stepX = Math.Sign(direction.X), stepY = Math.Sign(direction.Y), stepZ = Math.Sign(direction.Z);

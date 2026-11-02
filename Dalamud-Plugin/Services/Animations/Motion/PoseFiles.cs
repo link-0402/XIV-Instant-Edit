@@ -54,14 +54,25 @@ internal static class PoseFiles
         }
     }
 
+    /// <summary>The farthest a bone may sit from the origin, in metres, for its pose to be taken as real.</summary>
+    private const float MaxPosition = 1000f;
+
     /// <summary>One bone's transform; null when its position or rotation can't be read.</summary>
     private static MotionTransform? Bone(JsonElement bone)
     {
         if (bone.ValueKind != JsonValueKind.Object || Values(bone, "Position", 3) is not { } position || Values(bone, "Rotation", 4) is not { } rotation)
             return null;
+        // A pose is in metres around a character; a bone a kilometre away is a damaged file, not a pose.
+        if (position.Any(value => Math.Abs(value) > MaxPosition))
+            return null;
         var scale = Values(bone, "Scale", 3) is { } read ? new Vector3(read[0], read[1], read[2]) : Vector3.One;
-        var turn = new Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]);
-        turn = turn.LengthSquared() < 1e-12f ? Quaternion.Identity : Quaternion.Normalize(turn);
+        // Measured in double: the square of a finite float rotation component can overflow a float to infinity,
+        // which slipped past the "no length" test and normalised to a zero quaternion (and then to NaN).
+        var length = Math.Sqrt((double)rotation[0] * rotation[0] + (double)rotation[1] * rotation[1] +
+                               (double)rotation[2] * rotation[2] + (double)rotation[3] * rotation[3]);
+        var turn = length < 1e-6
+            ? Quaternion.Identity
+            : new Quaternion((float)(rotation[0] / length), (float)(rotation[1] / length), (float)(rotation[2] / length), (float)(rotation[3] / length));
         return new MotionTransform(new Vector3(position[0], position[1], position[2]), turn, scale);
     }
 

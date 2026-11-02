@@ -69,9 +69,17 @@ internal sealed class AnimationJournalStore
             var path = Path.Combine(dir, "journal.json");
             try
             {
-                if (!File.Exists(path)) continue;
-                var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json);
-                if (record is null || record.CreatedUtc > cutoff) continue;
+                if (!File.Exists(path))
+                {
+                    // A job that failed or was cancelled before its record was written: staged copies and bake output
+                    // nothing refers to. Nothing else removes them, so they go once they are older than any record.
+                    if (Directory.GetLastWriteTimeUtc(dir) > cutoff) continue;
+                }
+                else
+                {
+                    var record = JsonSerializer.Deserialize<AnimationEditJournal>(File.ReadAllText(path), Json);
+                    if (record is null || record.CreatedUtc > cutoff) continue;
+                }
             }
             catch (Exception e) when (e is IOException or JsonException or InvalidDataException)
             {

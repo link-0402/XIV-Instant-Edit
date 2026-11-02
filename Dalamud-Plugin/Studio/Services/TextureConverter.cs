@@ -426,6 +426,7 @@ public static class TextureConverter
         uint format;
         int  bytesPerBlock;
         bool swapRgba = false;
+        bool opaque = false;   // 32-bit pixels with an unused fourth byte: the texture is read with alpha 255
 
         if (hasDx10)
         {
@@ -439,7 +440,8 @@ public static class TextureConverter
                 case 95: case 96: format = FormatBC6H; bytesPerBlock = 16; break;
                 case 98: case 99: format = FormatBC7; bytesPerBlock = 16; break;
                 case 28: case 29: format = FormatB8G8R8A8; bytesPerBlock = 4; swapRgba = true; break;
-                case 87: case 88: format = FormatB8G8R8A8; bytesPerBlock = 4; break;
+                case 87: format = FormatB8G8R8A8; bytesPerBlock = 4; break;
+                case 88: format = FormatB8G8R8A8; bytesPerBlock = 4; opaque = true; break;   // B8G8R8X8
                 default:
                     error = $"Unsupported DDS format (DXGI 0x{dxgiFormat:X}).";
                     return false;
@@ -463,6 +465,9 @@ public static class TextureConverter
             bytesPerBlock = 4;
             // DDPF_RGB with red in the low byte means the file is RGBA, not BGRA.
             swapRgba = rMask == 0x000000FF;
+            // X8R8G8B8 and its kin have no alpha mask: the fourth byte is whatever the writer left there,
+            // often zero, which the game would read as a fully transparent texture.
+            opaque = aMask == 0;
         }
         else
         {
@@ -498,6 +503,11 @@ public static class TextureConverter
             {
                 for (int p = 0; p + 4 <= block.Length; p += 4)
                     (block[p], block[p + 2]) = (block[p + 2], block[p]);
+            }
+            if (opaque)
+            {
+                for (int p = 3; p < block.Length; p += 4)
+                    block[p] = 255;
             }
 
             mipData[i] = block;

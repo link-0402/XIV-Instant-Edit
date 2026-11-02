@@ -193,11 +193,26 @@ internal class PreviewModStore<TPreview> : IPreviewModRegistry where TPreview : 
         }
     }
 
+    /// <summary>
+    /// Writes the list. A failure is reported through <see cref="LoadError"/> and not thrown: the callers add a
+    /// preview right after Penumbra has created and enabled its mod, and an exception here would lose track of a
+    /// mod that is already active on the character. The list stays in memory and the next save writes it again.
+    /// </summary>
     private void Save()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var temporary = _path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(_previews, Json));
-        File.Move(temporary, _path, true);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+            DurableFile.WriteAllText(temporary, JsonSerializer.Serialize(_previews, Json));
+            File.Move(temporary, _path, true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            try { File.Delete(temporary); }
+            catch (Exception) { /* a leftover .tmp is overwritten by the next save */ }
+            LoadError = $"The {_description} could not be saved ({e.Message}). Their preview mods are still in Penumbra; " +
+                        "if the plugin forgets them after a reload, apply or delete them there.";
+        }
     }
 }

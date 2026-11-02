@@ -1038,13 +1038,20 @@ internal sealed class TextureCompressionService : IDisposable
     }
 
     /// <summary>
-    /// Puts back the files of one refit group that still hold what the refit wrote, and keeps the
-    /// group, with only the files left, when others changed since. True when it wrote anything back.
+    /// What putting back a refit group would do, worked out before anything is written: the files that still
+    /// hold what the refit wrote (with their originals, read and verified), and why any other file blocks it.
     /// </summary>
-    private async Task<bool> RestoreRefitAsync(RefitGroup group, List<string> changed, List<string> failed)
+    internal sealed record RefitRestorePlan(IReadOnlyList<(RefitFile File, byte[] Original)> Restorable, List<string> Changed, List<string> Failed)
     {
-        var remaining = new List<RefitFile>();
-        var wrote = false;
+        /// <summary> A file that is neither the original nor what the refit wrote, is gone, or has no usable backup. </summary>
+        public bool Blocked => Changed.Count > 0 || Failed.Count > 0;
+    }
+
+    internal static async Task<RefitRestorePlan> PlanRefitRestoreAsync(RefitGroup group, Action<Exception, string>? log = null)
+    {
+        var restorable = new List<(RefitFile File, byte[] Original)>();
+        var changed = new List<string>();
+        var failed = new List<string>();
         foreach (var file in group.Files)
         {
             var label = $"{group.ModName}: {file.RelativePath}";
@@ -1053,7 +1060,6 @@ internal sealed class TextureCompressionService : IDisposable
                 if (!File.Exists(file.File))
                 {
                     failed.Add($"{label}: the file is no longer there");
-                    remaining.Add(file);
                     continue;
                 }
                 var current = TextureBackupStore.Hash(await File.ReadAllBytesAsync(file.File).ConfigureAwait(false));
@@ -1062,16 +1068,49 @@ internal sealed class TextureCompressionService : IDisposable
                 if (!string.Equals(current, file.NewSha256, StringComparison.OrdinalIgnoreCase))
                 {
                     changed.Add(label);
-                    remaining.Add(file);
                     continue;
                 }
                 var original = File.Exists(file.Backup) ? await File.ReadAllBytesAsync(file.Backup).ConfigureAwait(false) : null;
                 if (original is null || !string.Equals(TextureBackupStore.Hash(original), file.OriginalSha256, StringComparison.OrdinalIgnoreCase))
                 {
                     failed.Add($"{label}: its backup is missing or damaged");
-                    remaining.Add(file);
                     continue;
                 }
+                restorable.Add((file, original));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException or NotSupportedException)
+            {
+                log?.Invoke(e, file.File);
+                failed.Add($"{label}: {e.Message}");
+            }
+        }
+        return new RefitRestorePlan(restorable, changed, failed);
+    }
+
+    /// <summary>
+    /// Puts a refit group back together or not at all. A refit changed the hair's model, its materials and its
+    /// textures to go with each other (the cropped texture and the model's moved UVs); undoing some of them would
+    /// leave the model reading a full-size texture's UVs from a cropped one. So when any file of the group changed
+    /// since, is gone, or has no usable backup, nothing of it is written, the group stays whole, and the files in
+    /// the way are reported. True when it wrote anything back.
+    /// </summary>
+    private async Task<bool> RestoreRefitAsync(RefitGroup group, List<string> changed, List<string> failed)
+    {
+        var plan = await PlanRefitRestoreAsync(group, (e, file) => _log.Warning(e, "Could not restore {File}.", file)).ConfigureAwait(false);
+        changed.AddRange(plan.Changed);
+        failed.AddRange(plan.Failed);
+        if (plan.Blocked)
+        {
+            failed.Add($"{group.ModName}: this refit was left as it is, because some of its files can't be put back with the others");
+            return false;
+        }
+
+        var remaining = new List<RefitFile>();
+        var wrote = false;
+        foreach (var (file, original) in plan.Restorable)
+        {
+            try
+            {
                 await _modFiles.ReplaceModFileAsync(SourceOf(group, file, file.NewSha256), file.NewSha256, original, "It was left as it is").ConfigureAwait(false);
                 wrote = true;
                 lock (_sessionLock)
@@ -1080,7 +1119,7 @@ internal sealed class TextureCompressionService : IDisposable
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException or NotSupportedException)
             {
                 _log.Warning(e, "Could not restore {File}.", file.File);
-                failed.Add($"{label}: {e.Message}");
+                failed.Add($"{group.ModName}: {file.RelativePath}: {e.Message}");
                 remaining.Add(file);
             }
         }

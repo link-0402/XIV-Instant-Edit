@@ -9,6 +9,7 @@ internal static class ToolSetupScenarios
     public static void Run(string testRoot)
     {
         SteamLibrariesParse();
+        BlenderLauncherIsACandidate();
         CommandLinesAndVersions();
         VersionRangesAreEnforced(testRoot);
         PainterLogNamesItsFolders();
@@ -41,6 +42,17 @@ internal static class ToolSetupScenarios
         var libraries = InstalledSoftware.ParseSteamLibraryFolders(vdf);
         Require(libraries.SequenceEqual([@"C:\Program Files (x86)\Steam", @"D:\SteamLibrary"]),
             "Steam's libraryfolders.vdf yields every library path, unescaped");
+    }
+
+    private static void BlenderLauncherIsACandidate()
+    {
+        // The .blend file association names blender-launcher.exe; detection must keep it to map it to blender.exe.
+        string In(string file) => Path.Combine("D:", "Tools", "blender-4.5", file);
+        Require(BlenderSetup.IsBlenderProgram(In("blender-launcher.exe")) &&
+                BlenderSetup.IsBlenderProgram(In("BLENDER.EXE")) &&
+                !BlenderSetup.IsBlenderProgram(In("blender-softwaregl-launcher.exe")) &&
+                !BlenderSetup.IsBlenderProgram(In("notepad.exe")),
+            "Blender detection keeps blender.exe and the launcher beside it, and nothing else");
     }
 
     private static void CommandLinesAndVersions()

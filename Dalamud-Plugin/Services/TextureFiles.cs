@@ -431,7 +431,7 @@ internal static class TextureFiles
 
     public static void EnsureLocalPath(string path)
     {
-        if (!Path.IsPathFullyQualified(path) || path.StartsWith("\\\\", StringComparison.Ordinal))
+        if (!Path.IsPathFullyQualified(path) || PathRules.IsNetworkPath(path))
             throw new IOException("Choose a local absolute path.");
         var current = Path.GetFullPath(path);
         while (!string.IsNullOrEmpty(current))
@@ -467,7 +467,7 @@ internal static class TextureFiles
         EnsureLocalPath(path);
         var temp = path + ".tmp";
         EnsureLocalPath(temp);
-        File.WriteAllText(temp, JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }));
+        DurableFile.WriteAllText(temp, JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }));
         File.Move(temp, path, true);
     }
 

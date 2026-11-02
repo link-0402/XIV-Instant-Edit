@@ -95,7 +95,7 @@ public sealed class HairSkeletonStore
             var temporary = _path + ".tmp." + Guid.NewGuid().ToString("N");
             try
             {
-                File.WriteAllText(temporary, JsonSerializer.Serialize(kept, JsonOptions));
+                DurableFile.WriteAllText(temporary, JsonSerializer.Serialize(kept, JsonOptions));
                 File.Move(temporary, _path, true);
             }
             finally

@@ -80,6 +80,9 @@ internal static class PoseFileFixture
         check(PoseFiles.Parse(Json("""{"TypeName":"Ktisis Pose","Bones":{"j_kao":{"Position":"0, 1, 0","Rotation":"0, 0, 0, 1"}}}""")).Tool == "Ktisis" &&
               PoseFiles.Parse(Json("""{"Bones":{"j_kao":{"Position":"0, 1, 0","Rotation":"0, 0, 0, 1"}}}""")).Tool == "",
             "the tool that wrote the pose is named when the file says");
+        var huge = PoseFiles.Parse(Json("""{"Bones":{"j_kao":{"Position":"0, 1, 0","Rotation":"1e20, 0, 0, 0"},"j_far":{"Position":"0, 5000, 0","Rotation":"0, 0, 0, 1"},"j_ok":{"Position":"0, 1, 0","Rotation":"0, 0, 0, 1"}}}"""));
+        check(huge.Bones["j_kao"].Rotation == new Quaternion(1, 0, 0, 0) && !huge.Bones.ContainsKey("j_far") && huge.Bones.ContainsKey("j_ok"),
+            "a rotation too large to square is still a unit rotation, not a zero quaternion that turns into NaN, and a bone a kilometre away is skipped");
         reject(() => PoseFiles.Parse(Json("not a pose")), "a file that isn't JSON is refused");
         reject(() => PoseFiles.Parse(Json("""{"TypeName":"Brio Pose"}""")), "a file without bones is refused");
         reject(() => PoseFiles.Parse(Json("""{"Bones":{"j_kao":{"Position":"x"}}}""")), "a file with no readable bone is refused");

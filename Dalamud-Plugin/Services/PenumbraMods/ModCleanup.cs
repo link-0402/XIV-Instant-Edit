@@ -101,28 +101,36 @@ internal static class ModCleanup
             if (mappings.Count == 0)
                 return new ModCleanupResult([], null);
 
-            var contentByHash = new Dictionary<string, List<(CleanupMapping Mapping, byte[] Bytes)>>(
-                StringComparer.OrdinalIgnoreCase);
+            // A file that many options map is read and held once: the bytes are kept per distinct content,
+            // not per mapping, so a 40 MB texture shared by thirty options is 40 MB in memory, not 1.2 GB.
+            var contentByHash = new Dictionary<string, List<CleanupMapping>>(StringComparer.OrdinalIgnoreCase);
+            var bytesByHash = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            var hashBySource = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var pathHash = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var mapping in mappings)
             {
                 var source = SafeContentPath(root, mapping.OldRelativePath);
                 if (!File.Exists(source) || !IsSafeModResourceFile(root, source))
                     throw new InvalidDataException($"The referenced content file is missing or unsafe: {mapping.OldRelativePath}");
-                var bytes = File.ReadAllBytes(source);
-                var hash = Convert.ToHexString(SHA256.HashData(bytes));
+                if (!hashBySource.TryGetValue(source, out var hash))
+                {
+                    var bytes = File.ReadAllBytes(source);
+                    hash = Convert.ToHexString(SHA256.HashData(bytes));
+                    hashBySource[source] = hash;
+                    bytesByHash.TryAdd(hash, bytes);   // identical files under different names are kept once too
+                }
                 if (pathHash.TryGetValue(mapping.CanonicalPath, out var existingHash) &&
                     !string.Equals(existingHash, hash, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException($"Different files map to the same canonical path: {mapping.CanonicalPath}");
                 pathHash[mapping.CanonicalPath] = hash;
                 if (!contentByHash.TryGetValue(hash, out var sameContent))
                     contentByHash[hash] = sameContent = [];
-                sameContent.Add((mapping, bytes));
+                sameContent.Add(mapping);
             }
 
             var keeperByHash = contentByHash.ToDictionary(
                 pair => pair.Key,
-                pair => pair.Value.Select(item => item.Mapping.CanonicalPath)
+                pair => pair.Value.Select(mapping => mapping.CanonicalPath)
                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(path => path, StringComparer.Ordinal)
                     .First(),
@@ -132,11 +140,11 @@ internal static class ModCleanup
             foreach (var content in contentByHash)
             {
                 var keeper = keeperByHash[content.Key];
-                desiredFiles[keeper] = content.Value[0].Bytes;
-                foreach (var item in content.Value)
+                desiredFiles[keeper] = bytesByHash[content.Key];
+                foreach (var mapping in content.Value)
                 {
-                    item.Mapping.Files[item.Mapping.GamePath] = keeper;
-                    AddPathRemap(remappedPaths, item.Mapping.OldRelativePath, keeper);
+                    mapping.Files[mapping.GamePath] = keeper;
+                    AddPathRemap(remappedPaths, mapping.OldRelativePath, keeper);
                 }
             }
 

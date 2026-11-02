@@ -78,8 +78,8 @@ internal sealed partial class MaterialWindow
         var facts = ShaderPackages.Get(doc.ShaderPackage);
         for (var i = 0; i < doc.Slots.Count; i++)
             DrawSlot(current, doc, facts, i);
-        if (facts == null || working != null)
-            return;
+        if (facts == null || working != null || !doc.Editable)
+            return;   // a material whose shader section is read-only keeps its sampler table: only paths can change
         var missing = facts.Samplers.Where(sampler => doc.Slots.All(slot => slot.SamplerId != sampler.Id)).ToList();
         if (missing.Count == 0)
             return;
@@ -117,7 +117,7 @@ internal sealed partial class MaterialWindow
             }
             ImGui.SameLine();
             ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - ImGui.GetFrameHeight()));
-            using (ImRaii.Disabled(working != null))
+            using (ImRaii.Disabled(working != null || !doc.Editable))
             {
                 if (Widgets.GhostIconButton("##remove-slot", FontAwesomeIcon.Trash, "Remove this texture slot"))
                 {

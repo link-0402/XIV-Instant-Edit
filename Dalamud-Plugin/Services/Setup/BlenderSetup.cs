@@ -95,9 +95,10 @@ internal static class BlenderSetup
         candidates.Add(InstalledSoftware.FileTypeExecutable("blendfile"));
 
         var found = InstalledSoftware.Existing(candidates)
-            .Where(path => Path.GetFileName(path).Equals("blender.exe", StringComparison.OrdinalIgnoreCase))
+            .Where(IsBlenderProgram)
             .Select(path => FromExecutable(path, false).Install)
             .OfType<BlenderInstall>()
+            .DistinctBy(install => install.Executable, StringComparer.OrdinalIgnoreCase)
             .ToList();
         foreach (var path in addedByHand)
             if (FromExecutable(path, true).Install is { } install &&
@@ -108,6 +109,16 @@ internal static class BlenderSetup
             .ThenBy(install => install.Executable, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+
+    /// <summary>
+    /// A candidate worth checking: blender.exe, or the blender-launcher.exe beside it. The file association
+    /// of .blend files names the launcher, which <see cref="FromExecutable"/> maps to the blender.exe next
+    /// to it; filtering on blender.exe alone threw that candidate away before the mapping could happen.
+    /// </summary>
+    internal static bool IsBlenderProgram(string path)
+        => Path.GetFileName(path) is { } name &&
+           (name.Equals("blender.exe", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("blender-launcher.exe", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The Blender a program belongs to: blender.exe itself, or the blender-launcher.exe beside

@@ -702,6 +702,62 @@ internal static class TextureCompressionScenarios
         }).ToList(),
     };
 
+    /// <summary> Its own scenario, so it runs even where an earlier check of this class cannot (it needs no Windows paths). </summary>
+    public static void RunRefitRestore(string testRoot) => CheckRefitRestoreIsWholeAsync(testRoot).GetAwaiter().GetResult();
+
+    private static async Task CheckRefitRestoreIsWholeAsync(string testRoot)
+    {
+        var folder = Path.Combine(testRoot, "RefitRestore");
+        Directory.CreateDirectory(folder);
+        byte[] originalModel = [1, 1, 1, 1], refitModel = [2, 2], originalTexture = [3, 3, 3, 3], refitTexture = [4, 4];
+        string Write(string name, byte[] bytes)
+        {
+            var path = Path.Combine(folder, name);
+            File.WriteAllBytes(path, bytes);
+            return path;
+        }
+        RefitGroup Group(string tag, byte[] currentTexture, bool backupOfTexture = true)
+        {
+            var model = Write($"{tag}-hair.mdl", refitModel);
+            var texture = Write($"{tag}-hair_norm.tex", currentTexture);
+            return new RefitGroup
+            {
+                ModDirectory = "Hair Mod", ModName = "Hair Mod", Refit = DateTimeOffset.UtcNow,
+                Files =
+                [
+                    new RefitFile { File = model, RelativePath = "hair.mdl", Backup = Write($"{tag}-m.bak", originalModel),
+                        OriginalSha256 = TextureBackupStore.Hash(originalModel), OriginalLength = 4, NewSha256 = TextureBackupStore.Hash(refitModel), NewLength = 2 },
+                    new RefitFile { File = texture, RelativePath = "hair_norm.tex", Backup = backupOfTexture ? Write($"{tag}-t.bak", originalTexture) : Path.Combine(folder, "gone.bak"),
+                        OriginalSha256 = TextureBackupStore.Hash(originalTexture), OriginalLength = 4, NewSha256 = TextureBackupStore.Hash(refitTexture), NewLength = 2 },
+                ],
+            };
+        }
+
+        var untouched = await TextureCompressionService.PlanRefitRestoreAsync(Group("ok", refitTexture));
+        Require(!untouched.Blocked && untouched.Restorable.Count == 2 &&
+                untouched.Restorable.All(item => TextureBackupStore.Hash(item.Original) == item.File.OriginalSha256),
+            "refit restore: a group whose files all hold what the refit wrote is put back, with every original verified");
+
+        var edited = await TextureCompressionService.PlanRefitRestoreAsync(Group("edited", [9, 9, 9]));
+        Require(edited.Blocked && edited.Changed.Count == 1 && edited.Changed[0].EndsWith("hair_norm.tex", StringComparison.Ordinal),
+            "refit restore: a texture edited since blocks the whole group, so the model is not put back to UVs the texture no longer has");
+
+        var noBackup = await TextureCompressionService.PlanRefitRestoreAsync(Group("nobackup", refitTexture, backupOfTexture: false));
+        Require(noBackup.Blocked && noBackup.Failed.Count == 1 && noBackup.Failed[0].Contains("backup", StringComparison.Ordinal),
+            "refit restore: a missing backup blocks the group too");
+
+        var gone = Group("gone", refitTexture);
+        File.Delete(gone.Files[1].File);
+        Require((await TextureCompressionService.PlanRefitRestoreAsync(gone)).Blocked,
+            "refit restore: and so does a file that is no longer there");
+
+        var already = Group("already", originalTexture);
+        File.WriteAllBytes(already.Files[0].File, originalModel);
+        var done = await TextureCompressionService.PlanRefitRestoreAsync(already);
+        Require(!done.Blocked && done.Restorable.Count == 0,
+            "refit restore: files already holding their originals need nothing and block nothing");
+    }
+
     private static void CheckRestoreSelection()
     {
         var now = DateTimeOffset.UtcNow;

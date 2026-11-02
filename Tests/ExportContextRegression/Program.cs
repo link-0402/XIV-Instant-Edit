@@ -241,6 +241,15 @@ try
     Scenarios.Run(() => GameTextureScenarios.Run(testRoot));
     Scenarios.Run(() => NormalGreenScenarios.Run(testRoot));
     Scenarios.Run(MeshMaterialScenarios.Run);
+    Scenarios.Run(PathRuleScenarios.Run);
+    Scenarios.Run(() => TextureCacheScenarios.Run(testRoot));
+    Scenarios.Run(() => DdsAlphaScenarios.Run(testRoot));
+    Scenarios.Run(() => ModCleanupMemoryScenarios.Run(testRoot));
+    Scenarios.Run(() => MashupLegacyAtrScenarios.Run(testRoot));
+    Scenarios.Run(ImporterRobustnessScenarios.Run);
+    Scenarios.Run(SeamSpaceScenarios.Run);
+    Scenarios.Run(MaterialReadOnlyScenarios.Run);
+    Scenarios.Run(() => TextureCompressionScenarios.RunRefitRestore(testRoot));
     Scenarios.Run(MaterialEditorScenarios.RunRows);
     Scenarios.Run(MaterialEditorScenarios.RunPackages);
     Scenarios.Run(MaterialEditorScenarios.RunLabels);

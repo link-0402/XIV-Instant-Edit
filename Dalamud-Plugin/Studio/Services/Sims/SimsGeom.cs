@@ -329,6 +329,9 @@ public static class SimsGeom
         return highest + 1;
     }
 
+    /// <summary>Two million triangles; a Sims 4 hair or outfit LOD has tens of thousands.</summary>
+    private const int MaxFaceIndices = 6_000_000;
+
     private static void ReadFaces(BinaryReader br, SimsGeomMesh mesh)
     {
         int itemCount = br.ReadInt32();
@@ -336,6 +339,7 @@ public static class SimsGeom
             throw new InvalidDataException("GEOM declares an implausible face-block count.");
 
         var indices = new List<int>();
+        long total = 0;
 
         for (int i = 0; i < itemCount; i++)
         {
@@ -347,6 +351,11 @@ public static class SimsGeom
                 throw new InvalidDataException($"GEOM uses an unsupported index size of {bytesPerIndex} bytes.");
             if ((long)indexCount * bytesPerIndex > br.BaseStream.Length - br.BaseStream.Position)
                 throw new InvalidDataException("GEOM face data runs past the end of the resource.");
+            // One byte of the file becomes a four-byte index, so a resource that inflates from a few hundred
+            // kilobytes to 256 MB would otherwise take gigabytes here before anything looked at it.
+            total += indexCount;
+            if (total > MaxFaceIndices)
+                throw new InvalidDataException("GEOM declares more face points than any mesh of the game has.");
 
             for (int f = 0; f < indexCount; f++)
             {

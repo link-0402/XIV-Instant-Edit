@@ -1,4 +1,5 @@
 // Discovery/ranking adapted from VFXEditor's SkeletonMatcher (GPL-3.0).
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
@@ -22,8 +23,10 @@ internal sealed record SkeletonLibraryStatus(SkeletonLibraryState State, int Ske
 internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, AnimationResources resources, IFramework framework,
     IPluginLog log, Func<string> configuredCacheRoot)
 {
-    private readonly Dictionary<string, SkeletonDescription> descriptions = [];
-    private readonly Dictionary<SkeletonSource, (long Length, DateTime Write, SkeletonCandidate Candidate)> files = [];
+    // Read, written and cleared by every ResolveAsync, which the observer, a refresh of its matches, the send dialog and the
+    // face loader can run at once on thread-pool continuations; plain Dictionaries are not safe for that.
+    private readonly ConcurrentDictionary<string, SkeletonDescription> descriptions = new();
+    private readonly ConcurrentDictionary<SkeletonSource, (long Length, DateTime Write, SkeletonCandidate Candidate)> files = new();
     private readonly object libraryLock = new();
     private readonly object cacheLock = new();
     private ImmutableArray<SessionSkeleton> sessionLibrary = [];

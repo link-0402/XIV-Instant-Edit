@@ -20,17 +20,19 @@ internal static partial class UnityYaml
     [GeneratedRegex(@"^TextureImporter:\s*$", RegexOptions.Multiline)]
     private static partial Regex TextureImporter();
 
-    [GeneratedRegex(@"^\s+textureType:\s*(-?\d+)\s*$", RegexOptions.Multiline)]
+    // Lines start with [ \t]*, not \s*: \s also matches the line break, so under Multiline every line start in a
+    // run of blank lines would consume the rest of the run before failing, which is quadratic in the run.
+    [GeneratedRegex(@"^[ \t]+textureType:\s*(-?\d+)\s*$", RegexOptions.Multiline)]
     private static partial Regex TextureTypeLine();
 
-    [GeneratedRegex(@"^\s*m_Name:\s*(.*?)\s*$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^[ \t]*m_Name:\s*(.*?)\s*$", RegexOptions.Multiline)]
     private static partial Regex NameLine();
 
-    [GeneratedRegex(@"^\s*m_Shader:\s*\{[^}]*?guid:\s*([0-9a-fA-F]{32})", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^[ \t]*m_Shader:\s*\{[^}]*?guid:\s*([0-9a-fA-F]{32})", RegexOptions.Multiline)]
     private static partial Regex ShaderLine();
 
     // "    - _MainTex:" then "        m_Texture: {fileID: 2800000, guid: <32 hex>, type: 3}".
-    [GeneratedRegex(@"^\s*-\s+(\w+):\s*\r?\n\s*m_Texture:\s*\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^[ \t]*-[ \t]+(\w+):[ \t]*\r?\n[ \t]*m_Texture:\s*\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?", RegexOptions.Multiline)]
     private static partial Regex TextureEntry();
 
     [GeneratedRegex(@"\{fileID:\s*2100000,\s*guid:\s*([0-9a-fA-F]{32})")]

@@ -7,9 +7,11 @@ public static class TestModels
 {
     /// <summary>
     /// A V6 model with two meshes in the first LOD, both on the one material "/old.mtrl". With
-    /// <paramref name="lodCount"/> 2 or 3, each further LOD repeats the first's two meshes.
+    /// <paramref name="lodCount"/> 2 or 3, each further LOD repeats the first's two meshes. The string
+    /// block is padded to a multiple of 4 like the game's own files, unless <paramref name="alignStrings"/>
+    /// is false (some other exporters leave it as short as it is).
     /// </summary>
-    public static byte[] TwoMeshModel(int lodCount = 1)
+    public static byte[] TwoMeshModel(int lodCount = 1, bool alignStrings = true)
     {
         int meshCount = 2 * lodCount;
         var strings = new MemoryStream();
@@ -21,7 +23,7 @@ public static class TestModels
         }
         int bone = Name("j_kosi");
         int material = Name("/old.mtrl");
-        while (strings.Length % 4 != 0)
+        while (alignStrings && strings.Length % 4 != 0)
             strings.WriteByte(0);
 
         var vertices = Enumerable.Range(0, 96).Select(i => (byte)(i * 7)).ToArray();

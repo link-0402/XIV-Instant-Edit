@@ -56,10 +56,12 @@
 
   <!--
     ImageSharp 4 needs a paid license key to build, so the Mod Browser stays on 3.1 (Six Labors
-    Split License, free for open source). Its open advisories are in TIFF encoding, BigTIFF and ICC
-    profile decoding, and histogram equalization. The plugin never encodes TIFF or equalizes, and it
-    decodes only through Studio/Services/StudioImages.cs: no TIFF decoder, and metadata (ICC
-    profiles included) skipped. Drop these suppressions when moving to a version without them.
+    Split License, free for open source). Its open advisories are in TIFF encoding and decoding
+    (GHSA-v76p-62qx-wwq2 is the tiled fax TIFF decoder), BigTIFF and ICC profile decoding, and histogram
+    equalization. The plugin never encodes TIFF or equalizes, and it decodes only through
+    Studio/Services/StudioImages.cs: no TIFF decoder, and metadata (ICC profiles included) skipped.
+    Every Image.Load/Identify in the plugin passes that configuration; keep it that way.
+    Drop these suppressions when moving to a version without them.
   -->
   <ItemGroup>
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-gwg2-r3hj-4w44" />
@@ -67,6 +69,7 @@
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-j9gm-c75j-xc9q" />
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-wmxv-xphr-5c9g" />
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jjfr-hcj7-qf5w" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-v76p-62qx-wwq2" />
   </ItemGroup>
 
   <ItemGroup>

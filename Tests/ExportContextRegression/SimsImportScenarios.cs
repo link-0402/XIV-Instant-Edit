@@ -310,6 +310,13 @@ internal static class SimsImportScenarios
         RequireCheapRejection(() => SimsGeom.Parse(Geom(3, new[] { Position }, new byte[36], 2, Array.Empty<uint>(), indexCount: 1_000_000)),
             "a GEOM claiming a million face points it does not hold");
 
+        // Every byte of a 1-byte index becomes a 4-byte one: a forged resource of mostly zeros, which
+        // compresses to a few hundred kilobytes, must not turn into gigabytes of face list.
+        var forged = Geom(0, Array.Empty<(uint, uint, byte)>(), Array.Empty<byte>(), 1, new uint[7_000_000]);
+        RequireCheapRejection(() => SimsGeom.Parse(forged), "a GEOM holding seven million face points");
+        var plausible = Geom(0, Array.Empty<(uint, uint, byte)>(), Array.Empty<byte>(), 1, new uint[300_000]);
+        Require(SimsGeom.Parse(plausible).Indices.Length == 300_000, "a GEOM with a large but real face list still parses");
+
         var mesh = SimsGeom.Parse(Geom(3, new[] { Position, Uv }, new byte[60], 2, new uint[] { 0, 1, 2 }));
         Require(mesh.VertexCount == 3 && mesh.FaceCount == 1 && mesh.UvChannels.Count == 1, "a well-formed GEOM still parses");
     }
@@ -579,6 +586,7 @@ internal static class SimsImportScenarios
         foreach (var index in indices)
         {
             if (bytesPerIndex == 4) bw.Write(index);
+            else if (bytesPerIndex == 1) bw.Write((byte)index);
             else bw.Write((ushort)index);
         }
         bw.Write(0);                    // tail block 1

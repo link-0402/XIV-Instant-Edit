@@ -199,7 +199,17 @@ internal sealed class ModelSender
     public void SendFiles(IReadOnlyList<string> files)
     {
         var importable = files.Where(IsImportableFile).ToList();
-        if (importable.Count == 0 || !Busy.TryEnter())
+        if (importable.Count == 0)
+            return;
+        if (importable.Count > BlenderClient.MaxImportFiles)
+        {
+            // Blender refuses a longer list outright ("files must list 1 to 64 paths"), and splitting it would
+            // stop models with a matching armature from sharing one.
+            _feed.SetStatus($"Blender takes up to {BlenderClient.MaxImportFiles} models at a time, and {importable.Count} are marked. Unmark some and send again.",
+                FeedbackSeverity.Warning);
+            return;
+        }
+        if (!Busy.TryEnter())
             return;
         var port = _config.BlenderPort;
         var cancellationToken = _lifetime;

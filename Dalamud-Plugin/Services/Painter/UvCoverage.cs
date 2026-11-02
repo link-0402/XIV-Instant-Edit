@@ -33,6 +33,9 @@ internal sealed class UvCoverage
     /// size; UVs outside the tile wrap, as the texture repeats. Each triangle also marks the texels
     /// under its corners, so slivers thinner than a texel still count.
     /// </summary>
+    /// <summary>Texel coordinates beyond this are not UVs; the same limit <c>Mark</c> uses for a corner.</summary>
+    private const float MaxCoordinate = 1e7f;
+
     public static UvCoverage Rasterize(int width, int height, IEnumerable<(Vector2 A, Vector2 B, Vector2 C)> triangles, int margin)
     {
         var covered = new bool[checked(width * height)];
@@ -46,13 +49,21 @@ internal sealed class UvCoverage
             Mark(covered, width, height, pa);
             Mark(covered, width, height, pb);
             Mark(covered, width, height, pc);
-            var minX = (int)Math.Floor(Math.Min(pa.X, Math.Min(pb.X, pc.X)));
-            var maxX = (int)Math.Ceiling(Math.Max(pa.X, Math.Max(pb.X, pc.X)));
-            var minY = (int)Math.Floor(Math.Min(pa.Y, Math.Min(pb.Y, pc.Y)));
-            var maxY = (int)Math.Ceiling(Math.Max(pa.Y, Math.Max(pb.Y, pc.Y)));
-            // A triangle larger than a few tiles is corrupt data; the corners above still count.
-            if (maxX - minX > 4 * width || maxY - minY > 4 * height)
+            var lowX = Math.Min(pa.X, Math.Min(pb.X, pc.X));
+            var highX = Math.Max(pa.X, Math.Max(pb.X, pc.X));
+            var lowY = Math.Min(pa.Y, Math.Min(pb.Y, pc.Y));
+            var highY = Math.Max(pa.Y, Math.Max(pb.Y, pc.Y));
+            // A triangle larger than a few tiles, or lying so far out that its texel range is no int, is
+            // corrupt data; the corners above still count. Judged on the floats: as ints, the extent of a
+            // far-out triangle wraps around to a small number and the loops below run billions of times.
+            if (highX - lowX > 4f * width || highY - lowY > 4f * height ||
+                Math.Abs(lowX) > MaxCoordinate || Math.Abs(highX) > MaxCoordinate ||
+                Math.Abs(lowY) > MaxCoordinate || Math.Abs(highY) > MaxCoordinate)
                 continue;
+            var minX = (int)Math.Floor(lowX);
+            var maxX = (int)Math.Ceiling(highX);
+            var minY = (int)Math.Floor(lowY);
+            var maxY = (int)Math.Ceiling(highY);
             var area = Edge(pa, pb, pc);
             if (Math.Abs(area) < 1e-12f)
                 continue;

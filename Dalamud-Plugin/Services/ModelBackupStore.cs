@@ -107,7 +107,7 @@ public sealed partial class ModelBackupStore
         var temporary = path + ".tmp";
         try
         {
-            File.WriteAllText(temporary, state.ToJsonString());
+            DurableFile.WriteAllText(temporary, state.ToJsonString());
             File.Move(temporary, path, true);
         }
         finally

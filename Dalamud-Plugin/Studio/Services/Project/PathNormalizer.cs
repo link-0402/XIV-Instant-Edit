@@ -76,7 +76,11 @@ internal static class PathNormalizer
         return true;
     }
 
-    /// <summary>A file or folder name made safe for a path segment (used for option folders inside a mod).</summary>
+    /// <summary>
+    /// A file or folder name made safe for a path segment (used for option folders inside a mod). A name
+    /// Windows reads as a device (CON, NUL, COM1 and the like, with or without an extension) gets a '_' in
+    /// front, as <c>PortSession.SanitizeFolderName</c> does: a folder or file of that name cannot be made.
+    /// </summary>
     public static string SafeSegment(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
@@ -85,6 +89,8 @@ internal static class PathNormalizer
             if (Array.IndexOf(invalid, chars[i]) >= 0)
                 chars[i] = '_';
         var result = new string(chars).Trim().TrimEnd('.');
-        return result.Length == 0 ? "_" : result;
+        if (result.Length == 0)
+            return "_";
+        return InstantEdit.Services.PathRules.IsReservedDeviceName(result) ? "_" + result : result;
     }
 }

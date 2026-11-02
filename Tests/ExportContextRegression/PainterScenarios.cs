@@ -20,6 +20,7 @@ internal static class PainterScenarios
         ObjWriterFlipsAndScales();
         TgaRoundTrips();
         CoverageKeepsUncoveredTexels();
+        CoverageSurvivesAbsurdUvs();
         CharacterChannelLayout();
         SkinAndHairLayouts();
         CollisionsAndExhaustion();
@@ -284,6 +285,22 @@ internal static class PainterScenarios
             "a mesh without submeshes becomes one submesh over its index range");
         Require(second.Positions[1] == new Vector3(3, 0, 0) && Math.Abs(second.Uvs[2].Y - 0.4f) < 1e-6, "a single float4 stream decodes position and UV");
         Reject(() => ModelMeshReader.Read(SyntheticModel()[..200]), "a truncated model is rejected");
+
+        // A mesh whose 3000 submeshes each cover the whole 3000-index buffer would decode to 9 million indices
+        // from a few kilobytes; with 65535 submeshes of 60000 indices it took gigabytes.
+        var stream = new byte[4 * 12];
+        var triangle = Enumerable.Range(0, 3000).Select(i => (ushort)(i % 3)).ToArray();
+        var overlapping = BuildModel(
+            [new MeshSpec([new Element(0, 0, 2, 0)], [stream], [12], 4, triangle, 0,
+                Enumerable.Repeat((0, 3000, 1u), 3000).ToArray())],
+            [], ["/mt_a.mtrl"], [0]);
+        Reject(() => ModelMeshReader.Read(overlapping), "submeshes that read the index buffer many times over are refused");
+        var partitioned = BuildModel(
+            [new MeshSpec([new Element(0, 0, 2, 0)], [stream], [12], 4, triangle, 0,
+                Enumerable.Range(0, 1000).Select(i => (i * 3, 3, 1u)).ToArray())],
+            [], ["/mt_a.mtrl"], [0]);
+        Require(ModelMeshReader.Read(partitioned).Meshes[0].Submeshes.Count == 1000,
+            "and a mesh whose submeshes split the index buffer between them is read whole");
     }
 
     private static void ObjWriterFlipsAndScales()
@@ -340,6 +357,24 @@ internal static class PainterScenarios
         Require(new RgbaImage(3, 2, (byte[])image.Pixels.Clone()).PixelHash() == image.PixelHash() &&
                 new RgbaImage(2, 3, (byte[])image.Pixels.Clone()).PixelHash() != image.PixelHash(), "pixel hashes cover size and pixels");
         Reject(() => TgaImage.Read(rle[..20]), "truncated run-length data is rejected");
+    }
+
+    private static void CoverageSurvivesAbsurdUvs()
+    {
+        // UVs of a billion tiles: the pixel extent of such a triangle wrapped around as an int, passed the
+        // "larger than a few tiles" guard and kept the Painter send rasterizing for billions of steps.
+        // Each call runs on its own task with a time limit, so a regression fails the check instead of hanging the suite.
+        var far = new[] { (new Vector2(-1e9f, 0), new Vector2(1e9f, 0), new Vector2(0, 0.5f)) };
+        var farTask = Task.Run(() => UvCoverage.Rasterize(64, 64, far, 0));
+        var farDone = farTask.Wait(TimeSpan.FromSeconds(10));
+        Require(farDone, "a triangle with absurd UVs is skipped, not rasterized");
+        if (!farDone)
+            return;
+        var kept = new[] { (new Vector2(0, 0), new Vector2(0.5f, 0), new Vector2(0, 1)), (new Vector2(5e8f, 0), new Vector2(5e8f + 0.5f, 0), new Vector2(5e8f, 1)) };
+        var keptTask = Task.Run(() => UvCoverage.Rasterize(8, 8, kept, 0));
+        var keptDone = keptTask.Wait(TimeSpan.FromSeconds(10));
+        Require(keptDone && keptTask.Result.IsCovered(0, 0) && keptTask.Result.IsCovered(1, 4),
+            "and the triangles next to it still count");
     }
 
     private static void CoverageKeepsUncoveredTexels()
