@@ -3260,8 +3260,8 @@ over the frames typed in its popup. Spec: docs/superpowers/specs/2026-11-01-inst
 
 ## Spring, Repeat and Balance (pending)
 
-The repeat's and the spring's maths are covered offline (RepeatLayerFixture, SpringLayerFixture); these checks are the panel,
-Live and the save.
+The repeat's, the spring's and the balance's maths are covered offline (RepeatLayerFixture, SpringLayerFixture,
+BalanceLayerFixture); these checks are the panel, Live and the save.
 
 - [ ] 1 Key a wave once on the right arm, add a Repeat layer after it over three times its length, From and To round the
   wave: Live plays the wave 3 times, and the saved clip does too.
@@ -3269,6 +3269,12 @@ Live and the save.
 - [ ] 3 A clip with a sound or an effect in the repeated stretch: the sound plays once, where it was, not on each repeat.
 - [ ] 4 With the layer selected the canvas shades From to To. The From and To buttons set them to the playhead; the count
   reads 3 repeats, and on a looping clip a count that isn't whole shows in the warning colour.
+- [ ] 9 A Still pose with an Offset layer leaning the upper back to one side, then a Balance layer: in Live the hips shift
+  over the feet, the feet stay planted, and the saved clip does too. Sideways off keeps the hips' side to side.
+- [ ] 10 Lift one foot with an Offset layer for a stretch: the weight moves onto the other foot there and back after.
+- [ ] 11 The panel shows Sideways, Front to back, Smooth, Max shift, Sensitivity and Strength, then "Left held" and "Right
+  held" lines that update after an edit. A face's Add menu has no Balance; a skeleton without the hips or feet says "This
+  skeleton has no hips or feet.".
 
 ## Free camera (pending)
 

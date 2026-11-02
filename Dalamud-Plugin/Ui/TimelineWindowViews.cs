@@ -41,7 +41,7 @@ internal static partial class TimelineWindowViews
     /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
         [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
-            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat, MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Pin];
+            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat, MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Balance, MotionLayerKind.Pin];
 
     /// <summary>The bone layer items a face's Add menu has: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
     public static readonly ImmutableArray<MotionLayerKind> FaceLayerKinds = [.. LayerKinds.Where(kind => TimelineFace.Allows(kind, null))];
@@ -343,6 +343,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Link => Theme.OtherTexture,
         MotionLayerKind.Repeat => Theme.RepeatLayer,
         MotionLayerKind.Spring => Theme.SpringLayer,
+        MotionLayerKind.Balance => Theme.BalanceLayer,
         _ => Theme.Important,
     };
 
@@ -362,6 +363,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Link => "Moves a bone with a partner's bone.",
         MotionLayerKind.Repeat => "Play a stretch of the motion again and again.",
         MotionLayerKind.Spring => "Make bones lag and overshoot the motion.",
+        MotionLayerKind.Balance => "Keep the body's weight over the feet.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -446,6 +448,12 @@ internal static partial class TimelineWindowViews
             }
             if (layer.Kind == MotionLayerKind.Smooth)
                 continue;
+            // A balance moves the hips; the legs it bends to keep the feet down are tracks every clip has.
+            if (layer.Kind == MotionLayerKind.Balance)
+            {
+                moved.Add(PinChains.Hips);
+                continue;
+            }
             foreach (var key in layer.Keys)
                 foreach (var bone in key.Bones.Keys)
                     if (layer.Bones.IsEmpty || layer.Bones.Contains(bone))
@@ -480,6 +488,8 @@ internal static partial class TimelineWindowViews
         }
         if (layer.Kind == MotionLayerKind.Idle)
             return layer.Idle is { } idle ? $"From {idle.Donor}" : "No motion read yet";
+        if (layer.Kind == MotionLayerKind.Balance)
+            return "Hips and feet";
         if (layer.Kind == MotionLayerKind.LookAt)
         {
             var turned = layer.Bones.Length == 0 ? "no bones" : layer.Bones.Length == 1 ? "1 bone" : $"{Whole(layer.Bones.Length)} bones";
@@ -859,6 +869,7 @@ internal static partial class TimelineWindowViews
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
                     MotionLayerKind.Pin => PinnedBones(layer, editing),
                     MotionLayerKind.Idle => MotionIdles.Moved(layer),
+                    MotionLayerKind.Balance => MotionBalances.Moved.AsEnumerable(),
                     _ => layer.Keys.SelectMany(key => key.Bones.Keys),
                 })
                 .Where(left.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();

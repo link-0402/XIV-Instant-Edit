@@ -39,7 +39,7 @@ internal static class PoseEdits
 
     /// <summary>
     /// Whether any key of the layer has <paramref name="bone"/>, or for an amplitude or a fix whether it is limited to
-    /// it; a repeat limited to none changes every bone. A symmetry's, a pin's or a link's bones come from the skeleton, an idle's from what it
+    /// it; a repeat limited to none changes every bone, a balance the hips and the legs. A symmetry's, a pin's or a link's bones come from the skeleton, an idle's from what it
     /// moves (<paramref name="changed"/>, see BonePosing.BonesOf).
     /// </summary>
     public static bool Changes(MotionLayer layer, string bone, IReadOnlySet<string>? changed = null) => layer.Kind switch
@@ -47,6 +47,7 @@ internal static class PoseEdits
         MotionLayerKind.Repeat => layer.Bones.IsEmpty || layer.Bones.Contains(bone),
         MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
             MotionLayerKind.LookAt or MotionLayerKind.Spring => layer.Bones.Contains(bone),
+        MotionLayerKind.Balance => MotionBalances.Moved.Contains(bone),
         MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Link => changed?.Contains(bone) == true,
         MotionLayerKind.Idle => changed?.Contains(bone) ?? MotionIdles.Moved(layer).Contains(bone),
         _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),

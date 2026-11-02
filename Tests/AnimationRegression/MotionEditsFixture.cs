@@ -296,7 +296,7 @@ internal static class MotionEditsFixture
             "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
         check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
                   MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat,
-                  MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Pin]) &&
+                  MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Balance, MotionLayerKind.Pin]) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
               TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&
@@ -360,6 +360,24 @@ internal static class MotionEditsFixture
               !TimelineLayout.Unfolds(sprung) && LayerPanel.Summary(sprung with { Bones = ["j_kosi", "j_sebo_a"] }) == "Springs 2 bones" &&
               TimelineFace.Allows(MotionLayerKind.Spring, null),
             "a spring without bones says so, has no bone rows, and a face takes one");
+        var balance = MotionEdits.Add(Empty(), MotionLayerKind.Balance, 0, 100, out var balanceKey, out _);
+        var balanced = MotionEdits.Find(balance, balanceKey)!;
+        check(balanced is { Name: "Balance 1", Amount: 1, Components: PoseComponents.Rotation | PoseComponents.Position, Window: 0, Spring: null } &&
+              balanced.Balance == new MotionBalance() && balanced.Bones.IsEmpty && MotionEdits.MaxAmount(MotionLayerKind.Balance) == 1,
+            "a balance starts with the default balance, turning and moving, at full strength");
+        check(!MotionEdits.Same(balanced, balanced with { Balance = balanced.Balance! with { MaxShift = .2f } }) &&
+              ReferenceEquals(MotionEdits.SetKey(balance, balanceKey, 50, "j_kosi", rest), balance) &&
+              ReferenceEquals(MotionEdits.SetBones(balance, balanceKey, ["j_kosi"]), balance),
+            "layers differ by a balance's max shift, and a balance takes no keys or bones");
+        check(MotionEdits.KindName(MotionLayerKind.Balance) == "Balance" &&
+              TimelineWindowViews.LayerKindHint(MotionLayerKind.Balance) == "Keep the body's weight over the feet." &&
+              TimelineUi.LayerIcons.Distinct().Count() == TimelineUi.LayerIcons.Length && TimelineUi.LayerIcons.Length == Enum.GetValues<MotionLayerKind>().Length &&
+              Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.Balance).All(kind => TimelineWindowViews.LayerColour(kind) != TimelineWindowViews.LayerColour(MotionLayerKind.Balance)),
+            "the Add menu offers Balance before Pin, with its own hint, icon and colour");
+        var faced = MotionEdits.Add(TimelineFace.Open(Empty(), 0, 1, 100), MotionLayerKind.Balance, 0, 2, out _, out var faceError);
+        check(faced.Motion.IsEmpty && faceError == "A face takes no balance layer." && !TimelineFace.Allows(MotionLayerKind.Balance, null) &&
+              !TimelineLayout.Unfolds(balanced) && TimelineWindowViews.LayerContent(balanced) == "Hips and feet",
+            "a face takes no balance, which has no bone rows and works on the hips and feet");
         var full = Empty() with { Motion = [.. Enumerable.Range(0, MotionEvaluator.MaxLayers).Select(i => layer with { Key = "m" + i })] };
         var refused = MotionEdits.Add(full, MotionLayerKind.Offset, 0, 10, out _, out var tooMany);
         check(ReferenceEquals(refused, full) && tooMany != null, "a layer past the most an animation may have is refused with a reason");

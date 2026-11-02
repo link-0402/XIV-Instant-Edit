@@ -91,7 +91,7 @@ internal sealed class TimelineLayout
 
     /// <summary>Whether the layer can unfold into bone rows: an offset or pose with keys, or the Motion keys layer. Amplitudes, fixes, swings, smooth motions, noises, links, repeats and springs have none.</summary>
     public static bool Unfolds(MotionLayer layer) => layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or
-        MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring) &&
+        MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring or MotionLayerKind.Balance) &&
         (layer.Markers != null && layer.Kind == MotionLayerKind.Offset || layer.Keys.Any(key => !key.Bones.IsEmpty));
 
     /// <summary>

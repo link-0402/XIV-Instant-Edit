@@ -43,6 +43,10 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
     // the partner tracks.
     private (string Layer, MotionLayer[] Before, ImmutableArray<MotionPin> Pins, int Start, int End, MotionClip Clip, MotionLinkSet Links,
         IReadOnlyDictionary<string, string> Facts)? plantedFacts;
+    // A balance layer's facts on each foot, worked out on a worker, for what they depend on: the layers before it, its range and
+    // sensitivity, the decoded motion and the partner tracks.
+    private (string Layer, MotionLayer[] Before, int Start, int End, PinSensitivity Sensitivity, MotionClip Clip, MotionLinkSet Links,
+        Task<IReadOnlyList<string>> Task, CancellationTokenSource Cancel)? balanceFacts;
     // The motion with some layers baked over the whole clip, or why it can't be, for those layers, the clip and the partner tracks.
     private (MotionLayer[] Before, MotionClip Clip, MotionLinkSet? Links, MotionClip? Baked, string? Problem)? bakedBefore;
     // The clip's own pose at one frame, local and in model space, while the decode and the frame stay.
@@ -292,7 +296,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         {
             if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
                     MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Link or MotionLayerKind.Repeat or
-                    MotionLayerKind.Spring) &&
+                    MotionLayerKind.Spring or MotionLayerKind.Balance) &&
                 PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
             if (layerBones?.Pinned.Contains(bone) == true)
@@ -323,6 +327,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             MotionLayerKind.Link => "Bent to follow a link.",
             MotionLayerKind.Repeat => "This layer repeats its motion.",
             MotionLayerKind.Spring => "This layer springs its bones.",
+            MotionLayerKind.Balance => "This layer keeps the weight over the feet.",
             _ => "This layer changes it.",
         },
         BoneState.Animated => "The clip moves it.",
@@ -471,10 +476,11 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
 
     /// <summary>
     /// Whether any of <paramref name="layers"/> takes the whole clip, which one pose leaves out: an amplitude, a fix, a smooth motion, a
-    /// repeat, a spring or a planted pin. A link never does: it follows its partner frame by frame, so one pose has it (<see cref="MotionEvaluator.ApplyAt"/>).
+    /// repeat, a spring, a balance or a planted pin. A link never does: it follows its partner frame by frame, so one pose has it (<see cref="MotionEvaluator.ApplyAt"/>).
     /// </summary>
     public static bool TakesWholeClip(IEnumerable<MotionLayer> layers) => layers.Any(layer => layer.Kind != MotionLayerKind.Link && MotionEvaluator.Active(layer) &&
-        (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Repeat or MotionLayerKind.Spring ||
+        (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Repeat or MotionLayerKind.Spring or
+             MotionLayerKind.Balance ||
          layer.Kind == MotionLayerKind.Pin && layer.Pins.Any(pin => pin.Planted)));
 
     /// <summary>The bones the decoded clip has tracks for, when it was decoded on <paramref name="skeleton"/>; empty while unknown.</summary>
@@ -512,6 +518,39 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         }
         plantedFacts = (layer.Key, before, layer.Pins, layer.Start, layer.End, clip, links, facts);
         return facts;
+    }
+
+    /// <summary>
+    /// Where a balance layer finds each foot down, a fact line each ("Left held 0-40, 72-119"), on the motion as the layers before
+    /// it leave it, or why there are none. Null while the motion is read or the facts are worked out, on a worker this starts.
+    /// Worked out again only when the layers before it, its range, its sensitivity, the decode or the partner tracks change, not
+    /// while its other settings are edited, nor during a drag.
+    /// </summary>
+    public IReadOnlyList<string>? BalanceFacts(AnimationTimelineSource loaded, TimelineDocument doc, MotionLayer layer)
+    {
+        if (OutputClip(loaded) is not { } clip || layer.Balance is not { } balance)
+            return null;
+        var before = Earlier(doc.Motion, Math.Max(0, MotionEdits.IndexOf(doc, layer.Key)));
+        var links = session.Links;
+        if (balanceFacts is { } cached && cached.Layer == layer.Key && ReferenceEquals(cached.Clip, clip) &&
+            (session.Editor is { Gesture: not TimelineGesture.None } ||
+             cached.Start == layer.Start && cached.End == layer.End && cached.Sensitivity == balance.Sensitivity &&
+             cached.Before.SequenceEqual(before, ReferenceEqualityComparer.Instance) && ReferenceEquals(cached.Links, links)))
+        {
+            // A failure is read here so it isn't reported as unobserved.
+            _ = cached.Task.IsFaulted ? cached.Task.Exception : null;
+            return cached.Task.IsCompletedSuccessfully ? cached.Task.Result : null;
+        }
+        if (balanceFacts is { } stale)
+        {
+            stale.Cancel.Cancel();
+            stale.Cancel.Dispose();
+        }
+        var cancel = new CancellationTokenSource();
+        var token = cancel.Token;
+        balanceFacts = (layer.Key, before, layer.Start, layer.End, balance.Sensitivity, clip, links,
+            Task.Run(() => MotionBalances.Facts(clip, before, layer, links, token), token), cancel);
+        return null;
     }
 
     /// <summary>

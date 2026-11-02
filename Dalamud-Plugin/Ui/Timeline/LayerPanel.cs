@@ -110,7 +110,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         hands.DrawFields(current, layer, hand);
                     else if (reset)
                         DrawAxes(current, layer);
-                    else if (layer.Kind is not (MotionLayerKind.Pin or MotionLayerKind.LookAt or MotionLayerKind.Link or MotionLayerKind.Spring))
+                    else if (layer.Kind is not (MotionLayerKind.Pin or MotionLayerKind.LookAt or MotionLayerKind.Link or MotionLayerKind.Spring or MotionLayerKind.Balance))
                         DrawComponents(current, layer);
                     if (layer.Kind == MotionLayerKind.Swing)
                         SwingFields.Draw(current, layer);
@@ -124,9 +124,12 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         RepeatFields.Draw(current, layer);
                     else if (layer.Kind == MotionLayerKind.Spring)
                         SpringFields.Draw(current, layer);
+                    else if (layer.Kind == MotionLayerKind.Balance)
+                        BalanceFields.Draw(current, layer);
                     // A look that follows a bone has no keys to go between.
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                        MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring) && layer.Look?.Follow == null)
+                        MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring or MotionLayerKind.Balance) &&
+                        layer.Look?.Follow == null)
                         DrawInterpolation(current, layer);
                 }
             }
@@ -184,6 +187,11 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         {
             DrawPosing(layer);
             SpringFields.DrawNotes(layer);
+        }
+        else if (layer.Kind == MotionLayerKind.Balance)
+        {
+            BalanceFields.DrawFacts(posing.BoneTree(skeleton).Index, posing.BalanceFacts(loaded, current.Document, layer));
+            DrawPosing(layer);
         }
         else if (layer.Kind == MotionLayerKind.LookAt)
         {
@@ -639,7 +647,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         {
             MotionLayerKind.Link => TimelineWindowViews.LinkPullLabel,
             MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-                MotionLayerKind.LookAt or MotionLayerKind.Repeat or MotionLayerKind.Spring => "Strength",
+                MotionLayerKind.LookAt or MotionLayerKind.Repeat or MotionLayerKind.Spring or MotionLayerKind.Balance => "Strength",
             MotionLayerKind.Amplitude => "Movement",
             MotionLayerKind.Pin => "Pull",
             _ => "Blend",
@@ -667,6 +675,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 MotionLayerKind.Smooth => "How far the bones go to the smoothed motion. Ctrl+click to type.",
                 MotionLayerKind.Repeat => "How far the bones go to the repeated motion. Ctrl+click to type.",
                 MotionLayerKind.Spring => "How far the bones go to the sprung motion. Ctrl+click to type.",
+                MotionLayerKind.Balance => "How far the hips move to keep the weight over the feet. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
     }

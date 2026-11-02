@@ -229,6 +229,9 @@ internal static class PoseEditorFixture
         var spring = swing with { Kind = MotionLayerKind.Spring, Swing = null, Spring = new MotionSpring() };
         check(PoseEdits.Changes(spring, Twin) && !PoseEdits.Changes(spring, Hand) && !PoseEdits.Changes(spring with { Bones = [] }, Twin),
             "a spring changes the bones it is limited to, and none without any");
+        var balance = swing with { Kind = MotionLayerKind.Balance, Swing = null, Bones = [], Balance = new MotionBalance() };
+        check(PoseEdits.Changes(balance, PinChains.Hips) && PoseEdits.Changes(balance, PinChains.FootL) && !PoseEdits.Changes(balance, Hand),
+            "a balance changes the hips and the legs");
     }
 
     /// <summary>Two bones' frames, the rotations from character space to the spaces their values turn in, pointing different ways.</summary>

@@ -92,6 +92,7 @@ internal static class MotionEdits
         MotionLayerKind.Link => "Link",
         MotionLayerKind.Repeat => "Repeat",
         MotionLayerKind.Spring => "Spring",
+        MotionLayerKind.Balance => "Balance",
         _ => "Pose",
     };
 
@@ -103,8 +104,8 @@ internal static class MotionEdits
     /// the others, so it applies last, named "Offset 2" and so on, with no fades, so a loop
     /// stays seamless. An amplitude starts at 150%, every other kind at full strength; a swing starts with the
     /// default swing, a smooth motion with the default window, a noise with the default noise, a look turning the
-    /// head, neck and upper back with the default limit, a repeat playing the 30 frames before it and a spring with the default spring,
-    /// turning only. A link needs its partner, so it is refused here (see <see cref="AddLink"/>).
+    /// head, neck and upper back with the default limit, a repeat playing the 30 frames before it, a spring with the default spring,
+    /// turning only, and a balance with the default balance. A link needs its partner, so it is refused here (see <see cref="AddLink"/>).
     /// </summary>
     public static TimelineDocument Add(TimelineDocument doc, MotionLayerKind kind, int start, int end, out string key, out string? error)
     {
@@ -149,7 +150,8 @@ internal static class MotionEdits
             Noise: kind == MotionLayerKind.Noise ? new MotionNoise() : null,
             Look: kind == MotionLayerKind.LookAt ? new MotionLook() : null,
             Repeat: kind == MotionLayerKind.Repeat ? new MotionRepeat(Math.Max(0, start - 30), Math.Max(0, start - 30) + 30) : null,
-            Spring: kind == MotionLayerKind.Spring ? new MotionSpring() : null);
+            Spring: kind == MotionLayerKind.Spring ? new MotionSpring() : null,
+            Balance: kind == MotionLayerKind.Balance ? new MotionBalance() : null);
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
     }
 
@@ -1120,11 +1122,11 @@ internal static class MotionEdits
     {
         frame = KeyFrame(doc, frame);
         var index = IndexOf(doc, key);
-        // Symmetry, fix, idle-motion, swing, smooth motion, noise, link, repeat and spring layers never hold keys; a pin layer keys only its keyed pins,
-        // a look only the head's spot, and none while it follows a bone.
+        // Symmetry, fix, idle-motion, swing, smooth motion, noise, link, repeat, spring and balance layers never hold keys; a pin layer keys only its
+        // keyed pins, a look only the head's spot, and none while it follows a bone.
         if (index < 0 || string.IsNullOrEmpty(bone) ||
             doc.Motion[index].Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
-                MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring ||
+                MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring or MotionLayerKind.Balance ||
             doc.Motion[index].Kind == MotionLayerKind.Pin && !doc.Motion[index].Pins.Any(pin => pin.Bone == bone && !pin.Planted) ||
             doc.Motion[index].Kind == MotionLayerKind.LookAt && (bone != MotionLooks.KeyBone || doc.Motion[index].Look?.Follow != null))
             return doc;
@@ -1241,8 +1243,9 @@ internal static class MotionEdits
         if (index < 0)
             return doc;
         var layer = doc.Motion[index];
-        // A look turns only the head chain; a spring never takes the root or the body (MotionEvaluator.Validate refuses them).
-        ImmutableArray<string> limited = [.. bones.Where(bone => !string.IsNullOrEmpty(bone) && (layer.Kind != MotionLayerKind.LookAt || MotionLooks.Chain.Contains(bone)) &&
+        // A look turns only the head chain; a spring never takes the root or the body and a balance takes no bones (MotionEvaluator.Validate refuses them).
+        ImmutableArray<string> limited = [.. bones.Where(bone => !string.IsNullOrEmpty(bone) && layer.Kind != MotionLayerKind.Balance &&
+                (layer.Kind != MotionLayerKind.LookAt || MotionLooks.Chain.Contains(bone)) &&
                 (layer.Kind != MotionLayerKind.Spring || bone is not ("n_root" or PinChains.Body)))
             .Distinct(StringComparer.Ordinal)];
         return layer.Bones.SequenceEqual(limited, StringComparer.Ordinal) ? doc : doc with { Motion = doc.Motion.SetItem(index, layer with { Bones = limited }) };
@@ -1437,7 +1440,7 @@ internal static class MotionEdits
             : b.Fix != null && a.Fix.Kind == b.Fix.Kind && a.Fix.Fade == b.Fix.Fade && a.Fix.Axes == b.Fix.Axes && a.Fix.Placement == b.Fix.Placement &&
               SameBones(a.Fix.LoopFirst, b.Fix.LoopFirst) && SameBones(a.Fix.LoopSecond, b.Fix.LoopSecond) && SameHand(a.Fix.Hand, b.Fix.Hand)) &&
         SameIdle(a.Idle, b.Idle) && Equals(a.Markers, b.Markers) && Equals(a.Swing, b.Swing) && a.Window == b.Window && Equals(a.Noise, b.Noise) && Equals(a.Look, b.Look) &&
-        Equals(a.Repeat, b.Repeat) && Equals(a.Spring, b.Spring) && a.Keys.Length == b.Keys.Length &&
+        Equals(a.Repeat, b.Repeat) && Equals(a.Spring, b.Spring) && Equals(a.Balance, b.Balance) && a.Keys.Length == b.Keys.Length &&
         a.Keys.Zip(b.Keys).All(pair => pair.First.Frame == pair.Second.Frame && pair.First.Moved.SequenceEqual(pair.Second.Moved, StringComparer.Ordinal) &&
             pair.First.Ease == pair.Second.Ease && Equals(pair.First.Curve, pair.Second.Curve) && SameBones(pair.First.Bones, pair.Second.Bones));
 
