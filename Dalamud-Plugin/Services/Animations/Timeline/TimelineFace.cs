@@ -52,7 +52,7 @@ internal sealed record TimelineFace(int Anchor, int SourceFrames, int Frames)
     public static bool Allows(MotionLayerKind kind, MotionFixKind? fix) => kind switch
     {
         MotionLayerKind.Offset or MotionLayerKind.Amplitude or MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Swing
-            or MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Repeat => true,
+            or MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Repeat or MotionLayerKind.Spring => true,
         MotionLayerKind.Fix => fix == MotionFixKind.SmoothJitter,
         _ => false,
     };

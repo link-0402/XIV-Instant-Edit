@@ -46,7 +46,7 @@ internal static class PoseEdits
     {
         MotionLayerKind.Repeat => layer.Bones.IsEmpty || layer.Bones.Contains(bone),
         MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-            MotionLayerKind.LookAt => layer.Bones.Contains(bone),
+            MotionLayerKind.LookAt or MotionLayerKind.Spring => layer.Bones.Contains(bone),
         MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Link => changed?.Contains(bone) == true,
         MotionLayerKind.Idle => changed?.Contains(bone) ?? MotionIdles.Moved(layer).Contains(bone),
         _ => layer.Keys.Any(key => key.Bones.ContainsKey(bone)),

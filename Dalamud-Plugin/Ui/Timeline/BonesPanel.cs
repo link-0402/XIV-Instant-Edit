@@ -629,7 +629,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.TextColored(Theme.Label, MotionEdits.KindName(layer.Kind));
         ImGui.Spacing();
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-            MotionLayerKind.Repeat)
+            MotionLayerKind.Repeat or MotionLayerKind.Spring)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly);
         else if (layer.Kind == MotionLayerKind.LookAt)
         {

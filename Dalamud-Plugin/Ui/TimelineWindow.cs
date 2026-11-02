@@ -45,6 +45,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private Action? partnersPage;
     private (Configuration Config, Action Save)? poseFolders;
     private Func<ushort?, CancellationToken, Task<HandTipFacts>>? handTips;
+    private Func<ushort?, CancellationToken, Task<System.Collections.Immutable.ImmutableHashSet<string>?>>? physicsBones;
     private readonly IObjectTable objects;
     private readonly IClientState clientState;
     private readonly ITargetManager targets;
@@ -233,6 +234,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         if (poseFolders is { } folders)
             made.AttachPoseFolders(folders.Config, folders.Save);
         made.HandTips = handTips;
+        made.PhysicsBones = physicsBones;
         workspaces[key] = made;
         made.Session.Group?.Add(made.Preview);
         return made;
@@ -468,6 +470,18 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
             handTips = value;
             foreach (var workspace in workspaces.Values)
                 workspace.HandTips = value;
+        }
+    }
+
+    /// <summary>Reads the bones the game's physics moves on a GPose actor, for spring layers; the plugin sets it.</summary>
+    internal Func<ushort?, CancellationToken, Task<System.Collections.Immutable.ImmutableHashSet<string>?>>? PhysicsBones
+    {
+        get => physicsBones;
+        set
+        {
+            physicsBones = value;
+            foreach (var workspace in workspaces.Values)
+                workspace.PhysicsBones = value;
         }
     }
 

@@ -489,8 +489,13 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         ImGui.TextColored(Theme.Muted, "Bones");
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        // A swing or a noise with none listed moves nothing; the other limited kinds then change every bone.
-        var swing = layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise;
+        // A swing, a noise or a spring with none listed moves nothing; the other limited kinds then change every bone.
+        var swing = layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.Spring;
+        // A spring leaves out the bones the game's physics moves, and the root and the body, which would move the whole character.
+        var spring = layer.Kind == MotionLayerKind.Spring;
+        if (spring)
+            session.KeepPhysicsBones();
+        var physics = spring ? session.PhysicsBones : null;
         ImGui.TextUnformatted(layer.Bones.IsEmpty ? swing ? "None" : "Every bone" : layer.Bones.Length == 1 ? "1 bone" : $"{layer.Bones.Length} bones");
         foreach (var bone in layer.Bones)
         {
@@ -502,18 +507,27 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             }
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextUnformatted(AnimationPresentation.BoneName(bone));
+            if (physics?.Contains(bone) == true)
+            {
+                ImGui.TextColored(Theme.Warning, AnimationPresentation.BoneName(bone));
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("The game's physics moves this bone.");
+            }
+            else
+                ImGui.TextUnformatted(AnimationPresentation.BoneName(bone));
         }
         var index = posing.BoneTree(skeleton).Index;
-        string[] chosen = [.. posing.Selection.Bones.Where(index.ContainsKey)];
+        string[] picked = [.. posing.Selection.Bones.Where(index.ContainsKey)];
+        string[] chosen = spring ? [.. picked.Where(bone => !TimelineWindowViews.SpringRefuses(bone, skeleton, index, physics))] : picked;
         using (ImRaii.Disabled(readOnly || chosen.Length == 0 || chosen.All(layer.Bones.Contains)))
         {
-            if (ImGui.Button(chosen.Length > 1 ? "Limit to selected" : "Limit to this bone"))
+            if (ImGui.Button(picked.Length > 1 ? "Limit to selected" : "Limit to this bone"))
                 current.Commit(MotionEdits.SetBones(current.Document, layer.Key, layer.Bones.Concat(chosen)));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(layer.Kind switch
+            ImGui.SetTooltip(spring && picked.Length > 0 && physics != null && picked.All(physics.Contains) ? "The game's physics moves these bones." : layer.Kind switch
             {
+                MotionLayerKind.Spring => "Add the selected bones to the ones this layer springs.",
                 MotionLayerKind.Fix => "Add the selected bones to the ones this layer fixes. With none listed, it fixes every bone.",
                 MotionLayerKind.Swing => "Add the selected bones to the ones this layer swings.",
                 MotionLayerKind.Noise => "Add the selected bones to the ones this layer wobbles.",

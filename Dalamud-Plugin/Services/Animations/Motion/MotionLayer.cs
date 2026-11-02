@@ -33,6 +33,8 @@ internal enum MotionLayerKind : byte
     Link,
     /// <summary>Plays a stretch of the motion again and again (<see cref="MotionRepeat"/>).</summary>
     Repeat,
+    /// <summary>Makes bones lag behind the motion and overshoot it (<see cref="MotionSpring"/>).</summary>
+    Spring,
 }
 
 /// <summary>What a fix layer repairs. Saved as numbers.</summary>
@@ -297,6 +299,8 @@ internal sealed record MotionWeight(int Frame, float Value);
 /// Other kinds have none, and journals written before it load with none.</param>
 /// <param name="Repeat">For a repeat layer, the stretch of motion it plays again and again; its amount is the blend toward it. Other
 /// kinds have none, and journals written before it load with none.</param>
+/// <param name="Spring">For a spring layer, how its bones lag and overshoot; its amount is the blend toward the sprung motion. Other
+/// kinds have none, and journals written before it load with none.</param>
 /// <param name="Key">"m" + a number, unique in its document.</param>
 internal sealed record MotionLayer(
     string Key,
@@ -323,7 +327,8 @@ internal sealed record MotionLayer(
     MotionNoise? Noise = null,
     MotionLook? Look = null,
     MotionLink? Link = null,
-    MotionRepeat? Repeat = null)
+    MotionRepeat? Repeat = null,
+    MotionSpring? Spring = null)
 {
     public ImmutableArray<string> Bones { get; init; } = Bones.IsDefault ? [] : Bones;
     public ImmutableArray<MotionKey> Keys { get; init; } = Keys.IsDefault ? [] : Keys;

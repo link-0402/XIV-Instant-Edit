@@ -65,6 +65,7 @@ internal static class MotionEvaluator
         MotionLayerKind.Link => layer.Amount > 0 && layer.Link != null && links?.For(layer.Key) != null,
         MotionLayerKind.Repeat => layer.Amount > 0 && layer.Repeat is { } repeat && MotionRepeats.Length(repeat) >= 2 &&
                                   (layer.Components & PoseComponents.All) != PoseComponents.None,
+        MotionLayerKind.Spring => layer.Amount > 0 && layer.Spring != null && !layer.Bones.IsEmpty && layer.Components.HasFlag(PoseComponents.Rotation),
         _ => layer.Amount > 0 && layer.Components != PoseComponents.None && layer.Keys.Any(key => !key.Bones.IsEmpty),
     };
 
@@ -177,10 +178,10 @@ internal static class MotionEvaluator
         return BlendsAtMostFully(layer.Kind) ? Math.Min(1, weight) : weight;
     }
 
-    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's or a link's pull, a fix, a smooth, a look or a repeat.</summary>
+    /// <summary>Whether a kind's amount is a blend of at most 1: a pose, a symmetry, a pin's or a link's pull, a fix, a smooth, a look, a repeat or a spring.</summary>
     public static bool BlendsAtMostFully(MotionLayerKind kind) =>
         kind is MotionLayerKind.Pose or MotionLayerKind.Symmetry or MotionLayerKind.Pin or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.LookAt or
-            MotionLayerKind.Link or MotionLayerKind.Repeat;
+            MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring;
 
     /// <summary>Checks one layer; throws <see cref="InvalidDataException"/> naming what is wrong.</summary>
     public static void Validate(MotionLayer layer)
@@ -204,7 +205,7 @@ internal static class MotionEvaluator
         if (layer.Keys.Length > MaxKeys)
             throw new InvalidDataException($"{name} has too many keys.");
         if (layer.Kind is MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or
-                MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat && !layer.Keys.IsEmpty)
+                MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring && !layer.Keys.IsEmpty)
             throw new InvalidDataException($"{name} can't have keys.");
         if (layer.Kind != MotionLayerKind.Pin && !layer.Pins.IsEmpty)
             throw new InvalidDataException($"{name} can't have pins.");
@@ -263,6 +264,17 @@ internal static class MotionEvaluator
             throw new InvalidDataException($"{name} can't have a repeat.");
         if (layer.Repeat is { } repeat)
             MotionRepeats.Validate(repeat, name);
+        if (layer.Kind == MotionLayerKind.Spring && layer.Spring == null)
+            throw new InvalidDataException($"{name} has no spring.");
+        if (layer.Kind != MotionLayerKind.Spring && layer.Spring != null)
+            throw new InvalidDataException($"{name} can't have a spring.");
+        if (layer.Spring is { } spring)
+        {
+            MotionSprings.Validate(spring, name);
+            // Springing the root or the body would swing the whole character.
+            if (layer.Bones.Any(bone => bone is "n_root" or PinChains.Body))
+                throw new InvalidDataException($"{name} springs the root or the body, which would move the whole character.");
+        }
         if (layer.Kind == MotionLayerKind.Smooth && layer.Window is < MotionSmoothing.MinWindow or > MotionSmoothing.MaxWindow)
             throw new InvalidDataException($"{name} has a window out of range.");
         if (layer.Kind != MotionLayerKind.Smooth && layer.Window != 0)
@@ -442,6 +454,9 @@ internal static class MotionEvaluator
                     break;
                 case MotionLayerKind.Repeat:
                     MotionRepeats.Apply(clip, layer, (IReadOnlyCollection<int>?)mask ?? Enumerable.Range(0, clip.Bones).ToArray(), end, token);
+                    break;
+                case MotionLayerKind.Spring:
+                    MotionSprings.Apply(clip, layer, index, loop, end, token);
                     break;
             }
             if (hipsBefore != null)
@@ -804,7 +819,8 @@ internal static class MotionEvaluator
     /// One pose with the offset, pose, symmetry, keyed pin, Replace hand shape, root reset, idle, swing, noise and look-at layers applied at <paramref name="frame"/>, in order, the way
     /// <see cref="Apply"/> applies them to a sample there. Amplitudes are left out: they scale motion
     /// around its average over their section, which one pose does not have, and so are smooth motions, which average the frames
-    /// round it, repeats, which play other frames of the motion under them, and a hand shape keeping finger motion; planted pins
+    /// round it, repeats, which play other frames of the motion under them, springs, which follow the motion up to the frame, and a
+    /// hand shape keeping finger motion; planted pins
     /// and the other fixes too, as finding where a bone is down or what its neighbours do takes the whole clip. The Bones window turns
     /// bones in the space the layers leave the bones above them in. <paramref name="loop"/> is the
     /// clip's length in frames when it loops, else 0; <paramref name="end"/> its length in frames, 0 when
@@ -862,7 +878,7 @@ internal static class MotionEvaluator
                     Weight(layer, frame, end));
                 continue;
             }
-            if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Repeat)
+            if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Repeat or MotionLayerKind.Spring)
                 continue;
             if (layer.Kind == MotionLayerKind.Symmetry)
             {

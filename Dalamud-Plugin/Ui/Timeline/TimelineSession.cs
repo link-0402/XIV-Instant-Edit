@@ -49,6 +49,56 @@ internal sealed class TimelineSession
     /// <summary>Reads whether the live character's skeleton and hand model have fingertip bones; set by the plugin, null without a game.</summary>
     public Func<ushort?, CancellationToken, Task<HandTipFacts>>? HandTips { get; set; }
 
+    /// <summary>
+    /// Reads the bones the game's physics moves on the GPose actor at an object index (null: unknown, as outside GPose); set by the
+    /// plugin, null without a game.
+    /// </summary>
+    public Func<ushort?, CancellationToken, Task<ImmutableHashSet<string>?>>? ReadPhysicsBones { get; set; }
+
+    /// <summary>
+    /// The bones the game's physics moves on the workspace's actor, read once for the open clip by <see cref="KeepPhysicsBones"/>;
+    /// null while unknown or when they can't be read, which leaves nothing out.
+    /// </summary>
+    public ImmutableHashSet<string>? PhysicsBones { get; private set; }
+
+    // What PhysicsBones was read for (the clip and the actor), and the read running.
+    private string? physicsKey;
+    private (string Key, Task<ImmutableHashSet<string>?> Task, CancellationTokenSource Cancel)? physicsRead;
+
+    /// <summary>
+    /// Keeps <see cref="PhysicsBones"/> to the open clip and actor: takes a finished read, and starts one, off the draw, the first
+    /// time it is asked for a clip or an actor it wasn't read for. Cheap to call every frame.
+    /// </summary>
+    public void KeepPhysicsBones()
+    {
+        if (physicsRead is { Task.IsCompleted: true } done)
+        {
+            physicsRead = null;
+            done.Cancel.Dispose();
+            // A failure is read here so it isn't reported as unobserved; a read cancelled for another clip runs again on coming back.
+            _ = done.Task.Exception;
+            physicsKey = done.Task.IsCanceled ? null : done.Key;
+            PhysicsBones = done.Task.IsCompletedSuccessfully ? done.Task.Result : null;
+        }
+        if (Source is not { } source || ReadPhysicsBones is not { } read)
+            return;
+        var actor = ActorIndex;
+        var key = $"{ClipKey(source)}|{actor}";
+        if (physicsRead is { } running)
+        {
+            if (running.Key != key)
+                running.Cancel.Cancel();
+            return;
+        }
+        if (physicsKey == key)
+            return;
+        PhysicsBones = null;
+        physicsKey = null;
+        var cancel = new CancellationTokenSource();
+        var token = cancel.Token;
+        physicsRead = (key, Task.Run(() => read(actor, token), token), cancel);
+    }
+
     /// <summary>The open startup's loop read for Match startup to loop, shared by the Add menus and the layer panel.</summary>
     public LoopPoseReader LoopPose { get; }
 

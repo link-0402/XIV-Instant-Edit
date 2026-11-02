@@ -298,6 +298,10 @@ public sealed class Plugin : IDalamudPlugin
         _headTracking = new Services.Skeletons.HeadTrackingService(_penumbra.Ipc, _penumbra.Physics, _penumbra.Previews, data, framework, objects, clientState, log,
             _config, SaveConfiguration, configDirectory, () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
         _timelineWindow.HandTips = _physics.ReadHandTipsAsync;
+        // Spring layers leave out the bones the GPose actor's physics files move; outside GPose they are unknown.
+        _timelineWindow.PhysicsBones = (actor, token) => actor is { } index
+            ? Services.Physics.PhysicsDrivenBones.ReadAsync(_penumbra.Ipc, data, framework, log, index, token)
+            : Task.FromResult<System.Collections.Immutable.ImmutableHashSet<string>?>(null);
         _timelineWindow.AttachPoseFolders(_config, SaveConfiguration);
         // Partners: a second GPose actor from a preset, with its Penumbra collection, Glamourer design and Customize+ profile.
         var partnerStore = new PartnerPresetStore(configDirectory, message => log.Warning("{Message}", message));

@@ -295,8 +295,8 @@ internal static class MotionEditsFixture
               MotionEdits.Find(smooth, smoothKey) is { Name: "Smooth motion 1", Amount: 1, Window: MotionSmoothing.DefaultWindow, Swing: null },
             "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
         check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
-                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Repeat, MotionLayerKind.LookAt,
-                  MotionLayerKind.Link, MotionLayerKind.Pin]) &&
+                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat,
+                  MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Pin]) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
               TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&
@@ -343,6 +343,23 @@ internal static class MotionEditsFixture
               !TimelineLayout.Unfolds(repeated) && LayerPanel.Summary(repeated) == "Repeats every bone" &&
               LayerPanel.Summary(repeated with { Bones = ["j_kosi", "j_sebo_a"] }) == "Repeats 2 bones" && TimelineFace.Allows(MotionLayerKind.Repeat, null),
             "a repeat without bones repeats every bone, has no bone rows, and a face takes one");
+        var spring = MotionEdits.Add(Empty(), MotionLayerKind.Spring, 0, 100, out var springKey, out _);
+        var sprung = MotionEdits.Find(spring, springKey)!;
+        check(sprung is { Name: "Spring 1", Amount: 1, Components: PoseComponents.Rotation, Window: 0, Repeat: null } && sprung.Spring == new MotionSpring() &&
+              sprung.Bones.IsEmpty && MotionEdits.MaxAmount(MotionLayerKind.Spring) == 1,
+            "a spring starts with the default spring, turning only, at full strength");
+        check(!MotionEdits.Same(sprung, sprung with { Spring = sprung.Spring! with { Lag = 6 } }) &&
+              ReferenceEquals(MotionEdits.SetKey(spring, springKey, 50, "j_kosi", rest), spring),
+            "layers differ by a spring's lag, and a spring takes no keys");
+        check(MotionEdits.KindName(MotionLayerKind.Spring) == "Spring" &&
+              TimelineWindowViews.LayerKindHint(MotionLayerKind.Spring) == "Make bones lag and overshoot the motion." &&
+              TimelineUi.LayerIcons.Distinct().Count() == TimelineUi.LayerIcons.Length && TimelineUi.LayerIcons.Length == Enum.GetValues<MotionLayerKind>().Length &&
+              Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.Spring).All(kind => TimelineWindowViews.LayerColour(kind) != TimelineWindowViews.LayerColour(MotionLayerKind.Spring)),
+            "the Add menu offers Spring after Noise, with its own hint, icon and colour");
+        check(TimelineWindowViews.LayerContent(sprung) == "No bones" && TimelineWindowViews.LayerContent(sprung with { Bones = ["j_kosi"] }) == "1 bone" &&
+              !TimelineLayout.Unfolds(sprung) && LayerPanel.Summary(sprung with { Bones = ["j_kosi", "j_sebo_a"] }) == "Springs 2 bones" &&
+              TimelineFace.Allows(MotionLayerKind.Spring, null),
+            "a spring without bones says so, has no bone rows, and a face takes one");
         var full = Empty() with { Motion = [.. Enumerable.Range(0, MotionEvaluator.MaxLayers).Select(i => layer with { Key = "m" + i })] };
         var refused = MotionEdits.Add(full, MotionLayerKind.Offset, 0, 10, out _, out var tooMany);
         check(ReferenceEquals(refused, full) && tooMany != null, "a layer past the most an animation may have is refused with a reason");

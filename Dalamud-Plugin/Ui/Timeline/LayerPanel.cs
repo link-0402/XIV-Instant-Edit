@@ -110,7 +110,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         hands.DrawFields(current, layer, hand);
                     else if (reset)
                         DrawAxes(current, layer);
-                    else if (layer.Kind is not (MotionLayerKind.Pin or MotionLayerKind.LookAt or MotionLayerKind.Link))
+                    else if (layer.Kind is not (MotionLayerKind.Pin or MotionLayerKind.LookAt or MotionLayerKind.Link or MotionLayerKind.Spring))
                         DrawComponents(current, layer);
                     if (layer.Kind == MotionLayerKind.Swing)
                         SwingFields.Draw(current, layer);
@@ -122,9 +122,11 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                         LookFields.Draw(current, layer, skeleton);
                     else if (layer.Kind == MotionLayerKind.Repeat)
                         RepeatFields.Draw(current, layer);
+                    else if (layer.Kind == MotionLayerKind.Spring)
+                        SpringFields.Draw(current, layer);
                     // A look that follows a bone has no keys to go between.
                     if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
-                        MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat) && layer.Look?.Follow == null)
+                        MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.Link or MotionLayerKind.Repeat or MotionLayerKind.Spring) && layer.Look?.Follow == null)
                         DrawInterpolation(current, layer);
                 }
             }
@@ -177,6 +179,11 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         {
             DrawPosing(layer);
             SwingFields.DrawNotes(layer);
+        }
+        else if (layer.Kind == MotionLayerKind.Spring)
+        {
+            DrawPosing(layer);
+            SpringFields.DrawNotes(layer);
         }
         else if (layer.Kind == MotionLayerKind.LookAt)
         {
@@ -244,7 +251,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     }
 
     /// <summary>
-    /// One line on the bones the layer works on: how many it is limited to, keys, copies, turns, swings, wobbles, smooths or repeats,
+    /// One line on the bones the layer works on: how many it is limited to, keys, copies, turns, swings, wobbles, smooths, repeats or springs,
     /// or how many pins it has; for a link the bones it joins, its partner named by <paramref name="nameOf"/>. Null for a hand shape or
     /// a root reset, whose bones are set by what they do.
     /// </summary>
@@ -264,6 +271,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             MotionLayerKind.Swing => $"Swings {Count(bones, "bone")}",
             MotionLayerKind.Smooth => bones == 0 ? "Smooths every bone" : $"Smooths {Count(bones, "bone")}",
             MotionLayerKind.Repeat => bones == 0 ? "Repeats every bone" : $"Repeats {Count(bones, "bone")}",
+            MotionLayerKind.Spring => $"Springs {Count(bones, "bone")}",
             MotionLayerKind.Link => layer.Link is { } link ? TimelineWindowViews.LinkSummary(link, nameOf ?? (_ => null)) : null,
             _ => null,
         };
@@ -630,7 +638,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         {
             MotionLayerKind.Link => TimelineWindowViews.LinkPullLabel,
             MotionLayerKind.Offset or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-                MotionLayerKind.LookAt or MotionLayerKind.Repeat => "Strength",
+                MotionLayerKind.LookAt or MotionLayerKind.Repeat or MotionLayerKind.Spring => "Strength",
             MotionLayerKind.Amplitude => "Movement",
             MotionLayerKind.Pin => "Pull",
             _ => "Blend",
@@ -657,6 +665,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
                 MotionLayerKind.LookAt => "How far the head turns toward the target. Ctrl+click to type.",
                 MotionLayerKind.Smooth => "How far the bones go to the smoothed motion. Ctrl+click to type.",
                 MotionLayerKind.Repeat => "How far the bones go to the repeated motion. Ctrl+click to type.",
+                MotionLayerKind.Spring => "How far the bones go to the sprung motion. Ctrl+click to type.",
                 _ => "How far the bones blend toward the keyed poses. Ctrl+click to type.",
             });
     }

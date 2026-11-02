@@ -226,6 +226,9 @@ internal static class PoseEditorFixture
         var repeat = swing with { Kind = MotionLayerKind.Repeat, Swing = null, Repeat = new MotionRepeat(0, 10) };
         check(PoseEdits.Changes(repeat, Twin) && !PoseEdits.Changes(repeat, Hand) && PoseEdits.Changes(repeat with { Bones = [] }, Twin) &&
               PoseEdits.Changes(repeat with { Bones = [] }, Hand), "a repeat changes the bones it is limited to, or every bone");
+        var spring = swing with { Kind = MotionLayerKind.Spring, Swing = null, Spring = new MotionSpring() };
+        check(PoseEdits.Changes(spring, Twin) && !PoseEdits.Changes(spring, Hand) && !PoseEdits.Changes(spring with { Bones = [] }, Twin),
+            "a spring changes the bones it is limited to, and none without any");
     }
 
     /// <summary>Two bones' frames, the rotations from character space to the spaces their values turn in, pointing different ways.</summary>

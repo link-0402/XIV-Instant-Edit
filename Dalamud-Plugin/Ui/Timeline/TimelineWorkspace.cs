@@ -292,6 +292,13 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     /// <summary>Reads whether the live character has fingertip bones; the plugin sets it once the physics builder exists.</summary>
     internal Func<ushort?, CancellationToken, Task<HandTipFacts>>? HandTips { get => session.HandTips; set => session.HandTips = value; }
 
+    /// <summary>Reads the bones the game's physics moves on the GPose actor, for spring layers; the plugin sets it.</summary>
+    internal Func<ushort?, CancellationToken, Task<ImmutableHashSet<string>?>>? PhysicsBones
+    {
+        get => session.ReadPhysicsBones;
+        set => session.ReadPhysicsBones = value;
+    }
+
     /// <summary>A drag runs on the lanes, which Escape cancels: Escape must not also close the window then.</summary>
     internal bool HoldsEscape { get; private set; }
 
