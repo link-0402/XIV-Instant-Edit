@@ -149,7 +149,8 @@ internal static class MotionEdits
             Window: kind == MotionLayerKind.Smooth ? MotionSmoothing.DefaultWindow : 0,
             Noise: kind == MotionLayerKind.Noise ? new MotionNoise() : null,
             Look: kind == MotionLayerKind.LookAt ? new MotionLook() : null,
-            Repeat: kind == MotionLayerKind.Repeat ? new MotionRepeat(Math.Max(0, start - 30), Math.Max(0, start - 30) + 30) : null,
+            // On a face the source starts no earlier than the face (FaceRepeat).
+            Repeat: kind == MotionLayerKind.Repeat ? MotionRepeats.Fit(Math.Max(doc.Face?.Anchor ?? 0, start - 30), Math.Max(doc.Face?.Anchor ?? 0, start - 30) + 30, MotionRepeats.DefaultBlend) : null,
             Spring: kind == MotionLayerKind.Spring ? new MotionSpring() : null,
             Balance: kind == MotionLayerKind.Balance ? new MotionBalance() : null);
         return doc with { Motion = doc.Motion.Add(added), NextMotionKey = next };
@@ -476,7 +477,8 @@ internal static class MotionEdits
 
     /// <summary>
     /// Replaces the layer with <paramref name="layer"/>'s key by <paramref name="layer"/>, kept valid: on the
-    /// timeline, a frame long or more, fades that fit, an amount in its kind's range, a short name.
+    /// timeline, a frame long or more, fades that fit, an amount in its kind's range, a short name; on a face, a repeat's source
+    /// starting no earlier than the face.
     /// </summary>
     public static TimelineDocument Replace(TimelineDocument doc, MotionLayer layer)
     {
@@ -484,9 +486,18 @@ internal static class MotionEdits
         if (index < 0)
             return doc;
         var old = doc.Motion[index];
-        var next = Normalize(layer with { Kind = old.Kind, Name = string.IsNullOrWhiteSpace(layer.Name) ? old.Name : layer.Name });
+        var next = FaceRepeat(doc, Normalize(layer with { Kind = old.Kind, Name = string.IsNullOrWhiteSpace(layer.Name) ? old.Name : layer.Name }));
         return Same(old, next) ? doc : doc with { Motion = doc.Motion.SetItem(index, next) };
     }
+
+    /// <summary>
+    /// <paramref name="layer"/> with its repeat's source starting at the face's first frame or later on a face, which has no
+    /// frames before it to play; the layer itself otherwise.
+    /// </summary>
+    private static MotionLayer FaceRepeat(TimelineDocument doc, MotionLayer layer) =>
+        doc.Face is { Anchor: > 0 } face && layer.Repeat is { } repeat && repeat.From < face.Anchor
+            ? layer with { Repeat = MotionRepeats.Fit(face.Anchor, repeat.To, repeat.Blend) }
+            : layer;
 
     /// <summary>Whether <paramref name="layer"/> takes weight points: every layer but a match or a close loop, whose stored frames are only a length.</summary>
     public static bool TakesWeights(MotionLayer layer) => !IsAnchored(layer);

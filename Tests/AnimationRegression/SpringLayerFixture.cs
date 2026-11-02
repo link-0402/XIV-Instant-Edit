@@ -161,6 +161,11 @@ internal static class SpringLayerFixture
         var seam = Degrees(sprung.Get(0, Index(Hips)).Rotation, sprung.Get(60, Index(Hips)).Rotation);
         check(seam < .1f && Degrees(sprung.Get(15, Index(Hips)).Rotation, sine.Get(15, Index(Hips)).Rotation) > .5f,
             $"a spring round a loop meets itself at the seam ({seam:0.###} degrees apart)");
+        // One starting later doesn't wrap: it eases back onto the motion by the loop's end, so the seam doesn't pop.
+        var late = Applied(sine, Spring(new MotionSpring(6, .3f), Hips) with { Start = 20 });
+        var lastOff = Degrees(late.Get(60, Index(Hips)).Rotation, sine.Get(60, Index(Hips)).Rotation);
+        check(lastOff < .01f && Degrees(late.Get(40, Index(Hips)).Rotation, sine.Get(40, Index(Hips)).Rotation) > .5f,
+            $"a spring from partway to a loop's end ends on the motion ({lastOff:0.####} degrees off at the last sample)");
     }
 
     private static void EndEase(Action<bool, string> check)
@@ -183,6 +188,10 @@ internal static class SpringLayerFixture
         var finite = Enumerable.Range(0, sprung.Samples).All(i => Enumerable.Range(0, sprung.Bones).All(b => Finite(sprung.Get(i, b))));
         var last = Turn(sprung, 120, Waist);
         check(finite && MathF.Abs(last - 90) < .5f, $"the stiffest, bounciest spring stays finite and settles ({last:0.##} degrees at the end)");
+        // With ζ = 0.05 it swings far past the step before settling.
+        var peak = Enumerable.Range(0, sprung.Samples).Max(i => Turn(sprung, i, Waist));
+        var after = Degrees(sprung.Get(21, Index(Waist)).Rotation, step.Get(21, Index(Waist)).Rotation);
+        check(peak > 105 && after > 1, $"the stiffest, bounciest spring overshoots far ({peak:0.#} degrees at most, {after:0.#} off just after the step)");
     }
 
     private static void Pose(Action<bool, string> check)

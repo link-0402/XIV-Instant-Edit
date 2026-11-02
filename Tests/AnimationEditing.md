@@ -3269,6 +3269,15 @@ BalanceLayerFixture); these checks are the panel, Live and the save.
 - [ ] 3 A clip with a sound or an effect in the repeated stretch: the sound plays once, where it was, not on each repeat.
 - [ ] 4 With the layer selected the canvas shades From to To. The From and To buttons set them to the playhead; the count
   reads 3 repeats, and on a looping clip a count that isn't whole shows in the warning colour.
+- [ ] 5 Key an arm swinging up and stopping, add a Spring layer after it on the upper arm, forearm and hand: in Live the
+  forearm and hand trail the upper arm and overshoot where it stops, and the saved clip does too. More Bounce swings back
+  further; more Lag trails further behind.
+- [ ] 6 With hair, a skirt or a tail bone selected (bones the outfit's physics moves), Limit to selected is greyed with "The
+  game's physics moves these bones."; with a mix selected it adds only the others. A layer saved with such a bone lists it
+  in the warning colour.
+- [ ] 7 A Spring layer over a whole looping clip: no jump where the loop starts over. One ending mid-clip without a fade-out
+  doesn't pop at its end.
+- [ ] 8 The panel shows Lag, Bounce and Strength and no Turn/Move ticks; with no bones it says "Select bones to spring.".
 - [ ] 9 A Still pose with an Offset layer leaning the upper back to one side, then a Balance layer: in Live the hips shift
   over the feet, the feet stay planted, and the saved clip does too. Sideways off keeps the hips' side to side.
 - [ ] 10 Lift one foot with an Offset layer for a stretch: the weight moves onto the other foot there and back after.
@@ -3290,15 +3299,6 @@ game's own update. Plan: tasks/freecam.md (local only).
 - [ ] 6 Off, closing the Timeline, or leaving GPose: the game's camera is back where it was before, zoom included.
 - [ ] 7 The bones overlay and gizmo stay on the bones while the free camera flies.
 - [ ] 8 Unloading the plugin with the free camera on gives the game its camera back.
-- [ ] 5 Key an arm swinging up and stopping, add a Spring layer after it on the upper arm, forearm and hand: in Live the
-  forearm and hand trail the upper arm and overshoot where it stops, and the saved clip does too. More Bounce swings back
-  further; more Lag trails further behind.
-- [ ] 6 With hair, a skirt or a tail bone selected (bones the outfit's physics moves), Limit to selected is greyed with "The
-  game's physics moves these bones."; with a mix selected it adds only the others. A layer saved with such a bone lists it
-  in the warning colour.
-- [ ] 7 A Spring layer over a whole looping clip: no jump where the loop starts over. One ending mid-clip without a fade-out
-  doesn't pop at its end.
-- [ ] 8 The panel shows Lag, Bounce and Strength and no Turn/Move ticks; with no bones it says "Select bones to spring.".
 
 ## Look-at partner (pending)
 

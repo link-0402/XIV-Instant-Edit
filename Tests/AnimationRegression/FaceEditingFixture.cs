@@ -442,9 +442,17 @@ internal static class FaceEditingFixture
         var back = TimelineFace.ToFace([onFace], -30).Single();
         check(onFace is { Start: 30, End: 90, Repeat: { From: 0, To: 30, Blend: 4 } } && back.Repeat == repeat.Repeat && MotionEdits.Same(back, repeat),
             "a repeat's source moves into the face's frames with the layer, and back on the timeline when the face is restored");
-        var before = TimelineFace.ToFace([repeat with { Repeat = new MotionRepeat(10, 40, 12) }], 30).Single();
+        // On a face the source starts no earlier than the face, so the panel shows what Live and the save play.
+        var faceDoc = TimelineFace.Open(Empty(150), 30, 600, 150) with { Motion = [repeat] };
+        var edited = MotionEdits.Find(MotionEdits.Replace(faceDoc, repeat with { Repeat = new MotionRepeat(10, 40, 12) }), "m1")!;
+        var before = TimelineFace.ToFace([edited], 30).Single();
         MotionEvaluator.Validate(before);
-        check(before.Repeat == new MotionRepeat(0, 10, 5), "a source starting before the face starts at its first frame, its blend fitting what is left");
+        check(edited.Repeat == new MotionRepeat(30, 40, 5) && before.Repeat == new MotionRepeat(0, 10, 5),
+            "a source set before the face starts at its first frame, its blend fitting what is left");
+        var added = MotionEdits.Find(MotionEdits.Add(TimelineFace.Open(Empty(150), 30, 600, 150), MotionLayerKind.Repeat, 45, 120, out var addedKey, out _), addedKey)!;
+        var addedOnFace = TimelineFace.ToFace([added], 30).Single();
+        check(added.Repeat!.From >= 30 && MotionRepeats.Length(addedOnFace.Repeat!) == 30,
+            $"a repeat added on a face takes its 30-frame source from the face (from {added.Repeat.From}, {MotionRepeats.Length(addedOnFace.Repeat!)} face frames)");
         reject(() => TimelineFace.ToFace([PinLayer()], 0), "a pin layer can't go onto a face");
         var opened = TimelineFace.Open(Empty(150), 0, 1, 150);
         check(opened.Face == new TimelineFace(0, 1, 1) && opened is { Length: 150, LengthChanged: false }, "opening a face is not a length change");

@@ -17,7 +17,7 @@ internal static class RepeatFields
     {
         if (layer.Repeat is not { } repeat)
             return;
-        // MotionEdits.Replace keeps the source two frames long or more and the blend within half of it.
+        // MotionEdits.Replace keeps the source two frames long or more, the blend within half of it and, on a face, the source from the face's first frame on.
         Frame(current, layer, "From", "##repeat-from", "The first frame it plays.", repeat.From, from => repeat with { From = from });
         Frame(current, layer, "To", "##repeat-to", "Where it starts over. This frame isn't played.", repeat.To, to => repeat with { To = to });
 

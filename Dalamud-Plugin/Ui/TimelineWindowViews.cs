@@ -223,15 +223,16 @@ internal static partial class TimelineWindowViews
         : $"Baking the layers in ends the link to {partnerNames[0]}.";
 
     /// <summary>
-    /// The partners a save that bakes <paramref name="doc"/>'s layers in ends a link with: those of its own link layers that may change
-    /// the motion, named by <paramref name="nameOf"/> (a deleted preset's left out), then <paramref name="linkedBy"/>, the other
+    /// The partners a save that bakes <paramref name="doc"/>'s layers in ends a link with: those of its own link layers and looks at a
+    /// partner that may change the motion, named by <paramref name="nameOf"/> (a deleted preset's left out), then <paramref name="linkedBy"/>, the other
     /// workspaces linking to this clip (<see cref="LinkedBy"/>); each once, in that order.
     /// </summary>
     public static IReadOnlyList<string> LinkBakeNames(TimelineDocument doc, Func<Guid?, string?> nameOf, IEnumerable<string> linkedBy)
     {
         var names = new List<string>();
         foreach (var layer in doc.Motion)
-            if (MotionLinks.MayChange(layer) && PartnerName(layer.Link!, nameOf) is { } name && !names.Contains(name, StringComparer.Ordinal))
+            if ((MotionLinks.MayChange(layer) ? layer.Link : MotionLooks.MayChange(layer) ? MotionLooks.AsLink(layer) : null) is { } link &&
+                PartnerName(link, nameOf) is { } name && !names.Contains(name, StringComparer.Ordinal))
                 names.Add(name);
         foreach (var name in linkedBy)
             if (!names.Contains(name, StringComparer.Ordinal))

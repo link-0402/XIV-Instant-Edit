@@ -186,6 +186,11 @@ internal static class LinkLayerFixture
         check(TimelineWindowViews.LinkBakeNames(doc with { Motion = [Layer(hand) with { Enabled = false }, Layer(gone, key: "m2"), Offset("m3", "j_te_l", Vector3.Zero)] }, Names, []).Count == 0 &&
               TimelineWindowViews.LinkBakeNames(new TimelineDocument(30, 30, null, [], 1), Names, []).Count == 0,
             "views: a link off itself, one to a deleted preset and other layers name nobody");
+        var partnerLook = new MotionLayer("m4", MotionLayerKind.LookAt, "Look at 1", 0, 30, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear,
+            Bones: [.. MotionLooks.Chain], Look: new MotionLook("j_te_l", 80, new MotionLookPartner(Partner, Hug, 1)));
+        check(TimelineWindowViews.LinkBakeNames(doc with { Motion = [partnerLook] }, Names, []).SequenceEqual(["Aria Rose"]) &&
+              TimelineWindowViews.LinkBakeNames(doc with { Motion = [partnerLook with { Enabled = false }] }, Names, []).Count == 0,
+            "views: a look at a partner is named in the bake-in line, unless it is off itself");
         var toYou = new TimelineDocument(30, 30, null, [], 1) { Motion = [Layer(new MotionLink("j_te_l", null, "j_te_r", Hug, 1))] };
         var toAria = new TimelineDocument(30, 30, null, [], 1) { Motion = [Layer(new MotionLink("j_te_l", Partner, "j_te_r", Hug, 1))] };
         check(TimelineWindowViews.LinkedBy([("Aria Rose", toYou), ("Bea", toAria), ("Cid", toYou), ("Aria Rose", toYou)], null, Hug.ToUpperInvariant(), 1).SequenceEqual(["Aria Rose", "Cid"]) &&

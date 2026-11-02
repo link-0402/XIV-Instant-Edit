@@ -42,15 +42,18 @@ internal static class MotionSprings
 
     /// <summary>
     /// How far the sprung result applies at <paramref name="frame"/> before the layer's weight: 1, but on a layer that ends
-    /// before the motion does it eases back onto the motion on a smoothstep over its last <c>ceil(Lag)</c> frames, so a layer
-    /// without a fade-out doesn't pop where it ends.
+    /// before the motion does, or reaches a loop's end (<paramref name="loop"/>) without wrapping round it, it eases back onto the
+    /// motion on a smoothstep over its last <c>ceil(Lag)</c> frames, so a layer without a fade-out doesn't pop where it ends or at the seam.
     /// </summary>
-    public static float EndEase(MotionLayer layer, float frame, float end)
+    public static float EndEase(MotionLayer layer, float frame, float end, float loop)
     {
-        if (layer.Spring is not { } spring || MotionEvaluator.ReachesEnd(layer, end))
+        if (layer.Spring is not { } spring)
+            return 1;
+        var reaches = MotionEvaluator.ReachesEnd(layer, end);
+        if (reaches && (loop <= 0 || MotionEvaluator.Wraps(layer, loop)))
             return 1;
         var frames = MathF.Ceiling(spring.Lag);
-        var t = (layer.End - frame) / frames;
+        var t = ((reaches ? Math.Min(layer.End, end) : layer.End) - frame) / frames;
         return t >= 1 ? 1 : AnimationPoseRules.SmoothStep(Math.Clamp(t, 0, 1));
     }
 
@@ -82,7 +85,7 @@ internal static class MotionSprings
         for (var i = first; i <= last; i++)
         {
             var frame = clip.Frame(i);
-            weights[i] = MotionEvaluator.Weight(layer, frame, end) * EndEase(layer, frame, end);
+            weights[i] = MotionEvaluator.Weight(layer, frame, end) * EndEase(layer, frame, end, loop);
             any |= weights[i] > 0;
         }
         if (!any)

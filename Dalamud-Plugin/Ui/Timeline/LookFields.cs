@@ -77,6 +77,9 @@ internal static class LookFields
                         }
                     }
             }
+            else if (ComboWheel.Steps() is var steps and not 0 &&
+                     ComboWheel.Pick(Choices(look, skeleton, session), choice => Same(choice, look), steps) is var picked && !Same(picked, look))
+                current.Commit(MotionEdits.Replace(current.Document, layer with { Look = picked }));
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(look.Follow == null ? "Move the target with the gizmo. Picking a bone drops the keyed spots." : "Pick Spot to key spots again.");
@@ -89,6 +92,29 @@ internal static class LookFields
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("The most the head turns. Ctrl+click to type.");
     }
+
+    /// <summary> What the closed combo's wheel steps through, in the open list's order: Spot, the bones the head may follow, then each open partner's bones. </summary>
+    private static List<MotionLook> Choices(MotionLook look, SkeletonDescription? skeleton, TimelineSession session)
+    {
+        var choices = new List<MotionLook> { look with { Follow = null, Partner = null } };
+        if (skeleton != null)
+        {
+            var head = MotionEvaluator.Index(skeleton).GetValueOrDefault(MotionLooks.KeyBone, -1);
+            for (var b = 0; b < skeleton.Bones.Length; b++)
+                if (MotionLooks.CanFollow(skeleton, b, head))
+                    choices.Add(look with { Follow = skeleton.Bones[b].Name, Partner = null });
+        }
+        if (session.LinkPicker is { } picker)
+            foreach (var candidate in picker.Candidates())
+                if (candidate.Skeleton is { } theirs)
+                    foreach (var bone in theirs.Bones)
+                        choices.Add(look with { Follow = bone.Name, Partner = new MotionLookPartner(candidate.Key.Preset, candidate.GamePath, candidate.Binding) });
+        return choices;
+    }
+
+    /// <summary> Whether two looks follow the same thing: Spot, one of this skeleton's bones, or the same partner's bone. </summary>
+    private static bool Same(MotionLook a, MotionLook b) =>
+        a.Follow == b.Follow && (a.Partner == null) == (b.Partner == null) && a.Partner?.Workspace == b.Partner?.Workspace;
 
     /// <summary> A look at a partner's line, in the warning colour, while it can't follow the partner: why, as a link's line says it. </summary>
     public static void DrawState(MotionLayer layer, TimelineSession session)
