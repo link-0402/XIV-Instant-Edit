@@ -2121,6 +2121,12 @@ the held bones by selecting them and Ctrl+clicking the hips.
   Select the tail, then Ctrl+click the hips: a ticked Tail box joins the row and the tail holds; untick
   all boxes: "Nothing holds; the hips move alone." and the whole body moves with the hips.
   (Before the Hold boxes: XIV Bridge 352, 2026-10-28, Idle pose 3: knees 13/9 to 59/58 deg.)
+  Partly checked (XIV Bridge animations-pending/352, Release 2026-11-02 03:29, Idle pose 3, injected drag): down 10 cm
+  bends the knees 13/9 to 59/58 deg with the feet and hands held (0.0 mm, in game too); hands unticked, they go down
+  the full 10 cm while the feet hold; all boxes unticked, "Nothing holds; the hips move alone." shows and the whole
+  body moves with the hips. Tail: the first tail bone (n_sippo_a) gets no box, as it hangs from the hips with nothing to
+  bend; n_sippo_b gets one but holds only 6.6 of 10 cm (out of its reach); n_sippo_c holds exactly. Decide: offer a
+  box for the tail's first bone (holding through the next one), or leave it. Not checked: a real mouse drag.
 - [x] 4 Drag the hips up past the legs' reach: the legs straighten smoothly and the feet lift, nothing
   snaps; back down, the feet are back on the floor under the gizmo.
   (XIV Bridge 353, 2026-10-28: 2 cm steps, no jump; back down the feet are where they were.)
