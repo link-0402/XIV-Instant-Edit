@@ -13,6 +13,8 @@ import tempfile
 import threading
 import types
 import unittest
+import urllib.request
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -238,6 +240,35 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(client.PluginUnavailable):
                 client.call([dead], "/status", timeout=1)
         finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_calls_go_straight_to_the_listener_whatever_proxy_is_configured(self):
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                data = b'{"ok": true}'
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        # A proxy that is not there, and no exemption for loopback: a call that went through it would fail.
+        # (urllib's default opener is built from the environment on first use, so that is reset around the call.)
+        proxy = f"http://127.0.0.1:{free_port()}"
+        environment = {"HTTP_PROXY": proxy, "http_proxy": proxy, "NO_PROXY": "", "no_proxy": ""}
+        saved = urllib.request._opener
+        urllib.request._opener = None
+        try:
+            with mock.patch.dict(os.environ, environment):
+                _, status, body = client.call([server.server_address[1]], "/status")
+            self.assertEqual((status, body), (200, {"ok": True}))
+        finally:
+            urllib.request._opener = saved
             server.shutdown()
             server.server_close()
 

@@ -4,6 +4,11 @@ import json
 import urllib.request
 from urllib.error import HTTPError, URLError
 
+# Instant Edit only listens on loopback. urllib's default opener would send these requests through
+# HTTP_PROXY or the Windows proxy settings, handing the send's capability to the proxy; the Blender
+# add-on and the plugin's own clients both go direct.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 MAX_RESPONSE_BYTES = 1024 * 1024
 # How long a send waits for Instant Edit to answer at all before giving up on it.
 UNREACHABLE_SECONDS = 60.0
@@ -39,7 +44,7 @@ def _request(port: int, endpoint: str, payload, timeout: float):
         method="GET" if data is None else "POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _DIRECT.open(request, timeout=timeout) as response:
             status = getattr(response, "status", None) or response.getcode()
             body = response.read(MAX_RESPONSE_BYTES + 1)
     except HTTPError as error:
