@@ -58,5 +58,5 @@ Tests/**/*.Local.cs
 **/docs/adr/
 
 # Generated tool output.
-Tools/EarringBones/out/
+Tools/EarringBones/
 graphify-out/
