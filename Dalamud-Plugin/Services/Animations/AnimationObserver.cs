@@ -462,11 +462,14 @@ internal sealed class AnimationObserver : IDisposable
                     catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { }
                 }
                 var idString = $"{runtime.ActorId}:{timeline.Id}:{clip.GamePath}:{clip.BindingIndex}:{clip.Partial}";
+                // The face packs the clip's timeline and its startup's load, which Edit face opens their face events from.
+                var facePacks = new[] { timeline.Id, startup?.Timeline ?? timeline.Id }.Distinct()
+                    .SelectMany(id => timelineReferences.GetValueOrDefault(id)?.FacePacks ?? []).Distinct(StringComparer.Ordinal).ToImmutableArray();
                 captures.Add(new AnimationCapture(idString, runtime.ActorId, runtime.Address, collection.Id, collection.Name,
                     timeline.Name, clip, startup, family.ToImmutableArray(), sources.Distinct().ToImmutableArray(),
                     capturedUtc, true, LoadedResourcePaths: gamePaths.ToImmutableArray(), ResourceAliases: resourceAliases,
                     ExpressionTimeline: timeline.IsExpression ? timelineReferences.GetValueOrDefault(timeline.Id)?.Root : null,
-                    ActorIndex: runtime.ObjectIndex));
+                    ActorIndex: runtime.ObjectIndex, FacePacks: facePacks));
             }
             // Publish identified clips before any native source-skeleton search.
             await PublishAsync(captures, expectedGeneration, token);

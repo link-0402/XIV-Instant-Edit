@@ -32,14 +32,21 @@ internal sealed record TimelineFace(int Anchor, int SourceFrames, int Frames)
     /// <summary>
     /// The face file a face event playing <paramref name="motion"/> plays from, for the character's race and face folder
     /// (<paramref name="key"/>): the always-loaded face.pap when it holds the motion (<paramref name="resident"/>), else
-    /// the timeline's face pack (<paramref name="pack"/>); null when neither has it.
+    /// a face pack the timeline loads: its own (<paramref name="pack"/>), then those of the action timeline that plays it
+    /// (<paramref name="timelinePacks"/>), as a vanilla emote's face events sit in its PAP's own timeline, which names none.
+    /// Of those, the first <paramref name="holding"/> lists for the motion, else the first: the catalog knows only the
+    /// game's packs, not a mod's. Null when there is no pack.
     /// </summary>
-    public static string? FacePath(TimelineCatalogKey key, string motion, string? pack, IReadOnlySet<string> resident)
+    public static string? FacePath(TimelineCatalogKey key, string motion, string? pack, IReadOnlySet<string> resident,
+        IEnumerable<string>? timelinePacks = null, ImmutableArray<string> holding = default)
     {
         var folder = $"chara/human/c{key.Race:D4}/animation/{key.Face}";
-        return resident.Contains(motion) ? $"{folder}/resident/face.pap"
-            : !string.IsNullOrEmpty(pack) && TmbFile.IsSafePackName(pack) ? $"{folder}/nonresident/{pack}.pap"
-            : null;
+        if (resident.Contains(motion))
+            return $"{folder}/resident/face.pap";
+        var loaded = new[] { pack }.Concat(timelinePacks ?? []).OfType<string>()
+            .Where(name => name.Length > 0 && TmbFile.IsSafePackName(name)).ToList();
+        var chosen = holding.IsDefaultOrEmpty ? null : loaded.FirstOrDefault(name => holding.Contains(name, StringComparer.OrdinalIgnoreCase));
+        return (chosen ?? loaded.FirstOrDefault()) is { } file ? $"{folder}/nonresident/{file}.pap" : null;
     }
 
     /// <summary>

@@ -176,7 +176,7 @@ internal static class FaceEditingFixture
         check(PoseMap.FaceSections.All(section => images.Contains(PoseMap.Resource(section))), "every face picture is in the plugin");
     }
 
-    /// <summary>The face file Edit face opens for a face event: the always-loaded face.pap, else the timeline's face pack.</summary>
+    /// <summary>The face file Edit face opens for a face event: the always-loaded face.pap, else a face pack the timeline or its action timeline loads.</summary>
     private static void Paths(Action<bool, string> check)
     {
         var key = new TimelineCatalogKey(801, "f0002");
@@ -186,6 +186,21 @@ internal static class FaceEditingFixture
         check(TimelineFace.FacePath(key, "cfxf_base", "smile", resident) == "chara/human/c0801/animation/f0002/resident/face.pap",
             "an always-loaded face opens from face.pap");
         check(TimelineFace.FacePath(key, "cfxf_smile", null, resident) == null, "a face in no file the character loads can't open");
+
+        // A vanilla emote's face events sit in its PAP's own timeline, which names no pack: its action timeline loads it (seen in game 2026-11-03).
+        const string dance = "chara/human/c0801/animation/f0002/nonresident/emot/dance.pap";
+        check(TimelineFace.FacePath(key, "cfxf_bossy", null, resident, ["emot/dance"]) == dance,
+            "a body clip's face event opens from the pack its action timeline loads");
+        check(TimelineFace.FacePath(key, "cfxf_bossy", null, resident, ["emot/sp33", "emot/dance"], ["bossy", "emot/dance"]) == dance &&
+              TimelineFace.FacePath(key, "cfxf_bossy", "smile", resident, ["emot/dance"], ["emot/dance"]) == dance,
+            "of the packs the timeline loads, the face opens from one that holds it");
+        check(TimelineFace.FacePath(key, "cfxf_smile", "smile", resident, ["emot/dance"]) == "chara/human/c0801/animation/f0002/nonresident/smile.pap" &&
+              TimelineFace.FacePath(key, "cfxf_bossy", null, resident, ["emot/x", "emot/dance"], ["bossy"])?.EndsWith("/emot/x.pap") == true,
+            "the timeline's own pack comes first, and a face the catalog doesn't place opens from the first pack");
+        check(TimelineFace.FacePath(key, "cfxf_bossy", null, resident, ["../emot", "", "emot/dance"]) == dance &&
+              TimelineFace.FacePath(key, "cfxf_bossy", null, resident, []) == null &&
+              TimelineFace.FacePath(key, "cfxf_base", null, resident, ["emot/dance"])!.EndsWith("/resident/face.pap"),
+            "unsafe pack names are skipped, no pack means no file, and an always-loaded face still opens from face.pap");
     }
 
     /// <summary>What Live shows on a face: its layers in the face's own frames, at the face's own length once it changed.</summary>

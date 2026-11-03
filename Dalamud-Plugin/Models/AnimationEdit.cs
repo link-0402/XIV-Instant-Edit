@@ -79,15 +79,19 @@ internal sealed record AnimationClip(string GamePath, string Name, int BindingIn
 // ActorIndex is the object the animation was captured from: 0 for your own character, 200 or
 // more for a GPose actor. Captures journaled before it was kept load as your own character's.
 // Captures journaled before LivePose was dropped also hold a Pose; it is ignored on load.
+// FacePacks are the face packs (TMPP, such as "emot/dance") the clip's action timeline and its startup's load, as the
+// collection resolves them: a vanilla emote's face events, in its PAP's own timeline, play from them. Captures journaled
+// before they were kept have none.
 internal sealed record AnimationCapture(string Id, ulong ActorId, long ActorAddress, Guid CollectionId,
     string CollectionName, string DisplayName, AnimationClip Clip, AnimationClip? Startup,
     ImmutableArray<string> FamilyPaths, ImmutableArray<AnimationResource> Sources,
     DateTime CapturedUtc, bool Playing, string? UnavailableReason = null,
     ImmutableArray<string> LoadedResourcePaths = default,
     ImmutableDictionary<string, ImmutableArray<string>>? ResourceAliases = null,
-    AnimationResource? ExpressionTimeline = null, ushort ActorIndex = 0)
+    AnimationResource? ExpressionTimeline = null, ushort ActorIndex = 0, ImmutableArray<string> FacePacks = default)
 {
     public ImmutableArray<string> LoadedResourcePaths { get; init; } = LoadedResourcePaths.IsDefault ? [] : LoadedResourcePaths;
+    public ImmutableArray<string> FacePacks { get; init; } = FacePacks.IsDefault ? [] : FacePacks;
     public ImmutableDictionary<string, ImmutableArray<string>> ResourceAliases { get; init; } =
         ResourceAliases ?? ImmutableDictionary<string, ImmutableArray<string>>.Empty;
 }

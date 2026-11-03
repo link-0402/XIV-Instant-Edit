@@ -293,7 +293,8 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
         if (session.Source is { Standalone: true } open && open.Clip.Name == ev.Path)
             return;
         var path = session.CatalogKey is { } key ? TimelineFace.FacePath(key, ev.Path, current.Document.FacePack,
-            current.ResidentMotions ?? (IReadOnlySet<string>)new HashSet<string>()) : null;
+            current.ResidentMotions ?? (IReadOnlySet<string>)new HashSet<string>(), session.Source?.Capture.FacePacks,
+            current.MotionPacks?.GetValueOrDefault(ev.Path) ?? default) : null;
         var reason = OpenFace == null || session.Animations == null ? "Face editing is unavailable."
             : session.ReadOnly ? "Wait for the timeline to finish."
             : session.CatalogKey == null ? "Your character's face isn't known yet."
