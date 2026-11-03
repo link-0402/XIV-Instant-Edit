@@ -34,7 +34,7 @@ from .context        import (SCHEMA, VERSION, SUPPORTED_VERSIONS, CONTEXT_FIELD_
                              context_collections,
                              context_id_for_object, create_collection, mesh_ids_from_name,
                              try_mesh_ids_from_name,
-                             mesh_name_info, MASHUP_SOURCE_MATERIAL_PROPERTY,
+                             MASHUP_ALIASES_FIELD, MASHUP_SOURCE_MATERIAL_PROPERTY,
                              tag_object,
                              validate_context)
 from .plugin_http    import PluginResponseTooLarge, connection_refused, post_json
@@ -522,16 +522,18 @@ def material_coverage_missing_materials(
             return ()
         cache_key = _material_coverage_cache_key(context, ref, refs, materials, objects)
         now = time.monotonic()
+        # An expired answer keeps showing until the re-check replaces it, so the warning doesn't blink.
+        stale = ()
         with _material_coverage_lock:
             cached = _material_coverage_cache.get(cache_key)
             if cached is not None:
                 expires_at, missing_materials = cached
                 if expires_at > now:
                     return missing_materials
-                _material_coverage_cache.pop(cache_key, None)
+                stale = missing_materials
             probe_running = bool(_material_coverage_pending)
         if cache_only:
-            return ()
+            return stale
 
         if blocking:
             contributors = _material_coverage_contributor_payload(ref, refs, materials)
@@ -557,9 +559,23 @@ def material_coverage_missing_materials(
                 ref.callback_port,
                 _material_coverage_payload(ref, contributors),
             )
-        return ()
+        return stale
     except (ContextValidationError, AttributeError, RuntimeError, TypeError, ValueError):
         return ()
+
+
+def _material_coverage_answer_known(context: Context, ref=None) -> bool:
+    """Whether the export composition has a coverage answer, current or expired."""
+    try:
+        ref = ref or export_destination_context(context)
+        objects, refs, materials, _ = _collect_export_context_materials(context, ref)
+        if ref.context_id not in materials or len(materials) < 2:
+            return True
+        cache_key = _material_coverage_cache_key(context, ref, refs, materials, objects)
+        with _material_coverage_lock:
+            return cache_key in _material_coverage_cache
+    except (ContextValidationError, AttributeError, RuntimeError, TypeError, ValueError):
+        return True
 
 
 def material_coverage_warning_state(
@@ -959,7 +975,7 @@ def export_target_issues(
                 "WARNING",
                 _material_coverage_warning_message(missing_materials),
             ))
-        elif material_coverage_probe_pending():
+        elif material_coverage_probe_pending() and not _material_coverage_answer_known(context, ref):
             issues.append(("WARNING", "Checking material and texture coverage…"))
 
     return issues
@@ -1705,71 +1721,40 @@ def _mashup_context_metadata(payload: dict, target_file_path: str) -> dict:
     return {**metadata, "target_file_path": output_path, "import_file_name": Path(output_path).name}
 
 
-def _mashup_duplicate_name(obj, context_id: str) -> str:
-    """Create a unique name that retains the object's YAA mesh identity."""
-    info = mesh_name_info(obj)
-    lod = f" LOD{info.lod}" if info.lod else ""
-    prefix = f"{info.mesh_group}.{info.mesh_part} "
-    tag = f" [Mashup {context_id[:8]}]"
-    # Keep LOD at the very end, after any counter: mesh_name_info reads the terminal LOD
-    # suffix to recover the YAA identity. Blender 4.5 cuts names at 63 bytes, so shorten
-    # the label rather than lose the suffix.
-    room = 63 - len(f"{prefix}{tag} 9999{lod}".encode("utf-8"))
-    label = (info.label or "Mashup").encode("utf-8")[:max(room, 1)].decode("utf-8", "ignore").rstrip()
-    base = f"{prefix}{label or 'Mashup'}{tag}"
-    candidate = f"{base}{lod}"
-    suffix = 2
-    existing = {item.name for item in bpy.data.objects}
-    while candidate in existing:
-        candidate = f"{base} {suffix}{lod}"
-        suffix += 1
-    return candidate
-
-
-def _create_mashup_output_context(
-    context: Context,
-    payload: dict,
-    target_file_path: str,
-    export_objects: list,
-    object_contexts: dict,
-    assignments: dict[tuple[str, str], str],
-):
-    """Create a destination context from existing scene meshes, never an MDL import."""
-    metadata = _mashup_context_metadata(payload, target_file_path)
-    collection = create_collection(context.scene, metadata)
-    created_objects = []
+def _mashup_alias_key(obj) -> str | None:
+    """Identify a mashup part by its own Context, mesh group, LOD and source material."""
     try:
-        output_context_id = metadata["context_id"]
-        for obj in export_objects:
-            source_context_id, source_material = object_contexts[obj.as_pointer()]
-            alias = assignments[(source_context_id, source_material.casefold())]
-            duplicate = obj.copy()
-            duplicate.data = obj.data.copy()
-            created_objects.append(duplicate)
-            duplicate.name = _mashup_duplicate_name(obj, output_context_id)
-            collection.objects.link(duplicate)
-            # A mesh made in Blender has no import metadata; its collection routes it, as for the source.
-            if _value(obj, "context_id"):
-                tag_object(duplicate, {
-                    "context_id": output_context_id,
-                    "schema": metadata["schema"],
-                    "version": metadata["version"],
-                })
-            duplicate["xiv_material"] = alias
-            duplicate["instant_edit_xiv_material"] = alias
-            # The mashup's own mod only has the aliases, so the material picker offers those.
-            duplicate["original_material"] = alias
-            duplicate["instant_edit_original_material"] = alias
-            duplicate.pop(MASHUP_SOURCE_MATERIAL_PROPERTY, None)
+        ids = try_mesh_ids_from_name(obj)
+        group = (ids[0], ids[2]) if ids is not None else (-1, -1)
+        material = _object_material_name(obj, source_material=True).casefold()
+        return f"{context_id_for_object(obj)}|{group[0]}|{group[1]}|{material}"
+    except (ContextValidationError, AttributeError, ReferenceError):
+        return None
 
-        return validate_context(output_context_id, context.scene), created_objects
+
+def _mashup_output_aliases(context_id: str) -> dict | None:
+    """The material aliases a new mod's mashup Context keeps, or None for any other Context."""
+    for collection in context_collections(bpy.context.scene):
+        if _value(collection, "context_id", "") != context_id:
+            continue
+        stored = _value(collection, MASHUP_ALIASES_FIELD, "")
+        try:
+            aliases = json.loads(stored) if isinstance(stored, str) and stored else None
+        except ValueError:
+            return None
+        return aliases if isinstance(aliases, dict) else None
+    return None
+
+
+def _create_mashup_output_context(context: Context, payload: dict, target_file_path: str, aliases: dict):
+    """Create the new mod's Context as a collection without meshes: the mashup's meshes stay in their
+    own collections, and exports to this Context give them the aliases it keeps."""
+    metadata = _mashup_context_metadata(payload, target_file_path)
+    metadata[MASHUP_ALIASES_FIELD] = json.dumps(aliases, sort_keys=True)
+    collection = create_collection(context.scene, metadata)
+    try:
+        return validate_context(metadata["context_id"], context.scene)
     except Exception:
-        for obj in reversed(created_objects):
-            data = obj.data
-            if obj.name in bpy.data.objects:
-                bpy.data.objects.remove(obj, do_unlink=True)
-            if data is not None and data.users == 0:
-                bpy.data.meshes.remove(data)
         if collection.name in bpy.data.collections:
             bpy.data.collections.remove(collection, do_unlink=True)
         raise
@@ -1791,19 +1776,24 @@ def _persist_mashup_assignments(export_objects, object_contexts, assignments, al
 
 
 def _use_mashup_source_materials(export_objects, context_id) -> list:
-    """Export mashup-aliased objects with their source material outside the mashup's Context."""
+    """Export with the materials ``context_id``'s mod has: a new mod's mashup aliases when it is one,
+    else the source material of meshes aliased for another Context's mod."""
+    output_aliases = _mashup_output_aliases(context_id)
     saved = []
     for obj in export_objects:
-        source_material = obj.get(MASHUP_SOURCE_MATERIAL_PROPERTY)
-        alias_context_id = obj.get(MASHUP_ALIAS_CONTEXT_PROPERTY)
-        if not source_material or not alias_context_id or alias_context_id == context_id:
-            continue
+        material = output_aliases.get(_mashup_alias_key(obj)) if output_aliases is not None else None
+        if not material:
+            source_material = obj.get(MASHUP_SOURCE_MATERIAL_PROPERTY)
+            alias_context_id = obj.get(MASHUP_ALIAS_CONTEXT_PROPERTY)
+            if not source_material or not alias_context_id or alias_context_id == context_id:
+                continue
+            material = source_material
         properties = [(name, name in obj, obj.get(name))
                       for name in ("xiv_material", "instant_edit_xiv_material")]
         saved.append((obj, properties))
         for name, existed, _previous in properties:
             if name == "xiv_material" or existed:
-                obj[name] = source_material
+                obj[name] = material
     return saved
 
 
@@ -2925,6 +2915,14 @@ def perform_mashup_export(
     export_id = uuid.uuid4().hex
     temp_dir = create_job("exports", export_id)
     mdl_path = temp_dir / f"mashup_{export_id}.mdl"
+    # Keyed before the parts take their aliases for the export below.
+    output_aliases = {}
+    if destination == "NEW_MOD":
+        for obj in export_objects:
+            key = _mashup_alias_key(obj)
+            if key is not None:
+                source_context_id, material = object_contexts[obj.as_pointer()]
+                output_aliases[key] = assignments[(source_context_id, material.casefold())]
     saved_materials = []
     persist_active_assignments = False
     try:
@@ -3024,20 +3022,9 @@ def perform_mashup_export(
                 )
             else:
                 try:
-                    output_ref, _created_objects = _create_mashup_output_context(
-                        context,
-                        output_context,
-                        str(target),
-                        export_objects,
-                        object_contexts,
-                        assignments,
-                    )
-                    props = get_instant_edit_props()
-                    # The output collection is the complete mashup. Keep the
-                    # original contributor collections available without
-                    # exporting both the sources and their output copies.
-                    props.export_scope = "CURRENT_COLLECTION"
-                    props.export_destination = output_ref.context_id
+                    output_ref = _create_mashup_output_context(
+                        context, output_context, str(target), output_aliases)
+                    get_instant_edit_props().export_destination = output_ref.context_id
                     try:
                         refresh_variant_targets(context)
                     except Exception as error:

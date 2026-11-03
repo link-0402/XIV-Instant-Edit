@@ -23,6 +23,8 @@ SUPPORTED_VERSIONS = {1, 2, 3}
 COLLECTION_TAG = "instant_edit_context_id"
 OBJECT_TAG = "instant_edit_context_id"
 MASHUP_SOURCE_MATERIAL_PROPERTY = "instant_edit_mashup_source_material"
+# A new mod's mashup Context keeps its parts' material aliases here; its meshes stay in their own Contexts.
+MASHUP_ALIASES_FIELD = "mashup_aliases"
 
 
 @dataclass(frozen=True)
@@ -77,7 +79,7 @@ CONTEXT_FIELD_NAMES = tuple(field.name for field in CONTEXT_FIELDS)
 
 # Everything clear_context_metadata removes: the context, and what the import added beside it.
 CONTEXT_METADATA_FIELDS = CONTEXT_FIELD_NAMES + (
-    "import_file_name", "collection_kind", "mashup_source_material",
+    "import_file_name", "collection_kind", "mashup_source_material", MASHUP_ALIASES_FIELD,
 )
 
 
@@ -607,7 +609,7 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
 
     objects = tuple(collection.objects)
     try:
-        mesh_objects = _validated_meshes(objects)
+        mesh_objects = _validated_meshes(objects, allow_empty=bool(_value(collection, MASHUP_ALIASES_FIELD, "")))
     except ContextSceneError:
         raise
     except ContextValidationError as error:
@@ -642,7 +644,7 @@ def validate_context(context_id: str, scene=None) -> ContextRef:
     )
 
 
-def _validated_meshes(objects) -> list:
+def _validated_meshes(objects, *, allow_empty: bool = False) -> list:
     """The context collection's mesh objects, each checked (see validate_context)."""
     mesh_objects = []
     for obj in objects:
@@ -686,7 +688,7 @@ def _validated_meshes(objects) -> list:
         mesh_ids_from_name(obj)
         mesh_objects.append(obj)
 
-    if not mesh_objects:
+    if not mesh_objects and not allow_empty:
         raise ContextSceneError("context contains no mesh objects")
     return mesh_objects
 

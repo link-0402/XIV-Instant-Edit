@@ -510,41 +510,51 @@ MASHUP_OUTPUT_CONTEXT = {
 }
 
 
-def mashup_output_context_takes_user_meshes(addon):
+def mashup_output_context_keeps_meshes_in_place(addon):
     ops = importlib.import_module(f"{addon.__name__}.instant_edit.ops")
     context_module = importlib.import_module(f"{addon.__name__}.instant_edit.context")
     with temporary_scene_data():
-        imported = mesh("0.0 Imported")
-        context_module.tag_object(imported, {
-            "schema": context_module.SCHEMA, "version": 3, "original_material": imported["xiv_material"],
-            "material_index": 0, "mesh_index": 0, "submesh_index": 0})
-        made = mesh("1.0 Made In Blender")
-        del made["context_id"]
-        made["xiv_material"] = "/mt_c0101e0001_top_c.mtrl"
-        objects = [imported, made]
-        object_contexts = {obj.as_pointer(): ("source", obj["xiv_material"]) for obj in objects}
-        assignments = {("source", "/mt_c0101e0001_top_a.mtrl"): "/mt_c0101e0001_top_b.mtrl"}
+        source = mesh("0.0 Imported")
+        before = [{item.as_pointer() for item in data} for data in (bpy.data.objects, bpy.data.meshes)]
+        collections_before = {item.as_pointer() for item in bpy.data.collections}
 
-        # The made mesh has no alias, so the second duplicate fails after the first exists.
-        before = [{item.as_pointer() for item in data} for data in (bpy.data.objects, bpy.data.meshes, bpy.data.collections)]
+        key = ops._mashup_alias_key(source)
+        aliases = {key: "/mt_c0101e0001_top_b.mtrl"}
+        broken = {**MASHUP_OUTPUT_CONTEXT, "contextId": "broken-output", "sourceKind": "unknown"}
         try:
-            ops._create_mashup_output_context(bpy.context, MASHUP_OUTPUT_CONTEXT, "", objects, object_contexts, assignments)
-        except KeyError:
+            ops._create_mashup_output_context(bpy.context, broken, "", aliases)
+        except ops.ContextValidationError:
             pass
         else:
-            raise AssertionError("a mashup output without an alias for every material did not fail")
-        after = [{item.as_pointer() for item in data} for data in (bpy.data.objects, bpy.data.meshes, bpy.data.collections)]
-        assert after == before, "a failed mashup output context left objects, meshes or its collection behind"
+            raise AssertionError("an invalid mashup output context was accepted")
+        assert {item.as_pointer() for item in bpy.data.collections} == collections_before, \
+            "a failed mashup output context left its collection behind"
 
-        assignments[("source", "/mt_c0101e0001_top_c.mtrl")] = "/mt_c0101e0001_top_d.mtrl"
-        ref, created = ops._create_mashup_output_context(
-            bpy.context, MASHUP_OUTPUT_CONTEXT, "", objects, object_contexts, assignments)
-        made_copy = next(obj for obj in created if obj.name.startswith("1.0 "))
-        assert ref.context_id == "mashup-output" and len(ref.mesh_objects) == 2, ref.mesh_objects
-        assert context_module.context_id_for_object(made_copy) == "mashup-output", made_copy.name
-        assert "context_id" not in made_copy and "instant_edit_context_id" not in made_copy
-        assert made_copy["xiv_material"] == "/mt_c0101e0001_top_d.mtrl"
-    print("[PASS] a new mod's mashup context takes meshes made in Blender; a failed one leaves no meshes behind")
+        ref = ops._create_mashup_output_context(bpy.context, MASHUP_OUTPUT_CONTEXT, "", aliases)
+        assert ref.context_id == "mashup-output" and not ref.mesh_objects, ref.mesh_objects
+        after = [{item.as_pointer() for item in data} for data in (bpy.data.objects, bpy.data.meshes)]
+        assert after == before, "the mashup output context copied meshes"
+        assert ref.collection not in source.users_collection
+        assert source["xiv_material"] == "/mt_c0101e0001_top_a.mtrl", "the mashup context changed a source mesh"
+        saved = ops._use_mashup_source_materials([source], "mashup-output")
+        assert source["xiv_material"] == "/mt_c0101e0001_top_b.mtrl", "an export to the mashup context missed its alias"
+        ops._restore_object_materials(saved)
+        assert source["xiv_material"] == "/mt_c0101e0001_top_a.mtrl"
+
+        # Deleting the mashup Context deletes its aliases; an ordinary Context still needs meshes.
+        bpy.data.collections.remove(ref.collection)
+        assert not ops._use_mashup_source_materials([source], "mashup-output")
+        ordinary = {**MASHUP_OUTPUT_CONTEXT, "contextId": "ordinary-empty"}
+        collection = context_module.create_collection(
+            bpy.context.scene, ops._mashup_context_metadata(ordinary, ""))
+        try:
+            context_module.validate_context("ordinary-empty", bpy.context.scene)
+        except context_module.ContextSceneError:
+            pass
+        else:
+            raise AssertionError("a Context without meshes validated without the mashup marker")
+        bpy.data.collections.remove(collection)
+    print("[PASS] a new mod's mashup context leaves the meshes where they are and keeps its aliases itself")
 
 
 def export_refuses_empty_meshes_as_empty(addon):
@@ -641,7 +651,7 @@ def run():
     with addon_session("_xiv_ie_correctness_regression") as addon:
         faceless_meshes_keep_one_triangle(addon)
         half_precision_fits_the_vertex_limit(addon)
-        mashup_output_context_takes_user_meshes(addon)
+        mashup_output_context_keeps_meshes_in_place(addon)
         export_refuses_empty_meshes_as_empty(addon)
         duplicate_face_keeps_corner_layers_aligned(addon)
         assert_combination_failures(addon)

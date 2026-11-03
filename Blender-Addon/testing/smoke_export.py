@@ -2642,15 +2642,51 @@ def run() -> None:
             raise AssertionError("Hidden Context did not use the deterministic next visible fallback")
         context_collection.hide_viewport = True
         instant_module._switch_hidden_export_context()
-        if instant_props.export_destination != "NONE":
-            raise AssertionError("No-visible-Context state did not clear the Context selector")
+        if instant_props.export_destination != context_id:
+            raise AssertionError("Hiding every Context changed or cleared the selection")
         context_collection.hide_viewport = False
         instant_module._switch_hidden_export_context()
         if instant_props.export_destination != context_id:
-            raise AssertionError("A newly visible Context was not selected automatically")
+            raise AssertionError("Showing the selected Context again changed the selection")
         mashup_collection.hide_viewport = False
+
+        context_parts = [item for item in context_collection.objects if item.type == "MESH"]
+        hidden_before = {item.as_pointer(): item.hide_get() for item in context_parts}
+        try:
+            for item in context_parts:
+                item.hide_set(True)
+            instant_module._switch_hidden_export_context()
+            if instant_props.export_destination != mashup_context_id:
+                raise AssertionError("Hiding every part of a Context did not switch to the Context still showing parts")
+            mashup_obj.hide_set(True)
+            instant_module._switch_hidden_export_context()
+            if instant_props.export_destination != mashup_context_id:
+                raise AssertionError("Hiding every part changed the selection with no other Context showing parts")
+            mashup_obj.hide_set(False)
+
+            # A new mod's mashup Context has no meshes: it stays selected and is never switched to.
+            meshless = context_module.create_collection(bpy.context.scene, {
+                "context_id": "smoke-meshless-context",
+                "source_game_path": "chara/equipment/e0003/model/c0101e0003_top.mdl",
+            })
+            try:
+                instant_props.export_destination = "smoke-meshless-context"
+                instant_module._switch_hidden_export_context()
+                if instant_props.export_destination != "smoke-meshless-context":
+                    raise AssertionError("A Context without meshes was switched away from")
+                instant_props.export_destination = mashup_context_id
+                mashup_obj.hide_set(True)
+                instant_module._switch_hidden_export_context()
+                if instant_props.export_destination != mashup_context_id:
+                    raise AssertionError("A Context without meshes was picked as a switch target")
+            finally:
+                mashup_obj.hide_set(False)
+                bpy.data.collections.remove(meshless)
+        finally:
+            for item in context_parts:
+                item.hide_set(hidden_before[item.as_pointer()])
         instant_props.export_destination = context_id
-        print("[PASS] Context visibility switching handles layer state, selection, fallback, empty visibility, and recovery")
+        print("[PASS] Context visibility switching handles layer state, hidden parts, selection, fallback, and recovery")
 
         original_scope_for_mashup = instant_props.export_scope
         instant_props.export_scope = "VISIBLE"
@@ -2875,6 +2911,16 @@ def run() -> None:
         ) or any(severity == "ERROR" for severity, _message in coverage_issues):
             raise AssertionError(
                 f"Material coverage did not name the missing material: {coverage_issues}")
+        with instant_ops._material_coverage_lock:
+            for coverage_key, (_expires, coverage_missing) in list(instant_ops._material_coverage_cache.items()):
+                instant_ops._material_coverage_cache[coverage_key] = (0.0, coverage_missing)
+        if not instant_ops.material_coverage_warning_state(bpy.context):
+            raise AssertionError("An expired material coverage warning disappeared during its re-check")
+        if not instant_ops.material_coverage_probe_pending():
+            raise AssertionError("An expired material coverage answer was not re-checked")
+        if not instant_ops._material_coverage_answer_known(bpy.context, ref):
+            raise AssertionError("An expired material coverage answer showed the checking notice again")
+        await_material_coverage(2, True)
         instant_props.variant_target = instant_ops.MASHUP_TARGET
         mashup_readiness = instant_ops.export_target_issues(
             bpy.context, ref, material_coverage_warning=True
@@ -2892,13 +2938,13 @@ def run() -> None:
         instant_props.export_scope = "VISIBLE_NO_MANNEQUIN"
         if instant_ops.material_coverage_warning_state(bpy.context):
             raise AssertionError("Material coverage cache was not invalidated when Export Parts changed")
-        await_material_coverage(2, False)
+        await_material_coverage(3, False)
         instant_props.export_scope = "VISIBLE"
         material_coverage_warning = True
         instant_ops.reset_material_coverage_state()
         if instant_ops.material_coverage_warning_state(bpy.context):
             raise AssertionError("Reset material coverage reused a stale warning")
-        await_material_coverage(3, True)
+        await_material_coverage(4, True)
         instant_props.variant_targets.clear()
         smoke_group_target = instant_props.variant_targets.add()
         smoke_group_target.selection_id = "smoke-group-target"
@@ -3073,6 +3119,11 @@ def run() -> None:
                 AssertionError("mashup output unexpectedly re-imported its model")))
         original_finish_job = instant_ops.finish_job
         instant_ops.finish_job = lambda _job: None
+        scope_before_new_mod = instant_props.export_scope
+        source_tags = ("xiv_material", "instant_edit_xiv_material",
+                       instant_ops.MASHUP_SOURCE_MATERIAL_PROPERTY, instant_ops.MASHUP_ALIAS_CONTEXT_PROPERTY)
+        tags_before_new_mod = {item.as_pointer(): tuple(item.get(name) for name in source_tags)
+                               for item in (obj, second, added_group)}
         try:
             single_mod_target = instant_ops.perform_mashup_export(
                 bpy.context, "NEW_MOD", "Smoke Single Mod", allow_single_context=True)
@@ -3090,24 +3141,28 @@ def run() -> None:
         if mashup_export_payloads[-1].get("bundleExternalDependencies") is not False:
             raise AssertionError("Save to new mod unexpectedly enabled external dependency bundling")
         output_ref = context_module.validate_context("smoke-output-context", bpy.context.scene)
-        if instant_props.export_destination != "smoke-output-context" or \
-                instant_props.export_scope != "CURRENT_COLLECTION":
-            raise AssertionError("New-mod mashup did not select its output context and collection scope")
-        if len(output_ref.mesh_objects) != 3:
-            raise AssertionError("New-mod mashup output context did not duplicate the exported meshes")
-        if sorted(context_module.mesh_ids_from_name(item) for item in output_ref.mesh_objects) != sorted(
-                context_module.mesh_ids_from_name(item) for item in (obj, second, added_group)):
-            raise AssertionError("New-mod mashup output meshes did not retain valid YAA mesh IDs")
-        output_aliases = {item.get("xiv_material") for item in output_ref.mesh_objects}
-        expected_output_aliases = {
-            active_assignments[(context_id, original_material_properties[obj.as_pointer()][0].casefold())],
-            active_assignments[(context_id, original_material_properties[second.as_pointer()][0].casefold())],
-            active_assignments[(context_id, original_material_properties[added_group.as_pointer()][0].casefold())],
-        }
-        if output_aliases != expected_output_aliases:
-            raise AssertionError("New-mod mashup output meshes did not receive material aliases")
-        if not all(item.name in bpy.data.objects for item in (obj, second, added_group)):
-            raise AssertionError("New-mod mashup handoff removed source contributor objects")
+        if instant_props.export_destination != "smoke-output-context":
+            raise AssertionError("New-mod mashup did not select its output context")
+        if instant_props.export_scope != scope_before_new_mod:
+            raise AssertionError("New-mod mashup changed Export Parts")
+        if output_ref.mesh_objects:
+            raise AssertionError("New-mod mashup copied meshes into its output context")
+        if not all(item.name in bpy.data.objects for item in (obj, second, added_group)) or any(
+                context_module.context_id_for_object(item) != context_id for item in (obj, second, added_group)):
+            raise AssertionError("New-mod mashup handoff moved or removed source contributor objects")
+        if {item.as_pointer(): tuple(item.get(name) for name in source_tags)
+                for item in (obj, second, added_group)} != tags_before_new_mod:
+            raise AssertionError("New-mod mashup changed the source meshes' materials")
+        mashup_saved = instant_ops._use_mashup_source_materials((obj, second, added_group), "smoke-output-context")
+        try:
+            for item in (obj, second, added_group):
+                source_material = original_material_properties[item.as_pointer()][0]
+                if item.get("xiv_material") != active_assignments[(context_id, source_material.casefold())]:
+                    raise AssertionError("An export to the new mod's Context did not use its aliases")
+        finally:
+            instant_ops._restore_object_materials(mashup_saved)
+        if instant_ops._use_mashup_source_materials((obj,), context_id):
+            raise AssertionError("The new mod's aliases reached an export to the source Context")
         importlib.import_module(f"{addon.__name__}.instant_edit.cache").remove_job(
             Path(single_mod_target).parent)
         output_ref.collection.hide_viewport = True

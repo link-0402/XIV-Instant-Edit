@@ -40,7 +40,7 @@ def _recover_after_scene_load(_dummy) -> None:
 
 
 def _switch_hidden_export_context() -> None:
-    """Keep the selector on a visible context when visibility changes."""
+    """Keep the selector on a Context with visible parts when visibility changes."""
     global _last_visible_context_ids
     from .context import visible_collections_in_view_layer, context_collections, context_id_for_object, _value
     from .props import NO_EXPORT_CONTEXT
@@ -61,7 +61,13 @@ def _switch_hidden_export_context() -> None:
     # every depsgraph update, so a per-collection tree walk noticeably added
     # up during continuous viewport interaction (dragging, painting, sculpting).
     visible_set = visible_collections_in_view_layer(collections, view_layer)
-    visible = [value for value in collections if value in visible_set]
+    # A Context is a target while one of its parts shows. One without meshes (a new mod's mashup)
+    # never is one, but stays selected while its collection shows.
+    visible = [
+        value for value in collections
+        if value in visible_set and any(
+            obj.type == "MESH" and obj.visible_get(view_layer=view_layer) for obj in value.objects)
+    ]
     visible_ids = {
         str(_value(value, "context_id", "")) for value in visible
     }
@@ -111,10 +117,14 @@ def _switch_hidden_export_context() -> None:
             if props.variant_targets_context_id:
                 props.variant_targets_context_id = ""
         return
-    if len(collections) < 2 or collections[selected_index] in visible_set:
+    selected_collection = collections[selected_index]
+    if len(collections) < 2 or selected_collection in visible or (
+            selected_collection in visible_set
+            and not any(obj.type == "MESH" for obj in selected_collection.objects)):
         return
 
-    target_id = NO_EXPORT_CONTEXT
+    # With no other Context showing parts, the selection stays as it is.
+    target_id = None
     preferred_objects = []
     active = getattr(view_layer.objects, "active", None)
     if active is not None:
@@ -136,7 +146,7 @@ def _switch_hidden_export_context() -> None:
                 target_id = candidate_id
                 break
 
-    if props.export_destination != target_id:
+    if target_id is not None and props.export_destination != target_id:
         # Enum assignment deliberately reuses _export_destination_changed so
         # cached Penumbra target data is cleared and rebuilt for the new Context.
         props.export_destination = target_id
