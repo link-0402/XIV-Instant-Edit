@@ -245,7 +245,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
-        playBar = new PlayBar(session, timelinePreview, host.Transport);
+        playBar = new PlayBar(timelinePreview, host.Transport);
         posing = new BonePosing(session, decode);
         blenderMotion = new BlenderMotionPanel(session, decode);
         livePose = new LivePosePanel(session);
@@ -429,6 +429,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         editor.Commit(MotionEdits.AddLink(editor.Document, link, name, out _));
         return true;
     }
+
+    /// <summary>No clip is open, being read or asked about, and no read failed: the window may open what plays now.</summary>
+    internal bool Idle => animations != null && source == null && !reader.Busy && reader.Error == null && pending == PendingAction.None;
 
     /// <summary>The play bar acts on this workspace too: it has an editable clip and its actor is there.</summary>
     internal bool OnTransport => animations != null && source?.Document != null && editor != null && host.Waiting(Key) == null;
@@ -894,7 +897,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
 
         var layout = host.Layout;
         var area = ImGui.GetContentRegionAvail();
-        var splitter = Theme.Scaled(6);
+        // The splitter with room on each side, so the dock and the timeline don't touch.
+        var margin = Theme.Scaled(6);
+        var splitter = Theme.Scaled(6) + margin * 2;
         var rest = Theme.Scaled(MainMinimum) + splitter;
         // The width set stays as it was set: a narrow window only narrows the dock while it is narrow.
         var dockWidth = layout.DockFolded ? Theme.Scaled(40) : WindowLayout.Dock(layout.DockWidth, area.X, rest, Theme.Scale);
@@ -903,9 +908,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             if (side.Success)
                 dock.Draw(host.Waiting(Key));
         }
-        ImGui.SameLine(0, 0);
+        ImGui.SameLine(0, margin);
         if (layout.DockFolded)
-            ImGui.Dummy(new Vector2(splitter, area.Y));
+            ImGui.Dummy(new Vector2(Theme.Scaled(6), area.Y));
         else
         {
             var low = Theme.Scaled(WindowLayout.MinimumDock);
@@ -914,7 +919,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             if (dragged != dockWidth)
                 layout.DockWidth = dragged;
         }
-        ImGui.SameLine(0, 0);
+        ImGui.SameLine(0, margin);
         // The timeline's ids are this actor's, so its popups and child windows stay its own; the dock's are shared, so it keeps
         // its scroll and popups when the actor changes.
         using var id = ImRaii.PushId(Key.Id);
@@ -1054,9 +1059,11 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         var left = start.X;
         if (editable)
         {
-            var liveWidth = LiveWidth();
-            DrawLive(editor!, new Vector2(liveWidth, height));
-            left = start.X + liveWidth + Theme.Scaled(10);
+            var switchWidth = SwitchWidth();
+            DrawLive(editor!, new Vector2(switchWidth, height));
+            ImGui.SetCursorPos(new Vector2(start.X + switchWidth + Theme.Scaled(6), start.Y));
+            DrawPreview(current, new Vector2(switchWidth, height));
+            left = start.X + switchWidth * 2 + Theme.Scaled(6) + Theme.Scaled(10);
         }
         // The frame and time first, so the name knows where to stop.
         var timeLeft = editable ? DrawTime(editor!, start.Y, height) : ImGui.GetContentRegionMax().X;
@@ -1091,12 +1098,62 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     /// <summary>The line under "Live off".</summary>
     private const string LiveOffHint = "Click to show edits";
 
-    /// <summary>The Live switch's width: room for its longest fixed text, so it keeps its size when it comes on.</summary>
-    private static float LiveWidth() => Math.Max(Theme.Scaled(96), ImGui.CalcTextSize(LiveOffHint).X + Theme.Scaled(20));
+    /// <summary>The line under "LIVE".</summary>
+    private const string LiveOnHint = "Playing animation";
+
+    /// <summary>The lines under "Preview": before it is built, while it builds, and once it was built for this clip.</summary>
+    private const string PreviewHint = "Build and play", PreviewBuildingHint = "Building", PreviewBuiltHint = "Built, play again";
+
+    /// <summary>The Live and Preview switches' width: room for their longest fixed text, so they keep their size as they change.</summary>
+    private static float SwitchWidth() => Math.Max(Theme.Scaled(96),
+        new[] { LiveOffHint, LiveOnHint, PreviewHint, PreviewBuiltHint }.Max(text => ImGui.CalcTextSize(text).X) + Theme.Scaled(20));
+
+    /// <summary>
+    /// Preview, as big as Live beside it: builds every actor's edited clip and plays it. Outlined in purple once a preview was
+    /// built for this clip; greyed while it can't start, saying why.
+    /// </summary>
+    private void DrawPreview(AnimationTimelineSource current, Vector2 size)
+    {
+        var blocked = timelinePreview.PreviewBlocked();
+        var enabled = blocked == null;
+        var built = timelinePreview.BuiltOnce(current);
+        var at = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton("##timeline-preview", size) && enabled;
+        var hovered = ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
+        if (hovered)
+            ImGui.SetTooltip((blocked ?? "Build the edited clips, redraw the GPose actors with them and play them. Nothing is saved.") + "\n" +
+                             TimelinePreview.PreviewHints);
+        var draw = ImGui.GetWindowDrawList();
+        var rounding = Theme.Scaled(6);
+        var alpha = enabled ? 1f : .45f;
+        var edge = built ? Theme.PreviewBuilt : Theme.Info;
+        draw.AddRectFilled(at, at + size, TimelineUi.U32(Theme.WithAlpha(edge, .1f + (hovered && enabled ? .1f : 0))), rounding);
+        draw.AddRect(at, at + size, TimelineUi.U32(Theme.WithAlpha(edge, (built ? 1f : .6f) * alpha)), rounding, ImDrawFlags.None, Theme.Scaled(2));
+        const string label = "Preview";
+        var hint = timelinePreview.Building ? PreviewBuildingHint : built ? PreviewBuiltHint : PreviewHint;
+        var line = ImGui.GetTextLineHeight();
+        string glyph;
+        float glyphWidth;
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
+            glyph = FontAwesomeIcon.Video.ToIconString();
+            glyphWidth = ImGui.CalcTextSize(glyph).X;
+        }
+        var gap = Theme.Scaled(5);
+        var top = at.Y + (size.Y - line * 2 - Theme.Scaled(2)) / 2;
+        var labelLeft = at.X + (size.X - glyphWidth - gap - ImGui.CalcTextSize(label).X) / 2;
+        using (ImRaii.PushFont(UiBuilder.IconFont))
+            draw.AddText(new Vector2(labelLeft, top), TimelineUi.U32(Theme.WithAlpha(edge, alpha)), glyph);
+        draw.AddText(new Vector2(labelLeft + glyphWidth + gap, top), TimelineUi.U32(Theme.WithAlpha(Theme.Text, alpha)), label);
+        draw.AddText(new Vector2(at.X + (size.X - ImGui.CalcTextSize(hint).X) / 2, top + line + Theme.Scaled(2)),
+            TimelineUi.U32(Theme.WithAlpha(Theme.Muted, alpha)), hint);
+        if (clicked)
+            host.Transport.Preview();
+    }
 
     /// <summary>
     /// The Live switch, big and <paramref name="size"/>, for every actor at once: a red dot and "Live off" while off, green
-    /// "LIVE" naming the actors it is on for while on; greyed while it can come on for none, saying why.
+    /// "LIVE" and "Playing animation" while on; greyed while it can come on for none, saying why.
     /// </summary>
     private void DrawLive(TimelineEditor current, Vector2 size)
     {
@@ -1116,7 +1173,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         draw.AddRectFilled(at, at + size, TimelineUi.U32(Theme.WithAlpha(colour, (on ? .32f : .1f) + (hovered && enabled ? .1f : 0))), rounding);
         draw.AddRect(at, at + size, TimelineUi.U32(Theme.WithAlpha(colour, (on ? 1f : .6f) * alpha)), rounding, ImDrawFlags.None, Theme.Scaled(2));
         var label = on ? "LIVE" : "Live off";
-        var hint = on ? TimelineWindowViews.LiveCovers(transport.LiveActors) : LiveOffHint;
+        var hint = on ? LiveOnHint : LiveOffHint;
         var line = ImGui.GetTextLineHeight();
         var dot = Theme.Scaled(4);
         var labelWidth = ImGui.CalcTextSize(label).X + dot * 2 + Theme.Scaled(5);
@@ -1218,9 +1275,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         var layout = host.Layout;
         var splitter = Theme.Scaled(6);
         if (layout.SideWidth <= 0)
-            layout.SideWidth = Theme.Scaled(320);
+            layout.SideWidth = Theme.Scaled(340);
         var minimumCanvas = Theme.Scaled(320);
-        var minimumProperties = Theme.Scaled(220);
+        var minimumProperties = Theme.Scaled(260);
         // The width set stays as it was set: a narrow window only narrows the panel while it is narrow.
         var side = Math.Clamp(layout.SideWidth, minimumProperties, Math.Max(minimumProperties, width - minimumCanvas - splitter));
         var canvasWidth = Math.Max(Theme.Scaled(120), width - side - splitter);

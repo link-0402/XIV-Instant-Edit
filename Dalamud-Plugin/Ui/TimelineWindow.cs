@@ -65,6 +65,10 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost, ITimeli
     private readonly List<(WorkspaceKey Partner, MotionLink Link, string Name, string Path, int Binding)> linkBacks = [];
     // The partner tracks of every workspace's link layers, built after the workspaces' own update.
     private readonly PartnerLinks links;
+    // Since when the window, just opened with no clip, waits to open what plays now; null once it did or gave up.
+    private DateTime? pickPlaying;
+    // How long it waits for the listener to hear what plays.
+    private static readonly TimeSpan PickPatience = TimeSpan.FromSeconds(3);
     // The window's close waits for the question about unsaved changes; Discard confirms it.
     private bool closeAsked;
     private bool closeConfirmed;
@@ -312,11 +316,34 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost, ITimeli
         TellShown(Shown.Key.IsSelf ? null : NameOf(Shown.Key));
         foreach (var workspace in workspaces.Values)
             workspace.Tick();
+        PickPlaying(animations);
         // The links read each clip as this frame's update left it.
         AddLinkBacks();
         links.Update(workspaces.Values, clientState.IsGPosing, PresetExists);
         // After every workspace's own update, so every clip it plays again starts on this framework frame.
         selfServices.Group.Update();
+    }
+
+    /// <summary>The window opens on what plays now, unless a clip is opened first.</summary>
+    public override void OnOpen() => pickPlaying = DateTime.UtcNow;
+
+    /// <summary>
+    /// After the window opened with no clip, opens the shown actor's playing animation (its loop, not its startup) once the
+    /// listener hears it; gives up when a clip opens or nothing plays for a few seconds.
+    /// </summary>
+    private void PickPlaying(AnimationEditService animations)
+    {
+        if (pickPlaying is not { } since)
+            return;
+        if (!Shown.Idle || DateTime.UtcNow - since > PickPatience)
+        {
+            pickPlaying = null;
+            return;
+        }
+        if (AnimationRows.Build(animations.Observer.History).FirstOrDefault(row => row.Group == AnimationGroup.Playing && !row.Startup) is not { } playing)
+            return;
+        pickPlaying = null;
+        Shown.Open(playing.Capture, false);
     }
 
     /// <summary>Whether the partner preset still exists.</summary>

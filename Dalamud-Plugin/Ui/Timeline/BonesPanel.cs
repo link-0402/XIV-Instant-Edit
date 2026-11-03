@@ -47,8 +47,6 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private string[]? live;
     // The bones only a bigger standard has, for the skeleton, match and rebuild race they were worked out for.
     private (SkeletonDescription Skeleton, SkeletonResolution? Resolution, string? Model, Dictionary<string, string> Choices)? wider;
-    // Whether Make symmetrical would copy anything, for the selection it was worked out for.
-    private (SkeletonDescription Skeleton, MotionSide From, string[] Chosen, bool Copies)? symmetrical;
 
     /// <summary>The Bones window's whole content; called from its draw.</summary>
     public void Draw()
@@ -141,12 +139,10 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             Widgets.HintWrapped(choiceError);
     }
 
-    /// <summary> Undo and redo with the shared play bar, then the layer strip on a line of its own. </summary>
+    /// <summary> Undo and redo, then the layer strip on a line of its own. Playing, Preview and Live are in the Timeline window. </summary>
     private void DrawBonesHeader(TimelineEditor current, AnimationTimelineSource loaded)
     {
         TimelineUi.DrawUndoRedo("##bones", current, session.ReadOnly);
-        ImGui.SameLine(0, Theme.Scaled(12));
-        playBar.Draw(current, "##bones-play");
         LayerStrip.Draw(current, "##bones-strip", pauseForStep);
     }
 
@@ -238,7 +234,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGuiP.PushItemFlag(ImGuiItemFlags.SelectableDontClosePopup, true);
         try
         {
-            ImGui.TextColored(Theme.Muted, "On character");
+            ImGui.TextColored(Theme.Muted, "Bone Overlay");
             DrawOnCharacterItem("Off", BoneOverlayMode.Off, "No bones show on the character.");
             DrawOnCharacterItem("Selected", BoneOverlayMode.Selected,
                 "In GPose only the selected bones show on the character, with the gizmo.");
@@ -276,7 +272,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         }
     }
 
-    /// <summary> One of On character's choices, ticked while it is the one in use. </summary>
+    /// <summary> One of Bone Overlay's choices, ticked while it is the one in use. </summary>
     private void DrawOnCharacterItem(string label, BoneOverlayMode mode, string tooltip)
     {
         if (ImGui.MenuItem(label, "", overlay.OnCharacter == mode))
@@ -620,7 +616,6 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     private void DrawBonesPanel(TimelineEditor current, AnimationTimelineSource loaded, MotionLayer? layer, SkeletonDescription skeleton)
     {
         var readOnly = session.ReadOnly;
-        DrawMakeSymmetrical(current, skeleton, readOnly);
         if (layer == null)
         {
             Widgets.MutedWrapped("Select a bone layer in the timeline to pose its bones, or add one over the whole clip.");
@@ -688,42 +683,6 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         using var popup = ImRaii.Popup("##bones-add-layer");
         if (popup.Success)
             layerMenu.Draw(current, bones: true);
-    }
-
-    /// <summary>
-    /// Make symmetrical: a symmetry layer over the whole clip for the selected bones, copying the side the
-    /// primary bone is on (the left for a bone in the middle). Needs a selected bone with a twin.
-    /// </summary>
-    private void DrawMakeSymmetrical(TimelineEditor current, SkeletonDescription skeleton, bool readOnly)
-    {
-        var index = posing.BoneTree(skeleton).Index;
-        string[] chosen = [.. posing.Selection.Bones.Where(index.ContainsKey)];
-        var from = posing.Selection.Primary is { } primary && MotionMirror.Side(primary) == 'r' ? MotionSide.Right : MotionSide.Left;
-        // A middle bone counts when something below it has a twin, as the chest does for the arms.
-        // Worked out again only when the selection changes, not every frame.
-        if (symmetrical is not { } known || !ReferenceEquals(known.Skeleton, skeleton) || known.From != from || !known.Chosen.SequenceEqual(chosen))
-        {
-            var copies = chosen.Length > 0 && !MotionSymmetry.Plan(skeleton,
-                new MotionLayer("m0", MotionLayerKind.Symmetry, "", 0, 1, 0, 0, 1, PoseComponents.Rotation, MotionInterpolation.Linear, [.. chosen], From: from)).Pairs.IsEmpty;
-            known = (skeleton, from, chosen, copies);
-            symmetrical = known;
-        }
-        using (ImRaii.Disabled(readOnly || !known.Copies))
-        {
-            if (ImGui.Button("Make symmetrical"))
-                current.AddSymmetry(chosen, from);
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Add a layer that copies the selected side onto the other, mirrored. A bone in the middle copies its left side.");
-        ImGui.SameLine();
-        using (ImRaii.Disabled(readOnly || chosen.Length == 0))
-        {
-            if (ImGui.Button("Pin selected"))
-                current.PinSelected(chosen);
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Pin the selected bones in the selected Pin layer, or in a new one.");
-        ImGui.Spacing();
     }
 
     /// <summary> In the Bones window: undo and redo, the arrows step the playhead and Space plays or pauses. </summary>

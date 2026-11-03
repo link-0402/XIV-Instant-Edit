@@ -8,8 +8,8 @@ using InstantEdit.Services.Animations;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Edits page: every animation edit of the days kept (Settings > Cache), newest first, with Undo and Edit again for a
-/// save with bone layers.
+/// The Save history page: every animation edit of the days kept (Settings > Cache), newest first, each under the mod it
+/// saved into, with Undo and Edit again for a save with bone layers.
 /// </summary>
 /// <param name="loading">Whether the timeline is being read.</param>
 /// <param name="editAgain">Opens a saved edit again with its layers (Edit again).</param>
@@ -47,8 +47,23 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
         _ => "LivePose bake",
     };
 
+    /// <summary>
+    /// The mod the edit saved into: the new mod's name, else the name of the mod the edited file came from, else the mod
+    /// folder the edit wrote.
+    /// </summary>
+    internal static string ModLabel(AnimationEditJournal journal)
+    {
+        var request = journal.Request;
+        if (request.Destination == AnimationDestination.NewMod && request.ModName.Length > 0)
+            return request.ModName;
+        var clip = request.Timeline?.Startup == true && request.Capture.Startup is { } startup ? startup : request.Capture.Clip;
+        if (request.Capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath)?.ModName is { Length: > 0 } name)
+            return name;
+        return journal.ModDirectory.Length > 0 ? Path.GetFileName(journal.ModDirectory.TrimEnd('/', '\\')) : "Unknown mod";
+    }
+
     private static string DestinationLabel(AnimationBakeRequest request) =>
-        request.Destination == AnimationDestination.NewMod ? $"new mod \"{request.ModName}\"" : "in place";
+        request.Destination == AnimationDestination.NewMod ? "new mod" : "in place";
 
     private static (Vector4 Colour, string Label) JournalState(AnimationEditJournal journal) => journal.State switch
     {
@@ -97,14 +112,22 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
             ImGui.TextColored(Theme.Hint, $"{journals.Length - RecoveryRows} older edit{(journals.Length - RecoveryRows == 1 ? "" : "s")} not shown.");
     }
 
-    /// <summary>One edit: what it changed and when, its state, and its buttons.</summary>
+    /// <summary>One edit: the mod it saved into and its animation, its state and when, what it changed, and its buttons.</summary>
     private void DrawRecentEdit(AnimationEditService service, AnimationEditJournal journal)
     {
         var request = journal.Request;
         var startup = request.Timeline?.Startup == true;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted(AnimationPresentation.AnimationName(request.Capture, startup));
         var buttons = Theme.Scaled(56);
+        var mod = ModLabel(journal);
+        ImGui.AlignTextToFramePadding();
+        // Cut at the buttons, whole in the tooltip.
+        var at = ImGui.GetCursorScreenPos();
+        var room = Math.Max(1, ImGui.GetContentRegionAvail().X - buttons - Theme.Gap);
+        ImGui.PushClipRect(at, at + new Vector2(room, ImGui.GetFrameHeight()), true);
+        ImGui.TextColored(Theme.Label, mod);
+        ImGui.PopClipRect();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(mod);
         ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + Theme.Gap, ImGui.GetContentRegionMax().X - buttons));
         // Opening another clip waits for a running read, save or undo; with no clip open nothing does.
         var working = loading() || saveFooter.Working;
@@ -131,6 +154,7 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
                 service.Undo(journal);
             }
         }
+        ImGui.TextUnformatted(AnimationPresentation.AnimationName(request.Capture, startup));
         var (colour, state) = JournalState(journal);
         if (Widgets.Badge(state, colour) && journal.Message.Length > 0)
             ImGui.SetTooltip(journal.Message);

@@ -54,7 +54,7 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
         var loop = values.GetValueOrDefault(LoopField, 1);
         using (ImRaii.Disabled(!editable))
         {
-            ImGui.SetNextItemWidth(Theme.Scaled(170));
+            ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(170), ImGui.GetContentRegionAvail().X));
             using var combo = ImRaii.Combo("##sound-plays", TimelineWindowViews.PlaysText(loop));
             if (combo.Success)
             {
@@ -85,7 +85,7 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
             TimelineUi.Fact("Which sound");
             using (ImRaii.Disabled(!editable))
             {
-                ImGui.SetNextItemWidth(Theme.Scaled(170));
+                ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(170), ImGui.GetContentRegionAvail().X));
                 using var combo = ImRaii.Combo("##sound-which", TimelineWindowViews.WhichText(ev.Pin, shown.Ids));
                 if (combo.Success)
                 {
@@ -108,7 +108,6 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
 
         TimelineUi.Fact("Ends");
         Flag(current, ev, editable, "Stops with the animation", flags, StopsBit, "Off, it plays to its end.");
-        Widgets.HintWrapped("Cut off when the emote ends.");
 
         TimelineUi.Fact("Comes from");
         Flag(current, ev, editable, "Bind point", flags, BindBit, "A point on the character, such as a hand, by its number.");
@@ -123,8 +122,6 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
                 TimelineUi.TrackField(current, changed, changed ? TimelineUi.With(ev, BindField, Math.Clamp(bind, 0, byte.MaxValue)) : null);
             }
         }
-        else
-            Widgets.HintWrapped("The character's position.");
 
         if (shown?.Model is { Sounds.Count: > 1 } several)
         {
@@ -432,7 +429,7 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
         }
         TimelineUi.Fact("Channel");
         var bus = edit.Bus ?? target.Bus;
-        ImGui.SetNextItemWidth(Theme.Scaled(170));
+        ImGui.SetNextItemWidth(Math.Min(Theme.Scaled(170), ImGui.GetContentRegionAvail().X));
         using (var combo = ImRaii.Combo("##sound-channel", TimelineWindowViews.ChannelName(bus)))
         {
             var options = TimelineWindowViews.KnownChannels.Contains(bus) ? TimelineWindowViews.KnownChannels : [bus, .. TimelineWindowViews.KnownChannels];

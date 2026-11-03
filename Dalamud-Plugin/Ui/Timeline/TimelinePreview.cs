@@ -114,6 +114,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private TimelineDocument? staleChecked;
     private TimelineDocument? lookChecked;
     private bool previewStale;
+    // The clip a full preview was last built and shown for (TimelineSession.ClipKey); the Preview button marks it.
+    private string? builtFor;
     // A preview asked for while a link track built: it starts once the track is in (see Poll), with the tracks Live shows.
     private (SkeletonStandard? Repair, bool Live)? previewWaiting;
 
@@ -125,6 +127,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     public ushort? Actor => previewActor;
     /// <summary>The binding fingerprint of what the preview or Live plays; null while neither does.</summary>
     public string? Fingerprint => previewFingerprint;
+    /// <summary>A full preview was built and shown for <paramref name="loaded"/>'s clip since the window opened.</summary>
+    public bool BuiltOnce(AnimationTimelineSource loaded) => builtFor == TimelineSession.ClipKey(loaded);
     /// <summary>A preview is being built, or waits for a link track to build first.</summary>
     public bool Building => previewJob || previewWaiting != null;
     /// <summary>The removal of the preview's temporary mod, while it runs.</summary>
@@ -293,16 +297,15 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     }
 
     /// <summary>
-    /// The status line's notes for the preview and Live: work running, else an error, else the playback status or why
-    /// playback is unavailable; then bones Live can't show, the shared collection and what the
-    /// preview still needs. <paramref name="repair"/> is the standard skeleton a preview repairs the clip onto.
+    /// The status line's notes for the preview and Live: work running, else an error, else why playback is unavailable;
+    /// then bones Live can't show, the shared collection and what the preview still needs. <paramref name="repair"/> is
+    /// the standard skeleton a preview repairs the clip onto.
     /// </summary>
     internal IEnumerable<StatusNote> Notes(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
     {
         var notes = new List<StatusNote>();
         var available = PlaybackAvailable(out var reason);
         var shown = previewFingerprint != null;
-        var active = session.Playback.Active;
 
         // One of these at a time, as on the preview bar before: an error waits for the work, a status for the error.
         if (previewJob)
@@ -312,8 +315,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 decode.Reading ? decode.Status : liveDrawWait != null ? "Waiting for your character" : "Applying the bone layers"));
         else if (FirstText(liveError, liveWanted ? session.MotionDisplay?.Error : null, previewError, session.Preview.Error, session.Playback.Error) is { } error)
             notes.Add(new StatusNote("preview-error", StatusKind.Error, error));
-        else if (FirstText(active ? session.Playback.Status : null, session.Preview.Active ? session.Preview.Status : null, available ? null : reason) is { } status)
-            notes.Add(new StatusNote("playback", StatusKind.Notice, status));
+        // What plays now shows on the play bar and the Preview and Live buttons: only why nothing can play is a note.
+        else if (!available)
+            notes.Add(new StatusNote("playback", StatusKind.Notice, reason));
 
         // The shared frame is past this clip's end: it stands on its last frame, and its keys wait.
         if (current.PastEnd)
@@ -529,6 +533,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 shownLooks = looks;
                 shownSounds = soundRedirects;
                 previewFingerprint = built.BindingFingerprint;
+                builtFor = TimelineSession.ClipKey(target);
                 // A face opened on its own has no expression of its own: the carrier plays it.
                 previewTimeline = Carried(target) ? FaceCarrier.TimelineId(session.Data) ?? 0 : clip.Timeline;
                 previewFace = target.Standalone || shown.Face != null;
@@ -655,9 +660,11 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     /// <summary>
     /// Ends the preview: the character is put back now, the temporary mod is removed on a task.
-    /// Runs when the window closes, the clip changes, before a save and from Stop.
+    /// Runs when the window closes, the clip changes, before a save and from Stop. With <paramref name="keepPlaying"/>
+    /// (the loader about to play another animation) the character keeps what it plays until that one starts: putting it
+    /// back first would flash the animation it had before GPose, startup and all.
     /// </summary>
-    public void Stop()
+    public void Stop(bool keepPlaying = false)
     {
         StopLive();
         previewWaiting = null;
@@ -669,7 +676,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         ForgetPreviewLooks();
         try
         {
-            if (session.Playback.Active)
+            if (session.Playback.Active && !keepPlaying)
                 session.Playback.Stop();
         }
         catch (InvalidOperationException e)

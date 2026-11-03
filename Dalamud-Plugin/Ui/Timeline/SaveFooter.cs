@@ -474,7 +474,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (pendingSaveId is { } stale && !service.Busy && service.LastResult?.Id != stale)
         {
             pendingSaveId = null;
-            saveError = "The save's result is unknown. Check Saved edits in the dock.";
+            saveError = "The save's result is unknown. Check Save history in the dock.";
             motionCarry = null;
         }
         var sameClip = session.Source != null && TimelineSession.ClipKey(session.Source) == jobClip;

@@ -34,8 +34,8 @@ internal sealed record StatusNote(string Key, StatusKind Kind, string Text, stri
 internal sealed record WorkTiming(double Since, double? Gone, bool Shown, StatusNote Last);
 
 /// <summary>
-/// The one line under a window's action bar: the first note shows, and "+N notes" opens a popup with all of them.
-/// Nothing is drawn when there is no note. Each window keeps its own line, so its dismissed notes stay its own.
+/// The notes under a window's action bar, one line each, all of them shown. Nothing is drawn when there is no note.
+/// Each window keeps its own, so its dismissed notes stay its own.
 /// </summary>
 internal sealed class StatusLine
 {
@@ -104,9 +104,6 @@ internal sealed class StatusLine
         return shown.ToImmutable();
     }
 
-    /// <summary> The text that opens the popup with every note: "+1 note", "+2 notes". </summary>
-    public static string MoreText(int more) => more == 1 ? "+1 note" : $"+{more} notes";
-
     /// <summary> Hides <paramref name="note"/> until its text changes. </summary>
     public void Dismiss(StatusNote note) => dismissed[note.Key] = note.Text;
 
@@ -129,17 +126,16 @@ internal sealed class StatusLine
     }
 
     /// <summary>
-    /// The width the first note's text gets on the line: all of it (<paramref name="text"/>) when it fits in
+    /// The width a note's text gets on its line: all of it (<paramref name="text"/>) when it fits in
     /// <paramref name="available"/> beside what follows it on the line (<paramref name="after"/>), else what is left, never
     /// below 0. Less than <paramref name="text"/> means the text is cut off and shows whole in its tooltip.
     /// </summary>
     public static float TextRoom(float available, float text, float after) => Math.Clamp(available - after, 0, text);
 
     /// <summary>
-    /// Draws the line: the first shown note, then "+N notes" at the right end when there are more. Work running comes and
-    /// goes on it steadily (<see cref="Debounced"/>). The note's text is cut to the room left, so its button, its dismiss
-    /// button and "+N notes" always stay in view. <paramref name="id"/> starts every control's id, so two windows can each
-    /// draw a line.
+    /// Draws every shown note, one line each. Work running comes and goes steadily (<see cref="Debounced"/>). Each
+    /// note's text is cut to the room left on its line, so its button and its dismiss button always stay in view.
+    /// <paramref name="id"/> starts every control's id, so two windows can each draw their notes.
     /// </summary>
     public void Draw(string id, IEnumerable<StatusNote> notes)
     {
@@ -147,33 +143,20 @@ internal sealed class StatusLine
         if (shown.IsEmpty)
             return;
         using var scope = ImRaii.PushId(id + "-status");
-        var more = shown.Length > 1 ? MoreText(shown.Length - 1) : null;
-        var first = shown[0];
         var style = ImGui.GetStyle();
         var spacing = style.ItemSpacing.X;
         var square = ImGui.GetFrameHeight();
-        var moreWidth = more != null ? ImGui.CalcTextSize(more).X : 0;
-        // The spinner before work running, or the dismiss button after any other note: one frame-height square either way.
-        var after = square + spacing
-                    + (first.Button is { } button ? ImGui.CalcTextSize(button).X + style.FramePadding.X * 2 + spacing : 0)
-                    + (more != null ? moreWidth + spacing : 0);
-        DrawNote(first, TextRoom(ImGui.GetContentRegionAvail().X, ImGui.CalcTextSize(first.Text).X, after));
-        if (more == null)
-            return;
-        ImGui.SameLine();
-        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetContentRegionMax().X - moreWidth));
-        if (ImGui.Selectable(more, false, ImGuiSelectableFlags.None, ImGui.CalcTextSize(more)))
-            ImGui.OpenPopup("notes");
-        using var popup = ImRaii.Popup("notes");
-        if (!popup)
-            return;
         foreach (var note in shown)
-            DrawNote(note, null);
+        {
+            // The spinner before work running, or the dismiss button after any other note: one frame-height square either way.
+            var after = square + spacing + (note.Button is { } button ? ImGui.CalcTextSize(button).X + style.FramePadding.X * 2 + spacing : 0);
+            DrawNote(note, TextRoom(ImGui.GetContentRegionAvail().X, ImGui.CalcTextSize(note.Text).X, after));
+        }
     }
 
     /// <summary>
     /// One note on one line: a spinner for work running, its text in its kind's colour, its button and the dismiss button.
-    /// With <paramref name="room"/> the text is cut to that width, and shows whole in its tooltip when cut.
+    /// The text is cut to <paramref name="room"/>, and shows whole in its tooltip when cut.
     /// </summary>
     private void DrawNote(StatusNote note, float? room)
     {

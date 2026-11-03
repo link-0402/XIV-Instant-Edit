@@ -325,15 +325,13 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     /// </summary>
     private void DrawPins(TimelineEditor current, MotionLayer layer, SkeletonDescription skeleton, AnimationTimelineSource loaded, bool readOnly)
     {
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "Pins");
         if (layer.Pins.IsEmpty)
         {
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Hint, "None yet. Select bones and choose Pin selected in the Bones window.");
+            Widgets.HintWrapped("No pins yet. Select bones and choose Pin selected in the Bones window.");
             return;
         }
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Pins");
         var facts = layer.Pins.Any(pin => pin.Planted) ? posing.PlantedFacts(loaded, current.Document, layer) : null;
         var index = posing.BoneTree(skeleton).Index;
         foreach (var pin in layer.Pins)
@@ -961,20 +959,19 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     /// <summary> The layer's keys: click one to move the playhead there and select it. </summary>
     private static void DrawLayerKeys(TimelineEditor current, MotionLayer layer)
     {
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, "Keys");
         if (layer.Keys.IsEmpty)
         {
-            ImGui.SameLine(0, Theme.Gap);
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Hint, layer.Kind switch
+            // On a line of its own, wrapped, so a narrow panel shows all of it.
+            Widgets.HintWrapped(layer.Kind switch
             {
-                MotionLayerKind.Pin => "None yet. Pin here in the Bones window adds one.",
-                MotionLayerKind.LookAt => "None yet. Move the target with the gizmo.",
-                _ => "None yet. Set a bone's value in the Bones window to add one.",
+                MotionLayerKind.Pin => "No keys yet. Pin here in the Bones window adds one.",
+                MotionLayerKind.LookAt => "No keys yet. Move the target with the gizmo.",
+                _ => "No keys yet. Set a bone in the Bones window.",
             });
             return;
         }
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Keys");
         var picked = current.PickedKeys.Frames;
         foreach (var key in layer.Keys)
         {

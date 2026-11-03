@@ -212,7 +212,7 @@ internal sealed class PlayingNowPage
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(blocked ?? "Replace the startup with a smooth move into the loop.\n" +
                 $"Saved in {UiText.Safe(capture.Sources.FirstOrDefault(s => s.GamePath == capture.Clip.GamePath)?.ModName, "the loop's mod")}.\n" +
-                "Undo it in Saved edits.");
+                "Undo it in Save history.");
     }
 
     /// <summary> The line joining a startup row to the animation above it, hanging from that row's glyph. </summary>

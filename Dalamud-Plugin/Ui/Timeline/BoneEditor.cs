@@ -262,6 +262,15 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         string[] bones = [.. posing.Selection.Bones.Where(bone =>
             index.ContainsKey(bone) && MotionEdits.PinIndex(layer, bone) is var at and >= 0 && !layer.Pins[at].Planted)];
         var several = bones.Length > 1;
+        // Selected bones this layer doesn't pin yet.
+        string[] unpinned = [.. posing.Selection.Bones.Where(bone => index.ContainsKey(bone) && MotionEdits.PinIndex(layer, bone) < 0)];
+        using (ImRaii.Disabled(readOnly || unpinned.Length == 0))
+        {
+            if (ImGui.Button("Pin selected"))
+                current.PinSelected(unpinned);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Pin the selected bones in this layer.");
         if (bones.Length == 0)
             Widgets.HintWrapped("Select a keyed pin's bone to key it here.");
         else if (!inside)

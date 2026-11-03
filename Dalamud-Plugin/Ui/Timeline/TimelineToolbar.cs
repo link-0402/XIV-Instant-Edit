@@ -9,7 +9,7 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The action bar above the lanes, on one row: undo, redo, the play bar and on the right Curves, the free camera and the Bones
-/// window. Also the status line's notes. Live and the time are in the header; layers are added from the lanes.
+/// window. Also the status line's notes. Live, Preview and the time are in the header; layers are added from the lanes.
 /// </summary>
 internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers pickers, TimelineLoader loader, LivePosePanel livePose,
     TimelineTexts texts, SaveFooter saveFooter, Window bonesWindow, BlenderMotionPanel blenderMotion, PlayBar playBar, FreeCamera freeCamera,
@@ -36,7 +36,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
     {
         TimelineUi.DrawUndoRedo("##timeline", current, session.ReadOnly);
         ImGui.SameLine(0, Theme.Scaled(12));
-        playBar.Draw(current, "##timeline-play", live: false, time: false);
+        playBar.Draw("##timeline-play");
         DrawRight(current);
     }
 

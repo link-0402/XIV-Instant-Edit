@@ -687,7 +687,7 @@ internal static partial class TimelineWindowViews
     }
 
     /// <summary>
-    /// A note when the file's header gives another length than the motion's (mods only), or null.
+    /// A note when the file's header gives another length than the motion's (mods only), which a save fixes, or null.
     /// It hides while the length is changed, when the motion's loaded length no longer holds.
     /// </summary>
     public static string? HeaderNote(TimelineDocument doc) =>
@@ -695,7 +695,7 @@ internal static partial class TimelineWindowViews
             ? null
             : doc.HeaderLength < 0
                 ? "The file's header gives an endless length (-1). It stays that way."
-                : $"The file's header says {TimelineText.Seconds(doc.HeaderLength)}, but the motion lasts {TimelineText.Seconds(doc.SourceLength)}.";
+                : $"The file's header says {TimelineText.Seconds(doc.HeaderLength)}, but the motion lasts {TimelineText.Seconds(doc.SourceLength)}. Saving fixes it.";
 
     /// <summary>A field's value as read-only text.</summary>
     public static string FieldText(TimelineField field, double value)
@@ -1361,14 +1361,6 @@ internal static partial class TimelineWindowViews
         (on ? $"Live is on for {string.Join(", ", actors)}: bone layers show on the GPose actors as you edit. Click to turn it off for everyone."
             : blocked ?? "Show your bone layers on every GPose actor with an animation open as you edit. Nothing is saved.") + "\n" + hint;
 
-    /// <summary>Whom Live is on for, under the big Live switch: one or two names, or the first and how many more.</summary>
-    public static string LiveCovers(IReadOnlyList<string> actors) => actors.Count switch
-    {
-        0 => string.Empty,
-        1 => actors[0],
-        2 => $"{actors[0]}, {actors[1]}",
-        _ => $"{actors[0]} + {actors.Count - 1}",
-    };
     /// <summary>A partner targeted while it still spawns: its dock page waits.</summary>
     public static string Spawning(string name) => $"{name} is still spawning.";
 

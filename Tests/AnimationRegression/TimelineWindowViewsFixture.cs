@@ -186,7 +186,7 @@ internal static class TimelineWindowViewsFixture
             Ev("again", "C042", TimelineLane.Other, 466, access: TimelineAccess.Movable)) with { HeaderLength = 30 };
         var note = TimelineWindowViews.HeaderNote(dance);
         texts.Add(note ?? "");
-        check(note == "The file's header says 1s, but the motion lasts 15.17s." &&
+        check(note == "The file's header says 1s, but the motion lasts 15.17s. Saving fixes it." &&
               TimelineWindowViews.LengthText(dance) == "15.17s · 455 frames" &&
               TimelineWindowViews.PastEndWarning(dance) == "1 event starts after the end and may not play.",
             "A header length the motion disagrees with gets a short note, and the length and warning follow the motion");

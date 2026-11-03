@@ -197,7 +197,7 @@ internal static class TimelineChromeFixture
     /// <summary> The dock's tabs, its width within its limits and beside the timeline's room, and a partner's initials when folded. </summary>
     private static void Dock(Action<bool, string> check)
     {
-        check(TimelineDock.Tabs.SequenceEqual([DockTab.Animations, DockTab.Saved, DockTab.Blender]), "Dock: Animations, Saved edits, Blender");
+        check(TimelineDock.Tabs.SequenceEqual([DockTab.Animations, DockTab.Saved, DockTab.Blender]), "Dock: Animations, Save history, Blender");
         check(WindowLayout.Dock(0, 1240, 566, 1) == WindowLayout.DefaultDock, "Dock: starts at its default width");
         check(WindowLayout.Dock(1000, 1240, 566, 1) == WindowLayout.MaximumDock, "Dock: no wider than its limit");
         check(WindowLayout.Dock(300, 800, 566, 1) == 234, "Dock: gives way to the timeline in a narrow window");
@@ -213,8 +213,6 @@ internal static class TimelineChromeFixture
         check(TimelineWindowViews.TimePair(37, 200, false) == ("37", "200", "1.23s", "6.67s"), "Header: paused, the time has hundredths");
         check(TimelineWindowViews.TimePair(37, 200, true) == ("37", "200", "1s", "6.67s"), "Header: playing, the time has whole seconds");
         check(TimelineWindowViews.TimePair(0, 30, true) == ("0", "30", "0s", "1.00s"), "Header: the start and a one-second clip");
-        check(TimelineWindowViews.LiveCovers(["You"]) == "You" && TimelineWindowViews.LiveCovers(["You", "Partner One"]) == "You, Partner One" &&
-              TimelineWindowViews.LiveCovers(["You", "Partner One", "Partner Two"]) == "You + 2", "Header: Live names whom it is on for");
     }
 
     /// <summary> The view following a playing playhead: still at first, then moving with it, stopping where the end shows, back for a restart. </summary>
@@ -260,7 +258,6 @@ internal static class TimelineChromeFixture
         check(StatusLine.Shown([note], new Dictionary<string, string> { ["notice"] = "Copied 3 bones." }).IsEmpty, "A dismissed note stays hidden while its text is the same");
         check(StatusLine.Shown([note with { Text = "Copied 4 bones." }], new Dictionary<string, string> { ["notice"] = "Copied 3 bones." }).Length == 1, "A dismissed note comes back when its text changes");
         check(StatusLine.Shown([work], new Dictionary<string, string> { ["decode"] = "Reading the motion 40%" }).Length == 1, "Work running is never dismissed");
-        check(StatusLine.MoreText(1) == "+1 note" && StatusLine.MoreText(2) == "+2 notes", "More notes read +1 note and +2 notes");
 
         var line = new StatusLine();
         line.Dismiss(note);
@@ -273,9 +270,9 @@ internal static class TimelineChromeFixture
         line.Visible([]);
         check(hiddenPaste && line.Visible([paste]).Length == 1, "A dismissal ends when the note goes away, so the same text shows again");
 
-        check(StatusLine.TextRoom(760, 300, 200) == 300, "A first note that fits keeps all its text");
-        check(StatusLine.TextRoom(760, 700, 200) == 560, "A long first note is cut to the room its buttons and +N notes leave");
-        check(StatusLine.TextRoom(150, 700, 200) == 0, "A first note never gets less than no room");
+        check(StatusLine.TextRoom(760, 300, 200) == 300, "A note that fits keeps all its text");
+        check(StatusLine.TextRoom(760, 700, 200) == 560, "A long note is cut to the room its buttons leave");
+        check(StatusLine.TextRoom(150, 700, 200) == 0, "A note never gets less than no room");
         Steady(check);
     }
 

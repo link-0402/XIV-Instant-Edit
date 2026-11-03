@@ -157,20 +157,25 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
                     var waiting = loaderWaiting?.Item == item;
                     Widgets.Icon(item.Face ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running, Theme.AnimationKind);
                     ImGui.SameLine(0, Theme.Gap);
-                    var detail = search.Length > 0 ? $"{AnimationLibrary.GroupName(item.Group)} · {item.Detail}" : item.Detail;
+                    // An emote's /command only clutters the row: the search still finds it.
+                    var shownDetail = item.Detail.StartsWith('/') ? null : item.Detail;
+                    var detail = search.Length > 0
+                        ? shownDetail is null ? AnimationLibrary.GroupName(item.Group) : $"{AnimationLibrary.GroupName(item.Group)} · {shownDetail}"
+                        : shownDetail ?? string.Empty;
                     var detailWidth = ImGui.CalcTextSize(detail).X;
                     // In a narrow dock the detail goes to the tooltip rather than cut into the name.
                     var room = ImGui.GetContentRegionAvail().X;
-                    var both = ImGui.CalcTextSize(item.Name).X + Theme.Gap + detailWidth <= room;
+                    var both = detail.Length == 0 || ImGui.CalcTextSize(item.Name).X + Theme.Gap + detailWidth <= room;
                     using (ImRaii.Disabled(!available))
                     {
                         if (ImGui.Selectable(item.Name, waiting, ImGuiSelectableFlags.None,
-                                new Vector2(Math.Max(1, both ? room - detailWidth - Theme.Gap : room), 0)))
+                                new Vector2(Math.Max(1, both && detail.Length > 0 ? room - detailWidth - Theme.Gap : room), 0)))
                             PlayFromLoader(item);
                     }
                     if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                        ImGui.SetTooltip(both ? $"{item.Key} · timeline {item.Timeline}" : $"{item.Name}\n{detail}\n{item.Key} · timeline {item.Timeline}");
-                    if (!both)
+                        ImGui.SetTooltip(both ? $"{(shownDetail is null ? item.Detail + " · " : "")}{item.Key} · timeline {item.Timeline}"
+                            : $"{item.Name}\n{detail}\n{item.Key} · timeline {item.Timeline}");
+                    if (!both || detail.Length == 0)
                         continue;
                     ImGui.SameLine(0, Theme.Gap);
                     ImGui.TextColored(Theme.Muted, detail);
@@ -197,11 +202,12 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     /// <summary>
     /// Plays <paramref name="item"/> on the GPose actor and waits for the listener to hear it, once its
     /// animation is known to fit the actor's skeleton (<see cref="Poll"/>). The preview and Live end
-    /// first: they play the open clip on the same actor.
+    /// first: they play the open clip on the same actor. The actor keeps playing what it plays until the
+    /// new one starts, rather than going back to its own animation in between.
     /// </summary>
     private bool PlayFromLoader(AnimationLibraryItem item)
     {
-        timelinePreview.Stop();
+        timelinePreview.Stop(keepPlaying: true);
         ushort? actor;
         try { actor = session.Playback.ActorIndex(); }
         catch (InvalidOperationException e)

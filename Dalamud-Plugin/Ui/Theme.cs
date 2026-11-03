@@ -90,6 +90,9 @@ internal static class Theme
     /// <summary> The timeline's current frame: its line and the marker on the ruler. </summary>
     public static readonly Vector4 Playhead = Accent;
 
+    /// <summary> The Timeline's Preview button once a preview was built for the open clip. </summary>
+    public static readonly Vector4 PreviewBuilt = RepeatLayer;
+
     /// <summary> The line a timeline drag sticks to. </summary>
     public static readonly Vector4 SnapGuide = Info;
 

@@ -178,8 +178,8 @@ internal static class TimelineConvert
     /// time control whose end frame was its duration keeps ending at its duration; a motion at its
     /// own speed given time control gets a range that plays it whole (its own length from
     /// <paramref name="motionFrames"/>, by motion name); a curve (TMFC) stretches
-    /// with the entry that uses it. The header's length (TMDH) changes only with the
-    /// length (see <see cref="TimelineDocument.SavedHeaderLength"/>), so a mod's own otherwise stays.
+    /// with the entry that uses it. The header's length (TMDH) becomes the timeline's length when it
+    /// disagrees with it (see <see cref="TimelineDocument.SavedHeaderLength"/>).
     /// A kept face has the endless length; a looping one is written as its plays back to back
     /// (<see cref="Loop"/>), and a loop the edit left alone stays as it was. A looping face of
     /// <paramref name="retimed"/> (a face session changed its length) is written again at its length in
@@ -305,7 +305,8 @@ internal static class TimelineConvert
                 foreach (var copy in gone) file.RemoveEntry(copy);
         }
         if (edited.FacePack != source.FacePack) file.FacePack = edited.FacePack;
-        if (edited.Length != source.Length) file.SetLength(edited.SavedHeaderLength);
+        // A header that disagrees with the motion is fixed on any save, not only when the length changes.
+        if (file.Length != edited.SavedHeaderLength) file.SetLength(edited.SavedHeaderLength);
         if (!file.Edited) return originalTmb;
 
         var output = file.ToArray(out var ids);

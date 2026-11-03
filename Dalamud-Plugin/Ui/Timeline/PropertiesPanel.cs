@@ -329,6 +329,9 @@ internal sealed class PropertiesPanel(TimelineSession session, EffectPlaceEditor
         using (ImRaii.PushFont(UiBuilder.MonoFont))
             entered = ImGui.InputText("##path", ref pathFieldText, 256, ImGuiInputTextFlags.EnterReturnsTrue);
         pathFieldActive = ImGui.IsItemActive();
+        // A long path doesn't fit the field: hovering shows all of it.
+        if (!pathFieldActive && ImGui.IsItemHovered() && ImGui.CalcTextSize(ev.Path).X > ImGui.GetItemRectSize().X)
+            ImGui.SetTooltip(ev.Path);
         if (ImGui.IsItemActivated())
             pathFieldError = null;
         if (entered || ImGui.IsItemDeactivatedAfterEdit())

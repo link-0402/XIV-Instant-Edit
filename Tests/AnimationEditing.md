@@ -3360,3 +3360,25 @@ Offline: TimelineChromeFixture (dock tabs and width, the time pair, Live names, 
   narrows down to 180 px and no further.
 - [ ] 14 With no clip open after a preview or Live ran (also on a partner's workspace), the empty main area shows no stale
   "Preview playing." note: the dock reports only its own jobs (an undo in Saved edits, a wind-up, a send to Blender).
+## Timeline cleanup after the dock (pending)
+
+- [ ] 1 The animation list shows no /commands; searching "/smile" still finds Smile, and its tooltip shows the command.
+- [ ] 2 Opening the Timeline window with no clip opens what plays now (the loop, not its startup). A clip opened from the
+  main window wins; with nothing heard within 3 s the start page stays.
+- [ ] 3 A full-width "Hide the dock" button sits above full-width tabs. Folded, the same button fills the strip with its
+  arrow centred, above the actors.
+- [ ] 4 The gap between the dock and the timeline is wider; the splitter still drags the dock between 180 and 420 px.
+- [ ] 5 Live on reads "LIVE" over "Playing animation". Preview is the same size beside it, builds every actor's clip, and
+  gets a purple outline once a preview was built for the open clip; another clip shows it plain.
+- [ ] 6 Every note shows on its own line under the action bar, no "+N notes"; no "Playing." or "Preview on." note.
+- [ ] 7 A mod whose header disagrees with its motion says "Saving fixes it."; after any save the note is gone and the clip
+  plays as before.
+- [ ] 8 The Animations tab has no "Now playing" heading: its rows sit in a tinted box above the list, with their row menu.
+- [ ] 9 Save history (was Saved edits) names each edit's mod first, then its animation.
+- [ ] 10 The Bones window has no play bar, Preview or Live; Space still plays or pauses. View says "Bone Overlay".
+- [ ] 11 No Make symmetrical / Pin selected row at the top of the Bones window's panel; a selected Pin layer has Pin selected,
+  a Symmetry layer Add selected.
+- [ ] 12 Side panel at its default width: a sound's File field shows the whole path on hover, a new layer's "No keys yet"
+  line wraps, and nothing runs past the right edge.
+- [ ] 13 In GPose, after an emote played outside GPose: clicking one animation after another in the list goes straight from
+  one to the next, never back to that emote's startup in between. Stop still puts the actor back.

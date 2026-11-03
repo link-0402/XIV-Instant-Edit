@@ -888,8 +888,8 @@ internal static partial class TmbFileFixture
     /// <summary>
     /// A mod's header length (TMDH) that isn't its motion's, like one dance mod's: a
     /// 455-frame motion under a header copied from a 30-frame walk, laid out for two loops. The
-    /// document takes the motion's length, saving keeps the header unless the length changes (then
-    /// it scales with the motion), and a length change retimes the real motion.
+    /// document takes the motion's length, saving writes the timeline's length into the header, and
+    /// a length change retimes the real motion.
     /// </summary>
     private static void HeaderLength(Action<bool, string> check, Action<Action, string> reject)
     {
@@ -914,13 +914,15 @@ internal static partial class TmbFileFixture
         check(TimelineEdits.PastEnd(doc).Select(e => e.Key).SequenceEqual(["t11", "t12"]) && TimelineEdits.PastEnd(header).Length == 3,
             "only events past the motion's end count as past the end");
 
-        check(ReferenceEquals(TimelineConvert.Apply(dance, doc), dance), "an unchanged document gives back the original bytes");
+        check(TmbFile.Parse(TimelineConvert.Apply(dance, doc)) is { Length: 455 } fixedHeader && fixedHeader.Find(7)!.Int32(12) == 455,
+            "saving fixes a header the motion disagrees with, even with nothing else changed");
+        check(ReferenceEquals(TimelineConvert.Apply(dance, header), dance), "an unchanged document whose header agrees gives back the original bytes");
         var moved = TmbFile.Parse(TimelineConvert.Apply(dance, doc with
         {
             Events = [.. doc.Events.Select(e => e.Key == "t9" ? e with { Start = 210 } : e)],
         }));
-        check(moved.Length == 30 && moved.Find(7)!.Int32(12) == 455 && moved.Find(9)!.Time == 210,
-            "an edit that keeps the length keeps the mod's header length");
+        check(moved.Length == 455 && moved.Find(7)!.Int32(12) == 455 && moved.Find(9)!.Time == 210,
+            "an edit that keeps the length writes the motion's length into the header");
 
         var doubled = TimelineEdits.SetLength(doc, 910, false, doc);
         var saved = TmbFile.Parse(TimelineConvert.Apply(dance, doubled));
@@ -928,17 +930,17 @@ internal static partial class TmbFileFixture
               AnimationEditService.RetimeSeconds(doubled) is { } seconds && Math.Abs(seconds - 910 / 30f) < 1e-4 &&
               AnimationEditService.RetimeSeconds(doc) == null,
             "doubling the length makes the 15 s motion 30 s, not 2 s from the header's 1 s");
-        check(saved.Length == 60 && doubled.SavedHeaderLength == 60,
-            "a mod's own header length scales with the motion");
-        check(TmbFile.Parse(TimelineConvert.Apply(dance, doc with { Length = 600 })) is { Length: 40 } longer && longer.Find(7)!.Int32(12) == 600,
+        check(saved.Length == 910 && doubled.SavedHeaderLength == 910,
+            "a mod's own header length becomes the new length");
+        check(TmbFile.Parse(TimelineConvert.Apply(dance, doc with { Length = 600 })) is { Length: 600 } longer && longer.Find(7)!.Int32(12) == 600,
             "the clip's motion entry follows a length change on its own");
         // A 2 s pose loop whose header and events run past the motion, as some mods lay them out.
         var pose = new Tmb().Head(369, null, 2).Actor(2, 3, 4).Track(3, 5).Track(4, 6).Motion(5, 60).Sound(6, 351).Build();
         var poseDoc = TimelineConvert.Read(TmbFile.Parse(pose), 60);
         check(poseDoc is { Length: 60, HeaderLength: 369 } &&
-              TmbFile.Parse(TimelineConvert.Apply(pose, TimelineEdits.SetLength(poseDoc, 120, true, poseDoc))) is { Length: 738 } posed &&
+              TmbFile.Parse(TimelineConvert.Apply(pose, TimelineEdits.SetLength(poseDoc, 120, true, poseDoc))) is { Length: 120 } posed &&
               posed.Find(6)!.Time == 702 && posed.Find(5)!.Int32(12) == 120,
-            "a header longer than its motion stays as much longer, so the events laid out up to it still fit");
+            "a header longer than its motion becomes the motion's new length; the events laid out past it scale with it");
         var empty = new Tmb().Head(0, null, 2).Actor(2, 3).Track(3, 4).Motion(4, 60).Build();
         check(TimelineEdits.SetLength(TimelineConvert.Read(TmbFile.Parse(dance), 31), 50, false).SavedHeaderLength == 50 &&
               TimelineEdits.SetLength(TimelineConvert.Read(TmbFile.Parse(pose)), 400, false).SavedHeaderLength == 400 &&
@@ -946,13 +948,13 @@ internal static partial class TmbFileFixture
               TmbFile.Parse(TimelineConvert.Apply(empty, emptyDoc with { Length = 90 })).Length == 90,
             "a header that matched the motion, said 0 or is the only length known becomes the new length");
         var back = TimelineEdits.SetLength(doubled, 455, false, doc);
-        check(!back.LengthChanged && ReferenceEquals(TimelineConvert.Apply(dance, back), dance),
-            "going back to the motion's length leaves the file as it was, header included");
+        check(!back.LengthChanged && TmbFile.Parse(TimelineConvert.Apply(dance, back)) is { Length: 455 } backed && backed.Find(7)!.Int32(12) == 455,
+            "going back to the motion's length leaves the motion as it was and fixes the header");
 
         var counted = new Tmb().Head(30, null, 2).Actor(2, 3).Track(3, 4).Motion(4, 456).Build();
         var countedDoc = TimelineConvert.Read(TmbFile.Parse(counted), 455);
         check(countedDoc.Length == 455 && TimelineEdits.SetLength(countedDoc, 910, false, countedDoc).Events[0].Duration == 910 &&
-              TmbFile.Parse(TimelineConvert.Apply(counted, countedDoc with { Length = 910 })) is { Length: 60 } stretched &&
+              TmbFile.Parse(TimelineConvert.Apply(counted, countedDoc with { Length = 910 })) is { Length: 910 } stretched &&
               stretched.Find(4)!.Int32(12) == 910,
             "a motion entry one frame longer than its motion still lasts the whole clip");
         reject(() => TimelineConvert.Apply(dance, doc with { HeaderLength = 455 }), "a document whose header length isn't the file's is refused");

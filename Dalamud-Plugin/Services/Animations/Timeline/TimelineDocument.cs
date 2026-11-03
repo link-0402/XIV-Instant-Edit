@@ -184,20 +184,17 @@ internal sealed record TimelineDocument(
     /// <summary>
     /// The length the file's header (TMB TMDH) gave when loaded. Vanilla's matches the motion's, but
     /// mods often keep one copied from another timeline: a 15 s dance whose header says 30 frames
-    /// plays fine in game. See <see cref="SavedHeaderLength"/>.
+    /// plays fine in game. A save fixes it (see <see cref="SavedHeaderLength"/>).
     /// </summary>
     public int HeaderLength { get; init; } = SourceLength;
 
     /// <summary>
-    /// The header length a save writes. It stays as loaded unless the length changes. Then a header
-    /// that matched the motion (every vanilla one), or said nothing (0), becomes the new length, and
-    /// a mod's own scales with the motion: one laid out longer than its motion, with events up to
-    /// its end, stays that much longer, in case the game times the events by it.
+    /// The header length a save writes: the timeline's length, so a mod's header that disagrees with its motion (or
+    /// said nothing, 0) is fixed by any save. An endless header (-1) stays endless, and one a frame off the length
+    /// it was loaded at stays as it was: the same length counted differently, as in a few vanilla timelines.
     /// </summary>
     public int SavedHeaderLength =>
-        !LengthChanged ? HeaderLength
-        : HeaderLength == SourceLength || HeaderLength <= 0 || SourceLength <= 0 ? Length
-        : (int)Math.Clamp(Math.Round(HeaderLength * (double)Length / SourceLength, MidpointRounding.AwayFromZero), 1, MaxFrames);
+        HeaderLength < 0 || !LengthChanged && SameLength(HeaderLength, Length) ? HeaderLength : Length;
 
     /// <summary>
     /// Whether a motion entry lasting <paramref name="frames"/> lasts the whole clip. Files often count
