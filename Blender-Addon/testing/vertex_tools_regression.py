@@ -624,6 +624,13 @@ def check_export_requirements() -> None:
         require(export_module.check_weights([unweighted, partial, stray, mixed, follower])
                 == ["0.0 No Weights", "0.2 Stray Group"],
                 "the quick weight check names meshes without any bone group")
+        loose = part("1.0 No Armature", None, groups={"j_kosi": ((0, 1, 2), 1.0)})
+        loose_partial = part("1.1 No Armature Partial", None, groups={"j_kosi": ((0, 1), 1.0)})
+        require(export_module.check_armatures([loose, loose_partial, mixed]) == ["1.0 No Armature"]
+                and export_module.check_weights([loose, loose_partial]) == ["1.1 No Armature Partial"],
+                "a fully weighted mesh without an armature is named for the armature, not its weights")
+        for obj in (loose, loose_partial):
+            bpy.data.objects.remove(obj)
         for obj, expected in ((unweighted, "0.0 No Weights (all)"), (partial, "0.1 Partial (1 of 3)"),
                               (stray, "0.2 Stray Group (all)")):
             try:

@@ -32,7 +32,7 @@ from .materials import (
 )
 from .mesh_list import (DragSession, ListMetrics, list_parts, moved_part, placement_plan, scene_parts,
                         untangled_placement)
-from .mesh.export import (auto_triangulate, check_triangulation,check_uv_layers, check_weights, dropped_shape_keys_warning, export_result,
+from .mesh.export import (auto_triangulate, check_triangulation,check_uv_layers, check_weights, check_armatures, dropped_shape_keys_warning, export_result,
                           get_export_stats, ShapeExports)
 from .mesh.hidden import hidden_vertices, remove_vertices
 from .mesh.racial_scaling import apply_deformer
@@ -363,7 +363,11 @@ class XIVIE_OT_simple_export(Operator):
         if not_triangulated:
             self.report({"ERROR"}, "Not Triangulated: " + ", ".join(not_triangulated))
             return {"CANCELLED"}
-        unweighted = check_weights(objects)
+        no_armature = check_armatures(objects)
+        if no_armature:
+            self.report({"ERROR"}, "No armature: " + ", ".join(no_armature))
+            return {"CANCELLED"}
+        unweighted = check_weights(objects, no_armature)
         if unweighted:
             self.report({"ERROR"}, "No bone weights: " + ", ".join(unweighted))
             return {"CANCELLED"}

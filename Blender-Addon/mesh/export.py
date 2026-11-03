@@ -11,6 +11,7 @@ from .heels          import apply_calculated_heels_offset, is_heels_offset_attri
 from .objects        import visible_meshobj, armature_for_object
 from .shapes         import get_shape_mix
 from ..io.model      import ModelExport, SceneHandler, exportable_shape_keys
+from ..io.model.handler import unweighted_vertices
 from ..properties    import get_settings
 from ..backups       import create_backup
 from ..instant_edit.character import is_hung_weapon
@@ -174,18 +175,35 @@ def check_uv_layers(objects=None) -> list[str]:
             problems.append(str(error))
     return problems
 
-def check_weights(objects=None) -> list[str]:
+def _weighted_without_armature(obj) -> bool:
+    """A mesh with a weight on every vertex its faces use but no armature to drive it."""
+    if armature_for_object(obj) is not None or not obj.vertex_groups:
+        return False
+    return unweighted_vertices(obj)[1] == 0
+
+def check_armatures(objects=None) -> list[str]:
+    """Names of fully weighted meshes without an armature: the armature is what they miss."""
+    visible = list(objects) if objects is not None else visible_meshobj()
+    return [obj.name for obj in visible if _weighted_without_armature(obj)]
+
+def check_weights(objects=None, no_armature=None) -> list[str]:
     """Names of meshes without a vertex group for any bone of their armature.
 
     A quick check for the sidebar and before an export starts; the export itself
     then refuses every vertex without a bone weight (SceneHandler.check_weights).
+    Fully weighted meshes without an armature are left to check_armatures; pass its
+    result as ``no_armature`` to skip scanning their vertices again.
     """
     visible = list(objects) if objects is not None else visible_meshobj()
+    if no_armature is None:
+        no_armature = check_armatures(visible)
     unweighted = []
 
     for obj in visible:
         # A bone-parented mesh without groups follows its bone; the MDL writer weights it fully.
         if not obj.vertex_groups and obj.parent_type == "BONE" and obj.parent_bone:
+            continue
+        if obj.name in no_armature:
             continue
         armature = armature_for_object(obj)
         bones    = armature.data.bones if armature is not None else ()

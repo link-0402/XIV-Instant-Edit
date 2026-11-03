@@ -22,7 +22,7 @@ from ..materials     import (
     imported_material_path, is_body_material,
 )
 from ..mesh.export   import (export_result, get_export_stats, check_triangulation, check_weights,
-                             check_uv_layers, check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode,
+                             check_armatures, check_uv_layers, check_dropped_shape_keys, draw_dropped_shape_keys, flush_edit_mode,
                              ShapeExports, auto_triangulate, triangulation_refusals)
 from ..mesh.objects  import visible_meshobj
 from ..properties    import get_settings
@@ -839,7 +839,8 @@ def export_target_issues(
             for name in names
         ]
         not_triangulated = triangulation_refusals(export_objects)
-        unweighted = check_weights(export_objects)
+        no_armature = check_armatures(export_objects)
+        unweighted = check_weights(export_objects, no_armature)
 
         if invalid_names:
             issues.append((
@@ -865,6 +866,11 @@ def export_target_issues(
             issues.append((
                 "ERROR",
                 _named_readiness_issue("Not triangulated", not_triangulated),
+            ))
+        if no_armature:
+            issues.append((
+                "ERROR",
+                _named_readiness_issue("No armature", no_armature),
             ))
         if unweighted:
             issues.append((
@@ -2811,7 +2817,12 @@ def raise_unless_exportable(export_objects, game_path: str, *, race_model: bool 
     not_triangulated = check_triangulation(export_objects)
     if not_triangulated:
         raise ValueError("Not Triangulated: " + ", ".join(not_triangulated) + ".")
-    unweighted = check_weights(export_objects)
+    no_armature = check_armatures(export_objects)
+    if no_armature:
+        raise ValueError(
+            "No armature: " + ", ".join(no_armature)
+            + ". Add an Armature modifier or parent them to the armature before exporting.")
+    unweighted = check_weights(export_objects, no_armature)
     if unweighted:
         raise ValueError(
             "No bone weights: " + ", ".join(unweighted)
