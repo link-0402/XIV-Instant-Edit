@@ -11,10 +11,11 @@ namespace InstantEdit.Ui.Timeline;
 /// <summary>
 /// The loader: any emote, idle, sitting or lying pose, movement track, expression or other timeline,
 /// played on the GPose actor. Once the listener hears it, its timeline opens (<paramref name="open"/>).
-/// Only GPose actors are touched, and Stop or leaving GPose puts them back as the preview does.
+/// Only GPose actors are touched, and Stop or leaving GPose puts them back as the preview does. Its search and group are the
+/// window's (<see cref="WindowLayout"/>), the same for every actor.
 /// </summary>
 /// <param name="open">Opens the timeline of a capture's clip, or of its startup.</param>
-internal sealed class TimelineLoader(TimelineSession session, TimelinePreview timelinePreview, Action<AnimationCapture, bool> open)
+internal sealed class TimelineLoader(TimelineSession session, TimelinePreview timelinePreview, WindowLayout layout, Action<AnimationCapture, bool> open)
 {
     // How long the loader waits before it says the listener hasn't heard the animation.
     private static readonly TimeSpan LoaderPatience = TimeSpan.FromSeconds(6);
@@ -22,8 +23,6 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     private Task<ImmutableArray<AnimationLibraryItem>>? libraryTask;
     private ImmutableArray<AnimationLibraryItem> library = [];
     private string? libraryError;
-    private AnimationLibraryGroup loaderGroup = AnimationLibraryGroup.Emotes;
-    private string loaderSearch = string.Empty;
     // The list shown for one library, group and search.
     private (ImmutableArray<AnimationLibraryItem> Library, AnimationLibraryGroup Group, string Search, AnimationLibraryItem[] Rows)? loaderRows;
     // What the loader played and waits for the listener to hear, on which actor and since when.
@@ -63,7 +62,7 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
         }
     }
 
-    /// <summary> The loader's search, group tabs and list, <paramref name="height"/> tall. </summary>
+    /// <summary> The loader's search, group and list, <paramref name="height"/> tall, then why nothing can play when it can't. </summary>
     public void Draw(float height)
     {
         EnsureLibrary();
@@ -71,25 +70,29 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
         var start = ImGui.GetCursorPosY();
         var available = timelinePreview.PlaybackAvailable(out var reason);
         ImGui.SetNextItemWidth(-1);
-        ImGui.InputTextWithHint("##loader-search", "Search every animation", ref loaderSearch, 128);
-        var searching = loaderSearch.Trim().Length > 0;
+        ImGui.InputTextWithHint("##loader-search", "Search every animation", ref layout.LoaderSearch, 128);
+        var searching = layout.LoaderSearch.Trim().Length > 0;
+        ImGui.SetNextItemWidth(-1);
         using (ImRaii.Disabled(searching))
-        using (var tabs = ImRaii.TabBar("##loader-groups", ImGuiTabBarFlags.FittingPolicyScroll))
         {
-            if (tabs.Success)
-                foreach (var group in Enum.GetValues<AnimationLibraryGroup>())
-                {
-                    if (ImGui.BeginTabItem(AnimationLibrary.GroupName(group)))
+            using (var combo = ImRaii.Combo("##loader-group", AnimationLibrary.GroupName(layout.LoaderGroup), ImGuiComboFlags.HeightLarge))
+            {
+                if (combo.Success)
+                    foreach (var group in Groups)
                     {
-                        loaderGroup = group;
-                        ImGui.EndTabItem();
+                        if (ImGui.Selectable(AnimationLibrary.GroupName(group), group == layout.LoaderGroup))
+                            layout.LoaderGroup = group;
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip(GroupTip(group));
                     }
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(GroupTip(group));
-                }
+                else if (ComboWheel.Scroll(Groups, layout.LoaderGroup, out var picked))
+                    layout.LoaderGroup = picked;
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(searching ? "The search looks through every group." : GroupTip(layout.LoaderGroup));
         }
 
-        var footer = ImGui.GetFrameHeightWithSpacing() * 2;
+        var footer = available ? 0 : ImGui.GetFrameHeightWithSpacing() * 2;
         var listHeight = Math.Max(ImGui.GetFrameHeight() * 3, height - (ImGui.GetCursorPosY() - start) - footer);
         using (var list = ImRaii.Child("##loader-list", new Vector2(0, listHeight), true))
         {
@@ -97,10 +100,14 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
                 DrawLoaderList(available);
         }
         if (!available)
+        {
+            using var wrap = ImRaii.TextWrapPos(0f);
             ImGui.TextColored(Theme.Warning, reason);
-        else
-            ImGui.TextColored(Theme.Hint, "Plays on your GPose character, then opens here.");
+        }
     }
+
+    /// <summary> The groups in the dropdown's order. </summary>
+    private static readonly AnimationLibraryGroup[] Groups = Enum.GetValues<AnimationLibraryGroup>();
 
     private static string GroupTip(AnimationLibraryGroup group) => group switch
     {
@@ -130,7 +137,7 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
             Widgets.HintWrapped("The animation list could not be read: " + libraryError);
             return;
         }
-        var search = loaderSearch.Trim();
+        var search = layout.LoaderSearch.Trim();
         var rows = LoaderRows(search);
         if (rows.Length == 0)
         {
@@ -152,14 +159,19 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
                     ImGui.SameLine(0, Theme.Gap);
                     var detail = search.Length > 0 ? $"{AnimationLibrary.GroupName(item.Group)} · {item.Detail}" : item.Detail;
                     var detailWidth = ImGui.CalcTextSize(detail).X;
+                    // In a narrow dock the detail goes to the tooltip rather than cut into the name.
+                    var room = ImGui.GetContentRegionAvail().X;
+                    var both = ImGui.CalcTextSize(item.Name).X + Theme.Gap + detailWidth <= room;
                     using (ImRaii.Disabled(!available))
                     {
                         if (ImGui.Selectable(item.Name, waiting, ImGuiSelectableFlags.None,
-                                new Vector2(Math.Max(1, ImGui.GetContentRegionAvail().X - detailWidth - Theme.Gap), 0)))
+                                new Vector2(Math.Max(1, both ? room - detailWidth - Theme.Gap : room), 0)))
                             PlayFromLoader(item);
                     }
                     if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                        ImGui.SetTooltip($"{item.Key} · timeline {item.Timeline}");
+                        ImGui.SetTooltip(both ? $"{item.Key} · timeline {item.Timeline}" : $"{item.Name}\n{detail}\n{item.Key} · timeline {item.Timeline}");
+                    if (!both)
+                        continue;
                     ImGui.SameLine(0, Theme.Gap);
                     ImGui.TextColored(Theme.Muted, detail);
                 }
@@ -173,12 +185,12 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
 
     private AnimationLibraryItem[] LoaderRows(string search)
     {
-        if (loaderRows is { } cached && cached.Library == library && cached.Group == loaderGroup && cached.Search == search)
+        if (loaderRows is { } cached && cached.Library == library && cached.Group == layout.LoaderGroup && cached.Search == search)
             return cached.Rows;
         AnimationLibraryItem[] rows = search.Length > 0
             ? [.. library.Where(item => AnimationLibrary.Matches(item, search))]
-            : [.. library.Where(item => item.Group == loaderGroup)];
-        loaderRows = (library, loaderGroup, search, rows);
+            : [.. library.Where(item => item.Group == layout.LoaderGroup)];
+        loaderRows = (library, layout.LoaderGroup, search, rows);
         return rows;
     }
 
@@ -269,7 +281,7 @@ internal sealed class TimelineLoader(TimelineSession session, TimelinePreview ti
     }
 
     /// <summary>
-    /// The loader's own line, for the start page and a timeline that can't be edited, with <paramref name="more"/> notes
+    /// The loader's own line, for the main area while no clip is open and a timeline that can't be edited, with <paramref name="more"/> notes
     /// after the loader's; an open clip shows <see cref="Notes"/> in the window's status line instead.
     /// </summary>
     public void DrawStatus(IEnumerable<StatusNote>? more = null) => statusLine.Draw("##loader", more == null ? Notes() : Notes().Concat(more));

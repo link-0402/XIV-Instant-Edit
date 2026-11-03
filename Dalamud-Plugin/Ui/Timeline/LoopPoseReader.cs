@@ -103,11 +103,11 @@ internal sealed class LoopPoseReader(TimelineSession session)
     }
 
     /// <summary>
-    /// The Add menus' fix items after Pin feet, drawn by <paramref name="item"/> (a menu item or a button, given its label and
-    /// whether it is enabled): Match startup to loop, offered on a startup with a loop, Close loop, offered on a clip the game
-    /// loops, Smooth jitter, Hand shape and Reset root turn. A face takes only Smooth jitter.
+    /// The layer menu's Fix layer items, drawn by <paramref name="item"/> (a menu item, given its label and whether it is
+    /// enabled): Match startup to loop, offered on a startup with a loop, Close loop, offered on a clip the game loops, Smooth
+    /// jitter and Reset root turn. A face takes only Smooth jitter. Hand shape, a fix too, has an item of its own.
     /// </summary>
-    public void DrawAddItems(TimelineEditor current, bool readOnly, Func<string, bool, bool> item)
+    public void DrawFixItems(TimelineEditor current, bool readOnly, Func<string, bool, bool> item)
     {
         if (current.Document.Face != null)
         {
@@ -131,10 +131,6 @@ internal sealed class LoopPoseReader(TimelineSession session)
             current.AddFix(new MotionFix(MotionFixKind.SmoothJitter));
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(TimelineWindowViews.SmoothJitterHint);
-        if (item(TimelineWindowViews.HandShapeName + "###fix-hand", !readOnly))
-            current.AddFix(new MotionFix(MotionFixKind.HandShape, Hand: new MotionHand(MotionHandSide.Right, "relaxed")));
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(TimelineWindowViews.HandShapeHint);
         if (item(TimelineWindowViews.ResetRootName + "###fix-reset-root", !readOnly))
             current.AddFix(new MotionFix(MotionFixKind.ResetRoot, Axes: MotionAxes.All));
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))

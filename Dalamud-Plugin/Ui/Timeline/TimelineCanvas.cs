@@ -19,10 +19,12 @@ internal enum SelectionMenu : byte { None, Events, Layer, Cut }
 /// view. Labels, prop groups and tick texts are cached per document.
 /// </summary>
 internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing, TimelineClipBand clipBand, TimelinePickers pickers,
-    SoundFiles soundFiles, TimelineTexts texts, ShortcutKeys keys)
+    SoundFiles soundFiles, TimelineTexts texts, ShortcutKeys keys, LayerMenu layerMenu)
 {
     private const string CanvasMenu = "##timeline-canvas-menu";
     private const string MatchMenu = "##timeline-match-menu";
+    private const string AddLayerMenu = "##timeline-add-layer";
+    private static readonly string AddGlyph = FontAwesomeIcon.Plus.ToIconString();
 
     private static readonly string[] LaneGlyphs = [.. TimelineUi.LaneIcons.Select(icon => icon.ToIconString())];
     // One per layer kind, as TimelineUi.LayerIcons.
@@ -104,6 +106,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         DrawTooltip(current, hit, hovered && !active, readOnly);
         DrawCanvasMenu(current, readOnly);
         DrawMatchMenu(current, readOnly);
+        using var addLayer = ImRaii.Popup(AddLayerMenu);
+        if (addLayer.Success)
+            layerMenu.Draw(current);
     }
 
     private void ClampScroll(TimelineEditor current, float row, float ruler, float height) =>
@@ -240,6 +245,13 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
                 current.EditMotionKeys(pose.Frame);
             return;
         }
+        // "+ Add layer", the name of the row under the layers, opens the layer menu.
+        if (IsAddLayer(current, hit))
+        {
+            if (!readOnly)
+                ImGui.OpenPopup(AddLayerMenu);
+            return;
+        }
         if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !readOnly &&
             hit.Part is TimelinePart.Lane or TimelinePart.Legend && hit.Lane is { } lane && TimelineWindowViews.AddKind(lane) is { } kind)
         {
@@ -298,6 +310,10 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     /// </summary>
     private static void AddLayer(TimelineEditor current, MotionLayerKind kind) =>
         current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
+
+    /// <summary>Whether <paramref name="hit"/> is the name of the row under the layers, "+ Add layer".</summary>
+    private static bool IsAddLayer(TimelineEditor current, TimelineHit hit) =>
+        hit is { Part: TimelinePart.Legend, Lane: null, Layer: null, Bone: null } && current.Layout.MotionRowAt(hit.Row) is { Layer: < 0 };
 
     private void RefreshGroups(TimelineDocument doc, TimelineLayout layout)
     {
@@ -406,7 +422,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             drawList.AddLine(new Vector2(x, min.Y), new Vector2(x, max.Y), TimelineUi.U32(Theme.SnapGuide), line);
         }
         // Past this clip's end the shared frame's playhead runs on, faded, while this clip stands on its last frame.
-        var playheadX = TimelineUi.Crisp(trackLeft + view.X(current.GroupFrame ?? current.Playhead));
+        var playheadX = TimelineUi.Crisp(trackLeft + view.X(current.ShownPlayhead));
         if (playheadX >= trackLeft - 1 && playheadX <= max.X + 1)
         {
             var playhead = TimelineUi.U32(current.PastEnd ? Theme.WithAlpha(Theme.Playhead, .5f) : Theme.Playhead);
@@ -531,7 +547,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     /// <summary>
     /// The bone layer rows below the event lanes: each layer's kind and name over a band in its colour,
     /// with an arrow at the right that unfolds a row per bone; each bone row its bone's name, indented;
-    /// or "Bones" over the empty row a first layer goes into. A line sets them apart from the events.
+    /// and "+ Add layer" over the row under them. A line sets them apart from the events.
     /// </summary>
     private void DrawLayerLegend(ImDrawListPtr drawList, TimelineEditor current, TimelineDocument doc, TimelineLayout layout,
         TimelineGeometry geometry, Vector2 min, Vector2 max, float trackLeft, float rowsTop, TimelineHit hit)
@@ -570,11 +586,14 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             drawList.AddRectFilled(new Vector2(min.X, top), new Vector2(min.X + Theme.Scaled(3), bottom), TimelineUi.U32(colour));
             var unfolds = layer != null && TimelineLayout.Unfolds(layer);
             var nameRight = trackLeft - Theme.Scaled(3) - (unfolds ? geometry.Unfold : 0);
+            // The row under the layers: "+ Add layer", lit while the pointer is on it.
+            var adding = layer == null && hit.Part == TimelinePart.Legend && hit.Row == row;
             drawList.PushClipRect(new Vector2(min.X, top), new Vector2(nameRight, bottom), true);
-            drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY), TimelineUi.U32(Theme.WithAlpha(colour, layer?.Enabled == false ? .5f : 1)),
-                LayerGlyph(layer?.Kind ?? MotionLayerKind.Offset));
-            var name = layer == null ? Theme.Hint : !layer.Enabled ? Theme.Muted : current.SelectedLayer == layer.Key ? Theme.Accent : Theme.Label;
-            drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), TimelineUi.U32(name), layer?.Name ?? TimelineWindowViews.BonesLaneName);
+            drawList.AddText(UiBuilder.IconFont, fontSize, new Vector2(min.X + Theme.Scaled(9), textY),
+                TimelineUi.U32(layer == null ? adding ? Theme.Text : Theme.Hint : Theme.WithAlpha(colour, !layer.Enabled ? .5f : 1)),
+                layer == null ? AddGlyph : LayerGlyph(layer.Kind));
+            var name = layer == null ? adding ? Theme.Text : Theme.Hint : !layer.Enabled ? Theme.Muted : current.SelectedLayer == layer.Key ? Theme.Accent : Theme.Label;
+            drawList.AddText(new Vector2(min.X + Theme.Scaled(30), textY), TimelineUi.U32(name), layer?.Name ?? TimelineWindowViews.AddLayerName);
             drawList.PopClipRect();
             if (unfolds)
             {
@@ -663,7 +682,12 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             return;
         if (hit.Part == TimelinePart.MotionLane && hit.Layer == null && !readOnly && Widgets.HoverDelay("timeline-bones-lane"))
         {
-            ImGui.SetTooltip("Double-click to add a bone layer here.");
+            ImGui.SetTooltip("Right-click to add a layer. Double-click adds an offset layer.");
+            return;
+        }
+        if (IsAddLayer(current, hit) && !readOnly && Widgets.HoverDelay("timeline-add-layer"))
+        {
+            ImGui.SetTooltip("Add a layer over the whole clip.");
             return;
         }
         if (hit.OnEvent && TimelineEdits.Find(current.Document, hit.Key) is { } ev)
@@ -794,30 +818,7 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         }
         if (menuHit.Part == TimelinePart.MotionLane || menuHit.Part == TimelinePart.Legend && current.Layout.IsMotionRow(menuHit.Row))
         {
-            foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
-            {
-                // A link needs its partner: the item opens the link picker.
-                if (kind == MotionLayerKind.Link)
-                {
-                    session.LinkPicker?.DrawAddItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer", readOnly, TimelineWindowViews.LayerKindHint(kind));
-                    continue;
-                }
-                if (ImGui.MenuItem($"Add {MotionEdits.KindName(kind).ToLowerInvariant()} layer", "", false, !readOnly))
-                    AddLayer(current, kind);
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
-            }
-            // A face has no feet to pin.
-            if (current.Document.Face == null)
-            {
-                var skeleton = session.EditingSkeleton();
-                var feet = TimelineWindowViews.CanPinFeet(skeleton);
-                if (ImGui.MenuItem(TimelineWindowViews.PinFeetName, "", false, !readOnly && feet))
-                    current.AddPinFeet(skeleton);
-                if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                    ImGui.SetTooltip(TimelineWindowViews.PinFeetTip(skeleton));
-            }
-            session.LoopPose.DrawAddItems(current, readOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
+            layerMenu.Draw(current);
             ImGui.Separator();
             if (ImGui.MenuItem("Copy all layers", "", false, !current.Document.Motion.IsEmpty))
                 current.CopyLayers();

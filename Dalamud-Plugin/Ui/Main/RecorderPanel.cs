@@ -8,8 +8,8 @@ namespace InstantEdit.Ui.Main;
 
 /// <summary>
 /// Record live pose: records a character's live skeleton and sends it to Blender, with its last result under
-/// its controls. Drawn on the Timeline start page's Record entry, and in the Timeline window while the
-/// animation services are missing.
+/// its controls. Drawn in the Timeline dock's Blender tab, and in the Timeline window while the animation
+/// services are missing.
 /// </summary>
 internal sealed class RecorderPanel
 {

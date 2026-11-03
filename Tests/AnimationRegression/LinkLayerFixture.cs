@@ -111,8 +111,8 @@ internal static class LinkLayerFixture
               Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.Link).All(kind =>
                   TimelineWindowViews.LayerColour(kind) != Theme.OtherTexture && TimelineUi.LayerIcon(kind) != TimelineUi.LayerIcon(MotionLayerKind.Link)),
             "views: a link layer has the handshake icon and a colour no other kind uses");
-        check(TimelineWindowViews.LayerKinds[^3] == MotionLayerKind.Link && TimelineWindowViews.LayerKinds[^1] == MotionLayerKind.Pin &&
-              !TimelineWindowViews.FaceLayerKinds.Contains(MotionLayerKind.Link), "views: the Add menu offers Link just before Balance and Pin, and a face's none");
+        check(TimelineWindowViews.LayerKinds[^1] == MotionLayerKind.Link && !TimelineWindowViews.FaceLayerKinds.Contains(MotionLayerKind.Link),
+            "views: the layer menu offers Link after the other kinds, and a face's none");
 
         // The texts, for a partner and for You.
         check(TimelineWindowViews.LinkName("Aria Rose") == "Link: Aria Rose" && TimelineWindowViews.LinkName("You") == "Link: You",

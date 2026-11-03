@@ -433,7 +433,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private sealed record SaveStart(Guid? Id, string? Error);
 
     /// <summary>
-    /// Every frame, also while the start page shows: the mod's check of a save's sounds, the save's start and its result,
+    /// Every frame, also while another workspace shows: the mod's check of a save's sounds, the save's start and its result,
     /// an undo's result and the rebuild picked for you.
     /// </summary>
     public void Poll()
@@ -474,7 +474,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (pendingSaveId is { } stale && !service.Busy && service.LastResult?.Id != stale)
         {
             pendingSaveId = null;
-            saveError = "The save's result is unknown. Check Saved edits on the start page.";
+            saveError = "The save's result is unknown. Check Saved edits in the dock.";
             motionCarry = null;
         }
         var sameClip = session.Source != null && TimelineSession.ClipKey(session.Source) == jobClip;
@@ -718,7 +718,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     {
         var clip = session.Fresh(loaded).Clip;
         var race = AnimationBones.RebuildRace(clip, loaded.FileModel, loaded.HoldsOthers);
-        // The match can change under the choice: a skeleton chosen under Source, another character.
+        // The match can change under the choice: a skeleton chosen in the Bones window, another character.
         if (session.Rebuild is { } rebuild)
             session.Rebuild = AnimationBones.CurrentRebuild(clip, loaded.FileModel, rebuild, loaded.HoldsOthers);
         var excluded = session.Editor?.Document.ExcludedBones ?? [];

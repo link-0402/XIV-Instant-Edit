@@ -22,11 +22,11 @@ internal sealed class LivePosePanel(TimelineSession session)
     /// <summary> Drops the last layer's note, which belongs to the clip it was added to. </summary>
     public void ForgetNote() => livePoseNote = null;
 
-    /// <summary>The Add menu's LivePose item: a layer from a .livepose file.</summary>
+    /// <summary>The layer menu's Offset layer pop-out's LivePose item: a layer from a .livepose file.</summary>
     public void DrawItems()
     {
         var busy = session.Animations is not { Busy: false } || livePoseFile != null;
-        if (ImGui.MenuItem("Offset layer from a .livepose file", "", false, !busy))
+        if (ImGui.MenuItem("From a .livepose file", "", false, !busy))
             PickLivePoseFile();
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("A saved LivePose pose becomes a layer over the whole clip.");
@@ -69,7 +69,7 @@ internal sealed class LivePosePanel(TimelineSession session)
         }
         if (session.EditingSkeleton(loaded) is not { } skeleton)
         {
-            LivePoseMessage("Choose the skeleton this animation was made for under Source first.", true);
+            LivePoseMessage(TimelineWindowViews.SkeletonUnknown, true);
             return;
         }
         var offsets = LivePoseLayer.Offsets(bones, skeleton);

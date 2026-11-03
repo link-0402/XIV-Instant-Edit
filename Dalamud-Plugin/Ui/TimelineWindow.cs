@@ -22,7 +22,7 @@ namespace InstantEdit.Ui;
 /// pose browser, the shortcut keys and the pose thumbnails. Every workspace is ticked on the framework update while the
 /// window is open, so a hidden or collapsed one keeps running.
 /// </summary>
-public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
+public sealed class TimelineWindow : Window, IDisposable, ITimelineHost, ITimelineTransport
 {
     private readonly WorkspaceServiceFactory services;
     private readonly WorkspaceServices selfServices;
@@ -35,14 +35,17 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     private readonly ShortcutKeys keys;
     private readonly FreeCamera freeCamera;
     private readonly string? animationError;
+    // The layout every workspace shares, so switching actors keeps it.
+    private readonly WindowLayout layout = new();
     private Func<bool>? mainListens;
-    // The dialogs the start page's rows open, such as Send animation to Blender; drawn every frame.
+    // The dialogs Now playing's rows open, such as Send animation to Blender; drawn every frame.
     private Action? drawDialogs;
     // What the plugin attached, replayed into every workspace this window makes.
-    private (Action? Settings, Action? Recorder)? tools;
+    private Action? recorder;
     private Main.AnimationDelivery? blender;
     private (Action Draw, Func<int> Playing)? playingNow;
-    private Action? partnersPage;
+    // The dock's actors; null until the partner spawner is attached.
+    private ActorList? actors;
     private (Configuration Config, Action Save)? poseFolders;
     private Func<ushort?, CancellationToken, Task<HandTipFacts>>? handTips;
     private Func<ushort?, CancellationToken, Task<System.Collections.Immutable.ImmutableHashSet<string>?>>? physicsBones;
@@ -87,11 +90,11 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         freeCamera = new FreeCamera(interop, framework, clientState, keyState, selfServices.Log);
         Shown = Workspace(WorkspaceKey.Self);
 
-        Size = new Vector2(1000, 560);
+        Size = new Vector2(1240, 620);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(760, 420),
+            MinimumSize = new Vector2(900, 420),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
         // The canvas reads the wheel itself; the window around it must not scroll.
@@ -106,6 +109,8 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
 
     private AnimationEditService? Animations => selfServices.Animations;
 
+    WindowLayout ITimelineHost.Layout => layout;
+    ITimelineTransport ITimelineHost.Transport => this;
     BonesWindow ITimelineHost.Bones => bonesWindow;
     PoseBrowserWindow ITimelineHost.Poses => poseBrowserWindow;
     ShortcutKeys ITimelineHost.Keys => keys;
@@ -153,39 +158,92 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         }
     }
 
-    bool ITimelineHost.DrawActorSwitch()
+    void ITimelineHost.DrawActors(bool folded)
     {
-        if (partners == null || !clientState.IsGPosing)
-            return false;
-        var tracked = partners.Store.Presets.Select(preset => partners.Find(preset.Id)).OfType<PartnerView>().ToArray();
-        if (tracked.Length == 0 && Shown.Key.IsSelf)
-            return false;
-        var name = NameOf(Shown.Key);
-        ImGui.AlignTextToFramePadding();
-        bool open;
-        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Label))
-            open = ImGui.Selectable(name + "##timeline-actor", false, ImGuiSelectableFlags.None, new Vector2(ImGui.CalcTextSize(name).X, 0));
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Whose clip this is. Click to edit another actor's; it becomes the GPose target.");
-        if (open)
-            ImGui.OpenPopup("##timeline-actors");
-        using var popup = ImRaii.Popup("##timeline-actors");
-        if (!popup.Success)
-            return true;
-        if (ImGui.Selectable("You##timeline-actor-you", Shown.Key.IsSelf))
-            Target(AnimationPlayback.GPosePlayerIndex);
-        foreach (var view in tracked)
+        if (actors == null)
+            return;
+        if (folded)
+            actors.DrawFolded();
+        else
+            actors.Draw();
+    }
+
+    /// <summary>The workspaces the play bar acts on, the shown one first: each with an editable clip whose actor is there.</summary>
+    private List<TimelineWorkspace> Transported() =>
+        [.. workspaces.Values.Where(workspace => workspace.OnTransport).OrderBy(workspace => ReferenceEquals(workspace, Shown) ? 0 : 1)];
+
+    IReadOnlyList<string> ITimelineTransport.LiveActors => [.. Transported().Where(workspace => workspace.LiveOn).Select(workspace => NameOf(workspace.Key))];
+
+    bool ITimelineTransport.AnyLive => Transported().Any(workspace => workspace.LiveOn);
+
+    string? ITimelineTransport.LiveBlocked =>
+        Transported() is var on && on.Any(workspace => workspace.LiveOn || workspace.LiveBlocked == null) ? null : Shown.LiveBlocked;
+
+    void ITimelineTransport.ToggleLive()
+    {
+        var all = Transported();
+        var on = !all.Any(workspace => workspace.LiveOn);
+        foreach (var workspace in all)
+            workspace.SetLive(on);
+    }
+
+    void ITimelineTransport.Preview()
+    {
+        foreach (var workspace in Transported())
+            workspace.StartPreview();
+    }
+
+    bool ITimelineTransport.Playing => Transported().Any(workspace => workspace.Playing);
+
+    bool ITimelineTransport.AnyShown => Transported().Any(workspace => workspace.PreviewShown);
+
+    bool ITimelineTransport.AnyActive => Transported().Any(workspace => workspace.PlaybackActive);
+
+    bool ITimelineTransport.Building => workspaces.Values.Any(workspace => workspace.PreviewBuilding);
+
+    void ITimelineTransport.PlayPause()
+    {
+        var all = Transported();
+        var play = !all.Any(workspace => workspace.Playing);
+        foreach (var workspace in all)
+            if (!play || workspace.PreviewShown)
+                workspace.SetPlaying(play);
+    }
+
+    void ITimelineTransport.FromStart()
+    {
+        // The play group plays all its clips again at once: one of them asks it.
+        var grouped = false;
+        foreach (var workspace in Transported().Where(workspace => workspace.PreviewShown))
         {
-            var ready = view.Stage == PartnerStage.Ready;
-            using (ImRaii.Disabled(!ready))
+            if (workspace.InGroup)
             {
-                if (ImGui.Selectable($"{view.Name}##timeline-actor-{view.PresetId:N}", Shown.Key.Preset == view.PresetId))
-                    Target(view.ObjectIndex);
+                if (grouped)
+                    continue;
+                grouped = true;
             }
-            if (!ready && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip(TimelineWindowViews.Spawning(view.Name));
+            workspace.Replay();
         }
-        return true;
+    }
+
+    void ITimelineTransport.Stop()
+    {
+        foreach (var workspace in Transported())
+            workspace.StopPlayback();
+    }
+
+    IEnumerable<StatusNote> ITimelineHost.OtherNotes(WorkspaceKey self) =>
+        Transported().Where(workspace => workspace.Key != self).SelectMany(workspace => workspace.PlaybackNotes()
+            .Select(note => note with { Key = workspace.Key.Id + ":" + note.Key, Text = $"{NameOf(workspace.Key)}: {note.Text}" }));
+
+    /// <summary>What <paramref name="key"/>'s workspace does now, for the dock's dot by its actor.</summary>
+    private ActorActivity Activity(WorkspaceKey key)
+    {
+        if (!workspaces.TryGetValue(key, out var workspace))
+            return ActorActivity.Idle;
+        return workspace.Preview.LiveWanted ? ActorActivity.Live
+            : workspace.Session.Playback.Active && !workspace.Session.Playback.Paused ? ActorActivity.Playing
+            : ActorActivity.Idle;
     }
 
     /// <summary>Makes the GPose character at <paramref name="index"/> the GPose target, which shows its workspace.</summary>
@@ -206,6 +264,7 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     {
         partners = service;
         showingPartner = showing;
+        actors = new ActorList(service, () => Shown.Key, Target, Activity, HasUnsaved, PresetDeleted);
     }
 
     /// <summary>Whether the preset's workspace has unsaved edits, for the Partners page's Delete question.</summary>
@@ -223,14 +282,11 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         if (workspaces.TryGetValue(key, out var found))
             return found;
         var made = new TimelineWorkspace(key, services.For(key), this);
-        if (tools is { } attachedTools)
-            made.AttachTools(attachedTools.Settings, attachedTools.Recorder);
+        made.AttachRecorder(recorder);
         if (blender != null)
             made.AttachBlender(blender);
         if (playingNow is { } playing)
             made.AttachPlayingNow(playing.Draw, playing.Playing);
-        if (partnersPage != null)
-            made.AttachPartners(partnersPage);
         if (poseFolders is { } folders)
             made.AttachPoseFolders(folders.Config, folders.Save);
         made.HandTips = handTips;
@@ -367,15 +423,12 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
             workspace.DrawFileDialog();
     }
 
-    /// <summary>
-    /// What the Timeline window borrows from the main window: Settings, where the skeleton library is
-    /// rebuilt, and the live pose recorder, which sends to Blender through it.
-    /// </summary>
-    internal void AttachTools(Action? settings, Action? recorderPanel)
+    /// <summary>The main window's live pose recorder, which sends to Blender through it; the dock's Blender tab shows it.</summary>
+    internal void AttachRecorder(Action? recorderPanel)
     {
-        tools = (settings, recorderPanel);
+        recorder = recorderPanel;
         foreach (var workspace in workspaces.Values)
-            workspace.AttachTools(settings, recorderPanel);
+            workspace.AttachRecorder(recorderPanel);
     }
 
     /// <summary>The main window's connection to Blender, which Send motion to Blender and Motion from Blender go through.</summary>
@@ -387,8 +440,8 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     }
 
     /// <summary>
-    /// The main window's Playing now page for the start page, how many animations play now for its sidebar, and the
-    /// dialogs its rows open, which this window draws every frame.
+    /// The main window's Now playing list for the dock, how many animations play now for its tab, and the dialogs its rows
+    /// open, which this window draws every frame.
     /// </summary>
     internal void AttachPlayingNow(Action draw, Func<int> playing, Action dialogs)
     {
@@ -398,19 +451,10 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
             workspace.AttachPlayingNow(draw, playing);
     }
 
-    /// <summary>The start page's Partners page; its sidebar entry shows once this is attached.</summary>
-    internal void AttachPartners(Action draw)
-    {
-        partnersPage = draw;
-        foreach (var workspace in workspaces.Values)
-            workspace.AttachPartners(draw);
-    }
 
     /// <summary>How many recorded edits did not finish and need an undo; none while an edit is still running.</summary>
     internal static int RecoveryAttention(AnimationEditService service) => RecentEditsPage.RecoveryAttention(service);
 
-    /// <summary>The header's Start button: "Start", or "Start (2)" with 2 <paramref name="unfinished"/> edits.</summary>
-    internal static string StartLabel(int unfinished) => unfinished > 0 ? $"Start ({unfinished})" : "Start";
 
     /// <summary>
     /// Whether Back can run: not while a read runs, nor while the face that is open (<paramref name="open"/>, null when its
@@ -418,8 +462,6 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
     /// </summary>
     internal static bool CanGoBack(AnimationTimelineSource? open, bool dirty, bool busy) => !busy && !(dirty && open?.Document != null);
 
-    /// <summary>Shows the start page of the shown workspace, on <paramref name="entry"/> or on the last entry shown.</summary>
-    internal void ShowStart(StartEntry? entry) => SyncShown().ShowStart(entry);
 
     internal BonesWindow Bones => bonesWindow;
 
@@ -547,13 +589,6 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
         poseThumbnails.Dispose();
     }
 
-    /// <summary> Before the window begins: the shown workspace sets the menu bar. </summary>
-    public override void PreDraw()
-    {
-        var flags = Flags;
-        Shown.PreDraw(ref flags);
-        Flags = flags;
-    }
 
     public override void Draw()
     {
@@ -564,8 +599,8 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost
             drawDialogs?.Invoke();
         if (closeAsked)
             DrawCloseQuestion();
-        using (ImRaii.PushId(Shown.Key.Id))
-            Shown.Draw();
+        // The workspace scopes its timeline's ids to its actor itself; the dock beside it is shared.
+        Shown.Draw();
         // Escape cancels a drag; it must not also close the window.
         RespectCloseHotkey = !Shown.HoldsEscape;
     }

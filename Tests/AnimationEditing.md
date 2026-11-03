@@ -3311,3 +3311,47 @@ save, with a partner workspace open in GPose.
   "A look-at follows a partner clip that isn't open.". Open it again: the head follows again.
 - [ ] 3 Two heads looking at each other (each workspace's Look at on the other's head): both turn, and nothing flickers or drifts.
 - [ ] 4 Edit the partner's arm: the look follows the edited hand, and this clip shows as unsaved until saved again.
+
+## Dock, one transport, smooth playhead (pending)
+
+The Timeline without its start page and menu bar: a dock on the left, Live and the time in the header, one transport for every
+actor, the layer menu on the lanes, a gliding playhead. Plan: the session plan magical-cuddling-backus.md (local only).
+Offline: TimelineChromeFixture (dock tabs and width, the time pair, Live names, the layer menu, Follow), PlayGroupFixture.
+
+- [x] 1 No clip open: the dock shows Animations (Now playing lists only what plays now, a startup under its loop; the loader
+  with its search and group dropdown) and the main area says "Pick an animation on the left". No menu bar, no Start button.
+- [ ] 2 A click on a Now playing or loader row opens it beside the dock, which stays. A Now playing row's "..." and
+  right-click give Send to Blender, the mod actions and Make wind-up; its tooltip names the mod and game path.
+  2026-11-03: rows open their clip beside the dock; the row menu and tooltip not checked yet.
+- [x] 3 The dock's arrow folds it to a strip of actor icons (You, then initials): one click switches actor. Unfolded again it
+  has the same tab and width.
+- [ ] 4 Actor: You and the spawned partners. The + lists the presets: a click spawns one, right-click edits or deletes it,
+  New preset makes one. Right-click a partner: Despawn. Switching keeps the dock, the side panel's width and Curves; each actor
+  keeps its own clip, zoom and playhead.
+  2026-11-03: switching, the + popup's spawn and Despawn pass; New preset, Edit and Delete not run yet.
+- [x] 5 Blender tab: Send motion to Blender and Motion from Blender for the open clip, greyed with the reason with no clip or
+  with a face; Record under them.
+- [x] 6 The header's Live: red "Live off", green "LIVE" naming the actors it is on for. With a partner's clip open too, one
+  click turns both on or both off; Preview builds both, one after the other; Play/Pause, From start and Stop act on both;
+  Space too. There is no Speed field.
+- [ ] 7 Top right: frame / total over time / total. Playing, the seconds have no decimals and the text keeps still; paused,
+  two decimals. A click opens Length with Scale events with length; a face's shows Moves and its seconds; an expression's
+  says it keeps its length. A changed length shows the totals in amber.
+  2026-11-03: the pair, whole seconds while playing, the body and face popups pass; the expression's wording and amber not checked.
+- [ ] 8 "+ Add layer" under the last layer opens the layer menu: Offset layer, Pin layer and Fix layer open their own kinds
+  (From a .livepose file, Pin feet; Match startup to loop, Close loop, Smooth jitter, Reset root turn). A right-click on the
+  empty space below the layers opens it too, with Copy all layers, Paste layers and Fit. A face's menu starts with Neutral face.
+  2026-11-03: the row, Fix's pop-out and the right-click pass; Offset's and Pin's pop-outs and a face's menu not opened yet.
+- [x] 9 Curves on the action bar shows and hides the strip under the lanes, the same for every actor.
+- [x] 10 While playing, the playhead glides with no frame steps, and once it is 40% across the lanes scroll with it until the
+  end shows; a loop starting over brings the view back. From start and a loop's restart don't snap the playhead to the end
+  first. A partner's playhead moves with yours.
+- [ ] 11 Nothing selected: the side panel shows one line. The Bones window's Kept page unticks bones as the clip view did;
+  its Add layer is the same layer menu.
+  2026-11-03: the Kept page passes (one undo step per tick); the side panel's line and the Bones window's Add layer not checked.
+- [x] 12 dalamud.log during 30 s of playback, alone and with a partner: count the UiBuilder and TimelineWindow::OnUpdate hitch
+  warnings against a run on the build before this change.
+- [x] 13 At the minimum width (900 px) the action bar's right end moves to its own line and nothing overlaps; the dock
+  narrows down to 180 px and no further.
+- [ ] 14 With no clip open after a preview or Live ran (also on a partner's workspace), the empty main area shows no stale
+  "Preview playing." note: the dock reports only its own jobs (an undo in Saved edits, a wind-up, a send to Blender).

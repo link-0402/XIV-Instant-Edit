@@ -12,8 +12,8 @@ internal readonly record struct TimelineLaneRows(TimelineLane Lane, int FirstRow
 }
 
 /// <summary>
-/// One bone layer row: the layer at <paramref name="Layer"/> in the document's layers (-1 for the empty
-/// row a first layer goes into), or with <paramref name="Bone"/> one bone's keys of it, under its row.
+/// One bone layer row: the layer at <paramref name="Layer"/> in the document's layers (-1 for the row under the
+/// layers, "+ Add layer"), or with <paramref name="Bone"/> one bone's keys of it, under its row.
 /// </summary>
 internal readonly record struct TimelineMotionRow(int Layer, string? Bone = null);
 
@@ -47,7 +47,7 @@ internal sealed class TimelineLayout
 
     /// <summary>
     /// The bone layer rows: one per layer, in the order they apply, each unfolded layer followed by one
-    /// row per bone its keys name; or one empty row to add the first to. None on an expression's own
+    /// row per bone its keys name, then the row a new layer is added from. None on an expression's own
     /// timeline, whose face takes no bone layers.
     /// </summary>
     public int MotionRows => motionRows.Length;
@@ -87,7 +87,7 @@ internal sealed class TimelineLayout
     public int LayerRow(int index) => layerRows[index];
 
     /// <summary>How many bone rows the layer at <paramref name="index"/> shows under it: none while it is folded.</summary>
-    public int BoneRows(int index) => (index + 1 < layerRows.Length ? layerRows[index + 1] : MotionFirstRow + MotionRows) - layerRows[index] - 1;
+    public int BoneRows(int index) => (index + 1 < layerRows.Length ? layerRows[index + 1] : MotionFirstRow + MotionRows - 1) - layerRows[index] - 1;
 
     /// <summary>Whether the layer can unfold into bone rows: an offset or pose with keys, or the Motion keys layer. Amplitudes, fixes, swings, smooth motions, noises, links, repeats and springs have none.</summary>
     public static bool Unfolds(MotionLayer layer) => layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or
@@ -176,7 +176,8 @@ internal sealed class TimelineLayout
                     motion.Add(new TimelineMotionRow(index, bone));
             }
         }
-        if (layered && motion.Count == 0)
+        // The row under the layers, which "+ Add layer" names.
+        if (layered)
             motion.Add(new TimelineMotionRow(-1));
         return new TimelineLayout(doc, lanes.ToImmutable(), next + motion.Count, rows, ends, shown, indexByKey, motionFirst,
             motion.ToImmutable(), layerRows);

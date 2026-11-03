@@ -213,8 +213,8 @@ internal static class FaceEditingFixture
         check(Math.Abs(turned - .3f) < .01f, "a symmetry layer makes the right upper lid follow the left one");
 
         var face = TimelineFace.Open(Empty(150), 0, 1, 150) with { Motion = [Layer(0, 2, 0)] };
-        check(TimelineLayout.Build(face).MotionRows == 1 && TimelineLayout.Build(Empty(150) with { Expression = true, Motion = [Layer(0, 2, 0)] }).MotionRows == 0,
-            "a face has bone layer rows; an expression without one has none");
+        check(TimelineLayout.Build(face).MotionRows == 2 && TimelineLayout.Build(Empty(150) with { Expression = true, Motion = [Layer(0, 2, 0)] }).MotionRows == 0,
+            "a face has bone layer rows and the row to add one from; an expression without one has none");
         var moving = TimelineFace.Open(Empty(150), 0, 300, 150);
         check(MotionEdits.KeyFrame(face, 40) == 0 && MotionEdits.KeyFrame(moving, 40) == 40 && MotionEdits.KeyFrame(Empty(150), 40) == 40,
             "a still face's keys go on its first frame");

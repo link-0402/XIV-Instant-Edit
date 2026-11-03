@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using InstantEdit.Services.Animations.Timeline;
@@ -463,8 +463,8 @@ internal static class TimelineEditorFixture
             "the length handle sits on the ruler and the motion lane, not on other lanes");
         check(Hit(new(150, 10)) is { Part: TimelinePart.Ruler, Frame: 12.5f, Lane: null } && Hit(At(20, 1) with { X = 50 }) is
               { Part: TimelinePart.Legend, Lane: TimelineLane.Expression } && Hit(new(50, 10)).Part == TimelinePart.None &&
-              Hit(At(10, 7)).Part == TimelinePart.MotionLane && Hit(At(10, 8)).Part == TimelinePart.None && Hit(At(200, 1)).Part == TimelinePart.None,
-            "the ruler, the legend and the space outside the rows are told apart");
+              Hit(At(10, 7)).Part == TimelinePart.MotionLane && Hit(At(10, 8)) is { Part: TimelinePart.MotionLane, Row: 7 } && Hit(At(200, 1)).Part == TimelinePart.None,
+            "the ruler, the legend and the space outside the rows are told apart; the space under the rows adds a layer");
 
         var crowded = Doc(100, Ev("a", TimelineLane.Sound, 50), Ev("b", TimelineLane.Sound, 51));
         var crowdedLayout = TimelineLayout.Build(crowded);

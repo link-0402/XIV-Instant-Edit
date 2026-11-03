@@ -38,23 +38,22 @@ internal static partial class TimelineWindowViews
     public static readonly ImmutableArray<TimelineAddKind> AddKinds =
         [TimelineAddKind.Expression, TimelineAddKind.LipSync, TimelineAddKind.Sound, TimelineAddKind.Effect, TimelineAddKind.Prop];
 
-    /// <summary>What the Add menu's bone layer items create, in menu order.</summary>
+    /// <summary>The bone layer kinds the layer menu adds, in its order (<see cref="LayerMenu.Items"/>).</summary>
     public static readonly ImmutableArray<MotionLayerKind> LayerKinds =
-        [MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry, MotionLayerKind.Idle, MotionLayerKind.Swing,
-            MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat, MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Balance, MotionLayerKind.Pin];
+        [.. LayerMenu.Items(false).Select(LayerMenu.KindOf).OfType<MotionLayerKind>()];
 
-    /// <summary>The bone layer items a face's Add menu has: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
+    /// <summary>The bone layer kinds a face's layer menu adds: those a face takes (<see cref="TimelineFace.Allows"/>).</summary>
     public static readonly ImmutableArray<MotionLayerKind> FaceLayerKinds = [.. LayerKinds.Where(kind => TimelineFace.Allows(kind, null))];
 
-    /// <summary>The bone layer items the Add menus offer for <paramref name="doc"/>: a face's, or every kind.</summary>
-    public static ImmutableArray<MotionLayerKind> AddLayerKinds(TimelineDocument doc) => doc.Face != null ? FaceLayerKinds : LayerKinds;
-
-    /// <summary>The Add menus' item after the layer kinds: a pin layer that plants both feet.</summary>
+    /// <summary>The layer menu's Pin layer pop-out's second item: a pin layer that plants both feet.</summary>
     public const string PinFeetName = "Pin feet";
     public const string PinFeetHint = "Hold both feet where the motion has them down, so they stop sliding.";
     public const string NoFeet = "This skeleton has no feet to pin.";
 
-    /// <summary>The Add menus' fix items after Pin feet (<see cref="LoopPoseReader.DrawAddItems"/>): fix layers start with their fix.</summary>
+    /// <summary>Why bones can't be picked or posed yet: the skeleton the clip was made for is still being found, or none fits.</summary>
+    public const string SkeletonUnknown = "The skeleton this animation was made for isn't known yet.";
+
+    /// <summary>The layer menu's fix items (<see cref="LoopPoseReader.DrawFixItems"/>): fix layers start with their fix.</summary>
     public const string MatchLoopName = "Match startup to loop";
     public const string MatchLoopHint = "Blend this startup's end into the loop frame the game shows then, so they flow into each other.";
     public const string NoLoop = "Only a startup that leads into a loop";
@@ -88,7 +87,7 @@ internal static partial class TimelineWindowViews
 
     /// <summary>The Pin feet item's tooltip: what it does, or why it can't.</summary>
     public static string PinFeetTip(SkeletonDescription? skeleton) =>
-        skeleton == null ? "Choose the skeleton this animation was made for under Source first." : CanPinFeet(skeleton) ? PinFeetHint : NoFeet;
+        skeleton == null ? SkeletonUnknown : CanPinFeet(skeleton) ? PinFeetHint : NoFeet;
 
     /// <summary>
     /// What the gizmo does to <paramref name="primary"/> in a pin layer: true moves its pin key, false turns it,
@@ -300,8 +299,8 @@ internal static partial class TimelineWindowViews
     public static bool HeadDrag(MotionLayer layer, string? primary, SkeletonDescription? skeleton) =>
         primary == PinChains.Head && skeleton != null && layer.Components.HasFlag(PoseComponents.Position) && HeadSolver.Back(skeleton) != null;
 
-    /// <summary>The bone layer rows' legend when there is no layer yet.</summary>
-    public const string BonesLaneName = "Bones";
+    /// <summary>The name of the row under the bone layers, which opens the layer menu.</summary>
+    public const string AddLayerName = "Add layer";
 
     /// <summary>
     /// The status line's note while the clip plays a motion from Blender (where it came from and what it
@@ -1344,8 +1343,46 @@ internal static partial class TimelineWindowViews
         ? "This timeline has unsaved changes. Close it and lose them?"
         : $"{string.Join(", ", names.Take(names.Count - 1))} and {names[^1]} have unsaved changes. Close and lose them?";
 
-    /// <summary>A partner targeted while it still spawns: its start page waits.</summary>
+    /// <summary>
+    /// The header's frame and time: the playhead's frame and the total frames, its time and the total time. While it is
+    /// <paramref name="playing"/> the time has whole seconds, so the text keeps still; paused it has two decimals.
+    /// </summary>
+    public static (string Frame, string Frames, string Time, string Length) TimePair(int playhead, int length, bool playing) =>
+        (playhead.ToString(CultureInfo.InvariantCulture), length.ToString(CultureInfo.InvariantCulture),
+            playing ? string.Create(CultureInfo.InvariantCulture, $"{playhead / TimelineDocument.Fps}s") : HeaderSeconds(playhead), HeaderSeconds(length));
+
+    private static string HeaderSeconds(int frames) => string.Create(CultureInfo.InvariantCulture, $"{frames / (double)TimelineDocument.Fps:0.00}s");
+
+    /// <summary>
+    /// Live's tooltip for every actor at once: on, whom it is on for and that a click turns it off; off, why it can't come on
+    /// (<paramref name="blocked"/>) or what a click does; then the clip's <paramref name="hint"/>.
+    /// </summary>
+    public static string LiveTip(bool on, IReadOnlyList<string> actors, string? blocked, string hint) =>
+        (on ? $"Live is on for {string.Join(", ", actors)}: bone layers show on the GPose actors as you edit. Click to turn it off for everyone."
+            : blocked ?? "Show your bone layers on every GPose actor with an animation open as you edit. Nothing is saved.") + "\n" + hint;
+
+    /// <summary>Whom Live is on for, under the big Live switch: one or two names, or the first and how many more.</summary>
+    public static string LiveCovers(IReadOnlyList<string> actors) => actors.Count switch
+    {
+        0 => string.Empty,
+        1 => actors[0],
+        2 => $"{actors[0]}, {actors[1]}",
+        _ => $"{actors[0]} + {actors.Count - 1}",
+    };
+    /// <summary>A partner targeted while it still spawns: its dock page waits.</summary>
     public static string Spawning(string name) => $"{name} is still spawning.";
+
+    /// <summary>A partner's initials for the folded dock: the first letters of its first two words, or its first two letters.</summary>
+    public static string Initials(string name)
+    {
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return words.Length switch
+        {
+            0 => "?",
+            1 => words[0][..Math.Min(2, words[0].Length)],
+            _ => $"{words[0][0]}{words[1][0]}",
+        };
+    }
 
     private static string? SafeRoot(string? modRoot)
     {

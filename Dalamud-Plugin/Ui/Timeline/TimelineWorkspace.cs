@@ -34,6 +34,49 @@ internal sealed record WorkspaceServices(AnimationEditService? Animations, Timel
     AnimationPlayback Playback, MotionLiveDisplay? MotionDisplay, AnimationRecorder Recorder, IDataManager Data, IFramework Framework,
     ITextureProvider Textures, IPluginLog Log, GameSoundPlayer? SoundPlayer, PreviewFiles Files, Func<string> ActorName, TimelinePlayGroup Group);
 
+/// <summary>
+/// The play bar's controls over every actor's workspace with an editable clip at once: Live, Preview, Play and Pause, From
+/// start and Stop. The Timeline window holds it.
+/// </summary>
+internal interface ITimelineTransport
+{
+    /// <summary>The actors whose Live is on, the shown one first.</summary>
+    IReadOnlyList<string> LiveActors { get; }
+
+    /// <summary>Live is on for any actor.</summary>
+    bool AnyLive { get; }
+
+    /// <summary>Why Live can come on for none of them; null when it can for one.</summary>
+    string? LiveBlocked { get; }
+
+    /// <summary>Turns Live off for every actor while it is on for any, else on for every actor it can come on for.</summary>
+    void ToggleLive();
+
+    /// <summary>Builds every actor's preview and plays it, one build after another.</summary>
+    void Preview();
+
+    /// <summary>Any actor's preview or Live plays now.</summary>
+    bool Playing { get; }
+
+    /// <summary>Any actor has a preview or Live shown, which Play, Pause and From start act on.</summary>
+    bool AnyShown { get; }
+
+    /// <summary>Any actor has something Stop ends: a preview, Live, a build or a clip playing.</summary>
+    bool AnyActive { get; }
+
+    /// <summary>Any actor's preview is being built or waits to be, which reports in that actor's own notes.</summary>
+    bool Building { get; }
+
+    /// <summary>Pauses every actor while any plays, else plays every actor with something shown.</summary>
+    void PlayPause();
+
+    /// <summary>Plays every shown preview again from frame 0.</summary>
+    void FromStart();
+
+    /// <summary>Ends every actor's preview and Live and puts the actors back.</summary>
+    void Stop();
+}
+
 /// <summary>What a workspace takes from the Timeline window around it.</summary>
 internal interface ITimelineHost
 {
@@ -45,14 +88,23 @@ internal interface ITimelineHost
     PoseThumbnails Thumbnails { get; }
     string? AnimationError { get; }
 
+    /// <summary>The window's layout, the same for every workspace: the dock, the side panel's width, the curve strip, the loader.</summary>
+    WindowLayout Layout { get; }
+
+    /// <summary>The play bar's controls over every actor at once.</summary>
+    ITimelineTransport Transport { get; }
+
+    /// <summary>The other actors' playback notes, each with its actor's name in front, for this workspace's status line.</summary>
+    IEnumerable<StatusNote> OtherNotes(WorkspaceKey self);
+
     /// <summary>Opens the window and brings it to the front.</summary>
     void Show();
 
     /// <summary>
-    /// Draws the actor's name ("You", "Partner One") that lists the workspaces to switch to, and returns true, while partners are
-    /// spawned; draws nothing and returns false otherwise.
+    /// The dock's actors: You and the spawned partners, a click switching to one, with the + popup of presets; folded
+    /// (<paramref name="folded"/>), their icons alone. Nothing without the partner spawner.
     /// </summary>
-    bool DrawActorSwitch();
+    void DrawActors(bool folded);
 
     /// <summary>Why <paramref name="key"/>'s actor can't be acted on yet ("Partner One is still spawning."); null when it can.</summary>
     string? Waiting(WorkspaceKey key);
@@ -138,9 +190,11 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     private readonly TimelineLoader loader;
     private readonly LivePosePanel livePose;
     private readonly SidePanel sidePanel;
-    private readonly StartPage startPage;
+    private readonly TimelineDock dock;
     private readonly TimelineToolbar toolbar;
-    private readonly TimelineMenus menus;
+    private readonly LayerMenu layerMenu;
+    private readonly LengthPopup lengthPopup;
+    private readonly BonesKeptPage bonesKept;
     private readonly BlenderMotionPanel blenderMotion;
     private readonly BonesWindow bonesWindow;
     private readonly PoseBrowserWindow poseBrowserWindow;
@@ -161,10 +215,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     // The timeline Edit face left (Back returns to it) and its unsaved edits, which come back with it; null for none.
     private (AnimationCapture Capture, bool Startup)? parkedClip;
     private TimelineAutosave? parkedEdits;
-    // The start page shows over the open clip, which keeps running behind it (Start; Back to the clip ends it).
-    private bool startShown;
     private float footerHeight;
-    private float propertiesWidth;
     private bool disposed;
     // The catalog's face lengths with an expression's own face, kept while neither changes.
     private IReadOnlyDictionary<string, int>? framesKnown;
@@ -194,8 +245,11 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         pickers = new TimelinePickers(session, soundFiles);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
-        playBar = new PlayBar(session, timelinePreview);
+        playBar = new PlayBar(session, timelinePreview, host.Transport);
         posing = new BonePosing(session, decode);
+        blenderMotion = new BlenderMotionPanel(session, decode);
+        livePose = new LivePosePanel(session);
+        layerMenu = new LayerMenu(session, livePose, blenderMotion);
         // The Add menus open the link picker, and link texts name partners, through the session.
         session.PartnerName = host.ActorName;
         session.LinkedBy = () => host.LinkedBy(key);
@@ -205,8 +259,8 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         poseBrowser = new PoseBrowser(session, decode, posing, poseOptions, host.Thumbnails);
         poseSources = new PoseSourcePanel(session, decode, posing, services.Recorder, poseOptions, poseBrowserWindow);
         layerPanel = new LayerPanel(session, decode, posing, bonesWindow);
-        canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys);
-        curveView = new CurveView(session, decode, posing);
+        canvas = new TimelineCanvas(session, posing, clipBand, pickers, soundFiles, texts, keys, layerMenu);
+        curveView = new CurveView(session, decode, posing, host.Layout);
         properties = new PropertiesPanel(session, effectPlace, new PropPlaceEditor(session), effectLooks, soundInspector, cutPanel, layerPanel, texts, pickers)
             { OpenFace = OpenFace };
         soundSave = new SoundSaveCheck(session, soundFiles);
@@ -218,22 +272,21 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             },
             EditAgain);
         recentEdits = new RecentEditsPage(session, saveFooter, timelinePreview, () => reader.Busy, EditAgain);
-        loader = new TimelineLoader(session, timelinePreview, Open);
-        blenderMotion = new BlenderMotionPanel(session, decode);
-        sidePanel = new SidePanel(properties, effectLooks, soundInspector,
-            new ClipView(session, posing, timelinePreview, blenderMotion, Open));
-        startPage = new StartPage(session, loader, recentEdits, () => sidePanel.Recorder);
-        livePose = new LivePosePanel(session);
-        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar, host.FreeCamera);
-        menus = new TimelineMenus(session, canvas, toolbar, blenderMotion, curveView, bonesWindow, timelinePreview, ShowStart, Reload, Open);
-        bonesPanel = new BonesPanel(session, host.AnimationError, posing, boneEditor, poseSources, timelinePreview, playBar, () => saveFooter.RepairTarget,
+        loader = new TimelineLoader(session, timelinePreview, host.Layout, Open);
+        sidePanel = new SidePanel(properties, effectLooks, soundInspector);
+        dock = new TimelineDock(session, host.Layout, host, loader, recentEdits, blenderMotion, () => sidePanel.Recorder,
+            () => saveFooter.Working || host.Transport.Building);
+        toolbar = new TimelineToolbar(session, pickers, loader, livePose, texts, saveFooter, bonesWindow, blenderMotion, playBar, host.FreeCamera, curveView);
+        lengthPopup = new LengthPopup(session, blenderMotion);
+        bonesKept = new BonesKeptPage(session, timelinePreview);
+        bonesPanel = new BonesPanel(session, host.AnimationError, posing, boneEditor, poseSources, timelinePreview, playBar,
             this, services.Textures, keys, () =>
         {
             // Save pose: the pose browser at its last folder, the name to type in focused.
             poseBrowserWindow.IsOpen = true;
             poseBrowserWindow.BringToFront();
             poseBrowser.FocusSave();
-        });
+        }, bonesKept, layerMenu);
         session.KeepReadOnlyWhile(() => reader.Busy || saveFooter.Busy || blenderMotion.Working);
         autosaver = new TimelineAutosaver(session, Restore, key.IsSelf ? null : key.Id);
     }
@@ -246,37 +299,17 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
 
     public void DrawFileDialog() => session.FileDialog.Draw();
 
-    /// <summary>
-    /// What the Timeline window borrows from the main window: Settings, where the skeleton library is
-    /// rebuilt, and the live pose recorder, which sends to Blender through it.
-    /// </summary>
-    internal void AttachTools(Action? settings, Action? recorderPanel) => sidePanel.AttachTools(settings, recorderPanel);
+    /// <summary>The main window's live pose recorder, which sends to Blender through it; the dock's Blender tab shows it.</summary>
+    internal void AttachRecorder(Action? recorderPanel) => sidePanel.AttachRecorder(recorderPanel);
 
     /// <summary>The main window's connection to Blender, which Send motion to Blender and Motion from Blender go through.</summary>
     internal void AttachBlender(Main.AnimationDelivery delivery) => blenderMotion.Attach(delivery);
 
-    /// <summary>The main window's Playing now page for the start page and how many animations play now for its sidebar.</summary>
-    internal void AttachPlayingNow(Action draw, Func<int> playing) => startPage.AttachPlayingNow(draw, playing);
-
-    /// <summary>The start page's Partners page; its sidebar entry shows once this is attached.</summary>
-    internal void AttachPartners(Action draw) => startPage.AttachPartners(draw);
+    /// <summary>The main window's Now playing list for the dock and how many animations play now for its tab.</summary>
+    internal void AttachPlayingNow(Action draw, Func<int> playing) => dock.AttachPlayingNow(draw, playing);
 
     /// <summary>The settings the pose browser keeps its folders in.</summary>
     internal void AttachPoseFolders(Configuration config, Action save) => poseBrowser.Attach(config, save);
-
-    /// <summary>
-    /// Shows the start page, on <paramref name="entry"/> or with null on the last entry shown. An open clip stays open and
-    /// keeps running behind it.
-    /// </summary>
-    internal void ShowStart(StartEntry? entry)
-    {
-        startShown = true;
-        if (entry is { } shown)
-            startPage.Current = shown;
-    }
-
-    /// <summary>Back from the start page to the open clip, with its view and playhead as they were.</summary>
-    internal void BackToClip() => startShown = false;
 
     /// <summary>The open clip's title, for the Bones window's title; null with no editable clip open.</summary>
     internal string? ClipTitle => source?.Document != null && editor != null ? title : null;
@@ -397,6 +430,60 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         return true;
     }
 
+    /// <summary>The play bar acts on this workspace too: it has an editable clip and its actor is there.</summary>
+    internal bool OnTransport => animations != null && source?.Document != null && editor != null && host.Waiting(Key) == null;
+
+    /// <summary>Live is on, or waits to start.</summary>
+    internal bool LiveOn => timelinePreview.LiveWanted;
+
+    /// <summary>Why Live can't come on here now; null while it is on or can come on.</summary>
+    internal string? LiveBlocked => OnTransport ? timelinePreview.LiveBlockedNow(editor!, source!) : "No animation is open.";
+
+    /// <summary>Turns Live on or off here, for the play bar over every actor; nothing while it can't come on.</summary>
+    internal void SetLive(bool on)
+    {
+        if (OnTransport && timelinePreview.LiveWanted != on && !session.ReadOnly && (!on || LiveBlocked == null))
+            timelinePreview.ToggleLive(editor!, source!);
+    }
+
+    /// <summary>Builds and plays this clip's preview, now or after the build running, for the play bar over every actor.</summary>
+    internal void StartPreview()
+    {
+        if (OnTransport)
+            timelinePreview.QueuePreview(editor!, source!, saveFooter.RepairTarget);
+    }
+
+    /// <summary>A preview or Live is shown here.</summary>
+    internal bool PreviewShown => timelinePreview.Fingerprint != null;
+
+    /// <summary>The clip plays here now.</summary>
+    internal bool Playing => playback.Active && !playback.Paused;
+
+    /// <summary>Something here that Stop ends: a preview, Live, a build or a clip playing.</summary>
+    internal bool PlaybackActive => PreviewShown || playback.Active || session.Preview.Active || timelinePreview.Building || LiveOn;
+
+    /// <summary>The preview is being built here, or waits to be.</summary>
+    internal bool PreviewBuilding => timelinePreview.Building;
+
+    /// <summary>The clip plays in the play group with another actor's.</summary>
+    internal bool InGroup => timelinePreview.InGroup;
+
+    /// <summary>Plays or pauses here to match <paramref name="play"/>; in the play group the group does it once.</summary>
+    internal void SetPlaying(bool play) => timelinePreview.SetPlaying(play);
+
+    /// <summary>Plays the shown preview again from frame 0.</summary>
+    internal void Replay()
+    {
+        if (editor != null)
+            timelinePreview.Replay(editor);
+    }
+
+    /// <summary>Ends the preview and Live here and puts the actor back.</summary>
+    internal void StopPlayback() => timelinePreview.Stop();
+
+    /// <summary>The preview's and Live's notes, for the shown workspace's status line.</summary>
+    internal IEnumerable<StatusNote> PlaybackNotes() => OnTransport ? timelinePreview.Notes(editor!, source!, saveFooter.RepairTarget) : [];
+
     /// <summary> Unsaved edits of an editable timeline. </summary>
     // The edits of the timeline Edit face left count too: opening another clip would lose them. So does a partner that changed
     // what a link layer follows since the last save.
@@ -452,13 +539,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         if (animations == null)
             return;
         startup &= capture.Startup != null;
-        // The clip already open, such as its row on the start page: back to it. Another clip leaves the start page
-        // only once it loads, so Keep editing stays on the page.
+        // The clip already open, such as its row in Now playing, stays as it is.
         if (Showing(capture, startup) && ChangedCapture() == null)
-        {
-            startShown = false;
             return;
-        }
         if (HasUnsavedChanges)
         {
             pending = PendingAction.Switch;
@@ -467,26 +550,6 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             return;
         }
         Load(capture, startup, false);
-    }
-
-    /// <summary>
-    /// Reads the open clip again (Animation, Reload), on the newest capture of it when its file changed. With unsaved
-    /// changes it first asks, inline, whether to discard them, as <see cref="Open"/> does.
-    /// </summary>
-    private void Reload()
-    {
-        // A face from Edit face is read through its clip's capture, which would open the clip instead.
-        if (source is not { } current || reader.Busy || current.Document?.Face != null)
-            return;
-        var capture = ChangedCapture() ?? current.Capture;
-        if (HasUnsavedChanges)
-        {
-            pending = PendingAction.Switch;
-            pendingOpen = (capture, current.Startup);
-            pendingAgain = null;
-            return;
-        }
-        Load(capture, current.Startup, false);
     }
 
     /// <summary>
@@ -503,7 +566,6 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     private void EditAgain(AnimationEditJournal journal, AnimationCapture? capture)
     {
         host.Show();
-        // The start page stays until the clip loads (Load), so Keep editing stays on it.
         if (animations is not { } service || journal.Request.Timeline is not { } edit)
             return;
         capture ??= AnimationEditService.EditAgainCapture(journal, session.History, session.ActorIndex ?? journal.Request.Capture.ActorIndex);
@@ -524,7 +586,6 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     private void Restore(TimelineAutosave kept)
     {
         host.Show();
-        startShown = false;
         // The kept capture names the character of the run that kept it; the clip is opened on the newest capture of it.
         var capture = animations != null
             ? AnimationEditService.LatestCapture(kept.Capture, kept.Startup, session.History, session.ActorIndex ?? kept.Capture.ActorIndex)
@@ -652,8 +713,6 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         if (!keepView)
         {
             // Another clip: the timeline Edit face left is let go (opening asked first when it had edits).
-            // It shows in place of the start page; a clip read again after a save or undo leaves the page shown.
-            startShown = false;
             parkedClip = null;
             parkedEdits = null;
             source = null;
@@ -700,7 +759,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             effectLooks.Forget();
             ForgetSounds();
             canvas.ResetScroll();
-            sidePanel.ClearFilter();
+            bonesKept.ClearFilter();
             livePose.ForgetNote();
         }
         saveFooter.Loaded(loaded, sameClip, again != null);
@@ -774,13 +833,6 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         return framesMerged;
     }
 
-    /// <summary> Before the window begins: the menu bar shows while an editable clip is open and the start page isn't shown. </summary>
-    internal void PreDraw(ref ImGuiWindowFlags flags)
-    {
-        var menu = animations != null && source?.Document != null && editor != null && !startShown;
-        flags = menu ? flags | ImGuiWindowFlags.MenuBar : flags & ~ImGuiWindowFlags.MenuBar;
-    }
-
     /// <summary>
     /// Every framework update while the window is open, shown or not: the reads, saves, imports, previews and Live
     /// polled, and the open clip's playback kept in step. No ImGui here: this runs outside the ImGui frame.
@@ -797,7 +849,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         pickers.PollLengths();
         loader.PollLibrary();
         loader.Poll();
-        startPage.Poll(source == null || startShown);
+        dock.Poll();
         // Every frame: the bone rows' order, Live and the save all read the clip's match.
         session.KeepMatch();
         if (source?.Document == null || editor == null)
@@ -806,10 +858,10 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             timelinePreview.ClearMember();
             return;
         }
-        // Other parts read the texts every frame, also while the start page shows.
+        // Other parts read the texts every frame, also while another workspace shows.
         texts.Refresh(editor.Document);
         livePose.Poll(editor, source);
-        // A finished Still pose, face hold or Blender read goes in here, so the start page over the clip doesn't hold it.
+        // A finished face hold or Blender read goes in here, also while another workspace shows.
         blenderMotion.Poll(editor);
         session.LoopPose.Poll(editor);
         if (session.CatalogKey != null)
@@ -840,42 +892,67 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             return;
         }
 
+        var layout = host.Layout;
+        var area = ImGui.GetContentRegionAvail();
+        var splitter = Theme.Scaled(6);
+        var rest = Theme.Scaled(MainMinimum) + splitter;
+        // The width set stays as it was set: a narrow window only narrows the dock while it is narrow.
+        var dockWidth = layout.DockFolded ? Theme.Scaled(40) : WindowLayout.Dock(layout.DockWidth, area.X, rest, Theme.Scale);
+        using (var side = ImRaii.Child("##timeline-dock", new Vector2(dockWidth, area.Y), false))
+        {
+            if (side.Success)
+                dock.Draw(host.Waiting(Key));
+        }
+        ImGui.SameLine(0, 0);
+        if (layout.DockFolded)
+            ImGui.Dummy(new Vector2(splitter, area.Y));
+        else
+        {
+            var low = Theme.Scaled(WindowLayout.MinimumDock);
+            var dragged = dockWidth;
+            Widgets.Splitter("##timeline-dock-splitter", ref dragged, low, Math.Max(low, Math.Min(Theme.Scaled(WindowLayout.MaximumDock), area.X - rest)), area.Y);
+            if (dragged != dockWidth)
+                layout.DockWidth = dragged;
+        }
+        ImGui.SameLine(0, 0);
+        // The timeline's ids are this actor's, so its popups and child windows stay its own; the dock's are shared, so it keeps
+        // its scroll and popups when the actor changes.
+        using var id = ImRaii.PushId(Key.Id);
+        using var main = ImRaii.Child("##timeline-main", new Vector2(0, area.Y), false, ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse);
+        if (main.Success)
+            DrawMain();
+    }
+
+    /// <summary>The narrowest the timeline beside the dock gets, before scaling.</summary>
+    private const float MainMinimum = 560;
+
+    /// <summary>
+    /// Right of the dock: the banners, then with no clip open where to pick one; with one the header, the action bar, the
+    /// status line, the lanes beside the side panel, and the save row.
+    /// </summary>
+    private void DrawMain()
+    {
         DrawPendingBanner();
         if (pending == PendingAction.None)
             autosaver.Draw(HasUnsavedChanges || reader.Busy);
         if (source == null)
         {
-            DrawStart(null);
+            DrawEmpty();
             return;
         }
         if (source.Document == null || editor == null)
         {
-            if (startShown)
-            {
-                DrawStart(title);
-                return;
-            }
             DrawHeader(source);
-            ImGui.Spacing();
             Widgets.Banner("##timeline-read-only", FeedbackSeverity.Warning,
                 "This timeline can't be edited. " + (source.ReadOnlyReason ?? "Its file could not be read."));
             ImGui.Spacing();
-            if (ImGui.Button("Start page##timeline-read-only"))
-                ShowStart(null);
-            loader.DrawStatus();
+            loader.DrawStatus(dock.JobNotes());
             return;
         }
-        if (!startShown)
-        {
-            menus.Draw(editor, source);
-            // Open startup or loop, or Reload, may have started reading a clip.
-            if (source?.Document == null)
-                return;
-            DrawHeader(source);
-        }
-        if (!startShown && reader.Error is { } readError)
+        DrawHeader(source);
+        if (reader.Error is { } readError)
             Widgets.Banner("##timeline-reload-error", FeedbackSeverity.Error, "Reading the timeline again failed: " + readError);
-        if (!startShown && pending == PendingAction.None && ChangedCapture() is { } changed)
+        if (pending == PendingAction.None && ChangedCapture() is { } changed)
         {
             Widgets.Banner("##timeline-file-changed", FeedbackSeverity.Info, "This file changed in your mods.");
             if (ImGui.Button("Reload##timeline-file-changed"))
@@ -883,21 +960,16 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
             ImGui.Spacing();
         }
         CheckGizmo();
-        // The start page over the clip: Tick keeps the clip running; the bars, lanes and save row wait.
-        if (startShown)
-        {
-            DrawStart(title);
-            return;
-        }
-        toolbar.Draw(editor, source);
-        statusLine.Draw("##timeline", toolbar.Notes(editor).Concat(timelinePreview.Notes(editor, source, saveFooter.RepairTarget)));
+        toolbar.Draw(editor);
+        statusLine.Draw("##timeline", toolbar.Notes(editor).Concat(timelinePreview.Notes(editor, source, saveFooter.RepairTarget)).Concat(dock.JobNotes())
+            .Concat(host.OtherNotes(Key)));
 
         var avail = ImGui.GetContentRegionAvail();
         if (footerHeight <= 0)
             footerHeight = ImGui.GetFrameHeightWithSpacing() + ImGui.GetTextLineHeightWithSpacing() + ImGui.GetStyle().ItemSpacing.Y;
         var height = Math.Max(Theme.Scaled(120), avail.Y - footerHeight - ImGui.GetStyle().ItemSpacing.Y);
         DrawBody(editor, avail.X, height);
-        // A link in the side panel (the Source page's startup Open) may have started reading another clip.
+        // Edit face in the side panel may have started reading the face.
         if (source == null)
             return;
 
@@ -908,7 +980,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         pickers.Draw(editor);
         linkPicker.Draw(editor, false);
         var playhead = editor.Playhead;
-        canvas.HandleKeys(editor, timelinePreview.PlayKey);
+        canvas.HandleKeys(editor, playBar.PlayKey);
         if (editor.Playhead != playhead)
             timelinePreview.PauseForStep();
         // Escape cancels a drag; it must not also close the window.
@@ -916,10 +988,10 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     }
 
     /// <summary>
-    /// The start page, while a clip is read the spinner line instead. <paramref name="backTo"/> names the clip open behind
-    /// it, which keeps running; null when none is open.
+    /// No clip open: the spinner line while one is read; a read that failed, with Back when Edit face couldn't open its face;
+    /// else where to pick one. Then the loader's line with the dock's job.
     /// </summary>
-    private void DrawStart(string? backTo)
+    private void DrawEmpty()
     {
         if (reader.Busy)
         {
@@ -931,22 +1003,19 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         }
         if (reader.Error is { } readError)
         {
-            // With a clip open, the read that failed was that clip's again, worded as the clip view words it.
-            Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error, backTo != null ? "Reading the timeline again failed: " + readError
-                : (reader.ErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + readError);
+            Widgets.Banner("##timeline-load-error", FeedbackSeverity.Error,
+                (reader.ErrorAgain ? "The edit could not be opened again. " : "The timeline could not be read: ") + readError);
             ImGui.Spacing();
-            // A face Edit face couldn't open: the timeline it was opened from waits with its edits. Over an open clip
-            // Back to it is the way back.
-            if (backTo == null && parkedClip != null)
+            // A face Edit face couldn't open: the timeline it was opened from waits with its edits.
+            if (parkedClip != null)
             {
                 DrawBack(null);
                 ImGui.Spacing();
             }
         }
-        // Whose start page: "You" or the partner, which switches the GPose target.
-        if (host.DrawActorSwitch())
-            ImGui.Spacing();
-        startPage.Draw(ImGui.GetContentRegionAvail().Y, backTo, BackToClip, host.Waiting(Key));
+        else
+            Widgets.EmptyState(FontAwesomeIcon.Running, "Pick an animation on the left", "What plays now, or any game animation.");
+        loader.DrawStatus(dock.JobNotes());
     }
 
     /// <summary>Back from Edit face to the timeline it left; <paramref name="open"/> is the face open, null when it couldn't be read.</summary>
@@ -966,59 +1035,142 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     }
 
     /// <summary>
-    /// The header: Start, marked while an edit did not finish; Back after Edit face; the clip's name, which clears the
-    /// selection; its state and mod; and on the right its length.
+    /// The header, two lines tall: the Live switch; Back after Edit face, the clip's name, which clears the selection, and
+    /// under it its state and mod; on the right the frame and the time over the total, which open the length popup. A
+    /// timeline that can't be edited shows its name alone.
     /// </summary>
     private void DrawHeader(AnimationTimelineSource current)
     {
-        var unfinished = animations is { } service ? TimelineWindow.RecoveryAttention(service) : 0;
-        bool start;
-        // "###" keeps the button's id when its label gains or loses the count, so a click then isn't dropped.
-        using (ImRaii.PushId("##timeline-start-button"))
-        using (ImRaii.PushColor(ImGuiCol.Text, Theme.Warning, unfinished > 0))
-            start = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.ArrowLeft, TimelineWindow.StartLabel(unfinished) + "###timeline-start", null, null, null, null);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(unfinished switch
-            {
-                0 => "Go to the start page. This clip stays open.",
-                1 => "Go to the start page. An edit did not finish and needs an undo.",
-                _ => $"Go to the start page. {unfinished} edits did not finish and need an undo.",
-            });
-        if (start)
-            ShowStart(null);
-        ImGui.SameLine(0, Theme.Scaled(12));
+        var style = ImGui.GetStyle();
+        var start = ImGui.GetCursorPos();
+        var height = ImGui.GetFrameHeight() * 2 + style.ItemSpacing.Y;
+        var editable = current.Document != null && editor != null;
+        var left = start.X;
+        if (editable)
+        {
+            var liveWidth = LiveWidth();
+            DrawLive(editor!, new Vector2(liveWidth, height));
+            left = start.X + liveWidth + Theme.Scaled(10);
+        }
+        // The frame and time first, so the name knows where to stop.
+        var timeLeft = editable ? DrawTime(editor!, start.Y, height) : ImGui.GetContentRegionMax().X;
+        var room = Math.Max(Theme.Scaled(40), timeLeft - Theme.Scaled(12) - left);
+
+        ImGui.SetCursorPos(new Vector2(left, start.Y));
         if (parkedClip != null)
         {
             DrawBack(current);
             ImGui.SameLine(0, Theme.Gap);
         }
-        // Whose clip: "You" or the partner, which switches the GPose target.
-        if (host.DrawActorSwitch())
-            ImGui.SameLine(0, Theme.Gap);
         Widgets.Icon(current.Standalone || current.Document?.Face != null ? FontAwesomeIcon.Smile : FontAwesomeIcon.Running, Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
         bool name;
+        var nameWidth = Math.Max(1, Math.Min(ImGui.CalcTextSize(title).X, left + room - ImGui.GetCursorPosX()));
         using (ImRaii.PushColor(ImGuiCol.Text, Theme.Label))
-            name = ImGui.Selectable(title + "##timeline-clip-name", false, ImGuiSelectableFlags.None, new Vector2(ImGui.CalcTextSize(title).X, 0));
-        if (editor != null && ImGui.IsItemHovered())
-            ImGui.SetTooltip("Clear the selection.");
+            name = ImGui.Selectable(title + "##timeline-clip-name", false, ImGuiSelectableFlags.None, new Vector2(nameWidth, 0));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(editor != null ? title + "\nClick to clear the selection." : title);
         if (name)
             editor?.ClearSelection();
-        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetCursorPos(new Vector2(left, start.Y + ImGui.GetFrameHeight() + style.ItemSpacing.Y));
         ImGui.AlignTextToFramePadding();
+        var at = ImGui.GetCursorScreenPos();
+        ImGui.PushClipRect(at, at + new Vector2(room, ImGui.GetFrameHeight()), true);
         ImGui.TextColored(Theme.Muted, subtitle);
-        if (current.Document == null || editor == null)
-            return;
-        var after = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X + Theme.Scaled(16);
-        var right = ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(texts.LengthText).X;
-        ImGui.SameLine(Math.Max(after, right));
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(editor.Document.LengthChanged ? Theme.Warning : Theme.Muted, texts.LengthText);
+        ImGui.PopClipRect();
+        ImGui.SetCursorPos(new Vector2(start.X, start.Y + (editable ? height : ImGui.GetFrameHeight() * 2) + style.ItemSpacing.Y));
+    }
+
+    /// <summary>The line under "Live off".</summary>
+    private const string LiveOffHint = "Click to show edits";
+
+    /// <summary>The Live switch's width: room for its longest fixed text, so it keeps its size when it comes on.</summary>
+    private static float LiveWidth() => Math.Max(Theme.Scaled(96), ImGui.CalcTextSize(LiveOffHint).X + Theme.Scaled(20));
+
+    /// <summary>
+    /// The Live switch, big and <paramref name="size"/>, for every actor at once: a red dot and "Live off" while off, green
+    /// "LIVE" naming the actors it is on for while on; greyed while it can come on for none, saying why.
+    /// </summary>
+    private void DrawLive(TimelineEditor current, Vector2 size)
+    {
+        var transport = host.Transport;
+        var on = transport.AnyLive;
+        var blocked = on ? null : transport.LiveBlocked;
+        var enabled = (on || blocked == null) && !session.ReadOnly;
+        var at = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton("##timeline-live", size) && enabled;
+        var hovered = ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
+        if (hovered)
+            ImGui.SetTooltip(TimelineWindowViews.LiveTip(on, transport.LiveActors, blocked, timelinePreview.LiveHint(current)));
+        var draw = ImGui.GetWindowDrawList();
+        var rounding = Theme.Scaled(6);
+        var alpha = enabled ? 1f : .45f;
+        var colour = on ? Theme.Success : Theme.Error;
+        draw.AddRectFilled(at, at + size, TimelineUi.U32(Theme.WithAlpha(colour, (on ? .32f : .1f) + (hovered && enabled ? .1f : 0))), rounding);
+        draw.AddRect(at, at + size, TimelineUi.U32(Theme.WithAlpha(colour, (on ? 1f : .6f) * alpha)), rounding, ImDrawFlags.None, Theme.Scaled(2));
+        var label = on ? "LIVE" : "Live off";
+        var hint = on ? TimelineWindowViews.LiveCovers(transport.LiveActors) : LiveOffHint;
+        var line = ImGui.GetTextLineHeight();
+        var dot = Theme.Scaled(4);
+        var labelWidth = ImGui.CalcTextSize(label).X + dot * 2 + Theme.Scaled(5);
+        var top = at.Y + (size.Y - line * 2 - Theme.Scaled(2)) / 2;
+        var labelLeft = at.X + (size.X - labelWidth) / 2;
+        draw.AddCircleFilled(new Vector2(labelLeft + dot, top + line / 2), dot, TimelineUi.U32(Theme.WithAlpha(on ? Theme.Success : Theme.Error, alpha)));
+        draw.AddText(new Vector2(labelLeft + dot * 2 + Theme.Scaled(5), top), TimelineUi.U32(Theme.WithAlpha(Theme.Text, alpha)), label);
+        // Long actor names are cut at the switch's edge, never drawn past it.
+        var pad = Theme.Scaled(6);
+        draw.PushClipRect(at + new Vector2(pad, 0), at + size - new Vector2(pad, 0), true);
+        draw.AddText(new Vector2(Math.Max(at.X + pad, at.X + (size.X - ImGui.CalcTextSize(hint).X) / 2), top + line + Theme.Scaled(2)),
+            TimelineUi.U32(Theme.WithAlpha(Theme.Muted, alpha)), hint);
+        draw.PopClipRect();
+        if (clicked)
+            transport.ToggleLive();
+    }
+
+    /// <summary>
+    /// The frame over the total frames and the time over the total time, right-aligned at the header's top, <paramref name="height"/>
+    /// tall; a click opens the length popup. Each number sits in a slot as wide as the total's, and the time shows whole seconds
+    /// while it plays, so the text keeps still. Returns where it starts.
+    /// </summary>
+    private float DrawTime(TimelineEditor current, float top, float height)
+    {
+        // While the clip drives the playhead (a preview, Live, Follow or the play group), whole seconds.
+        var pair = TimelineWindowViews.TimePair(current.Playhead, current.Document.Length, current.PlayTime != null);
+        var frameSlot = ImGui.CalcTextSize(pair.Frames).X;
+        var timeSlot = ImGui.CalcTextSize(pair.Length).X;
+        var frameTail = ImGui.CalcTextSize(" / " + pair.Frames).X;
+        var timeTail = ImGui.CalcTextSize(" / " + pair.Length).X;
+        var width = Math.Max(frameSlot + frameTail, timeSlot + timeTail);
+        var left = ImGui.GetContentRegionMax().X - width;
+        ImGui.SetCursorPos(new Vector2(left, top));
+        if (ImGui.InvisibleButton("##timeline-time", new Vector2(width, height)))
+            ImGui.OpenPopup("##timeline-length");
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(editor.Document.Face != null ? "The length shown. The face's own length is in the clip view."
-                : editor.Document.LengthChanged ? "The new length. Saving resamples the motion to it."
-                : current.Standalone ? "The expression's timeline length." : "The clip's length.");
+            ImGui.SetTooltip(current.FixedLength ? "An expression's timeline keeps its length."
+                : current.Document.LengthChanged ? "The new length. Saving resamples the motion to it. Click to change it."
+                : "Click to change the length.");
+        var total = current.Document.LengthChanged ? Theme.Warning : Theme.Muted;
+        var line = ImGui.GetTextLineHeight();
+        var gap = (height - line * 2) / 3;
+        var right = left + width;
+        TimeLine(new Vector2(right - frameTail - ImGui.CalcTextSize(pair.Frame).X, top + gap), pair.Frame, Theme.Text);
+        TimeLine(new Vector2(right - frameTail, top + gap), " / " + pair.Frames, total);
+        TimeLine(new Vector2(right - timeTail - ImGui.CalcTextSize(pair.Time).X, top + gap * 2 + line), pair.Time, Theme.Text);
+        TimeLine(new Vector2(right - timeTail, top + gap * 2 + line), " / " + pair.Length, total);
+        using (var popup = ImRaii.Popup("##timeline-length"))
+        {
+            if (popup.Success)
+                lengthPopup.Draw(current);
+        }
+        return left;
+    }
+
+    /// <summary>One piece of the header's frame and time, at <paramref name="at"/> in the window.</summary>
+    private static void TimeLine(Vector2 at, string text, Vector4 colour)
+    {
+        ImGui.SetCursorPos(at);
+        ImGui.TextColored(colour, text);
     }
 
     /// <summary> The inline question before unsaved changes are lost: Discard or Keep editing, never a modal. </summary>
@@ -1057,13 +1209,15 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     /// <summary> The lanes on the left, the curves under them when shown, and the side panel on the right, with a splitter between them. </summary>
     private void DrawBody(TimelineEditor current, float width, float height)
     {
+        var layout = host.Layout;
         var splitter = Theme.Scaled(6);
-        if (propertiesWidth <= 0)
-            propertiesWidth = Theme.Scaled(320);
+        if (layout.SideWidth <= 0)
+            layout.SideWidth = Theme.Scaled(320);
         var minimumCanvas = Theme.Scaled(320);
         var minimumProperties = Theme.Scaled(220);
-        propertiesWidth = Math.Clamp(propertiesWidth, minimumProperties, Math.Max(minimumProperties, width - minimumCanvas - splitter));
-        var canvasWidth = Math.Max(Theme.Scaled(120), width - propertiesWidth - splitter);
+        // The width set stays as it was set: a narrow window only narrows the panel while it is narrow.
+        var side = Math.Clamp(layout.SideWidth, minimumProperties, Math.Max(minimumProperties, width - minimumCanvas - splitter));
+        var canvasWidth = Math.Max(Theme.Scaled(120), width - side - splitter);
         // An expression's own timeline has no bones to draw.
         var curves = curveView.Shown && current.Document.Layered;
         var strip = curves ? curveView.Height(height) : 0;
@@ -1076,11 +1230,12 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         ImGui.SameLine(0, 0);
         var dragged = canvasWidth;
         Widgets.Splitter("##timeline-splitter", ref dragged, minimumCanvas, Math.Max(minimumCanvas, width - minimumProperties - splitter), height);
-        propertiesWidth -= dragged - canvasWidth;
+        if (dragged != canvasWidth)
+            layout.SideWidth = side - (dragged - canvasWidth);
         ImGui.SameLine(0, 0);
         using var panel = ImRaii.Child("##timeline-properties", new Vector2(0, height), true);
         if (panel.Success && source != null)
-            sidePanel.Draw(current, source);
+            sidePanel.Draw(current);
     }
 
     /// <summary> Forgets the sounds read for another clip. </summary>

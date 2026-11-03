@@ -200,7 +200,7 @@ internal sealed class LinkPicker(TimelineSession session, BonePosing posing, ITi
         }
         if (session.Source is not { } source || session.EditingSkeleton(source) is not { } skeleton)
         {
-            ImGui.TextColored(Theme.Hint, "Choose the skeleton this animation was made for under Source to pick bones.");
+            ImGui.TextColored(Theme.Hint, TimelineWindowViews.SkeletonUnknown);
             return;
         }
 

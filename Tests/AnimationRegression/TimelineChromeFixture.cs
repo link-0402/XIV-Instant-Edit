@@ -8,10 +8,10 @@ using InstantEdit.Ui;
 using InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Start button's
-/// label, the Animations button's tooltip, the start page's entries, which selection the Edit menu and the side panel show,
-/// the clip view's Bones kept line, the layer settings' summary line, the Bones window's layer strip and which layers get its
-/// breakdown row.
+/// The Timeline and Bones windows' chrome rules that need no game: which status notes show and in what order, the Animations
+/// button's tooltip, the dock's tabs and width, the header's frame and time, the layer menu's order, which selection the side
+/// panel shows, the Bones window's kept line, the layer settings' summary line, the Bones window's layer strip and which layers
+/// get its breakdown row.
 /// How they look is checked in game.
 /// </summary>
 internal static class TimelineChromeFixture
@@ -20,9 +20,11 @@ internal static class TimelineChromeFixture
     public static void Run(Action<bool, string> check, Action<Action, string> reject)
     {
         Status(check);
-        Start(check);
         Unfinished(check);
-        StartEntries(check);
+        Dock(check);
+        Header(check);
+        Follow(check);
+        Menu(check);
         Selection(check);
         SideViews(check);
         Kept(check);
@@ -122,9 +124,9 @@ internal static class TimelineChromeFixture
     /// <summary> The clip view's Bones kept line: all or some kept, then the highest index when one is known. </summary>
     private static void Kept(Action<bool, string> check)
     {
-        check(ClipView.KeptText(40, 40, 103) == "All 40 kept · highest index 103", "Bones kept: all");
-        check(ClipView.KeptText(37, 40, 103) == "37 of 40 kept · highest index 103", "Bones kept: some");
-        check(ClipView.KeptText(37, 40, -1) == "37 of 40 kept", "Bones kept: no index known");
+        check(BonesKeptPage.KeptText(40, 40, 103) == "All 40 kept · highest index 103", "Bones kept: all");
+        check(BonesKeptPage.KeptText(37, 40, 103) == "37 of 40 kept · highest index 103", "Bones kept: some");
+        check(BonesKeptPage.KeptText(37, 40, -1) == "37 of 40 kept", "Bones kept: no index known");
     }
 
     private static readonly ImmutableDictionary<string, double> NoValues = ImmutableDictionary<string, double>.Empty;
@@ -179,11 +181,6 @@ internal static class TimelineChromeFixture
         check(SidePanel.ViewFor(editor) == SideView.Cut, "Side panel: the seam");
     }
 
-    /// <summary> The header's Start button names the unfinished edits. </summary>
-    private static void Start(Action<bool, string> check)
-    {
-        check(TimelineWindow.StartLabel(0) == "Start" && TimelineWindow.StartLabel(2) == "Start (2)", "Start shows the unfinished edits");
-    }
 
     /// <summary> The main window's Animations button's tooltip names the unfinished edits. </summary>
     private static void Unfinished(Action<bool, string> check)
@@ -192,12 +189,56 @@ internal static class TimelineChromeFixture
         check(TimelineWindowViews.UnfinishedText(3) == "3 edits didn't finish. Undo them in the Timeline.", "Several unfinished edits");
     }
 
-    /// <summary> The start page's sidebar: Partners only once a spawner is attached, Record only with the recorder. </summary>
-    private static void StartEntries(Action<bool, string> check)
+    /// <summary> The dock's tabs, its width within its limits and beside the timeline's room, and a partner's initials when folded. </summary>
+    private static void Dock(Action<bool, string> check)
     {
-        check(StartPage.Entries(partners: false, record: true).SequenceEqual([StartEntry.Playing, StartEntry.Game, StartEntry.Saved, StartEntry.Record]), "Start page without partners");
-        check(StartPage.Entries(partners: true, record: true).SequenceEqual([StartEntry.Playing, StartEntry.Game, StartEntry.Saved, StartEntry.Partners, StartEntry.Record]), "Start page with partners");
-        check(StartPage.Entries(partners: false, record: false).SequenceEqual([StartEntry.Playing, StartEntry.Game, StartEntry.Saved]), "Start page without a recorder");
+        check(TimelineDock.Tabs.SequenceEqual([DockTab.Animations, DockTab.Saved, DockTab.Blender]), "Dock: Animations, Saved edits, Blender");
+        check(WindowLayout.Dock(0, 1240, 566, 1) == WindowLayout.DefaultDock, "Dock: starts at its default width");
+        check(WindowLayout.Dock(1000, 1240, 566, 1) == WindowLayout.MaximumDock, "Dock: no wider than its limit");
+        check(WindowLayout.Dock(300, 800, 566, 1) == 234, "Dock: gives way to the timeline in a narrow window");
+        check(WindowLayout.Dock(300, 700, 566, 1) == WindowLayout.MinimumDock, "Dock: never narrower than its narrowest");
+        check(WindowLayout.Dock(0, 2480, 1132, 2) == WindowLayout.DefaultDock * 2, "Dock: scales with the UI");
+        check(TimelineWindowViews.Initials("Partner One") == "PO" && TimelineWindowViews.Initials("Lucina") == "Lu" && TimelineWindowViews.Initials(" ") == "?",
+            "Dock: a folded partner shows its initials");
+    }
+
+    /// <summary> The header's frame and time: hundredths of a second while paused, whole seconds while it plays. </summary>
+    private static void Header(Action<bool, string> check)
+    {
+        check(TimelineWindowViews.TimePair(37, 200, false) == ("37", "200", "1.23s", "6.67s"), "Header: paused, the time has hundredths");
+        check(TimelineWindowViews.TimePair(37, 200, true) == ("37", "200", "1s", "6.67s"), "Header: playing, the time has whole seconds");
+        check(TimelineWindowViews.TimePair(0, 30, true) == ("0", "30", "0s", "1.00s"), "Header: the start and a one-second clip");
+        check(TimelineWindowViews.LiveCovers(["You"]) == "You" && TimelineWindowViews.LiveCovers(["You", "Partner One"]) == "You, Partner One" &&
+              TimelineWindowViews.LiveCovers(["You", "Partner One", "Partner Two"]) == "You + 2", "Header: Live names whom it is on for");
+    }
+
+    /// <summary> The view following a playing playhead: still at first, then moving with it, stopping where the end shows, back for a restart. </summary>
+    private static void Follow(Action<bool, string> check)
+    {
+        check(TimelineFollow.First(0, 30, 100, 300) == 0, "Follow: the view keeps still while the playhead is in its first part");
+        check(Math.Abs(TimelineFollow.First(0, 50, 100, 300) - 10) < 1e-4, "Follow: then it moves with the playhead, holding it at 40%");
+        check(Math.Abs(TimelineFollow.First(10, 50.5f, 100, 300) - 10.5f) < 1e-4, "Follow: a fraction of a frame moves it a fraction");
+        check(TimelineFollow.First(150, 290, 100, 300) == 200, "Follow: it stops where the end shows");
+        check(TimelineFollow.First(150, 2, 100, 300) == 0, "Follow: a loop starting over brings it back to the start");
+        check(TimelineFollow.First(0, 150, 300, 200) == 0, "Follow: a clip that fits doesn't scroll");
+        check(TimelineFollow.First(250, 260, 100, 300) == 250, "Follow: a view scrolled past the end stays");
+        check(TimelineFollow.First(0, float.NaN, 100, 300) == 0 && TimelineFollow.First(5, 50, 0, 300) == 5, "Follow: no width or no time changes nothing");
+    }
+
+    /// <summary> The layer menu: posing kinds first, the motion kinds, Link, then the fixes; a face's starts with Neutral face and has no body-only kinds. </summary>
+    private static void Menu(Action<bool, string> check)
+    {
+        var body = LayerMenu.Items(false);
+        check(body[0] == LayerMenuItem.Pose && body.IndexOf(LayerMenuItem.Offset) < body.IndexOf(LayerMenuItem.Amplitude) &&
+              body.IndexOf(LayerMenuItem.Amplitude) < body.IndexOf(LayerMenuItem.Link) && body[^1] == LayerMenuItem.Fix &&
+              !body.Contains(LayerMenuItem.NeutralFace), "Layer menu: posing first, then motion, Link, and Fix last");
+        var face = LayerMenu.Items(true);
+        check(face[0] == LayerMenuItem.NeutralFace && face[^1] == LayerMenuItem.Fix &&
+              !face.Any(item => item is LayerMenuItem.Pin or LayerMenuItem.LookAt or LayerMenuItem.HandShape or LayerMenuItem.MotionKeys or LayerMenuItem.Idle or LayerMenuItem.Link),
+            "Layer menu: a face's starts with Neutral face and leaves out what a face can't take");
+        check(face.Select(LayerMenu.KindOf).OfType<MotionLayerKind>().All(kind => TimelineFace.Allows(kind, null)) &&
+              TimelineWindowViews.FaceLayerKinds.SequenceEqual(face.Select(LayerMenu.KindOf).OfType<MotionLayerKind>()),
+            "Layer menu: a face's kinds are the kinds a face takes, in the menu's order");
     }
 
     /// <summary> The status line: notes sort by kind, a dismissed note stays hidden until its text changes, work running never hides. </summary>

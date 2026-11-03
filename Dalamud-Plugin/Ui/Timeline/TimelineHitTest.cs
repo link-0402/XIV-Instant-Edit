@@ -156,6 +156,9 @@ internal readonly record struct TimelineGeometry(float Legend, float Ruler, floa
         if (!float.IsFinite(x) || !float.IsFinite(y) || point.X < 0 || y < 0 || x > view.Width)
             return TimelineHit.None(float.IsFinite(frame) ? frame : 0);
         var row = layout.RowAt(y, Row, Header, ScrollY);
+        // The empty space below the rows of a document with bone layers is the row under the layers: a right-click there adds one.
+        if (row < 0 && x >= 0 && y >= Header && layout.MotionRows > 0 && y >= RowTop(layout.RowCount - 1))
+            row = layout.RowCount - 1;
         TimelineLane? lane = row >= 0 ? layout.LaneAt(row)?.Lane : null;
         var layerIndex = row >= 0 ? layout.LayerIndexAt(row) : -1;
         if (x < 0)

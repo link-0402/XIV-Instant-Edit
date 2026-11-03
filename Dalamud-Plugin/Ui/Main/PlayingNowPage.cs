@@ -11,9 +11,9 @@ using InstantEdit.Services.Animations.Timeline;
 namespace InstantEdit.Ui.Main;
 
 /// <summary>
-/// The start page's Playing now entry: what your character plays, listed like On Screen with the mod each
-/// animation comes from. A click on a row opens its timeline, the pen sends it to Blender, and the row menu
-/// holds the mod actions and Make wind-up, whose result shows on the start page's last line.
+/// The Timeline dock's Now playing: what the shown actor plays now, a startup under its loop. A click on a row opens its
+/// timeline; the row menu holds Send to Blender, the mod actions and Make wind-up, whose result shows in the Timeline's
+/// status line.
 /// </summary>
 internal sealed class PlayingNowPage
 {
@@ -21,9 +21,6 @@ internal sealed class PlayingNowPage
     private readonly AnimationIntegration _animations;
     private readonly AnimationSendDialog _animationSend;
     private readonly ResourceRows _rows;
-    private readonly ExpansionState _expansion;
-    private string animationFilter = "";
-    private readonly ResourceSearch animationSearch = new();
     // The list's view model, rebuilt when the listener's history or the On Screen snapshot changes.
     private ImmutableArray<AnimationCapture> animationRowSource;
     private IReadOnlyList<OnScreenObject>? animationRowActors;
@@ -37,14 +34,12 @@ internal sealed class PlayingNowPage
     private bool openWindUp;
 
     /// <summary>Builds the page over the listener, the send dialog and the row menu it shares with On Screen.</summary>
-    public PlayingNowPage(OnScreenService onScreen, AnimationIntegration animations, AnimationSendDialog animationSend,
-        ResourceRows rows, ExpansionState expansion)
+    public PlayingNowPage(OnScreenService onScreen, AnimationIntegration animations, AnimationSendDialog animationSend, ResourceRows rows)
     {
         _onScreen = onScreen;
         _animations = animations;
         _animationSend = animationSend;
         _rows = rows;
-        _expansion = expansion;
     }
 
     /// <summary>What a click on a row calls: opens that animation, or its startup, in the Timeline window.</summary>
@@ -72,30 +67,23 @@ internal sealed class PlayingNowPage
         }
     }
 
-    /// <summary>The page: the search box and the list.</summary>
+    /// <summary>The rows playing now, a startup under its loop, or a line saying nothing plays.</summary>
     public void Draw()
     {
-        ImGui.Spacing();
         var animations = _animations.Service;
         if (animations == null)
         {
-            Widgets.Banner("##animations-unavailable", FeedbackSeverity.Warning, _animations.Unavailable);
+            Widgets.HintWrapped(_animations.Unavailable);
             return;
         }
         animations.StartObservation();
         var rows = ReadAnimationRows(animations.Observer.History);
-        Widgets.SearchBox("##animation-search", ref animationFilter, "Search animations, mods and paths");
-        animationSearch.Text = animationFilter;
-        var shown = AnimationRows.Filter(rows, animationSearch);
-        ImGui.Spacing();
-
-        var height = Math.Max(ImGui.GetFrameHeight() * 4, ImGui.GetContentRegionAvail().Y);
-        using (ImRaii.PushColor(ImGuiCol.ChildBg, Theme.PanelBg))
-        using (var list = ImRaii.Child("##animation-list", new Vector2(0, height), true))
-        {
-            if (list.Success)
-                DrawAnimationList(animations.Observer.Status, rows, shown);
-        }
+        var playing = rows.Where(row => row.Group == AnimationGroup.Playing).ToArray();
+        if (playing.Length == 0)
+            ImGui.TextColored(Theme.Hint, "Nothing plays now.");
+        using (ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f)))
+            foreach (var row in playing)
+                DrawAnimationRow(row);
         DrawWindUpPopup(animations);
     }
 
@@ -153,95 +141,29 @@ internal sealed class PlayingNowPage
         animationRowSource = history;
         animationRowActors = actors;
         animationRows = rows;
-        animationSearch.Invalidate();
         return rows;
     }
 
-    /// <summary> Your character's animations as a table like On Screen's: what plays now, then what played recently. </summary>
-    private void DrawAnimationList(string status, ImmutableArray<AnimationRow> rows, IReadOnlyList<AnimationRow> shown)
-    {
-        DrawAnimationListHeader(status);
-        if (shown.Count == 0)
-        {
-            if (rows.IsEmpty)
-                Widgets.EmptyState(FontAwesomeIcon.Running, "No animations detected yet",
-                    "Play an emote, idle or walk outside combat. What your character plays appears here, with the mod it comes from.");
-            else
-                Widgets.EmptyState(FontAwesomeIcon.Search, "No matching animations", "Clear the search to see every animation.");
-            return;
-        }
-
-        using var align = ImRaii.PushStyle(ImGuiStyleVar.SelectableTextAlign, new Vector2(0, .5f));
-        using var table = ImRaii.Table("##animation-table", 4, ResourceRows.ResourceTableFlags | ImGuiTableFlags.ScrollY,
-            new Vector2(0, Math.Max(1, ImGui.GetContentRegionAvail().Y)));
-        if (!table.Success)
-            return;
-        ImGui.TableSetupScrollFreeze(0, 1);
-        ImGui.TableSetupColumn("Animation", ImGuiTableColumnFlags.WidthStretch, .34f);
-        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch, .18f);
-        ImGui.TableSetupColumn("Path", ImGuiTableColumnFlags.WidthStretch, .48f);
-        ImGui.TableSetupColumn("##actions", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoHide, Theme.Scaled(58));
-        ImGui.TableHeadersRow();
-        DrawAnimationSection(shown, AnimationGroup.Playing, "Playing now");
-        DrawAnimationSection(shown, AnimationGroup.Recent, "Played recently");
-    }
-
-    /// <summary> The character the animations belong to, headed as On Screen heads its actors, and what the listener is doing. </summary>
-    private void DrawAnimationListHeader(string status)
-    {
-        ResourceRows.DrawOpaqueRow();
-        Widgets.Icon(FontAwesomeIcon.User, Theme.Label);
-        ImGui.SameLine(0, Theme.Gap);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextUnformatted(animationActor.Header);
-        ImGui.SameLine(ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(status).X - Theme.Gap);
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Muted, status);
-    }
-
-    /// <summary> A section row like On Screen's, followed by its animations while it is open. </summary>
-    private void DrawAnimationSection(IReadOnlyList<AnimationRow> shown, AnimationGroup group, string label)
-    {
-        var rows = shown.Where(row => row.Group == group).ToArray();
-        if (rows.Length == 0)
-            return;
-        var key = group == AnimationGroup.Playing ? "animations:playing" : "animations:recent";
-        using var id = ImRaii.PushId(key);
-        ImGui.TableNextRow();
-        ImGui.TableSetColumnIndex(0);
-        // Sections start open, and a search opens them.
-        var expanded = _expansion.IsExpanded(key, true, animationSearch.Active);
-        if (Widgets.GhostIconButton("##section-toggle", expanded ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight, expanded ? "Collapse" : "Expand"))
-            _expansion.Toggle(key, expanded, true);
-        ImGui.SameLine(0, Theme.Gap);
-        if (ImGui.Selectable($"{label}##section-label", false, ImGuiSelectableFlags.SpanAllColumns, new Vector2(0, ImGui.GetFrameHeight())))
-            _expansion.Toggle(key, expanded, true);
-        if (!expanded)
-            return;
-        foreach (var row in rows)
-            DrawAnimationRow(row);
-    }
-
-    /// <summary> One animation: its name and state, the mod and file it comes from, and the pen that sends it to Blender. A click opens its timeline. </summary>
+    /// <summary>
+    /// One animation: its icon and name, a skeleton warning, and the More button for its menu. A click opens its timeline; its mod and
+    /// file are in the tooltip.
+    /// </summary>
     private void DrawAnimationRow(AnimationRow row)
     {
         var view = row.View;
         using var id = ImRaii.PushId(UiText.SafeId(row.Key));
-        ImGui.TableNextRow();
-        ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.GetColorU32(Theme.WithAlpha(Theme.AnimationKind, Theme.KindTintAlpha)));
-
-        ImGui.TableSetColumnIndex(0);
-        var start = ImGui.GetCursorPosX() + Theme.TreeIndent;
+        var left = ImGui.GetCursorPosX();
         // A startup hangs under the animation it leads into.
         if (row.Startup)
             DrawStartupGuide();
-        ImGui.SetCursorPosX(start + (row.Startup ? ResourceRows.TreeStep : 0));
+        ImGui.SetCursorPosX(left + (row.Startup ? ResourceRows.TreeStep : 0));
         Widgets.Icon(AnimationIcon(row.Capture), Theme.AnimationKind);
         ImGui.SameLine(0, Theme.Gap);
         var problem = SkeletonBlock(row.Clip);
         var searching = row.Clip.Resolution?.State == SkeletonResolutionState.Searching;
         var problemIcon = searching ? FontAwesomeIcon.HourglassHalf : FontAwesomeIcon.ExclamationTriangle;
-        var tags = (row.Playing ? BadgeWidth("playing") + Theme.Gap : 0) + (problem is null ? 0 : IconWidth(problemIcon) + Theme.Gap);
+        var more = ImGui.GetFrameHeight();
+        var tags = more + Theme.Gap + (problem is null ? 0 : IconWidth(problemIcon) + Theme.Gap);
         if (ImGui.Selectable($"{UiText.Safe(view.Name, "Animation")}##label", false, ImGuiSelectableFlags.None,
                 new Vector2(Math.Max(1, ImGui.GetContentRegionAvail().X - tags), ImGui.GetFrameHeight())))
             openTimeline?.Invoke(row.Capture, row.Startup);
@@ -249,11 +171,6 @@ internal sealed class PlayingNowPage
         ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
             DrawAnimationRowTooltip(row, problem);
-        if (row.Playing)
-        {
-            ImGui.SameLine(0, Theme.Gap);
-            Widgets.Badge("playing", Theme.Success);
-        }
         if (problem is not null)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -261,18 +178,21 @@ internal sealed class PlayingNowPage
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(problem);
         }
-
-        ImGui.TableSetColumnIndex(1);
-        ResourceRows.DrawSourceBadge(view);
-        ImGui.TableSetColumnIndex(2);
-        Widgets.PathText(UiText.Safe(view.SourceRelativePath, view.GamePath), UiText.Safe(view.ActualPath));
-        ImGui.TableSetColumnIndex(3);
-        if (Widgets.IconButton("##send-animation", FontAwesomeIcon.Pen, "Send this animation to Blender"))
-            _animationSend.OpenAnimationSend(view, AnimationSendDialog.TimelineOwner);
-        ImGui.SameLine(0, Theme.Scaled(2));
+        ImGui.SameLine(Math.Max(ImGui.GetCursorPosX(), ImGui.GetContentRegionMax().X - more));
         if (Widgets.GhostIconButton("##more", FontAwesomeIcon.EllipsisH, "More actions"))
             ImGui.OpenPopup(ResourceRows.RowMenuPopup);
-        _rows.DrawRowMenu(animationActor, view, row.Startup || row.Capture.Startup is null ? null : () => DrawInstantStartupItem(row.Capture));
+        _rows.DrawRowMenu(animationActor, view, () => DrawRowItems(row));
+    }
+
+    /// <summary>The row menu's own items: Send to Blender, and Make wind-up on a loop with a startup.</summary>
+    private void DrawRowItems(AnimationRow row)
+    {
+        if (ImGui.MenuItem("Send to Blender"))
+            _animationSend.OpenAnimationSend(row.View, AnimationSendDialog.TimelineOwner);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Send this animation to Blender as its file has it.");
+        if (!row.Startup && row.Capture.Startup is not null)
+            DrawInstantStartupItem(row.Capture);
     }
 
     /// <summary>A loop's menu item that gives it a wind-up startup (see <see cref="AnimationEditService.MakeInstantStartup"/>), asking its frames first.</summary>
@@ -299,13 +219,13 @@ internal sealed class PlayingNowPage
     {
         var origin = ImGui.GetCursorScreenPos();
         var frame = ImGui.GetFrameHeight();
-        var x = MathF.Floor(origin.X + Theme.TreeIndent + IconWidth(FontAwesomeIcon.Running) / 2) + .5f;
+        var x = MathF.Floor(origin.X + IconWidth(FontAwesomeIcon.Running) / 2) + .5f;
         var middle = MathF.Floor(origin.Y + frame / 2) + .5f;
-        var end = origin.X + Theme.TreeIndent + ResourceRows.TreeStep - Theme.Scaled(3);
+        var end = origin.X + ResourceRows.TreeStep - Theme.Scaled(3);
         var drawList = ImGui.GetWindowDrawList();
         var colour = ImGui.GetColorU32(Theme.TreeLine);
         var thickness = Math.Max(1, MathF.Floor(Theme.Scale));
-        drawList.AddLine(new Vector2(x, origin.Y - ImGui.GetStyle().CellPadding.Y), new Vector2(x, middle), colour, thickness);
+        drawList.AddLine(new Vector2(x, origin.Y - ImGui.GetStyle().ItemSpacing.Y), new Vector2(x, middle), colour, thickness);
         drawList.AddLine(new Vector2(x, middle), new Vector2(end, middle), colour, thickness);
     }
 
@@ -316,14 +236,15 @@ internal sealed class PlayingNowPage
         ImGui.TextColored(Theme.Label, row.View.Name);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Muted, AnimationPresentation.AnimationState(row.Capture, row.Startup));
+        ImGui.TextUnformatted(row.View.SourceModName.Length > 0 ? "From " + row.View.SourceModName : "From the game's own files");
         ImGui.TextColored(Theme.Hint, "Game path: " + row.Clip.GamePath);
+        ImGui.TextColored(Theme.Hint, "Click to open it. Right-click for more.");
         if (problem is not null)
             ImGui.TextColored(Theme.Warning, problem);
         else if (row.Clip.Resolution?.Selected is { } source)
             ImGui.TextUnformatted("Made for " + AnimationSendDialog.SkeletonLabel(source));
     }
 
-    private static float BadgeWidth(string text) => ImGui.CalcTextSize(text).X + Theme.Scaled(12);
 
     /// <summary> A face for an expression, a figure for every other animation. </summary>
     private static FontAwesomeIcon AnimationIcon(AnimationCapture capture) =>

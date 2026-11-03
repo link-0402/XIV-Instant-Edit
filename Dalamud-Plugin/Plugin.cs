@@ -264,7 +264,7 @@ public sealed class Plugin : IDalamudPlugin
         _window.AttachRecorder(_recorder);
         _window.AttachTimeline(_timelineWindow.Open, _timelineWindow.Show, () => _timelineWindow.Listens);
         _timelineWindow.AttachListening(() => _window.ListensForAnimations);
-        _timelineWindow.AttachTools(() => _settingsWindow!.Open(), _window.DrawRecorderPanel);
+        _timelineWindow.AttachRecorder(_window.DrawRecorderPanel);
         _timelineWindow.AttachBlender(_window.AnimationDelivery);
         _timelineWindow.AttachPlayingNow(_window.DrawPlayingNow, () => _window.PlayingCount, _window.DrawTimelineDialogs);
         _window.AttachPainter(_painterJobs);
@@ -308,9 +308,8 @@ public sealed class Plugin : IDalamudPlugin
         _actorSpawner = new ActorSpawner(framework, clientState, objects, log);
         _partners = new PartnerService(partnerStore, _actorSpawner, new PartnerCollections(_penumbra.Ipc, () => _penumbra.Ipc.Available),
             new GlamourerIpc(pi, log), new CustomizePlusProfiles(pi, log), warn: message => log.Warning("{Message}", message));
-        // Each spawned preset gets a Timeline workspace of its own, shown while it is the GPose target.
+        // Each spawned preset gets a Timeline workspace of its own, shown while it is the GPose target; the dock lists them.
         _timelineWindow.AttachPartnerService(_partners, _window.ShowingPartner);
-        _timelineWindow.AttachPartners(new Ui.Timeline.PartnersPage(_partners, _timelineWindow.HasUnsaved, _timelineWindow.PresetDeleted).Draw);
         // Recording a partner takes its preset's profile off for the recording and puts it back after.
         _recorder.Partners = _partners;
         // A partner workspace's preview left by a crash goes now, whether or not that workspace is opened again.

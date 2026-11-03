@@ -14,7 +14,7 @@ namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// What plays on the GPose actor for the open clip. The play bar's Preview builds the edited clip, shows it
-/// through a Penumbra temporary mod on the actor's collection and plays it there, with pause, speed,
+/// through a Penumbra temporary mod on the actor's collection and plays it there, with pause,
 /// replay and stop: paused, the playhead scrubs the pose; playing, it follows the clip. Live plays the
 /// clip's own file instead and shows its bone layers over it, swapped in by <see cref="MotionLiveDisplay"/>
 /// whenever the document changes. While either runs, effect looks and sound changes reach the game
@@ -24,7 +24,6 @@ namespace InstantEdit.Ui.Timeline;
 internal sealed class TimelinePreview(TimelineSession session, MotionDecode decode, EffectLookEditor effectLooks, SoundFiles soundFiles)
     : IPlayGroupMember
 {
-    private float speedPercent = 100;
     // What this workspace plays through the Timeline for the play group, as of its last update: the binding and the
     // played length in seconds; null while it plays nothing (a clip only playing by itself isn't driven).
     private string? memberFingerprint;
@@ -145,28 +144,11 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary>Outside the preview, the playhead moves with this clip while your character plays it.</summary>
     public bool Follow { get; set; } = true;
 
-    /// <summary>
-    /// The preview's playback speed in percent, 10 to 200. Setting it while the preview plays changes the speed now. With
-    /// other actors' clips playing too it is the play group's one speed.
-    /// </summary>
-    public float SpeedPercent
-    {
-        get => Grouped is { } group ? group.SpeedPercent : speedPercent;
-        set
-        {
-            if (Grouped is { } group)
-            {
-                group.SpeedPercent = value;
-                return;
-            }
-            speedPercent = Math.Clamp(value, 10, 200);
-            if (session.Playback.Active)
-                PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
-        }
-    }
-
     /// <summary>The play group while this clip plays in it with another actor's; null when it plays alone or not at all.</summary>
     private TimelinePlayGroup? Grouped => session.Group is { Grouped: true } group && memberFingerprint != null ? group : null;
+
+    /// <summary>This clip plays in the play group with another actor's: the group plays, pauses and replays them together.</summary>
+    internal bool InGroup => Grouped != null;
 
     string IPlayGroupMember.ActorName => session.ActorName();
 
@@ -209,8 +191,6 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         var actor = own ? previewActor ?? session.ActorIndex : session.ActorIndex;
         var face = own && previewFace;
         PlaybackCall(() => session.Playback.Play(timeline, fingerprint, actor, face));
-        if (Math.Abs(speedPercent - 100) > .1f && session.Playback.Active)
-            PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
     }
 
     void IPlayGroupMember.Pause()
@@ -225,12 +205,6 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             PlaybackCall(session.Playback.Resume);
     }
 
-    void IPlayGroupMember.SetSpeed(float speed)
-    {
-        speedPercent = Math.Clamp(speed * 100, 10, 200);
-        if (session.Playback.Active)
-            PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
-    }
 
     private T? Safely<T>(Func<T?> read) where T : struct
     {
@@ -368,25 +342,18 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     /// <summary> The fixed hints the Preview button's tooltip adds to what it does. </summary>
     internal const string PreviewHints = "Sounds and effects play only while the preview plays.\nChanging an effect look redraws your character.";
 
-    /// <summary> The Live toggle, icon and label, filled while on: in the play bar and in the Bones window. </summary>
-    public void DrawLiveToggle(TimelineEditor current, AnimationTimelineSource loaded, string id)
+    /// <summary>Why Live can't come on now; null while it is on or can come on.</summary>
+    public string? LiveBlockedNow(TimelineEditor current, AnimationTimelineSource loaded) =>
+        liveWanted ? null : LiveBlocked(current, session.Fresh(loaded), PlaybackAvailable(out var reason), reason);
+
+    /// <summary>Live's hint for this clip, the second line of Live's tooltip.</summary>
+    public string LiveHint(TimelineEditor current) =>
+        livePreview != null ? TimelineWindowViews.LiveOnPreviewHint : TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched);
+
+    /// <summary>Turns Live on, or off again, as a click on the toggle does; nothing while it can't come on.</summary>
+    public void ToggleLive(TimelineEditor current, AnimationTimelineSource loaded)
     {
-        var liveBlocked = liveWanted ? null : LiveBlocked(current, session.Fresh(loaded), PlaybackAvailable(out var reason), reason);
-        var enabled = liveWanted || liveBlocked == null;
-        bool clicked;
-        using (ImRaii.PushId(id))
-        using (ImRaii.Disabled(!enabled))
-        using (ImRaii.PushColor(ImGuiCol.Button, Theme.Selection, liveWanted)
-                   .Push(ImGuiCol.ButtonHovered, Theme.WithAlpha(Theme.Selection, .85f), liveWanted))
-            clicked = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Bolt, "Live", null, null, null, null);
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip((liveWanted
-                ? "Live is on: your bone layers show on the GPose character as you edit. Click to turn it off."
-                : liveBlocked ?? (OnBuiltPreview() != null
-                    ? "Show your bone layers over the preview as you edit them. Nothing is saved."
-                    : "Show your bone layers on the GPose character as you edit them. Nothing is saved.")) + "\n" +
-                (livePreview != null ? TimelineWindowViews.LiveOnPreviewHint : TimelineWindowViews.LiveHint(current.Document.Cut || current.Document.Stretched)));
-        if (!clicked || !enabled)
+        if (!liveWanted && LiveBlockedNow(current, loaded) != null)
             return;
         if (!liveWanted && Carried(session.Fresh(loaded)) && OnBuiltPreview() == null)
             // A face opened on its own plays only through the carrier: Live starts over its preview.
@@ -511,7 +478,6 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         }
         StopLive();
         session.Files?.Set(session.WorkspaceId, session.ActorName(), target.Capture.CollectionId, gamePaths, () => previewJob || session.Preview.Active);
-        var speed = speedPercent / 100f;
         var generation = ++previewGeneration;
         ForgetPreviewLooks();
         previewActor = index;
@@ -571,14 +537,12 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                 if (!session.Playback.Play(previewTimeline, built.BindingFingerprint, index, previewFace))
                     return false;
                 memberStarted = true;
-                if (Math.Abs(speed - 1) > .001f)
-                    session.Playback.SetSpeed(speed);
                 // The props whose attach point is unknown are watched as they appear, to 2 s after the last one does;
                 // none ends the last preview's watch.
                 var starts = TimelinePropPlaces.PropStarts(document);
                 var unknown = starts.Keys.Where(model => types.CodeOf(model) == null).ToArray();
                 session.Playback.LearnProps(index, unknown, unknown.Length == 0 ? TimeSpan.Zero
-                    : TimeSpan.FromSeconds(unknown.Max(model => starts[model]) / (double)TimelineDocument.Fps / Math.Max(speed, .1f) + 2), types.Learn);
+                    : TimeSpan.FromSeconds(unknown.Max(model => starts[model]) / (double)TimelineDocument.Fps + 2), types.Learn);
                 return true;
             });
             return played ? redraw == null ? "Preview playing." : "Preview playing. " + redraw : "Preview on. " + session.Playback.Error;
@@ -597,11 +561,40 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             await Task.Delay(ShowPoll, token);
     }
 
-    /// <summary>Space: the play bar's Play/Pause, while that button can be pressed.</summary>
-    public void PlayKey()
+    /// <summary>
+    /// Plays or pauses this clip to match <paramref name="play"/>, for the play bar over every actor: in the play group the
+    /// group plays or pauses them all, once.
+    /// </summary>
+    public void SetPlaying(bool play)
     {
-        if (previewFingerprint != null && PlaybackAvailable(out _))
+        if (Grouped is { } group)
+        {
+            if (group.Playing != play)
+                group.TogglePlay();
+            return;
+        }
+        var playing = session.Playback.Active && !session.Playback.Paused;
+        if (playing != play && (session.Playback.Active || previewFingerprint != null))
             TogglePlay();
+    }
+
+    /// <summary>
+    /// Preview for the play bar over every actor: starts building now, or once the edit running ends, such as another actor's
+    /// build, since the animation service builds one at a time. Says why when it can't.
+    /// </summary>
+    internal void QueuePreview(TimelineEditor current, AnimationTimelineSource loaded, SkeletonStandard? repair)
+    {
+        if (PreviewBlocked() is not { } blocked)
+        {
+            StartPreview(current, loaded, repair);
+            return;
+        }
+        if (previewJob || previewWaiting != null)
+            return;
+        if (session.Animations is { Busy: true } && !session.Busy && PlaybackAvailable(out _))
+            previewWaiting = (repair, false);
+        else
+            previewError = blocked;
     }
 
     public void TogglePlay()
@@ -727,8 +720,9 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
 
     public void Poll()
     {
-        // A preview waiting for a link track starts once the track is in, unless something else holds it now.
-        if (previewWaiting is { } waiting && !session.LinksBuilding)
+        // A preview waiting for a link track, or for another actor's build, starts once that is done, unless something else
+        // holds it now.
+        if (previewWaiting is { } waiting && !session.LinksBuilding && session.Animations is not { Busy: true })
         {
             previewWaiting = null;
             if (session.Editor is { } editor && session.Source is { Document: not null } source && PreviewBlocked() == null)
@@ -765,6 +759,8 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
     private void SyncPlayback(TimelineEditor current, AnimationTimelineSource loaded)
     {
         session.PlayheadFollows = false;
+        // Set again below while the clip plays.
+        current.PlayTime = null;
         try
         {
             // With another actor's clip playing too, the play group holds the frame: the playhead mirrors it, and a step or
@@ -796,11 +792,13 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
                         lastSeekFrame = -1;
                         return;
                     }
-                    if (session.Playback.CurrentTime(fingerprint) is { } seconds)
+                    // The newest round: after a play again (From start, a repeat, a loop's seam) the old one keeps the most
+                    // weight for about 0.17 s, still on its end, which would snap the playhead back there.
+                    if (session.Playback.CurrentTime(fingerprint, newest: true) is { } seconds)
                     {
                         current.Playhead = TimelineWindowViews.Frames(seconds);
                         lastSeekFrame = current.Playhead;
-                        current.Reveal(current.Playhead);
+                        Glide(current, seconds * TimelineDocument.Fps, current.Document.Length);
                         session.PlayheadFollows = true;
                     }
                     RepeatAtEnd(current, fingerprint);
@@ -815,6 +813,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
             {
                 current.Playhead = TimelineWindowViews.Frames(live);
                 lastSeekFrame = current.Playhead;
+                Glide(current, live * TimelineDocument.Fps, current.Document.Length);
                 session.PlayheadFollows = true;
             }
         }
@@ -848,9 +847,22 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         lastSeekFrame = frame;
         if (group.Playing)
         {
-            current.Reveal(current.GroupFrame ?? frame);
+            Glide(current, group.SharedSeconds * TimelineDocument.Fps, current.GroupFrame != null ? end : length);
             session.PlayheadFollows = true;
         }
+    }
+
+    /// <summary>
+    /// While the clip plays: the playhead drawn at <paramref name="frames"/> with its fraction, capped at <paramref name="end"/>,
+    /// and the view moving with it.
+    /// </summary>
+    private static void Glide(TimelineEditor current, float frames, int end)
+    {
+        if (!float.IsFinite(frames))
+            return;
+        var time = Math.Clamp(frames, 0, Math.Max(0, end));
+        current.PlayTime = time;
+        current.Follow(time);
     }
 
     /// <summary>Out of the play group: the ruler ends with this clip again, and the playhead is its own.</summary>
@@ -898,7 +910,7 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         if (session.Busy)
             return "Wait for the save to finish.";
         if (loaded.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: not null })
-            return loaded.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source first.";
+            return loaded.Clip.Resolution?.Reason ?? TimelineWindowViews.SkeletonUnknown;
         return null;
     }
 
@@ -1355,8 +1367,6 @@ internal sealed class TimelinePreview(TimelineSession session, MotionDecode deco
         repeatArmed = false;
         PlaybackCall(() => session.Playback.Play(previewTimeline, fingerprint, previewActor, previewFace));
         memberStarted = true;
-        if (Math.Abs(speedPercent - 100) > .1f && session.Playback.Active)
-            PlaybackCall(() => session.Playback.SetSpeed(speedPercent / 100f));
     }
 
     /// <summary> Whether two sets of files by game path hold the same bytes. </summary>

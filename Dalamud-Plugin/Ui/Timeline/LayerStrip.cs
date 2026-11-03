@@ -156,7 +156,7 @@ internal static class LayerStrip
         var pad = Theme.Scaled(6);
         var left = min.X + pad;
         var span = Math.Max(1, width - pad * 2);
-        float X(int frame) => left + span * Math.Clamp(frame, 0, length) / length;
+        float X(float frame) => left + span * Math.Clamp(frame, 0, length) / length;
 
         if (active)
         {
@@ -203,7 +203,7 @@ internal static class LayerStrip
                     new Vector2(x - half, middle), fill);
             }
         }
-        var playhead = TimelineUi.Crisp(X(current.Playhead));
+        var playhead = TimelineUi.Crisp(X(current.PlayTime ?? current.Playhead));
         drawList.AddLine(new Vector2(playhead, min.Y + Theme.Scaled(2)), new Vector2(playhead, max.Y - Theme.Scaled(2)),
             TimelineUi.U32(Theme.Playhead), Theme.Scaled(2));
         drawList.PopClipRect();

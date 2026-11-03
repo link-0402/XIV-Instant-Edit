@@ -89,6 +89,33 @@ internal readonly record struct TimelineView(float First, float PixelsPerFrame, 
     }
 }
 
+/// <summary>
+/// The view's left edge while it follows a playing playhead: still while the playhead is in the first part of the view
+/// (<see cref="Hold"/>), then moving with it so it stays there, until the end shows; a playhead out of view, such as a loop
+/// starting over, brings the view to it. No page jumps. No ImGui or Dalamud dependencies.
+/// </summary>
+internal static class TimelineFollow
+{
+    /// <summary>Where along the view the playhead stays while the view moves with it, as a share of the view.</summary>
+    public const float Hold = .4f;
+
+    /// <summary>
+    /// The view's first frame for a playhead at <paramref name="time"/> (frames), the view <paramref name="frames"/> wide
+    /// starting at <paramref name="first"/>, over a timeline <paramref name="extent"/> frames long.
+    /// </summary>
+    public static float First(float first, float time, float frames, int extent)
+    {
+        if (!float.IsFinite(first) || !float.IsFinite(time) || !float.IsFinite(frames) || frames <= 0)
+            return first;
+        // The furthest the view moves: where the end shows at its right edge; a view already further stays.
+        var last = Math.Max(0, extent - frames);
+        if (time < first || time > first + frames)
+            return Math.Clamp(time - frames * Hold, 0, last);
+        var held = time - frames * Hold;
+        return held > first ? Math.Min(held, Math.Max(last, first)) : first;
+    }
+}
+
 /// <summary>Short time texts for the ruler and readouts. Invariant culture, never an ellipsis.</summary>
 internal static class TimelineText
 {

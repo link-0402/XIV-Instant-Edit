@@ -531,7 +531,7 @@ internal static class FixLayerFixture
     private static void Views(Action<bool, string> check)
     {
         var match = MatchLayer(Loop());
-        check(!TimelineWindowViews.LayerKinds.Contains(MotionLayerKind.Fix) && TimelineWindowViews.LayerKinds.Last() == MotionLayerKind.Pin &&
+        check(!TimelineWindowViews.LayerKinds.Contains(MotionLayerKind.Fix) && LayerMenu.Items(false)[^1] == LayerMenuItem.Fix &&
               TimelineUi.LayerIcons.Length > (int)MotionLayerKind.Fix && TimelineUi.LayerIcon(MotionLayerKind.Fix) != TimelineUi.LayerIcon(MotionLayerKind.Pin) &&
               TimelineWindowViews.LayerColour(MotionLayerKind.Fix) != TimelineWindowViews.LayerColour(MotionLayerKind.Pose) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Fix) != TimelineWindowViews.LayerKindHint(MotionLayerKind.Pose),

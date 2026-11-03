@@ -1,4 +1,8 @@
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
+using Dalamud.Interface.Utility.Raii;
 using InstantEdit.Services.Animations;
 using InstantEdit.Services.Animations.Motion;
 using InstantEdit.Services.Animations.Timeline;
@@ -7,16 +11,15 @@ using InstantEdit.Ui.Main;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The clip's motion to Blender and back: Send motion to Blender sends it as the timeline plays it now
-/// (cuts and bone layers applied), and Motion from Blender reads the armature's motion back and puts it
-/// in place of the clip's, as one undo step. A still pose takes the clip's place the same way, to start
-/// it from scratch, and so do a face's holds (still or moving) and its neutral face; the Animation menu
-/// offers them. The status line says which motion plays.
+/// The clip's motion to Blender and back, from the dock's Blender tab: Send motion to Blender sends it as the timeline plays
+/// it now (cuts and bone layers applied), and Motion from Blender reads the armature's motion back and puts it in place of
+/// the clip's, as one undo step. A face's holds (still or moving) and its neutral face take the face's place the same way.
+/// The status line says which motion plays.
 /// </summary>
 internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode decode)
 {
-    /// <summary>What a running read makes: a motion from Blender, a still pose, a face's hold or its neutral face.</summary>
-    private enum Hold : byte { Blender, Still, Face, Neutral }
+    /// <summary>What a running read makes: a motion from Blender, a face's hold or its neutral face.</summary>
+    private enum Hold : byte { Blender, Face, Neutral }
 
     private AnimationDelivery? delivery;
     private Task<string>? sending;
@@ -51,31 +54,47 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         note = null;
     }
 
-    /// <summary> The Animation menu's Send motion to Blender and Motion from Blender, each with why it is unavailable as its tooltip. </summary>
-    public void DrawMenuItems(TimelineEditor current)
+    /// <summary>
+    /// The Blender tab's Send motion to Blender and Motion from Blender for <paramref name="current"/>, the open timeline (null
+    /// for none), each greyed with why it is unavailable as its tooltip.
+    /// </summary>
+    public void DrawButtons(TimelineEditor? current)
     {
-        var problem = Unavailable();
-        if (ImGui.MenuItem("Send motion to Blender", "", false, problem == null && sending == null && reading == null))
-            Send(current);
+        var problem = Unavailable(current);
+        var width = ImGui.GetContentRegionAvail().X;
+        bool send;
+        using (ImRaii.PushId("##blender-send"))
+        using (ImRaii.Disabled(problem != null || sending != null || reading != null))
+            send = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Upload, "Send motion to Blender", null, null, null, new Vector2(width, 0));
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(problem ?? "Send the motion as it plays now, with its cuts and bone layers.");
+        if (send && current != null)
+            Send(current);
         // ReplaceMotionAsync refuses a rebuilt or repaired clip only after Blender's motion was read.
         var rebuilt = session.Rebuild != null ? "Choose Keep its own under Skeleton first. A motion from Blender can't go onto a rebuilt or repaired clip yet." : null;
-        if (ImGui.MenuItem("Motion from Blender", "", false, (problem ?? rebuilt) == null && sending == null && reading == null))
-            Read(current);
+        bool read;
+        using (ImRaii.PushId("##blender-read"))
+        using (ImRaii.Disabled((problem ?? rebuilt) != null || sending != null || reading != null))
+            read = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Download, "Motion from Blender", null, null, null, new Vector2(width, 0));
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(problem ?? rebuilt ?? "Use the armature's animation in Blender as this clip's motion.");
+            ImGui.SetTooltip(problem ?? rebuilt ?? "Use the armature's animation in Blender as this clip's motion. Ctrl+Z goes back.");
+        if (read && current != null)
+            Read(current);
     }
 
     /// <summary>Why the motion can't go to Blender or come back now; null when it can.</summary>
-    private string? Unavailable()
+    private string? Unavailable(TimelineEditor? current)
     {
         if (delivery == null || session.Animations == null)
             return "Blender isn't available.";
-        if (session.Source is not { } loaded || session.Busy)
+        if (current == null || session.Source is not { Document: not null } loaded)
+            return "Open an animation first.";
+        if (session.Busy)
             return "Wait for the timeline to finish.";
         if (loaded.Standalone)
             return "An expression has no motion.";
+        if (current.Document.Face != null)
+            return "A face has no body motion.";
         return decode.DecodedPose(loaded) == null ? "The motion is still being read." : null;
     }
 
@@ -115,48 +134,6 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
         });
     }
 
-    /// <summary>Why the clip can't start from a still pose now; null when it can.</summary>
-    public string? StillUnavailable(TimelineEditor current)
-    {
-        if (session.Animations == null || session.Source is not { } loaded || session.ReadOnly)
-            return "Wait for the timeline to finish.";
-        if (loaded.Standalone || current.FixedLength)
-            return "An expression has no motion.";
-        if (current.Document.Face != null)
-            return "A face starts from Neutral face.";
-        if (reading != null)
-            return "Wait for the motion being read.";
-        if (session.Rebuild != null)
-            return "Choose Keep its own under Skeleton first. A still pose can't go onto a rebuilt or repaired clip yet.";
-        return decode.DecodedPose(loaded) == null ? "The motion is still being read." : null;
-    }
-
-    /// <summary>
-    /// Start from a still pose: the frame at the playhead, as the timeline plays it now, held for the clip's
-    /// length becomes its motion; a pose layer over it then takes the keys (see <see cref="TimelineEditor.HoldStill"/>).
-    /// </summary>
-    public void HoldStill(TimelineEditor current)
-    {
-        var loaded = session.Fresh(session.Source!);
-        if (decode.DecodedPose(loaded) is not { } decoded || session.Animations is not { } service)
-            return;
-        var output = decode.OutputMotion(current, decoded);
-        var layers = current.Document.Motion;
-        var frame = current.Playhead;
-        var frames = current.Document.Length;
-        cancel = new CancellationTokenSource();
-        var token = cancel.Token;
-        stopping = false;
-        hold = Hold.Still;
-        readingClip = TimelineSession.ClipKey(loaded);
-        note = null;
-        progress = "Holding the pose";
-        reading = Task.Run(async () =>
-        {
-            var playing = Playing(output, layers, token);
-            return ((MotionReplacement?)await service.HoldStillAsync(loaded, playing, frame, frames, message => progress = message, token), false);
-        }, token);
-    }
 
     /// <summary>Why the face's length or its neutral face can't be set now; null when it can.</summary>
     public string? FaceUnavailable(TimelineEditor current)
@@ -233,7 +210,7 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
     }
 
     /// <summary>
-    /// Every frame, also while the start page shows: takes a finished send or read; a read's motion goes in as one undo step.
+    /// Every frame: takes a finished send or read; a read's motion goes in as one undo step.
     /// </summary>
     public void Poll(TimelineEditor current)
     {
@@ -263,14 +240,11 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
             Message(TimelineWindowViews.BlenderUnchangedLine(read.Result.ScaleIgnored), false);
         else if (session.Busy || !(hold switch
                  {
-                     Hold.Still => current.HoldStill(replacement),
                      Hold.Face => current.HoldFace(replacement),
                      Hold.Neutral => current.NeutralFace(replacement),
                      _ => current.ReplaceMotion(replacement),
                  }))
             Message(hold == Hold.Blender ? "The timeline is busy. Read it again." : "The timeline is busy. Try again.", true);
-        else if (hold == Hold.Still)
-            Message("Holding the pose. Key a pose or pose bones in the new pose layer.", false);
         else if (hold == Hold.Neutral)
             Message("Neutral face. Key the new face in the pose layer.", false);
     }
@@ -294,12 +268,9 @@ internal sealed class BlenderMotionPanel(TimelineSession session, MotionDecode d
                 : new StatusNote("blender", StatusKind.Working, stopping ? "Stopping" : progress));
         else if (note is { } text)
             notes.Add(new StatusNote("blender", noteWarns ? StatusKind.Warning : StatusKind.Notice, text));
+        // Which motion plays in place of the clip's; Ctrl+Z goes back.
         if (current.Document.Replacement is { } replacement)
-            // A face's hold goes back with Ctrl+Z.
-            notes.Add(current.Document.Face != null
-                ? new StatusNote("blender-motion", StatusKind.Notice, TimelineWindowViews.BlenderMotionLine(replacement))
-                : new StatusNote("blender-motion", StatusKind.Notice, TimelineWindowViews.BlenderMotionLine(replacement), "Use the clip's motion",
-                    () => current.DropReplacement(), ButtonTooltip: "Go back to the animation's own motion. Ctrl+Z works too.", ButtonEnabled: !session.ReadOnly));
+            notes.Add(new StatusNote("blender-motion", StatusKind.Notice, TimelineWindowViews.BlenderMotionLine(replacement)));
         return notes;
     }
 }

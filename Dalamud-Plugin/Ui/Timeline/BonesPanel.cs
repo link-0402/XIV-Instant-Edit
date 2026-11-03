@@ -20,10 +20,10 @@ namespace InstantEdit.Ui.Timeline;
 /// shared with the properties panel's bone picker and the bones on the character.
 /// </summary>
 internal sealed class BonesPanel(TimelineSession session, string? animationError, BonePosing posing, BoneEditor boneEditor,
-    PoseSourcePanel poseSources, TimelinePreview timelinePreview, PlayBar playBar, Func<SkeletonStandard?> repair, IBonesOverlay overlay,
-    ITextureProvider textures, ShortcutKeys keys, Action savePose)
+    PoseSourcePanel poseSources, TimelinePreview timelinePreview, PlayBar playBar, IBonesOverlay overlay,
+    ITextureProvider textures, ShortcutKeys keys, Action savePose, BonesKeptPage bonesKept, LayerMenu layerMenu)
 {
-    private enum BonesPage : byte { Map, List }
+    private enum BonesPage : byte { Map, List, Kept }
 
     private const string BonesHelp =
         "The map shows the bones your character uses or the animation moves. View > Every bone shows them all.\n" +
@@ -80,7 +80,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             }
             else
                 Widgets.EmptyState(FontAwesomeIcon.Child, "Skeleton unknown",
-                    fresh.Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source first.");
+                    fresh.Clip.Resolution?.Reason ?? TimelineWindowViews.SkeletonUnknown);
             return;
         }
         posing.KeepSelection(skeleton);
@@ -98,8 +98,10 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
             {
                 if (bonesPage == BonesPage.Map)
                     DrawBoneMap(skeleton, layer, current.Playhead, fresh, ImGui.GetContentRegionAvail());
-                else
+                else if (bonesPage == BonesPage.List)
                     DrawBoneList(skeleton, layer, current.Playhead, fresh.Clip);
+                else
+                    bonesKept.Draw(current, loaded);
             }
         }
         ImGui.SameLine();
@@ -114,8 +116,8 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     }
 
     /// <summary>
-    /// The skeletons that fit the clip equally well, to choose the one it was made for. The choice is
-    /// shared with the Timeline window's Source page, so both keep it.
+    /// The skeletons that fit the clip equally well (their reference poses differ, so the clip decodes differently on
+    /// each), to choose the one it was made for. Shown only in that rare tie.
     /// </summary>
     private void DrawSkeletonChoice(AnimationTimelineSource fresh, SkeletonResolution resolution)
     {
@@ -144,7 +146,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
     {
         TimelineUi.DrawUndoRedo("##bones", current, session.ReadOnly);
         ImGui.SameLine(0, Theme.Scaled(12));
-        playBar.Draw(current, loaded, repair(), "##bones-play");
+        playBar.Draw(current, "##bones-play");
         LayerStrip.Draw(current, "##bones-strip", pauseForStep);
     }
 
@@ -159,6 +161,11 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.SameLine(0, Theme.Scaled(2));
         if (Widgets.TabButton(FontAwesomeIcon.List, "All bones", bonesPage == BonesPage.List))
             bonesPage = BonesPage.List;
+        ImGui.SameLine(0, Theme.Scaled(2));
+        if (Widgets.TabButton(FontAwesomeIcon.Tasks, "Kept", bonesPage == BonesPage.Kept))
+            bonesPage = BonesPage.Kept;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The bones the save keeps. Untick one to leave it out, such as hair for physics.");
         ImGui.SameLine(0, Theme.Scaled(12));
         if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.ObjectGroup, "Select", null, null, null, null))
             ImGui.OpenPopup("##bones-groups");
@@ -675,29 +682,12 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         }
     }
 
-    /// <summary>
-    /// The Add layer menu: the clip's layer kinds, each over the whole clip, then the loop-pose and fix items, each greyed out
-    /// with its reason where it can't be added.
-    /// </summary>
+    /// <summary> The Add layer menu: the Timeline's layer menu, with a link's picker opening in this window. </summary>
     private void DrawAddLayerMenu(TimelineEditor current, bool readOnly)
     {
         using var popup = ImRaii.Popup("##bones-add-layer");
-        if (!popup.Success)
-            return;
-        foreach (var kind in TimelineWindowViews.AddLayerKinds(current.Document))
-        {
-            // A link needs its partner: the item opens the link picker, in this window.
-            if (kind == MotionLayerKind.Link)
-            {
-                session.LinkPicker?.DrawAddItem($"{MotionEdits.KindName(kind)} layer", readOnly, TimelineWindowViews.LayerKindHint(kind), true);
-                continue;
-            }
-            if (ImGui.MenuItem($"{MotionEdits.KindName(kind)} layer", "", false, !readOnly))
-                current.AddLayer(kind, 0, Math.Max(TimelineDocument.MinLength, current.Document.Length));
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(TimelineWindowViews.LayerKindHint(kind));
-        }
-        session.LoopPose.DrawAddItems(current, readOnly, (label, enabled) => ImGui.MenuItem(label, "", false, enabled));
+        if (popup.Success)
+            layerMenu.Draw(current, bones: true);
     }
 
     /// <summary>
@@ -771,6 +761,6 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
                 timelinePreview.PauseForStep();
         }
         else if (!keys.Ctrl && !keys.Alt && keys.Pressed(ImGuiKey.Space, VirtualKey.SPACE, ctrl: false))
-            timelinePreview.PlayKey();
+            playBar.PlayKey();
     }
 }

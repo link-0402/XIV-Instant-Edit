@@ -34,8 +34,6 @@ internal interface IPlayGroupMember
     void Pause();
 
     void Resume();
-
-    void SetSpeed(float speed);
 }
 
 /// <summary>
@@ -53,7 +51,6 @@ internal sealed class TimelinePlayGroup
     private readonly HashSet<int> held = [];
     // The members seen playing before their end since they last started: only their end counts.
     private readonly HashSet<int> armed = [];
-    private float speedPercent = 100;
 
     /// <summary>Two or more members play: the group holds the shared frame.</summary>
     public bool Grouped { get; private set; }
@@ -68,17 +65,6 @@ internal sealed class TimelinePlayGroup
     /// <summary>Where each member shorter than the leader ends, by its actor.</summary>
     public IReadOnlyList<(string Actor, float End)> ShorterEnds { get; private set; } = [];
 
-    /// <summary>One speed for every member, in percent (10 to 200).</summary>
-    public float SpeedPercent
-    {
-        get => speedPercent;
-        set
-        {
-            speedPercent = Math.Clamp(value, 10, 200);
-            foreach (var member in Active())
-                member.SetSpeed(speedPercent / 100f);
-        }
-    }
 
     public void Add(IPlayGroupMember member)
     {
@@ -134,8 +120,6 @@ internal sealed class TimelinePlayGroup
         var (shared, orders) = PlayGroupRules.Step(Playing, SharedSeconds, facts.Select(pair => pair.Fact).ToList());
         SharedSeconds = shared;
         var byKey = facts.ToDictionary(pair => pair.Fact.Key, pair => pair.Member);
-        foreach (var started in facts.Where(pair => pair.Fact.Started))
-            started.Member.SetSpeed(speedPercent / 100f);
         foreach (var order in orders)
             Apply(byKey[order.Key], order);
         EndSeconds = facts.Max(pair => pair.Fact.Length);

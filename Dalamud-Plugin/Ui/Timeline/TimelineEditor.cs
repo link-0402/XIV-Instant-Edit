@@ -453,6 +453,26 @@ internal sealed class TimelineEditor
     /// <summary>The shared frame while it is past this clip's end (the playhead stands on its last frame then); null otherwise.</summary>
     public int? GroupFrame { get; set; }
 
+    /// <summary>
+    /// Where the clip stands while it plays, in frames with their fraction, as the game's clock read it this update; null while
+    /// nothing plays. The playhead is drawn there, so it glides instead of stepping a frame at a time.
+    /// </summary>
+    public float? PlayTime { get; set; }
+
+    /// <summary>Where the playhead is drawn: the play time while playing, else the shared frame past this clip's end, else the playhead.</summary>
+    public float ShownPlayhead => PlayTime ?? GroupFrame ?? Playhead;
+
+    /// <summary>Scrolls with the playhead at <paramref name="time"/> while it plays (see <see cref="TimelineFollow.First"/>); a drag keeps the view.</summary>
+    public void Follow(float time)
+    {
+        var view = View;
+        if (view.Width <= 0 || gesture != TimelineGesture.None)
+            return;
+        var first = TimelineFollow.First(view.First, time, view.Width / view.Scale, ViewExtent);
+        if (first != view.First)
+            View = (view with { First = first }).Clamp(ViewExtent);
+    }
+
     /// <summary>Where each shorter clip of the play group ends, by its actor, for the ruler's marks.</summary>
     public ImmutableArray<(int Frame, string Actor)> GroupEnds { get; set; } = [];
 

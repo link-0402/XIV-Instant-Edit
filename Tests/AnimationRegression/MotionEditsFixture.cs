@@ -294,9 +294,9 @@ internal static class MotionEditsFixture
               s.Swing == new MotionSwing() &&
               MotionEdits.Find(smooth, smoothKey) is { Name: "Smooth motion 1", Amount: 1, Window: MotionSmoothing.DefaultWindow, Swing: null },
             "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
-        check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Offset, MotionLayerKind.Amplitude, MotionLayerKind.Pose, MotionLayerKind.Symmetry,
-                  MotionLayerKind.Idle, MotionLayerKind.Swing, MotionLayerKind.Smooth, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat,
-                  MotionLayerKind.LookAt, MotionLayerKind.Link, MotionLayerKind.Balance, MotionLayerKind.Pin]) &&
+        check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Pose, MotionLayerKind.Offset, MotionLayerKind.LookAt, MotionLayerKind.Pin, MotionLayerKind.Balance,
+                  MotionLayerKind.Amplitude, MotionLayerKind.Smooth, MotionLayerKind.Swing, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat,
+                  MotionLayerKind.Idle, MotionLayerKind.Symmetry, MotionLayerKind.Link]) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
               TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&
@@ -507,8 +507,9 @@ internal static class MotionEditsFixture
         var editor = Editor();
         editor.SetUnfolded("m1", false);
         var layout = editor.Layout;
-        check(layout.MotionFirstRow == 6 && layout.MotionRows == 2 && layout.LayerIndexAt(6) == 0 && layout.LayerIndexAt(7) == 1 && layout.RowCount == 8,
-            "each bone layer gets a row below the event lanes, in the order they apply");
+        check(layout.MotionFirstRow == 6 && layout.MotionRows == 3 && layout.LayerIndexAt(6) == 0 && layout.LayerIndexAt(7) == 1 && layout.RowCount == 9 &&
+              layout.MotionRowAt(8) is { Layer: -1, Bone: null },
+            "each bone layer gets a row below the event lanes, in the order they apply, and the row to add one from comes last");
         check(TimelineLayout.Build(Empty() with { Expression = true }).MotionRows == 0, "an expression's own timeline has no bone layer rows");
         TimelineHit Hit(Vector2 point) => editor.HitTest(Geometry, point);
         check(Hit(At(40, 6)) is { Part: TimelinePart.LayerBody, Layer: "m1" } &&
@@ -521,8 +522,8 @@ internal static class MotionEditsFixture
               Hit(At(40, 6, dy: 3)) is { Part: TimelinePart.LayerBody },
             "the fade handles sit on the bar's top edge where the fades end");
         check(Hit(At(80, 6)) is { Part: TimelinePart.MotionLane } && Hit(new Vector2(50, 24 + 7 * 20 + 10)) is { Part: TimelinePart.Legend, Layer: "m2" } &&
-              Hit(At(10, 8)) is { Part: TimelinePart.None },
-            "empty space in a layer row is the bone lane, its legend names the layer, below the rows is nothing");
+              Hit(At(10, 8)) is { Part: TimelinePart.MotionLane, Layer: null } && Hit(At(10, 9)) is { Part: TimelinePart.MotionLane, Row: 8 },
+            "empty space in a layer row is the bone lane, its legend names the layer, the row under the layers and the space below it add one");
         var none = new TimelineEditor(Empty());
         none.SetWidth(440);
         check(none.HitTest(Geometry, At(10, 6)) is { Part: TimelinePart.MotionLane, Layer: null }, "with no layers one empty bone row takes the first");
@@ -598,10 +599,10 @@ internal static class MotionEditsFixture
         editor.SetWidth(440);
         var geometry = Geometry with { Unfold = 16 };
         var legendY = (int row) => 24 + row * 20 + 10f;
-        check(editor.IsUnfolded("m1") && editor.Layout.RowCount == 10, "layers start with their bone rows shown");
+        check(editor.IsUnfolded("m1") && editor.Layout.RowCount == 11, "layers start with their bone rows shown");
         editor.Press(editor.HitTest(geometry, new Vector2(92, legendY(6))));
         editor.Release();
-        check(!editor.IsUnfolded("m1") && editor.Layout.RowCount == 8, "the arrow folds them away");
+        check(!editor.IsUnfolded("m1") && editor.Layout.RowCount == 9, "the arrow folds them away");
         check(editor.HitTest(geometry, new Vector2(92, legendY(6))) is { Part: TimelinePart.LayerUnfold, Layer: "m1" } &&
               editor.HitTest(geometry, new Vector2(92, legendY(7))) is { Part: TimelinePart.Legend, Layer: "m2" } &&
               editor.HitTest(Geometry, new Vector2(92, legendY(6))) is { Part: TimelinePart.Legend },
@@ -609,7 +610,7 @@ internal static class MotionEditsFixture
         editor.Press(editor.HitTest(geometry, new Vector2(92, legendY(6))));
         editor.Release();
         var layout = editor.Layout;
-        check(editor.IsUnfolded("m1") && layout.RowCount == 10 && layout.BoneAt(7) == (0, Hand) && layout.BoneAt(8) == (0, Arm) &&
+        check(editor.IsUnfolded("m1") && layout.RowCount == 11 && layout.BoneAt(7) == (0, Hand) && layout.BoneAt(8) == (0, Arm) &&
               layout.LayerIndexAt(9) == 1 && layout.LayerRow(1) == 9 && layout.BoneRows(0) == 2 && layout.BoneRows(1) == 0 && layout.LayerIndexAt(7) == -1,
             "unfolding adds a row per bone under the layer and moves the next layer down");
         check(editor.History.UndoCount == 0, "folding is no edit");
@@ -643,7 +644,7 @@ internal static class MotionEditsFixture
         check(Frames(editor.Document).SequenceEqual([30, 40, 50]) && BonesAt(editor.Document, 30).SequenceEqual([Hand, Arm]), "undo puts the bone's key back");
         editor.SelectLayer("m1");
         editor.Key(TimelineKey.Delete);
-        check(!editor.IsUnfolded("m1") && editor.Layout.LayerIndexAt(6) == 0 && editor.Layout.RowCount == 7, "a deleted layer's bone rows go with it");
+        check(!editor.IsUnfolded("m1") && editor.Layout.LayerIndexAt(6) == 0 && editor.Layout.RowCount == 8, "a deleted layer's bone rows go with it");
     }
 
     private static void KeyPicks(Action<bool, string> check)

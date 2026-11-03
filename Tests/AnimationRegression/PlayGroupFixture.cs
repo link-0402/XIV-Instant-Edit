@@ -27,7 +27,7 @@ internal static class PlayGroupFixture
         ReadOnlySpan<float> blending = [0.99f, 0.01f];
         report(AnimationPreviewRules.PickControl(blending, newest: true) == 1 && AnimationPreviewRules.PickControl(blending, newest: false) == 0 &&
                AnimationPreviewRules.PickControl([0.5f, 0.5f], newest: false) == 0 && AnimationPreviewRules.PickControl([], newest: true) == -1,
-            "play group: a member's time is its newest round's; the playhead's read keeps the control with the most weight");
+            "play group: a member's time is its newest round's; the most weight picks the old round");
 
         var calls = new List<string>();
         var group = new TimelinePlayGroup();
@@ -75,7 +75,6 @@ internal static class PlayGroupFixture
         public void PlayAgain() => calls.Add($"{name} again");
         public void Pause() => calls.Add($"{name} pause");
         public void Resume() => calls.Add($"{name} resume");
-        public void SetSpeed(float speed) => calls.Add(FormattableString.Invariant($"{name} speed {speed:0.##}"));
     }
 
     private static void Group(Action<bool, string> report)
@@ -92,8 +91,8 @@ internal static class PlayGroupFixture
 
         group.Add(partnerOne);
         group.Update();
-        check(group.Grouped && calls.Where(call => !call.Contains("speed")).SequenceEqual(["you again", "partnerOne again"]) && calls[0] == "partnerOne speed 1",
-            "play group: a second clip joining while playing takes the group's speed and restarts both together", calls);
+        check(group.Grouped && calls.SequenceEqual(["you again", "partnerOne again"]),
+            "play group: a second clip joining while playing restarts both together", calls);
 
         calls.Clear();
         you.TimeSeconds = 2;
@@ -119,10 +118,6 @@ internal static class PlayGroupFixture
         calls.Clear();
         group.TogglePlay();
         check(calls.SequenceEqual(["you resume"]) && group.Playing, "play group: Play resumes the clips not holding their end", calls);
-
-        calls.Clear();
-        group.SpeedPercent = 50;
-        check(calls.SequenceEqual(["you speed 0.5", "partnerOne speed 0.5"]) && group.SpeedPercent == 50, "play group: one speed for every clip", calls);
 
         check(group.EndSeconds == 7.33f && group.ShorterEnds.SequenceEqual([("partnerOne", 2.33f)]), "play group: the group's end and where the shorter clip ends", calls);
 

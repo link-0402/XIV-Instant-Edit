@@ -156,7 +156,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         // Bones are picked and posed in the Bones window: here a line on them and the button that opens it.
         if (skeleton == null)
         {
-            Widgets.HintWrapped(session.Fresh(loaded).Clip.Resolution?.Reason ?? "Choose the skeleton this animation was made for under Source to pick bones.");
+            Widgets.HintWrapped(session.Fresh(loaded).Clip.Resolution?.Reason ?? TimelineWindowViews.SkeletonUnknown);
             DrawPosing(layer);
         }
         else if (layer.Kind == MotionLayerKind.Idle)

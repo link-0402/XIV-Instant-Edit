@@ -173,7 +173,7 @@ internal static class PinLayerFixture
 
     private static void Views(Action<bool, string> check)
     {
-        check(TimelineWindowViews.LayerKinds.Last() == MotionLayerKind.Pin && TimelineUi.LayerIcon(MotionLayerKind.Pin) != TimelineUi.LayerIcon(MotionLayerKind.Symmetry) &&
+        check(TimelineWindowViews.LayerKinds.Contains(MotionLayerKind.Pin) && TimelineUi.LayerIcon(MotionLayerKind.Pin) != TimelineUi.LayerIcon(MotionLayerKind.Symmetry) &&
               TimelineWindowViews.LayerColour(MotionLayerKind.Pin) == Theme.ModelKind &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Pin) == "Hold bones at a spot while the limb bends to reach it.",
             "Pin is a kind of its own in the menus, glyphs and colours");
@@ -204,7 +204,7 @@ internal static class PinLayerFixture
               !refusing.AddPinFeet(footless) && refusing.Document.Motion.IsEmpty && refusing.LastError == "This skeleton has no feet to pin." &&
               refusing.AddPinFeet(Body()), "Pin feet needs a skeleton with both feet");
         check(TimelineWindowViews.PinFeetTip(Body()) == TimelineWindowViews.PinFeetHint && TimelineWindowViews.PinFeetTip(footless) == TimelineWindowViews.NoFeet &&
-              TimelineWindowViews.PinFeetTip(null).Contains("under Source", StringComparison.Ordinal), "Pin feet says why it waits while the skeleton is unknown");
+              TimelineWindowViews.PinFeetTip(null) == TimelineWindowViews.SkeletonUnknown, "Pin feet says why it waits while the skeleton is unknown");
 
         // The gizmo on a pin layer: only on a keyed pinned bone; moves, or turns when the pin holds its turn and Move isn't chosen.
         var gizmoLayer = PinLayer([new("j_te_l"), new("j_te_r", HoldTurn: false), new(PinChains.FootL, Planted: true)]);

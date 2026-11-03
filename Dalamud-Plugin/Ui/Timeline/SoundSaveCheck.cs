@@ -117,7 +117,7 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
     }
 
     /// <summary>
-    /// Every frame, also while the start page shows: after Save's check of the mod, saves when no other animation plays the
+    /// Every frame, also while another workspace shows: after Save's check of the mod, saves when no other animation plays the
     /// sounds, else leaves the question for <see cref="Draw"/>. <paramref name="fail"/> says why the save can't go on.
     /// </summary>
     public void Poll(Action<string> fail)
@@ -150,7 +150,7 @@ internal sealed class SoundSaveCheck(TimelineSession session, SoundFiles soundFi
 
     /// <summary>
     /// The question after Save's check of the mod, when other animations play the sounds: change each one everywhere (the
-    /// mod's file) or only here (a copy). It waits for the save row, so while the start page shows it waits for Back.
+    /// mod's file) or only here (a copy). It waits for the save row, so while another workspace shows it waits for this one.
     /// </summary>
     public void Draw()
     {

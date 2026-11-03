@@ -15,7 +15,7 @@ namespace InstantEdit.Ui.Timeline;
 /// selected layer's keys marked; Layer shows the selected offset or pose layer's own values, a dot per key, and a dot
 /// dragged up or down changes that channel of its key. Self-contained: it owns its switches, its height and its caches.
 /// </summary>
-internal sealed class CurveView(TimelineSession session, MotionDecode decode, BonePosing posing)
+internal sealed class CurveView(TimelineSession session, MotionDecode decode, BonePosing posing, WindowLayout layout)
 {
     private const string TypePopup = "##curve-type";
     private static readonly string[] ChannelNames = ["Turn X", "Turn Y", "Turn Z", "Move X", "Move Y", "Move Z"];
@@ -27,7 +27,6 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
     private readonly List<Vector2> points = [];
     private bool layerMode;
     // The strip's height with its splitter; 0 until the first draw.
-    private float stripHeight;
     // A bone's curves from one clip (before layers, or after), kept while the clip and bone stay.
     private (MotionClip Clip, int Bone, CurveSamples Samples)? beforeCurve, afterCurve;
     // The selected layer's curve for a bone, kept while the layer (any edit replaces it), the bone and the loop stay.
@@ -40,8 +39,8 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
     private float typed;
     private bool scrubbing;
 
-    /// <summary>The View menu's Curves switch.</summary>
-    public bool Shown { get; set; }
+    /// <summary>The action bar's Curves switch, the same for every actor (<see cref="WindowLayout.Curves"/>).</summary>
+    public bool Shown { get => layout.Curves; set => layout.Curves = value; }
 
     /// <summary>Drops the curves and the bake, for another clip.</summary>
     public void Forget()
@@ -53,9 +52,9 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
     /// <summary>How tall the strip and its splitter are in a body <paramref name="total"/> tall, leaving the lanes room.</summary>
     public float Height(float total)
     {
-        if (stripHeight <= 0)
-            stripHeight = Theme.Scaled(170);
-        return Math.Clamp(stripHeight, Theme.Scaled(110), Math.Max(Theme.Scaled(110), total - Theme.Scaled(140)));
+        if (layout.CurveHeight <= 0)
+            layout.CurveHeight = Theme.Scaled(170);
+        return Math.Clamp(layout.CurveHeight, Theme.Scaled(110), Math.Max(Theme.Scaled(110), total - Theme.Scaled(140)));
     }
 
     /// <summary>The splitter above the strip, then the strip, <paramref name="size"/> together; the width is the canvas's.</summary>
@@ -94,7 +93,7 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
         if (hovered || active)
             ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeNs);
         if (active)
-            stripHeight = Math.Max(Theme.Scaled(110), stripHeight - ImGui.GetIO().MouseDelta.Y);
+            layout.CurveHeight = Math.Max(Theme.Scaled(110), layout.CurveHeight - ImGui.GetIO().MouseDelta.Y);
         var min = ImGui.GetItemRectMin();
         var max = ImGui.GetItemRectMax();
         var colour = active ? Theme.Accent : hovered ? Theme.Muted : Theme.WithAlpha(Theme.Muted, .25f);
@@ -386,7 +385,7 @@ internal sealed class CurveView(TimelineSession session, MotionDecode decode, Bo
                 at = new Vector2(track.Min.X + Theme.Scaled(8), (track.Min.Y + track.Max.Y - size.Y) / 2);
             drawList.AddText(at, TimelineUi.U32(content.Before == null ? Theme.Muted : Theme.Hint), text);
         }
-        var playheadX = TimelineUi.Crisp(track.X(current.Playhead));
+        var playheadX = TimelineUi.Crisp(track.X(current.ShownPlayhead));
         drawList.AddLine(new Vector2(playheadX, track.Min.Y), new Vector2(playheadX, track.Max.Y), TimelineUi.U32(Theme.Playhead), line);
         drawList.PopClipRect();
     }

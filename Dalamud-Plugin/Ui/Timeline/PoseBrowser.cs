@@ -120,7 +120,7 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
         else if (loaded.Standalone || current.Document.Face != null)
             blocked = "A face takes no body pose.";
         else if (session.EditingSkeleton(loaded) is not { } skeleton)
-            blocked = "Choose the skeleton this animation was made for under Source first.";
+            blocked = TimelineWindowViews.SkeletonUnknown;
         else if (current.SelectedLayerValue is not { Kind: MotionLayerKind.Pose } layer)
             blocked = "Select a pose layer in the timeline.";
         else
@@ -327,7 +327,7 @@ internal sealed class PoseBrowser(TimelineSession session, MotionDecode decode, 
             return "Open an animation in the Timeline window.";
         if (loaded.Standalone || current.Document.Face != null)
             return "A face can't be saved as a pose.";
-        return session.EditingSkeleton(loaded) == null ? "Choose the skeleton this animation was made for under Source first." : null;
+        return session.EditingSkeleton(loaded) == null ? TimelineWindowViews.SkeletonUnknown : null;
     }
 
     /// <summary>Saves the pose at the playhead in the folder shown, under the name typed; asks first when the file is there.</summary>
