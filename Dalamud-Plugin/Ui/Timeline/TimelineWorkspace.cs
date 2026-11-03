@@ -943,6 +943,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         if (source.Document == null || editor == null)
         {
             DrawHeader(source);
+            // Back in the header may have started reading the timeline Edit face left.
+            if (source == null)
+                return;
             Widgets.Banner("##timeline-read-only", FeedbackSeverity.Warning,
                 "This timeline can't be edited. " + (source.ReadOnlyReason ?? "Its file could not be read."));
             ImGui.Spacing();
@@ -959,6 +962,9 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
                 Open(changed, source.Startup);
             ImGui.Spacing();
         }
+        // Back in the header, or Reload, may have started reading a clip.
+        if (source == null)
+            return;
         CheckGizmo();
         toolbar.Draw(editor);
         statusLine.Draw("##timeline", toolbar.Notes(editor).Concat(timelinePreview.Notes(editor, source, saveFooter.RepairTarget)).Concat(dock.JobNotes())
