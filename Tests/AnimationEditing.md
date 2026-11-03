@@ -3300,7 +3300,8 @@ camera's update moves it after the game's own update. Plan: tasks/freecam.md (lo
   over a window it scrolls that window.
 - [ ] 5 Typing in a Timeline field or the game's chat doesn't move the camera; neither do keys typed into another program.
 - [ ] 6 Off, closing the Timeline, or leaving GPose: the game's camera is back where it was before, zoom included. /ie cam again
-  turns it off; entering or leaving GPose while it flies turns it off.
+  turns it off; entering or leaving GPose while it flies turns it off. Outside GPose, Escape turns it off without opening the
+  game's menu, even held down; Escape in a game text field or one of our windows doesn't.
 - [ ] 7 The bones overlay and gizmo stay on the bones while the free camera flies.
 - [ ] 8 Unloading the plugin with the free camera on gives the game its camera back.
 

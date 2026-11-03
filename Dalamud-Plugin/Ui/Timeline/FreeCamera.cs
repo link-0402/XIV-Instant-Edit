@@ -16,7 +16,8 @@ namespace InstantEdit.Ui.Timeline;
 /// free camera; its angles and zoom go back each frame, and its own view goes back before its next update, so the game never works
 /// from the free camera's view, never reaches its limits and never zooms into first person. The moving keys are read on the
 /// framework update, before the game reads them, and taken from the game while it has the keyboard, all but Shift and Ctrl; the
-/// wheel over the game sets the speed. Turning it off, or entering or leaving GPose, gives the game its camera back as it was.
+/// wheel over the game sets the speed. Turning it off, Escape outside GPose, or entering or leaving GPose gives the game its camera
+/// back as it was.
 /// </summary>
 internal sealed unsafe partial class FreeCamera : IDisposable
 {
@@ -57,6 +58,8 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     private Vector3 gameLookAt;
     private Vector3 gameUp;
     private bool gameViewSaved;
+    // Escape stopped the free camera and is still held.
+    private bool escapeHeld;
     private bool disposed;
 
     public FreeCamera(IGameInteropProvider interop, IFramework framework, IClientState clientState, IKeyState keys, IPluginLog log)
@@ -221,6 +224,13 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     // Runs before the game's own update, which reads the keys and then updates the camera.
     private void Tick(IFramework update)
     {
+        // The Escape that stopped it stays away from the game until it is let go, or the game would open its menu on it.
+        if (escapeHeld)
+        {
+            escapeHeld = ShortcutKeys.Down(VirtualKey.ESCAPE);
+            if (escapeHeld)
+                Take(VirtualKey.ESCAPE);
+        }
         if (!On)
             return;
         if (clientState.IsGPosing != gposing || (nint)Active() != camera)
@@ -229,6 +239,14 @@ internal sealed unsafe partial class FreeCamera : IDisposable
             return;
         }
         var io = ImGui.GetIO();
+        // Escape stops it outside GPose, where it would otherwise open the game's menu; in GPose it leaves GPose as ever.
+        if (!gposing && GameHasKeyboard(io) && keys[VirtualKey.ESCAPE])
+        {
+            Take(VirtualKey.ESCAPE);
+            escapeHeld = true;
+            Off();
+            return;
+        }
         if (!io.WantCaptureMouse)
             Speed = FreeCameraMotion.Speed(Speed, io.MouseWheel);
         var seconds = (float)Math.Min(update.UpdateDelta.TotalSeconds, 0.1);
@@ -241,13 +259,23 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     /// </summary>
     private FreeCameraInput Input(ImGuiIOPtr io)
     {
-        if (io.WantCaptureKeyboard || io.WantTextInput || !GameInFront() || ShortcutKeys.GameTyping())
+        if (!GameHasKeyboard(io))
             return default;
         foreach (var key in MoveKeys)
-            if (keys.IsVirtualKeyValid(key) && keys[key])
-                keys[key] = false;
+            Take(key);
         return new FreeCameraInput(Axis(VirtualKey.W, VirtualKey.S), Axis(VirtualKey.D, VirtualKey.A), Axis(VirtualKey.SPACE, VirtualKey.CONTROL),
             ShortcutKeys.Down(VirtualKey.SHIFT));
+    }
+
+    // The game's window has the keyboard: no window or text field of ours or the game's, and no other program.
+    private static bool GameHasKeyboard(ImGuiIOPtr io) =>
+        !io.WantCaptureKeyboard && !io.WantTextInput && GameInFront() && !ShortcutKeys.GameTyping();
+
+    // Takes a key held down from the game, so it doesn't act on it this frame.
+    private void Take(VirtualKey key)
+    {
+        if (keys.IsVirtualKeyValid(key) && keys[key])
+            keys[key] = false;
     }
 
     private static float Axis(VirtualKey plus, VirtualKey minus) => (ShortcutKeys.Down(plus) ? 1 : 0) - (ShortcutKeys.Down(minus) ? 1 : 0);

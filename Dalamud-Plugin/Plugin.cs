@@ -404,7 +404,7 @@ public sealed class Plugin : IDalamudPlugin
 
         _commands.AddHandler("/ie", new CommandInfo(OnCommand)
         {
-            HelpMessage = "Opens the XIV Instant Edit window. Use /ie refresh to refresh the on-screen list, /ie physics for the physics builder, /ie cam to fly the camera.",
+            HelpMessage = "Opens the XIV Instant Edit window. Use /ie refresh to refresh the on-screen list, /ie physics for the physics builder, /ie cam to fly the camera (Escape stops it).",
         });
         _commands.AddHandler("/iesettings", new CommandInfo((_, _) => _settingsWindow.Open())
         {
