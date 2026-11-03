@@ -15,8 +15,8 @@ namespace InstantEdit.Ui.Timeline;
 /// camera's spot right after. The game's own turn of its camera that frame (mouse drag, keys, with the game's own settings) turns the
 /// free camera; its angles and zoom go back each frame, and its own view goes back before its next update, so the game never works
 /// from the free camera's view, never reaches its limits and never zooms into first person. The moving keys are read on the
-/// framework update, before the game reads them, and taken from the game while it has the keyboard; the wheel over the game sets
-/// the speed. Turning it off, or entering or leaving GPose, gives the game its camera back as it was.
+/// framework update, before the game reads them, and taken from the game while it has the keyboard, all but Shift and Ctrl; the
+/// wheel over the game sets the speed. Turning it off, or entering or leaving GPose, gives the game its camera back as it was.
 /// </summary>
 internal sealed unsafe partial class FreeCamera : IDisposable
 {
@@ -28,8 +28,8 @@ internal sealed unsafe partial class FreeCamera : IDisposable
 
     private delegate void UpdateDelegate(CameraBase* camera);
 
-    private static readonly VirtualKey[] MoveKeys =
-        [VirtualKey.W, VirtualKey.A, VirtualKey.S, VirtualKey.D, VirtualKey.SPACE, VirtualKey.CONTROL, VirtualKey.SHIFT];
+    // The keys taken from the game while flying. Shift and Ctrl stay the game's too, so its own and macro shortcuts with them still work.
+    private static readonly VirtualKey[] MoveKeys = [VirtualKey.W, VirtualKey.A, VirtualKey.S, VirtualKey.D, VirtualKey.SPACE];
 
     private readonly IGameInteropProvider interop;
     private readonly IFramework framework;
@@ -236,8 +236,8 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     }
 
     /// <summary>
-    /// The moving keys held now, taken from the game so it doesn't act on them too; none while a window or a text field has the
-    /// keyboard, or another program does.
+    /// The moving keys held now, all but Shift and Ctrl taken from the game so it doesn't act on them too; none while a window or a
+    /// text field has the keyboard, or another program does.
     /// </summary>
     private FreeCameraInput Input(ImGuiIOPtr io)
     {

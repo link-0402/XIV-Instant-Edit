@@ -3292,7 +3292,8 @@ camera's update moves it after the game's own update. Plan: tasks/freecam.md (lo
 
 - [ ] 1 In GPose and out of it, on: the view stays where it was, no jump. In first person outside GPose, /ie cam says why it won't.
 - [ ] 2 Right after the click, W/S fly where the camera looks, A/D slide, Space/Ctrl rise and sink, Shift is faster; the character
-  doesn't move, the game's camera doesn't react to these keys and no Timeline shortcut fires.
+  doesn't move, the game's camera doesn't react to these keys and no Timeline shortcut fires. Shortcuts with Shift or Ctrl still
+  reach the game: a macro on Shift+X running /ie cam turns it back off.
 - [ ] 3 Right-drag over the game turns the view; drag over a window doesn't. Looking straight up and down stops just short. Turned
   away from where it started and looking up or down, the horizon stays level (no roll).
 - [ ] 4 The wheel over the game changes the speed (the tooltip shows it) and never turns the view, even many notches in or out;
