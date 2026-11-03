@@ -25,36 +25,40 @@ internal static class InstantStartupFixture
         Paths(check);
         Mapping(check);
         UndoOrder(check);
-        LoopRace(check, reject);
+        LoopRace(check);
     }
 
     /// <summary>
-    /// A loop whose file is another race's (a Midlander loop under a Miqo'te path) is read rebuilt for the startup's race, as
-    /// the game converts it: read as it is, its longer bones went into the startup and the character grew into the loop.
+    /// A startup made for another skeleton or race than its loop's (a Midlander startup beside a Miqo'te loop) is written on the
+    /// loop's skeleton and names the loop's race; the loop is read as it is, never rebuilt.
     /// </summary>
-    private static void LoopRace(Action<bool, string> check, Action<Action, string> reject)
+    private static void LoopRace(Action<bool, string> check)
     {
-        var skeleton = new SkeletonDescription("skeleton", "print", [new("n_root", -1, 0, new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.One))], [], [], []);
-        var standard = new StandardSkeleton(SkeletonStandard.Vanilla, skeleton, "game");
-        var candidate = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Game, new AnimationResource("skeleton.sklb", "skeleton.sklb", "hash")), skeleton, 1, "");
-        var clip = Capture().Clip with
+        SkeletonDescription Skeleton(string print) => new("skeleton", print, [new("n_root", -1, 0, new BoneTransform(Vector3.Zero, Quaternion.Identity, Vector3.One))], [], [], []);
+        AnimationTimelineSource Source(string path, SkeletonDescription skeleton, string? model, SkeletonResolutionState state = SkeletonResolutionState.Matched)
         {
-            Resolution = new SkeletonResolution(SkeletonResolutionState.Matched, [candidate], candidate, ActorModel: "c0801", ActorStandards: [standard]),
-        };
-        var loop = new AnimationTimelineSource(Capture() with { Clip = clip }, false, clip, new AnimationResource(Loop, Loop, "hash"), [], 0, [], null, null)
-            { FileModel = "c0101" };
-        check(AnimationEditService.WindUpLoopRebuild(loop, "c0801") is { Model: "c0801" } rebuild && ReferenceEquals(rebuild.Target, standard),
-            "a wind-up reads another race's loop rebuilt for the startup's race");
-        check(AnimationEditService.WindUpLoopRebuild(loop with { FileModel = "c0801" }, "c0801") == null &&
-              AnimationEditService.WindUpLoopRebuild(loop with { FileModel = null }, "c0801") == null,
-            "a loop of the startup's race, or one whose header names no race, is read as it is");
-        var searching = clip with { Resolution = clip.Resolution! with { State = SkeletonResolutionState.Searching } };
-        check(AnimationEditService.WindUpLoopRebuild(loop with { Clip = searching }, "c0801") == null,
+            var candidate = new SkeletonCandidate(new SkeletonSource(SkeletonSourceKind.Game, new AnimationResource("skeleton.sklb", "skeleton.sklb", "hash")), skeleton, 1, "");
+            var clip = Capture().Clip with { Resolution = new SkeletonResolution(state, [candidate], candidate) };
+            return new AnimationTimelineSource(Capture() with { Clip = clip }, false, clip, new AnimationResource(path, path, "hash"), [], 0, [], null, null)
+                { FileModel = model };
+        }
+        var loopRig = Skeleton("loop");
+        var loop = Source(Loop, loopRig, "c0801");
+        var startup = Source(Startup, Skeleton("startup"), "c0101");
+        check(AnimationEditService.WindUpRebuild(startup, loop) is { Model: "c0801" } rebuild && ReferenceEquals(rebuild.Target.Skeleton, loopRig),
+            "a wind-up is written on the loop's skeleton and names the loop's race");
+        check(AnimationEditService.WindUpRebuild(Source(Startup, loopRig, "c0801"), loop) == null,
+            "a startup on the loop's skeleton and race is written as it is");
+        check(AnimationEditService.WindUpRebuild(Source(Startup, loopRig, "c0101"), loop) is { Model: "c0801" } &&
+              AnimationEditService.WindUpRebuild(Source(Startup, Skeleton("startup"), "c0801"), loop) is { Model: "c0801" },
+            "another race alone, or another skeleton alone, is rebuilt too");
+        check(AnimationEditService.WindUpRebuild(startup, Source(Loop, loopRig, "c0801", SkeletonResolutionState.Searching)) == null,
             "a loop whose skeleton is still being matched is left to the read, which says so");
-        string? refused = null;
-        try { AnimationEditService.WindUpLoopRebuild(loop, "c1101"); }
-        catch (InvalidOperationException e) { refused = e.Message; }
-        check(refused != null, "a loop that can't be rebuilt for the startup's race stops the wind-up");
+        // A loop saved onto IVCS reads back as the game's skeleton when it moves only the game's bones.
+        var ivcs = new StandardSkeleton(SkeletonStandard.Ivcs, Skeleton("ivcs"), "IVCS");
+        check(AnimationEditService.WindUpRebuild(Source(Startup, loopRig, "c0801"), loop, ivcs) is { Model: "c0801" } onIvcs && ReferenceEquals(onIvcs.Target, ivcs) &&
+              AnimationEditService.WindUpRebuild(Source(Startup, ivcs.Skeleton, "c0801"), loop, ivcs) == null,
+            "a wind-up for a loop a save repaired onto IVCS is written on IVCS, even from a startup on the loop's own skeleton");
     }
 
     /// <summary>An instant startup added to the loop's mod waits for a later in-place save of that startup to be undone first.</summary>
@@ -149,6 +153,17 @@ internal static class InstantStartupFixture
               Close(longer.Get(44, 1).Rotation, MotionEvaluator.Slerp(Quaternion.Identity, loop.Pose(29)[1].Rotation, MotionCutter.Rise(44 / 45f))),
             "a wind-up longer than the loop aims at the loop's frames before the hand-off, wrapping round");
 
+        // A loop whose rotations are the opposite sign of the idle's (the same turn): the file's compression takes the short way
+        // between samples, so every bone must stay on one hemisphere or it spins a whole turn between two frames.
+        var flipped = Clip(Arm("loop", false), 31, f =>
+        [
+            Identity, Turned(Quaternion.CreateFromAxisAngle(Vector3.UnitX, .1f * MathF.Sin(f / 30f * MathF.Tau))),
+            Turned(Quaternion.Negate(reached)), Identity, Identity,
+        ]);
+        var shortest = MotionWindUp.Build(startup, from, flipped, frames, fade);
+        check(Enumerable.Range(1, shortest.Samples - 1).All(k => Enumerable.Range(0, shortest.Bones).All(b =>
+                  Quaternion.Dot(shortest.Get(k - 1, b).Rotation, shortest.Get(k, b).Rotation) >= 0)),
+            "every bone of the wind-up stays on one hemisphere from sample to sample, a loop of the other sign included");
         reject(() => MotionWindUp.Build(startup, from, loop, 0, fade), "a wind-up of no frames is refused");
         reject(() => MotionWindUp.Build(startup, [MotionTransform.Identity], loop, frames, fade), "a pose for another skeleton is refused");
     }

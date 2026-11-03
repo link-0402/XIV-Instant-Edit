@@ -296,6 +296,20 @@ internal static class EditAgainFixture
               AnimationEditService.SavedRepair([Repaired(Journal(capture, afterHash: "R1"), SkeletonStandard.Ivcs, "c0801")], Loaded("R1")) == null &&
               AnimationEditService.SavedRepair([a], Loaded("A1")) == null,
             "not another file, an undone save, a rebuild for another race or a save without a repair");
+
+        // A list row has no timeline read: the file it plays now is its capture's source, by hash.
+        var listed = capture with { Sources = [new AnimationResource(Pap, "dance.pap", "R1")] };
+        check(AnimationEditService.SavedRepair([yas, a], listed, false) == SkeletonStandard.IvcsYas,
+            "a listed clip whose file a save repaired onto IVCS + YAS says so");
+        check(AnimationEditService.SavedRepair([yas], capture, false) == null && AnimationEditService.SavedRepair([yas], listed, true) == null &&
+              AnimationEditService.SavedRepair([With(yas, "Undone")], listed, false) == null &&
+              AnimationEditService.SavedRepair([Repaired(Journal(capture, afterHash: "R1"), SkeletonStandard.Ivcs, "c0801")], listed, false) == null,
+            "nor for a listed clip playing another file, its missing startup, an undone save or a rebuild for another race");
+        // A first wind-up adds its startup beside the loop rather than saving over one.
+        var added = Repaired(Journal(capture, afterHash: "R1"), SkeletonStandard.Ivcs);
+        added = new AnimationEditJournal { Id = added.Id, Request = added.Request, State = added.State, Files = [added.Files[0] with { AddedFor = Pap }] };
+        check(AnimationEditService.SavedRepair([added], Loaded("R1")) == SkeletonStandard.Ivcs && AnimationEditService.SavedRepair([added], listed, false) == SkeletonStandard.Ivcs,
+            "a file the save added beside another reopens on the standard too");
     }
 
     private static void Journals(Action<bool, string> check)

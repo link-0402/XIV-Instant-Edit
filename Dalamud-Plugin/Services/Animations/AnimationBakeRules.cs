@@ -88,7 +88,7 @@ internal static class AnimationBakeRules
     /// </summary>
     public static bool Repairs(AnimationBakeRequest request) =>
         request.Operation == AnimationOperation.RepairSkeleton ||
-        request.Operation == AnimationOperation.EditTimeline && request.RepairTarget != null;
+        request.Operation == AnimationOperation.EditTimeline && (request.RepairTarget != null || request.RepairSkeleton != null);
 
     /// <summary>
     /// The race a repair's output must name in its PAP header: the one whose standard skeleton it was

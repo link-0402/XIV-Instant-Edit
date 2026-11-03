@@ -128,6 +128,10 @@ internal static class AnimationBonesFixture
         var shuffled = Rigs.Ivcs with { Fingerprint = "shuffled", Bones = [Rigs.Ivcs.Bones[0], Rigs.Ivcs.Bones[6], .. Rigs.Ivcs.Bones.RemoveAt(6).Skip(1)] };
         check(!AnimationBones.IsStandardLayout(shuffled, game, SkeletonStandard.Ivcs),
             "iv_ bones placed among the game's bones move them off the game's indices, so the layout is refused");
+        // The game's n_hara_noanim_trans index is IVCS's first iv_ bone, a finger: a track on it bends that finger there.
+        check(AnimationBones.LeftOut(game, ["j_kao"]).SetEquals([5, 6]) && AnimationBones.LeftOut(Rigs.Ivcs, []).SetEquals([9]) &&
+              AnimationBones.LeftOut(Rigs.Yas, []).Count == 0 && Rigs.Ivcs.Bones[6].Name == "iv_ko_c_l",
+            "a save writes no track for n_hara_noanim_trans on any skeleton that has it, besides the unticked bones");
 
         var resource = new AnimationResource("chara/human/c0801/animation/a0001/bt_common/emote/pose05_loop.pap", "idle.pap", "hash");
         var source = new SkeletonCandidate(new(SkeletonSourceKind.Mod, resource), Rigs.AllInOne, 0, "");

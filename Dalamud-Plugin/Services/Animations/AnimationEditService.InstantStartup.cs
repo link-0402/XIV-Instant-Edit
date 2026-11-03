@@ -55,7 +55,7 @@ internal sealed partial class AnimationEditService
 
     /// <summary>
     /// Gives <paramref name="capture"/>'s loop a wind-up startup: the startup's file with a move of <paramref name="frames"/>
-    /// frames from the game's idle (for the startup's race) into the loop, then the loop's first frames for the game's
+    /// frames from the game's idle (for the loop's race) into the loop, on the loop's skeleton, then the loop's first frames for the game's
     /// measured fade (<see cref="MotionWindUp.Build"/>), so the fade shows the same pose on both sides. It is saved in the
     /// loop's mod, journaled for Undo: over the startup when that mod already provides it, else as a new file mapped
     /// wherever the mod maps the loop.
@@ -87,16 +87,23 @@ internal sealed partial class AnimationEditService
             if (!own && ModMetadata.ModMapsGamePath(loop.ModRoot!, startupPath))
                 throw new InvalidOperationException($"{loop.ModName ?? loop.ModDirectory} already has this startup in an option that is off.");
 
-            var playing = await DecodeMotionAsync(source, message => Status = message, token);
-            var idle = await DecodeVanillaIdleAsync(source, message => Status = message, token);
+            // The wind-up is written on the loop's skeleton and for its race, so it fits the loop whatever the startup was made for.
+            // The loop itself is only read: as it is, or on the standard a save repaired it onto, as the Timeline opens it.
             Status = "Reading the loop";
             var loopSource = await LoadTimelineAsync(capture, false, token);
-            var looping = await DecodeMotionAsync(loopSource with { Rebuild = WindUpLoopRebuild(loopSource, StartupRace(source)) },
+            var repaired = SavedRepair(recovery, loopSource) is { } saved ? AnimationBones.Standard(loopSource.Clip, saved) : null;
+            var rebuild = WindUpRebuild(source, loopSource, repaired);
+            var rebuilt = source with { Rebuild = rebuild };
+            var playing = await DecodeMotionAsync(rebuilt, message => Status = message, token);
+            var idle = await DecodeVanillaIdleAsync(rebuild?.Model ?? StartupRace(source), capture, message => Status = message, token);
+            var looping = await DecodeMotionAsync(
+                repaired != null && repaired.Skeleton.Fingerprint != loopSource.Clip.Resolution?.Selected?.Skeleton.Fingerprint
+                    ? loopSource with { Rebuild = new(null, repaired) } : loopSource,
                 message => Status = message, token);
             Status = "Building the wind-up";
             var fade = Math.Clamp(Observer.LoopFades.Measured(capture.Startup!.Timeline, capture.Clip.Timeline) ?? LoopFades.Default, 0, LoopFades.Most);
             var windUp = MotionWindUp.Build(playing, MotionHold.Borrowed(playing, idle), looping, frames, fade);
-            var replacement = await ReplaceMotionAsync(source, selected, windUp, InstantStartupAction, "", null, message => Status = message, token);
+            var replacement = await ReplaceMotionAsync(rebuilt, selected, windUp, InstantStartupAction, "", null, message => Status = message, token);
             var edited = source.WithReplacement(replacement);
             var document = InstantStartupDocument(source.Document, replacement);
             var request = TimelineRequest(edited, document, AnimationDestination.InPlace, "") with { Id = id };
@@ -107,6 +114,10 @@ internal sealed partial class AnimationEditService
                 manifest.Resources.First(r => r.GamePath == loopPath).Hash != loop.Hash)
                 throw new IOException("The animation changed while saving. Try again.");
             var built = await BuildTimelineAsync(request, edited, manifest.Files[startupPath], document, null, journals.DirectoryFor(request.Id), token);
+            // Journaled as repaired onto the loop's standard, so the startup reopens on it too (SavedRepair). Only here: the build
+            // would bake the motion, already on that standard, onto it again.
+            if (repaired is { Standard: not SkeletonStandard.Vanilla })
+                request = request with { RepairTarget = repaired.Standard };
             var bytes = ImmutableDictionary<string, byte[]>.Empty.Add(startupPath, built.Bytes);
             var journal = own
                 ? await commits.PrepareAsync(request, manifest, bytes, token)
@@ -139,11 +150,11 @@ internal sealed partial class AnimationEditService
     }
 
     /// <summary>
-    /// Decodes the game's own idle for the race <paramref name="startup"/> was made for (its PAP header's, else its
-    /// skeleton's) on that race's game skeleton, whatever mods replace either. Nothing in game changes.
+    /// Decodes the game's own idle for <paramref name="race"/> on that race's game skeleton, whatever mods replace either.
+    /// Nothing in game changes.
     /// </summary>
-    private Task<MotionClip> DecodeVanillaIdleAsync(AnimationTimelineSource startup, Action<string> status, CancellationToken token) =>
-        DecodeGameFileAsync(VanillaIdlePaths(StartupRace(startup)).Idle, StandingIdleEntry, startup.Capture, status, token);
+    private Task<MotionClip> DecodeVanillaIdleAsync(string race, AnimationCapture capture, Action<string> status, CancellationToken token) =>
+        DecodeGameFileAsync(VanillaIdlePaths(race).Idle, StandingIdleEntry, capture, status, token);
 
     /// <summary>The race <paramref name="startup"/> was made for: its PAP header's, else its skeleton's.</summary>
     private static string StartupRace(AnimationTimelineSource startup) =>
@@ -151,19 +162,19 @@ internal sealed partial class AnimationEditService
         ?? throw new InvalidOperationException("The startup isn't made for a playable race.");
 
     /// <summary>
-    /// The rebuild the wind-up reads <paramref name="loop"/> with: a loop whose file is another race's (its PAP header's) is
-    /// rebuilt for <paramref name="race"/>, the startup's, as the game converts it when it plays, so the wind-up lands on the loop
-    /// the game shows. Read as it is, a Midlander loop's longer bones would go into a Miqo'te startup, and the character would
-    /// grow until the loop takes over. Null for a loop of that race already, or one whose header names no race; null too while
-    /// the loop's skeleton isn't matched, which reading the loop then reports.
+    /// The rebuild that writes the wind-up on <paramref name="loop"/>'s skeleton and names its race (its PAP header's) in the
+    /// startup's header, so the startup is a sibling of the loop: the game converts both the same way, and the loop's own bones
+    /// (a skeleton mod's) are the ones the wind-up moves. A loop a save <paramref name="repaired"/> onto a standard reads back as
+    /// a smaller skeleton, so the wind-up goes on that standard instead. Null when the startup is on that skeleton for that race
+    /// already, or while the loop's skeleton isn't matched, which reading the loop then reports.
     /// </summary>
-    internal static RaceRebuild? WindUpLoopRebuild(AnimationTimelineSource loop, string race)
+    internal static RaceRebuild? WindUpRebuild(AnimationTimelineSource startup, AnimationTimelineSource loop, StandardSkeleton? repaired = null)
     {
-        if (loop.FileModel is not { } model || model == race || loop.Clip.Resolution is not { State: SkeletonResolutionState.Matched })
+        if (loop.Clip.Resolution is not { State: SkeletonResolutionState.Matched, Selected: { } own })
             return null;
-        return AnimationBones.AutomaticRebuild(loop.Clip, model, [], loop.HoldsOthers) is { } rebuild && rebuild.Model == race
-            ? rebuild
-            : throw new InvalidOperationException(
-                $"The loop is made for {AnimationBones.RaceName(model)} and can't be read for {AnimationBones.RaceName(race)}, the startup's race.");
+        var target = repaired ?? new StandardSkeleton(SkeletonStandard.Vanilla, own.Skeleton, "the loop's");
+        if (startup.Clip.Resolution?.Selected?.Skeleton.Fingerprint == target.Skeleton.Fingerprint && loop.FileModel == startup.FileModel)
+            return null;
+        return new RaceRebuild(loop.FileModel, target);
     }
 }

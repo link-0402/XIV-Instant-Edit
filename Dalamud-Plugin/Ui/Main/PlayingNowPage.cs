@@ -170,7 +170,8 @@ internal sealed class PlayingNowPage
         var hovered = ImGui.IsItemHovered();
         ImGui.OpenPopupOnItemClick(ResourceRows.RowMenuPopup, ImGuiPopupFlags.MouseButtonRight);
         if (hovered)
-            DrawAnimationRowTooltip(row, problem);
+            DrawAnimationRowTooltip(row, problem, _animations.Service is { } service
+                ? AnimationEditService.SavedRepair(service.Recovery, row.Capture, row.Startup) : null);
         if (problem is not null)
         {
             ImGui.SameLine(0, Theme.Gap);
@@ -229,8 +230,11 @@ internal sealed class PlayingNowPage
         drawList.AddLine(new Vector2(x, middle), new Vector2(end, middle), colour, thickness);
     }
 
-    /// <summary> A row's name, state and game path, and the skeleton it was made for or why none is matched yet. </summary>
-    private static void DrawAnimationRowTooltip(AnimationRow row, string? problem)
+    /// <summary>
+    /// A row's name, state and game path, and the skeleton it was made for or why none is matched yet; with <paramref name="saved"/>,
+    /// the standard a save repaired its file onto, which the file alone reads back as a smaller skeleton.
+    /// </summary>
+    private static void DrawAnimationRowTooltip(AnimationRow row, string? problem, SkeletonStandard? saved)
     {
         using var tooltip = ImRaii.Tooltip();
         ImGui.TextColored(Theme.Label, row.View.Name);
@@ -242,7 +246,9 @@ internal sealed class PlayingNowPage
         if (problem is not null)
             ImGui.TextColored(Theme.Warning, problem);
         else if (row.Clip.Resolution?.Selected is { } source)
-            ImGui.TextUnformatted("Made for " + AnimationSendDialog.SkeletonLabel(source));
+            ImGui.TextUnformatted("Made for " + (saved is { } standard
+                ? AnimationPresentation.SkeletonLabel(source, standard, AnimationBones.Standard(row.Clip, standard)?.Skeleton)
+                : AnimationSendDialog.SkeletonLabel(source)));
     }
 
 

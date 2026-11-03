@@ -297,6 +297,16 @@ internal static class AnimationBones
     }
 
     /// <summary>
+    /// The game bone no saved animation drives: no game file has a track for it, and its index is another bone on IVCS, YAS
+    /// and skeleton-mod rigs (the game's 105 is IVCS's iv_ko_c_l), which a track on it would move there.
+    /// </summary>
+    public const string Unanimated = "n_hara_noanim_trans";
+
+    /// <summary>The bones a save of <paramref name="skeleton"/> writes no track for: the unticked <paramref name="excluded"/> and <see cref="Unanimated"/>.</summary>
+    public static HashSet<int> LeftOut(SkeletonDescription skeleton, IEnumerable<string> excluded) =>
+        Indices(skeleton, excluded.Append(Unanimated));
+
+    /// <summary>
     /// Drop the excluded bones' tracks, and hold validation to what the output then
     /// samples for them: with no track, a bone rests at its reference pose.
     /// </summary>

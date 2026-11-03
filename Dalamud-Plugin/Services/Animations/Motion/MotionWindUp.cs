@@ -78,6 +78,15 @@ internal static class MotionWindUp
                     Vector3.Lerp(start.Scale, aim.Scale, swingWeight)));
             }
         }
+        // As sampling does: each rotation on its previous sample's hemisphere. The loop's own sign may be the opposite of the
+        // idle's, and the file's compression takes the short way between samples, so a flip spins the bone a whole turn.
+        for (var k = 1; k < clip.Samples; k++)
+            for (var b = 0; b < map.Length; b++)
+            {
+                var at = clip.Get(k, b);
+                if (Quaternion.Dot(clip.Get(k - 1, b).Rotation, at.Rotation) < 0)
+                    clip.Set(k, b, new MotionTransform(at.Position, Quaternion.Negate(at.Rotation), at.Scale));
+            }
         return clip;
     }
 

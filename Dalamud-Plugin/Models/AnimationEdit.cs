@@ -110,7 +110,10 @@ internal sealed record AnimationBakeRequest(Guid Id, AnimationCapture Capture, A
     AnimationTimelineEdit? Timeline = null,
     // The race a timeline save rebuilds for (e.g. "c0801"), whose standard RepairTarget names;
     // null for the clip's own race, as in older journals.
-    string? RepairModel = null)
+    string? RepairModel = null,
+    // The skeleton a decode or replacement retargets onto in place of the standard RepairTarget names: another clip's own
+    // (an instant startup follows its loop's). Never journaled.
+    [property: System.Text.Json.Serialization.JsonIgnore] SkeletonDescription? RepairSkeleton = null)
 {
     public ImmutableArray<string> ExcludedBones { get; init; } = ExcludedBones.IsDefault ? [] : ExcludedBones;
 }

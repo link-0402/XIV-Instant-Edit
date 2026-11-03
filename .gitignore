@@ -45,6 +45,7 @@ coding-agent-release-workflow.txt
 # Agent specs, plans and handoffs (the XIV Bridge test docs among them): local and internal only.
 docs/superpowers/
 .superpowers/
+tasks/
 # Local documentation notes.
 docs/Instant Edit visual checks.md
 docs/issue-16-vertex-buffer-findings.md

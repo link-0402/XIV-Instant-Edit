@@ -102,7 +102,8 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         var motionPath = Path.Combine(workDirectory, Guid.NewGuid().ToString("N") + ".motion");
         // A timeline edit with nothing to change: the source's own length on the source's own skeleton, or the rebuild's.
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "", false,
-            AnimationOperation.EditTimeline, RepairTarget: rebuild?.Target.Standard, RepairModel: rebuild?.Model);
+            AnimationOperation.EditTimeline, RepairTarget: rebuild?.Target.Standard, RepairModel: rebuild?.Model,
+            RepairSkeleton: rebuild?.Target.Skeleton);
         try
         {
             session = await framework.RunOnFrameworkThread(() =>
@@ -133,17 +134,20 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
     /// <summary>
     /// Writes <paramref name="motion"/>, a motion from Blender on the clip's source skeleton, in place of the
     /// clip's motion in <paramref name="template"/>: compressed as the clip was, every other binding untouched,
-    /// and verified by sampling it back. Returns the whole PAP. Nothing in game changes.
+    /// and verified by sampling it back. Returns the whole PAP. Nothing in game changes. With <paramref name="rebuild"/>
+    /// the motion is on that rebuild's standard skeleton instead: it is written for it as a rebuilding save writes a clip,
+    /// and the header names its race.
     /// </summary>
     public async Task<byte[]> ReplaceAsync(byte[] template, byte[] skeleton, AnimationClip clip, AnimationCapture capture, MotionClip motion,
-        string workDirectory, Action<string> status, CancellationToken token)
+        string workDirectory, Action<string> status, CancellationToken token, RaceRebuild? rebuild = null)
     {
         native.EnsureAvailable();
         Session? session = null;
         var path = Path.Combine(workDirectory, Guid.NewGuid().ToString("N") + ".hkx");
-        // A timeline edit with nothing to change: the template's own skeleton, no layers, no cuts.
+        // A timeline edit with nothing to change: the template's own skeleton (or the rebuild's), no layers, no cuts.
         var request = new AnimationBakeRequest(Guid.NewGuid(), capture, AnimationDestination.NewMod, "", false,
-            AnimationOperation.EditTimeline);
+            AnimationOperation.EditTimeline, RepairTarget: rebuild?.Target.Standard, RepairModel: rebuild?.Model,
+            RepairSkeleton: rebuild?.Target.Skeleton);
         try
         {
             session = await framework.RunOnFrameworkThread(() =>
@@ -169,7 +173,10 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 completed = await framework.RunOnTick(() => { Check(token); return session.ValidateBatch(token); }, delayTicks: 1);
                 status($"Verifying {clip.Name}: {session.ValidationProgress:P0}");
             }
-            return new AnimationPap(template).ReplaceHavok(built);
+            var original = new AnimationPap(template);
+            var result = original.ReplaceHavok(built);
+            return AnimationBakeRules.RepairedModel(request, clip, original) is { } model
+                ? new AnimationPap(result).WithModel(model, original.ModelType) : result;
         }
         finally
         {
@@ -214,6 +221,9 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
         private readonly MotionLinkSet? links;
         private readonly short[] floatSlots = [];
         private readonly short[] sourceTracks = [];
+        // With a retarget, a motion's float tracks: the slot of the output skeleton each drives, and that skeleton's reference floats.
+        private short[] floatTargets = [];
+        private float[] targetFloats = [];
         private readonly sbyte blendHint;
         // How many samples there are: the source's grid while a cut edit samples, the output's after it cuts.
         private int frames;
@@ -265,13 +275,14 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 // save repairs too when it names a standard.
                 var repairing = AnimationBakeRules.Repairs(request);
                 targetDescription = repairing
-                    ? (request.RepairTarget is { } standard ? AnimationBones.Standard(clip, standard, request.RepairModel)?.Skeleton : null)
+                    ? (request.RepairSkeleton ?? (request.RepairTarget is { } standard ? AnimationBones.Standard(clip, standard, request.RepairModel)?.Skeleton : null))
                         ?? throw new InvalidDataException("The skeleton to repair onto was not found. Refresh the capture.")
                     : sourceDescription;
                 AnimationSkeleton.Validate(targetDescription);
                 // Unticked bones are named, so they resolve on whichever skeleton the
                 // output is written against - the source's own, or the standard on repair.
-                excluded = AnimationBones.Indices(targetDescription, request.ExcludedBones);
+                // n_hara_noanim_trans goes too: its index is a finger on other rigs.
+                excluded = AnimationBones.LeftOut(targetDescription, request.ExcludedBones);
                 retarget = sourceDescription.Fingerprint == targetDescription.Fingerprint ? null :
                     new AnimationRetarget(sourceDescription, targetDescription, AnimationSkeleton.Channels(originalBinding),
                         dropMissing: repairing);
@@ -514,16 +525,24 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
 
         /// <summary>
         /// Readies the session to write <paramref name="motion"/> instead of sampling the source (see
-        /// <see cref="ReplaceAsync"/>): the motion must be on the source skeleton, and a new length is refused
-        /// where a cut or stretch would be. Runs on the framework thread; <see cref="FillMotion"/> follows.
+        /// <see cref="ReplaceAsync"/>): the motion must be on the source skeleton, or on the standard the request rebuilds for,
+        /// and a new length is refused where a cut or stretch would be. Runs on the framework thread; <see cref="FillMotion"/> follows.
         /// </summary>
         public void PrepareMotion(MotionClip motion)
         {
             // Validation samples float tracks with the blend hint applied, which FillMotion can't predict for these yet.
             if (AnimationBakeRules.AdditiveWithFloats(blendHint, floatSlots.Length))
                 throw new InvalidDataException("This animation adds to another and has float tracks, so its motion can't come from Blender yet.");
-            if (retarget != null || motion.Skeleton.Fingerprint != sourceDescription.Fingerprint || motion.Bones != sourceDescription.Bones.Length)
+            var written = retarget == null ? sourceDescription : targetDescription;
+            if (motion.Skeleton.Fingerprint != written.Fingerprint || motion.Bones != written.Bones.Length)
                 throw new InvalidDataException("The motion doesn't fit this animation's skeleton.");
+            if (retarget != null)
+            {
+                // Read here, on the framework thread, for FillMotion's managed work.
+                floatTargets = new ReadOnlySpan<short>(outputMetadata->FloatTrackToFloatSlotIndices.Data,
+                    outputMetadata->FloatTrackToFloatSlotIndices.Length).ToArray();
+                targetFloats = new ReadOnlySpan<float>(skeleton->ReferenceFloats.Data, skeleton->FloatSlots.Length).ToArray();
+            }
             if (floatSlots.Length > 0 && (motion.TrackFloats == null || motion.FloatTracks != floatSlots.Length))
                 throw new InvalidDataException("The motion's float tracks are missing.");
             // Within a microsecond the clip keeps its own length exactly, which the metadata check compares.
@@ -576,9 +595,18 @@ internal sealed class AnimationBakeService(AnimationNative native, IFramework fr
                 for (var t = 0; t < floatSlots.Length; t++)
                     floats[floatSlots[t]] = motion.TrackFloats![f * motion.FloatTracks + t];
                 rawFloats.Add(floats);
-                expectedFloats.Add(floats.ToArray());
+                var written = floats.ToArray();
+                if (retarget != null)
+                {
+                    // As sampling maps them: each track's value onto the slot the rebuild's skeleton gives it.
+                    written = targetFloats.ToArray();
+                    for (var t = 0; t < floatSlots.Length; t++)
+                        written[floatTargets[t]] = AnimationRetarget.MapFloat(floats[floatSlots[t]],
+                            sourceDescription.ReferenceFloats[floatSlots[t]], targetDescription.ReferenceFloats[floatTargets[t]], blendHint);
+                }
+                expectedFloats.Add(written);
             }
-            foreach (var bone in AnimationBakeRules.ReplacementTracks(sourceTracks, motion))
+            foreach (var bone in AnimationBakeRules.ReplacementTracks(retarget?.MapTracks(sourceTracks) ?? sourceTracks, motion))
                 affected.Add(bone);
         }
 

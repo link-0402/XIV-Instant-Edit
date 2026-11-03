@@ -196,6 +196,13 @@ internal static class AnimationPresentation
         return $"{SourceModelName(candidate)} · {provider} · {bones}";
     }
 
+    /// <summary>
+    /// <see cref="SkeletonLabel"/> for a file a save repaired onto <paramref name="standard"/>, which reads back as
+    /// <paramref name="candidate"/>'s smaller skeleton: the race, the standard and, when found, its bone count.
+    /// </summary>
+    internal static string SkeletonLabel(SkeletonCandidate candidate, SkeletonStandard standard, SkeletonDescription? skeleton) =>
+        $"{SourceModelName(candidate)} · {AnimationBones.StandardName(standard)}" + (skeleton == null ? "" : $" · {skeleton.Bones.Length} bones");
+
     private static string ModelLabel(string? model, string fallback)
     {
         if (model == null) return fallback;

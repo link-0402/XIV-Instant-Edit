@@ -272,12 +272,39 @@ internal sealed partial class AnimationEditService
         if (current.Document == null || current.Standalone)
             return null;
         foreach (var journal in recovery)
-            if (journal is { State: "Completed", Request: { Operation: AnimationOperation.EditTimeline, RepairTarget: { } target, RepairModel: null } } &&
-                journal.Request.Capture.CollectionId == current.Capture.CollectionId && journal.Request.Timeline?.Startup == current.Startup &&
-                EditAgainFileProblem(journal, current) == null)
+            if (Repaired(journal) is { } target &&
+                journal.Request.Capture.CollectionId == current.Capture.CollectionId && journal.Request.Timeline is { Face: null } edit &&
+                edit.Startup == current.Startup && edit.EntryIndex == current.EntryIndex && Wrote(journal, current.Resource.GamePath, current.Resource.Hash))
                 return target;
         return null;
     }
+
+    /// <summary>
+    /// <see cref="SavedRepair(IEnumerable{AnimationEditJournal}, AnimationTimelineSource)"/> for a listed clip, without reading its
+    /// timeline: the standard the newest finished edit that saved the file <paramref name="capture"/>'s loop (or with
+    /// <paramref name="startup"/> its startup) plays now repaired it onto.
+    /// </summary>
+    internal static SkeletonStandard? SavedRepair(IEnumerable<AnimationEditJournal> recovery, AnimationCapture capture, bool startup)
+    {
+        if ((startup ? capture.Startup : capture.Clip) is not { } clip || capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath) is not { } file)
+            return null;
+        foreach (var journal in recovery)
+            if (Repaired(journal) is { } target && journal.Request.Capture.CollectionId == capture.CollectionId &&
+                journal.Request.Timeline is { Face: null } edit && edit.Startup == startup && Wrote(journal, file.GamePath, file.Hash))
+                return target;
+        return null;
+    }
+
+    /// <summary>The standard <paramref name="journal"/>, a finished timeline save, repaired its clip onto for the clip's own race; else null.</summary>
+    private static SkeletonStandard? Repaired(AnimationEditJournal journal) =>
+        journal is { State: "Completed", Request: { Operation: AnimationOperation.EditTimeline, RepairTarget: { } target, RepairModel: null } } ? target : null;
+
+    /// <summary>
+    /// Whether <paramref name="journal"/> wrote exactly that file at <paramref name="gamePath"/>: saved over it, or added it beside
+    /// another, as a first wind-up adds its startup.
+    /// </summary>
+    private static bool Wrote(AnimationEditJournal journal, string gamePath, string hash) =>
+        journal.Files.Any(f => f.GamePath == gamePath && f.AfterHash == hash);
 
     /// <summary><paramref name="loaded"/> with <paramref name="journal"/>'s layers back on its kept motion; throws when they can't come back.</summary>
     private async Task<AnimationTimelineSource> WithEditAgainAsync(AnimationEditJournal journal, AnimationTimelineSource loaded,
@@ -523,7 +550,8 @@ internal sealed partial class AnimationEditService
         var work = Path.Combine(Path.GetTempPath(), "XIV Instant Edit motion", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
         byte[] pap;
-        try { pap = await baker.ReplaceAsync(source.MotionSource, skeleton, source.MotionClip, source.Capture, motion, work, status, token); }
+        // The public callers refuse a rebuilt source; the wind-up's has the motion on its rebuild's skeleton.
+        try { pap = await baker.ReplaceAsync(source.MotionSource, skeleton, source.MotionClip, source.Capture, motion, work, status, token, source.Rebuild); }
         finally
         {
             try { Directory.Delete(work, true); } catch (IOException) { }
@@ -949,8 +977,10 @@ internal sealed partial class AnimationEditService
                 workDirectory, message => Status = message, token, () => CheckIdentityOnFramework(request.Capture, true));
         }
         var result = new AnimationPap(motion).WithTimeline(source.EntryIndex, timeline);
+        // A replacement motion may have been written for another race (an instant startup's), and then names it in its header.
         CheckTimelineOutput(pap, result, source.EntryIndex, timeline, !baked && source.BaseMotion == null,
-            baked ? AnimationBakeRules.RepairedModel(request, source.MotionClip, new AnimationPap(pap)) : null);
+            baked ? AnimationBakeRules.RepairedModel(request, source.MotionClip, new AnimationPap(pap))
+            : source.BaseMotion != null && document.Replacement != null ? new AnimationPap(source.BaseMotion).ModelId : null);
         // Unbaked, the motion is the file's own: what the game plays once it loads the file.
         var fingerprint = baked || source.BaseMotion != null
             ? await framework.RunOnFrameworkThread(() => AnimationRuntime.InspectPap(result).GetValueOrDefault(clip.BindingIndex, ""))
