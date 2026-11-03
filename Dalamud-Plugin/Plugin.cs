@@ -19,6 +19,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly object                    _configLock = new();
     private readonly IDalamudPluginInterface _pi;
     private readonly ICommandManager         _commands;
+    private readonly IChatGui                _chat;
     private readonly IPluginLog              _log;
     private readonly Configuration           _config;
     private readonly ExportContextSessionStore? _contextStore;
@@ -82,6 +83,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         _pi       = pi;
         _commands = commands;
+        _chat     = chat;
         _log      = log;
 
         _config    = pi.GetPluginConfig() as Configuration ?? new Configuration();
@@ -402,7 +404,7 @@ public sealed class Plugin : IDalamudPlugin
 
         _commands.AddHandler("/ie", new CommandInfo(OnCommand)
         {
-            HelpMessage = "Opens the XIV Instant Edit window. Use /ie refresh to refresh the on-screen list, /ie physics for the physics builder.",
+            HelpMessage = "Opens the XIV Instant Edit window. Use /ie refresh to refresh the on-screen list, /ie physics for the physics builder, /ie cam to fly the camera.",
         });
         _commands.AddHandler("/iesettings", new CommandInfo((_, _) => _settingsWindow.Open())
         {
@@ -434,6 +436,15 @@ public sealed class Plugin : IDalamudPlugin
         if (args.Trim().Equals("physics", StringComparison.OrdinalIgnoreCase))
         {
             _physicsWindow.Open();
+            return;
+        }
+        if (args.Trim().Equals("cam", StringComparison.OrdinalIgnoreCase))
+        {
+            var freeCamera = _timelineWindow.FreeCamera;
+            if (!freeCamera.On && freeCamera.Blocked is { } blocked)
+                _chat.Print(blocked);
+            else
+                freeCamera.Toggle();
             return;
         }
 

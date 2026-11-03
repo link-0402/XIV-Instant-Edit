@@ -115,6 +115,9 @@ public sealed class TimelineWindow : Window, IDisposable, ITimelineHost, ITimeli
     PoseBrowserWindow ITimelineHost.Poses => poseBrowserWindow;
     ShortcutKeys ITimelineHost.Keys => keys;
     FreeCamera ITimelineHost.FreeCamera => freeCamera;
+
+    /// <summary>The free camera, which /ie cam also turns on and off.</summary>
+    internal FreeCamera FreeCamera => freeCamera;
     PoseThumbnails ITimelineHost.Thumbnails => poseThumbnails;
     string? ITimelineHost.AnimationError => animationError;
 

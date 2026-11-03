@@ -26,7 +26,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
 
     /// <summary> The free camera's tooltip: its keys and its speed now, in metres a second. </summary>
     internal static string FreeCameraTip(float speed) =>
-        $"Fly the GPose camera with WASD, Space and Ctrl.\nDrag to look. The wheel sets the speed ({speed:0.#} m/s), Shift goes faster.";
+        $"Fly the camera with WASD, Space and Ctrl.\nDrag to look. The wheel sets the speed ({speed:0.#} m/s), Shift goes faster.";
 
     /// <summary>
     /// Draws the bar for <paramref name="current"/>. Curves, Free camera and Bones keep to
@@ -87,7 +87,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             curves.Shown = !curves.Shown;
     }
 
-    /// <summary> Free camera, icon and label, filled while it flies; it comes on only in GPose. </summary>
+    /// <summary> Free camera, icon and label, filled while it flies, also from /ie cam. </summary>
     private void DrawFreeCamera()
     {
         var blocked = freeCamera.On ? null : freeCamera.Blocked;

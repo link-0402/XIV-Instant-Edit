@@ -41,6 +41,9 @@ internal static class FreeCameraMotion
     /// <summary> The screen's right in the world, level. </summary>
     public static Vector3 Right(FreeCameraPose pose) => new(-MathF.Cos(pose.Yaw), 0, MathF.Sin(pose.Yaw));
 
+    /// <summary> The screen's up in the world, square to where the pose looks and to its level right: the view never rolls. </summary>
+    public static Vector3 Up(FreeCameraPose pose) => Vector3.Cross(Right(pose), Forward(pose));
+
     /// <summary> The point the game's camera looks at: a metre ahead. </summary>
     public static Vector3 LookAt(FreeCameraPose pose) => pose.Position + Forward(pose);
 

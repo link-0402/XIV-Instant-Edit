@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Keys;
@@ -9,16 +10,21 @@ using FFXIVClientStructs.FFXIV.Client.Game.Control;
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
-/// The Timeline's free camera: flies the GPose camera away from the character. The game places its camera around the GPose target
-/// every frame, so a hook on the camera's update (enabled only while the free camera is on) moves it to the free camera's spot right
-/// after. The game's own turn of its camera that frame (mouse drag, keys, with the game's own settings) turns the free camera, and the
-/// game's angles go back each frame so they never reach its limits. The moving keys are read on the framework update, before the
-/// game reads them, and taken from the game while it has the keyboard; the wheel over the game sets the speed. Turning it off, or
-/// leaving GPose, gives the game its camera back as it was.
+/// The free camera: flies the game's camera away from the character, in GPose or out of it (/ie cam). The game places its camera
+/// around its target every frame, so a hook on the camera's update (enabled only while the free camera is on) moves it to the free
+/// camera's spot right after. The game's own turn of its camera that frame (mouse drag, keys, with the game's own settings) turns the
+/// free camera; its angles and zoom go back each frame, and its own view goes back before its next update, so the game never works
+/// from the free camera's view, never reaches its limits and never zooms into first person. The moving keys are read on the
+/// framework update, before the game reads them, and taken from the game while it has the keyboard; the wheel over the game sets
+/// the speed. Turning it off, or entering or leaving GPose, gives the game its camera back as it was.
 /// </summary>
 internal sealed unsafe partial class FreeCamera : IDisposable
 {
-    public const string NotInGPose = "Enter GPose to fly the camera.";
+    public const string NotLoggedIn = "Log in to fly the camera.";
+    public const string InFirstPerson = "Leave first person to fly the camera.";
+
+    // Room the game's zoom keeps above its nearest while flying: more than one wheel notch, so the wheel never reaches first person.
+    private const float ZoomRoom = 3f;
 
     private delegate void UpdateDelegate(CameraBase* camera);
 
@@ -30,13 +36,27 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     private readonly IClientState clientState;
     private readonly IKeyState keys;
     private readonly IPluginLog log;
+    // One hook per camera update function met; the flown camera's is the one enabled.
+    private readonly Dictionary<nint, Hook<UpdateDelegate>> hooks = [];
     private Hook<UpdateDelegate>? hook;
     private FreeCameraPose pose;
-    // The camera flown, and its angles and distance when the free camera came on: the angles go back every frame, all three at the end.
+    // The camera flown, whether in GPose, and its zoom mode, angles and zoom when the free camera came on: the angles and zoom go
+    // back every frame, and all of it at the end unless the game switched the mode meanwhile.
     private nint camera;
+    private bool gposing;
+    private CameraZoomMode zoomMode;
+    private bool modeSwitched;
     private float distance;
+    private float interpDistance;
     private float dirH;
     private float dirV;
+    // The zoom the game's camera keeps while flying.
+    private float held;
+    // The game's own view from its last update, put back before its next one.
+    private Vector3 gamePosition;
+    private Vector3 gameLookAt;
+    private Vector3 gameUp;
+    private bool gameViewSaved;
     private bool disposed;
 
     public FreeCamera(IGameInteropProvider interop, IFramework framework, IClientState clientState, IKeyState keys, IPluginLog log)
@@ -49,14 +69,24 @@ internal sealed unsafe partial class FreeCamera : IDisposable
         framework.Update += Tick;
     }
 
-    /// <summary>Whether the free camera flies the GPose camera now.</summary>
+    /// <summary>Whether the free camera flies the game's camera now.</summary>
     public bool On { get; private set; }
 
     /// <summary>How fast it flies, in metres a second; Shift goes faster.</summary>
     public float Speed { get; private set; } = FreeCameraMotion.DefaultSpeed;
 
-    /// <summary>Why it can't come on now (<see cref="NotInGPose"/>); null when it can.</summary>
-    public string? Blocked => clientState.IsGPosing ? null : NotInGPose;
+    /// <summary>Why it can't come on now; null when it can.</summary>
+    public string? Blocked
+    {
+        get
+        {
+            var active = Active();
+            if (!clientState.IsLoggedIn || active == null)
+                return NotLoggedIn;
+            // Flying from first person would show the character without a head.
+            return !clientState.IsGPosing && active->ZoomMode == CameraZoomMode.FirstPerson ? InFirstPerson : null;
+        }
+    }
 
     /// <summary>Turns the free camera on at the game camera's spot, or off. Game thread only.</summary>
     public void Toggle()
@@ -73,24 +103,31 @@ internal sealed unsafe partial class FreeCamera : IDisposable
         if (disposed || Blocked != null || active == null)
             return;
         var update = (nint)active->CameraBase.VirtualTable->Update;
-        try
+        if (!hooks.TryGetValue(update, out var found))
         {
-            hook ??= interop.HookFromAddress<UpdateDelegate>(update, Detour);
+            try
+            {
+                Hook<UpdateDelegate>? created = null;
+                created = interop.HookFromAddress<UpdateDelegate>(update, updated => Detour(created!, updated));
+                hooks[update] = found = created;
+            }
+            catch (Exception e)
+            {
+                log.Warning(e, "Could not hook the camera's update; the free camera stays off.");
+                return;
+            }
         }
-        catch (Exception e)
-        {
-            log.Warning(e, "Could not hook the camera's update; the free camera stays off.");
-            return;
-        }
-        if (hook.Address != update)
-        {
-            log.Warning("The GPose camera's update isn't the one hooked; the free camera stays off.");
-            return;
-        }
+        hook = found;
         camera = (nint)active;
+        gposing = clientState.IsGPosing;
+        zoomMode = active->ZoomMode;
+        modeSwitched = false;
         distance = active->Distance;
+        interpDistance = active->InterpDistance;
         dirH = active->DirH;
         dirV = active->DirV;
+        held = Math.Min(Math.Max(distance, active->MinDistance + ZoomRoom), Math.Max(active->MaxDistance, active->MinDistance));
+        gameViewSaved = false;
         pose = FreeCameraMotion.From(active->CameraBase.SceneCamera.Position, active->CameraBase.SceneCamera.LookAtVector);
         On = true;
         hook.Enable();
@@ -103,13 +140,17 @@ internal sealed unsafe partial class FreeCamera : IDisposable
             return;
         On = false;
         hook?.Disable();
-        // Zoomed with the wheel behind the free camera: the game's camera goes back to where it was.
+        hook = null;
+        // Zoomed or turned behind the free camera: the game's camera goes back to where it was, in the same mode and camera.
         var active = Active();
-        if (clientState.IsGPosing && active != null && (nint)active == camera)
+        if (!modeSwitched && clientState.IsGPosing == gposing && active != null && (nint)active == camera)
         {
             active->Distance = distance;
+            active->InterpDistance = interpDistance;
             active->DirH = dirH;
             active->DirV = dirV;
+            if (gameViewSaved)
+                SetView(active, gamePosition, gameLookAt, gameUp);
         }
         camera = 0;
     }
@@ -121,8 +162,9 @@ internal sealed unsafe partial class FreeCamera : IDisposable
         disposed = true;
         framework.Update -= Tick;
         Off();
-        hook?.Dispose();
-        hook = null;
+        foreach (var created in hooks.Values)
+            created.Dispose();
+        hooks.Clear();
     }
 
     private static Camera* Active()
@@ -131,18 +173,49 @@ internal sealed unsafe partial class FreeCamera : IDisposable
         return manager == null ? null : manager->GetActiveCamera();
     }
 
-    // After the game's own update of every camera of its kind: only the flown one, while it is the active one, moves.
-    private void Detour(CameraBase* updated)
+    private static void SetView(Camera* flown, Vector3 position, Vector3 lookAt, Vector3 up)
     {
-        hook!.Original(updated);
-        if (!On || (nint)updated != camera || (nint)Active() != camera)
+        flown->CameraBase.SceneCamera.Position = position;
+        flown->CameraBase.SceneCamera.LookAtVector = lookAt;
+        flown->CameraBase.SceneCamera.Vector_1 = up;
+    }
+
+    // Wraps the game's own update of every camera of its kind: only the flown one, while it is the active one, moves.
+    private void Detour(Hook<UpdateDelegate> self, CameraBase* updated)
+    {
+        if (!On || self != hook || (nint)updated != camera || (nint)Active() != camera)
+        {
+            self.Original(updated);
             return;
+        }
         var flown = (Camera*)updated;
-        pose = FreeCameraMotion.Turn(pose, flown->DirH - dirH, flown->DirV - dirV);
+        // The game's update starts from its own view and zoom, not the free camera's.
+        if (gameViewSaved)
+            SetView(flown, gamePosition, gameLookAt, gameUp);
+        flown->Distance = held;
+        flown->InterpDistance = held;
+        self.Original(updated);
+        ref var scene = ref flown->CameraBase.SceneCamera;
+        gamePosition = scene.Position;
+        gameLookAt = scene.LookAtVector;
+        gameUp = scene.Vector_1;
+        gameViewSaved = true;
+        if (flown->ZoomMode != zoomMode)
+        {
+            // The game switched between first and third person, which flips its angles: they are the new rest, not a turn.
+            zoomMode = flown->ZoomMode;
+            modeSwitched = true;
+            dirH = flown->DirH;
+            dirV = flown->DirV;
+        }
+        else
+            pose = FreeCameraMotion.Turn(pose, flown->DirH - dirH, flown->DirV - dirV);
         flown->DirH = dirH;
         flown->DirV = dirV;
-        flown->CameraBase.SceneCamera.Position = pose.Position;
-        flown->CameraBase.SceneCamera.LookAtVector = FreeCameraMotion.LookAt(pose);
+        flown->Distance = held;
+        flown->InterpDistance = held;
+        // Up from the free camera's own view too: the game's leans with its own pitch and would roll the view.
+        SetView(flown, pose.Position, FreeCameraMotion.LookAt(pose), FreeCameraMotion.Up(pose));
     }
 
     // Runs before the game's own update, which reads the keys and then updates the camera.
@@ -150,7 +223,7 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     {
         if (!On)
             return;
-        if (!clientState.IsGPosing || (nint)Active() != camera)
+        if (clientState.IsGPosing != gposing || (nint)Active() != camera)
         {
             Off();
             return;

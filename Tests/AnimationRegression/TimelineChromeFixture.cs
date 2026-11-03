@@ -50,6 +50,11 @@ internal static class TimelineChromeFixture
         var level = pose with { Pitch = 0 };
         check(Near(FreeCameraMotion.Right(level), Vector3.Normalize(Vector3.Cross(FreeCameraMotion.Forward(level), Vector3.UnitY))),
             "Free camera: right is forward × up, as on the game's camera");
+        var up = FreeCameraMotion.Up(pose);
+        check(MathF.Abs(up.Length() - 1) < 1e-4f && MathF.Abs(Vector3.Dot(up, FreeCameraMotion.Forward(pose))) < 1e-4f && up.Y > 0,
+            "Free camera: up is square to the look and above it");
+        check(MathF.Abs(Vector3.Cross(FreeCameraMotion.Forward(pose), up).Y) < 1e-4f, "Free camera: pitched, the view doesn't roll");
+        check(Near(FreeCameraMotion.Up(level), Vector3.UnitY), "Free camera: level, up is straight up");
 
         var turned = FreeCameraMotion.Turn(pose, 0.5f, 0.1f);
         check(MathF.Abs(turned.Yaw - pose.Yaw - 0.5f) < 1e-5f && MathF.Abs(turned.Pitch - pose.Pitch - 0.1f) < 1e-5f, "Free camera: turns as the game's angles do");

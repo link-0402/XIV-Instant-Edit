@@ -3287,16 +3287,19 @@ BalanceLayerFixture); these checks are the panel, Live and the save.
 
 ## Free camera (pending)
 
-Free camera on the Timeline's action bar (left of Bones) flies the GPose camera: a hook on the camera's update moves it after the
-game's own update. Plan: tasks/freecam.md (local only).
+Free camera on the Timeline's action bar (left of Bones), or /ie cam, flies the game's camera in GPose or out of it: a hook on the
+camera's update moves it after the game's own update. Plan: tasks/freecam.md (local only).
 
-- [ ] 1 Outside GPose the button is greyed out and says why. In GPose, on: the view stays where it was, no jump.
+- [ ] 1 In GPose and out of it, on: the view stays where it was, no jump. In first person outside GPose, /ie cam says why it won't.
 - [ ] 2 Right after the click, W/S fly where the camera looks, A/D slide, Space/Ctrl rise and sink, Shift is faster; the character
   doesn't move, the game's camera doesn't react to these keys and no Timeline shortcut fires.
-- [ ] 3 Right-drag over the game turns the view; drag over a window doesn't. Looking straight up and down stops just short.
-- [ ] 4 The wheel over the game changes the speed (the tooltip shows it); over a window it scrolls that window.
+- [ ] 3 Right-drag over the game turns the view; drag over a window doesn't. Looking straight up and down stops just short. Turned
+  away from where it started and looking up or down, the horizon stays level (no roll).
+- [ ] 4 The wheel over the game changes the speed (the tooltip shows it) and never turns the view, even many notches in or out;
+  over a window it scrolls that window.
 - [ ] 5 Typing in a Timeline field or the game's chat doesn't move the camera; neither do keys typed into another program.
-- [ ] 6 Off, closing the Timeline, or leaving GPose: the game's camera is back where it was before, zoom included.
+- [ ] 6 Off, closing the Timeline, or leaving GPose: the game's camera is back where it was before, zoom included. /ie cam again
+  turns it off; entering or leaving GPose while it flies turns it off.
 - [ ] 7 The bones overlay and gizmo stay on the bones while the free camera flies.
 - [ ] 8 Unloading the plugin with the free camera on gives the game its camera back.
 
