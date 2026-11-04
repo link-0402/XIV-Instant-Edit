@@ -78,6 +78,7 @@ Scenarios.Run(() => AtchTableFixture.Run(Check, Reject));
 Scenarios.Run(() => ModEffectiveFilesFixture.Run(Check));
 Scenarios.Run(() => PropModelSourcesFixture.Run(Check));
 Scenarios.Run(() => PropCopyCommitFixture.Run(Check, Reject));
+Scenarios.Run(() => FaceLibraryCommitFixture.Run(Check, Reject));
 Scenarios.Run(() => TimelineChromeFixture.Run(Check, Reject));
 Scenarios.Run(() => PartnerFixture.Run(Check, Reject));
 Scenarios.Run(() => PartnerTimelineFixture.Run(Check, Reject));

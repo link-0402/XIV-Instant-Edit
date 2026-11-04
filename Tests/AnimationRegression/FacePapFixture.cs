@@ -12,7 +12,43 @@ internal static class FacePapFixture
     {
         Layout(check);
         Refusals(reject);
+        Sources(check, reject);
         Comparable(check);
+    }
+
+    /// <summary>
+    /// What a library takes from each source PAP: the entry's type, face flag, timeline and binding, under its new name.
+    /// The Havok merge itself (AnimationNative.MergeBindings) needs the game's Havok, so it is checked in game only.
+    /// </summary>
+    private static void Sources(Action<bool, string> check, Action<Action, string> reject)
+    {
+        var pack = FacePapLayout.Build(1401, 0, [new("cfxf_base", 17, 1, Tmlb(13)), new("cfxf_smile", 18, 0, Tmlb(22))],
+            Enumerable.Repeat((byte)3, 9).ToArray());
+        var library = FacePapLayout.Build(1401, 0, [new("cfxf_a", 17, 1, Tmlb(12)), new("cfxf_b", 19, 1, Tmlb(17))],
+            Enumerable.Repeat((byte)5, 8).ToArray());
+        // Other tools' PAPs may bind an entry to another index than its own: entry 1 here plays binding 0.
+        library[26 + 40 + 34] = 0;
+        var (entries, merge) = FacePapBuilder.Plan([(pack, 1, "cfxf_smile"), (library, 1, "cfxf_mine"), (pack, 0, "cfxf_base_2")]);
+        check(entries.Select(e => (e.Name, e.Type, e.Face)).SequenceEqual([("cfxf_smile", (short)18, 0), ("cfxf_mine", (short)19, 1), ("cfxf_base_2", (short)17, 1)]),
+            "each face keeps its source entry's type and face flag under its new name");
+        check(entries[0].Timeline.SequenceEqual(new AnimationPap(pack).TimelineBytes(1)) &&
+              entries[1].Timeline.SequenceEqual(new AnimationPap(library).TimelineBytes(1)) &&
+              entries[2].Timeline.SequenceEqual(new AnimationPap(pack).TimelineBytes(0)),
+            "each face carries its source entry's own timeline");
+        check(merge.Select(m => m.Binding).SequenceEqual([1, 0, 0]), "each face merges the binding its entry plays");
+        check(merge[0].Havok.SequenceEqual(new AnimationPap(pack).Havok) && merge[1].Havok.SequenceEqual(new AnimationPap(library).Havok) &&
+              ReferenceEquals(merge[0].Havok, merge[2].Havok), "faces of one file merge from its Havok data, read once");
+
+        reject(() => FacePapBuilder.Plan([(pack, 0, "cfxf_a"), (library, 0, "cfxf_a")]), "two faces given one name are refused");
+        reject(() => FacePapBuilder.Plan([(pack, 2, "cfxf_a")]), "an entry past the file's last is refused");
+        reject(() => FacePapBuilder.Plan([(pack, -1, "cfxf_a")]), "a negative entry is refused");
+        reject(() => FacePapBuilder.Plan([]), "a library of no faces is refused");
+        // No file is read before the names are checked: a null file would fail differently.
+        var early = false;
+        try { FacePapBuilder.Plan([(null!, 0, "cfxf_a"), (null!, 0, "cfxf_a")]); }
+        catch (InvalidDataException) { early = true; }
+        catch (Exception) { }
+        check(early, "duplicate face names are refused before any file is read");
     }
 
     /// <summary>Entries, new bindings, timelines and the library's race come back as built, across odd timeline sizes.</summary>

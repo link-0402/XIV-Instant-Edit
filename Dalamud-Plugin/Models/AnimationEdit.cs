@@ -209,7 +209,26 @@ internal sealed class AnimationEditJournal
     public List<string> ReusedFiles { get; set; } = [];
     // Meta manipulations the edit adds to the mod (a placed prop's attach overrides); null for none.
     public AnimationManipulationEdit? Manipulations { get; set; }
+    // The expression library file the save writes into a library mod other than its own; null for none, and in older journals.
+    public AnimationLibraryEdit? Library { get; set; }
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// The face library PAP a save writes into an expression library mod: <see cref="File"/>, at a fresh path the library's
+/// default data maps. It isn't one of the journal's <c>Files</c>, so a new mod's undo still puts it back. A library the
+/// save made (<see cref="Created"/>) is disabled on undo, never deleted. <see cref="FaceSave"/> is set when the library is
+/// what the save changed (a face saved into it): a later change to it then refuses the undo instead of leaving it.
+/// </summary>
+internal sealed class AnimationLibraryEdit
+{
+    public string ModDirectory { get; set; } = "";
+    public string ModRoot { get; set; } = "";
+    public bool Created { get; set; }
+    public string Name { get; set; } = "";
+    public string Pack { get; set; } = "";
+    public bool FaceSave { get; set; }
+    public AnimationFileChange File { get; set; } = null!;
 }
 
 /// <summary>

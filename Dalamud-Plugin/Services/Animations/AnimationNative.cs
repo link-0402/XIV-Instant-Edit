@@ -324,6 +324,80 @@ internal unsafe sealed class AnimationNative
         }
         finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
     }
+
+    /// <summary>
+    /// One Havok container holding each source's binding and that binding's animation, in order: binding i animates
+    /// animation i. The first source's container is the base and keeps its skeletons. The result is reloaded and every
+    /// binding checked against its source. Framework thread only: callers hop there.
+    /// </summary>
+    public static byte[] MergeBindings(IReadOnlyList<(byte[] Havok, int Binding)> sources, string workDirectory)
+    {
+        if (sources.Count is < 1 or > 4096) throw new InvalidDataException("A merge takes 1 to 4096 animations.");
+        if (sources.Any(s => s.Havok is not { Length: > 0 })) throw new InvalidDataException("A merge source has no Havok data.");
+        Directory.CreateDirectory(workDirectory);
+        var path = Path.Combine(workDirectory, $"merge-{Guid.NewGuid():N}.hkx");
+        var motionPath = Path.Combine(workDirectory, $"merge-{Guid.NewGuid():N}.motion.hkx");
+        // Each buffer loads once; every document stays loaded until the merged file is saved and checked.
+        var documents = new Dictionary<byte[], Document>(ReferenceEqualityComparer.Instance);
+        Document? target = null;
+        hkArray<hkRefPtr<hkaAnimationBinding>> baseBindings = default;
+        hkArray<hkRefPtr<hkaAnimation>> baseAnimations = default;
+        using var arena = new Arena();
+        try
+        {
+            var bindings = arena.Array<hkRefPtr<hkaAnimationBinding>>(sources.Count);
+            var animations = arena.Array<hkRefPtr<hkaAnimation>>(sources.Count);
+            var prints = new string[sources.Count];
+            var motions = new string[sources.Count];
+            for (var i = 0; i < sources.Count; i++)
+            {
+                var (havok, index) = sources[i];
+                if (!documents.TryGetValue(havok, out var document))
+                    documents[havok] = document = new Document(havok);
+                if (index < 0 || index >= document.Container->Bindings.Length)
+                    throw new InvalidDataException($"Merge source {i} has no animation binding {index}.");
+                var source = document.Container->Bindings[index].ptr;
+                prints[i] = Fingerprint(source);
+                motions[i] = ExtractedMotionFingerprint(source, motionPath);
+                // A borrowed binding still points into its own resource: its animation, the animation's extracted motion
+                // and annotation tracks, its track maps and skeleton name. The serializer writes whatever it reaches from
+                // the root, whichever resource holds it, so borrowing from several is safe while all stay loaded; Havok
+                // frees none of it (the copies don't count references, the arena arrays don't deallocate).
+                bindings.Data[i] = new hkRefPtr<hkaAnimationBinding> { ptr = arena.BorrowBinding(source) };
+                animations.Data[i] = new hkRefPtr<hkaAnimation> { ptr = source->Animation.ptr };
+            }
+            target = documents[sources[0].Havok];
+            baseBindings = target.Container->Bindings;
+            baseAnimations = target.Container->Animations;
+            target.Container->Bindings = bindings;
+            target.Container->Animations = animations;
+            target.Save(path);
+            var bytes = File.ReadAllBytes(path);
+            using var check = new Document(bytes);
+            if (check.Container->Bindings.Length != sources.Count || check.Container->Animations.Length != sources.Count)
+                throw new InvalidDataException("The merged animations don't hold every source.");
+            for (var i = 0; i < sources.Count; i++)
+            {
+                var binding = check.Container->Bindings[i].ptr;
+                if (Fingerprint(binding) != prints[i] || ExtractedMotionFingerprint(binding, motionPath) != motions[i] ||
+                    check.Container->Animations[i].ptr != binding->Animation.ptr)
+                    throw new InvalidDataException($"Merged animation {i} doesn't match its source.");
+            }
+            return bytes;
+        }
+        finally
+        {
+            // The base's resource owns its own arrays again before the arena goes.
+            if (target != null)
+            {
+                target.Container->Bindings = baseBindings;
+                target.Container->Animations = baseAnimations;
+            }
+            foreach (var document in documents.Values) document.Dispose();
+            if (File.Exists(path)) File.Delete(path);
+            if (File.Exists(motionPath)) File.Delete(motionPath);
+        }
+    }
     private static void ValidateCounts(hkaAnimation* a)
     {
         if (a == null) throw new InvalidDataException("Missing animation.");

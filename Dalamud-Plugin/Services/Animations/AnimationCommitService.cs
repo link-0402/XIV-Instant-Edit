@@ -20,12 +20,13 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     /// <c>For</c>: a new mod carries them, and in place every option mapping that animation gets them.
     /// <c>Aliases</c> are added game paths that share one of the added <c>Files</c> (alias to that file's game path, a
     /// prop material's other version folders): journaled with that file's target, never staged, mapped beside it.
+    /// <paramref name="library"/> is a face library file the save writes into an expression library mod other than its own.
     /// </summary>
     public async Task<AnimationEditJournal> PrepareAsync(AnimationBakeRequest request, AnimationDependencyManifest manifest,
         ImmutableDictionary<string, byte[]> outputs, CancellationToken token,
         (string For, IReadOnlyDictionary<string, byte[]> Files, IReadOnlyDictionary<string, string>? Owners,
             IReadOnlyDictionary<string, AddedCopies>? Copies, IReadOnlyDictionary<string, string>? Aliases)? added = null,
-        (string For, IReadOnlyList<Timeline.AtchManipulation> Atch)? manipulations = null)
+        (string For, IReadOnlyList<Timeline.AtchManipulation> Atch)? manipulations = null, LibraryFile? library = null)
     {
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request) };
         var dir = store.DirectoryFor(request.Id);
@@ -150,6 +151,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             }
             journal.Manipulations = edit;
         }
+        if (library != null) journal.Library = await StageLibraryAsync(journal, library, dir, token);
         store.Save(journal);
         return journal;
 
@@ -325,6 +327,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             if (journal.Request.Destination == AnimationDestination.InPlace)
                 foreach (var group in journal.Files.GroupBy(f => (f.ModDirectory, f.ModRoot)))
                     await animationMods.CheckAnimationModRootAsync(group.Key.ModDirectory, group.Key.ModRoot);
+            if (journal.Library is { } library) await CheckLibraryAsync(journal, library);
             // Dependency and metadata reads can span several ticks; recheck the live destination last.
             await checkActor();
             token.ThrowIfCancellationRequested();
@@ -396,11 +399,13 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                         JsonSerializer.SerializeToUtf8Bytes(metadata));
                     journal.ModFileHashes = ModHashes(journal.ModRoot);
                 }
+                // The library goes after the save's own files, so a stop before it leaves nothing of it to undo.
+                if (journal.Library != null) WriteLibrary(journal, author?.Invoke());
                 journal.State = "Committed"; store.Save(journal);
                 await checkActor();
                 status("Activating and verifying animation resources");
                 await animationMods.ActivateAnimationAsync(journal);
-                await VerifyActivationAsync(journal.Files,
+                await VerifyActivationAsync(journal.Library is { } written ? [.. journal.Files, written.File] : journal.Files,
                     path => animationMods.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, path),
                     file => RequireHash(file.Target, file.AfterHash),
                     () => animationMods.RedrawAnimationAsync(journal.Request.Capture.ActorIndex));
@@ -511,11 +516,19 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         if (journal.State == "Prepared")
         { journal.State = "FilesUndone"; journal.Message = "The prepared job had not changed any files."; store.Save(journal); return; }
         foreach (var file in journal.Files) ValidateTarget(journal, file);
+        if (journal.Library is { } library) ValidateLibrary(journal, library);
         if (NoFilesLeft(journal, Directory.Exists(journal.ModRoot)))
         {
             journal.State = "FilesUndone"; store.Save(journal);
             return;
         }
+        // The library goes back before the save's own files; a later change that refuses the undo refuses it here, before any write.
+        var libraryUndo = journal.Library != null ? CheckLibraryUndo(journal) : LibraryUndo.Nothing;
+        if (libraryUndo == LibraryUndo.Restore) await animationMods.CheckAnimationModRootAsync(journal.Library!.ModDirectory, journal.Library.ModRoot);
+        Task UndoLibrary() => journal.Library == null ? Task.CompletedTask : UndoLibraryAsync(journal, libraryUndo,
+            () => animationMods.DisableAnimationModAsync(journal.Library!.ModDirectory, journal.Library.ModRoot,
+                journal.Request.Capture.CollectionId, journal.Request.Capture.ActorIndex),
+            () => animationMods.ReloadAnimationSourcesAsync([journal.Library!.ModDirectory], journal.Request.Capture.ActorIndex));
         if (journal.Request.Destination == AnimationDestination.NewMod)
         {
             var marker = Path.Combine(journal.ModRoot, ".instant-edit-animation.json");
@@ -531,6 +544,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                     throw new IOException("The created mod was changed after activation. Undo will not disable newer work.");
             }
             journal.State = "Undoing"; store.Save(journal);
+            await UndoLibrary();
             await animationMods.DisableAnimationModAsync(journal, journal.Request.Capture.ActorIndex);
         }
         else
@@ -580,6 +594,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 RequireHash(ResolveBackup(file), file.BeforeHash);
             }
             journal.State = "Undoing"; store.Save(journal);
+            await UndoLibrary();
             if (atch != null) ModMetadata.RemoveAnimationManipulations(atch.ModRoot, atch.Changes);
             foreach (var file in journal.Files)
             {
@@ -607,6 +622,284 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         }
         journal.State = "FilesUndone"; store.Save(journal);
     }
+    /// <summary>
+    /// A face library PAP a save writes into an expression library mod other than its own: its game path
+    /// (chara/human/&lt;race&gt;/animation/&lt;face&gt;/nonresident/&lt;pack&gt;.pap), its bytes, the library's folder name, root and
+    /// marker, whether the save makes the library, and for an existing one the file the collection resolves the game path to
+    /// (null when it has none for that face folder yet). <paramref name="FaceSave"/>: the library is what the save changes.
+    /// </summary>
+    internal sealed record LibraryFile(string GamePath, byte[] Bytes, string ModDirectory, string ModRoot,
+        Timeline.FaceLibraryMarker Marker, bool Created, AnimationResource? Current, bool FaceSave = false);
+
+    /// <summary>What undoing a save's library file does, decided before anything is written.</summary>
+    internal enum LibraryUndo { Nothing, Restore, Disable, Leave }
+
+    /// <summary>The message of an undo that leaves a library a later save changed.</summary>
+    internal const string LibraryLeftMessage = "The faces it copied stay in the library.";
+
+    /// <summary>Stages the library file in the job folder, at a fresh path in the library (the game keeps an unchanged path's file).</summary>
+    private async Task<AnimationLibraryEdit> StageLibraryAsync(AnimationEditJournal journal, LibraryFile library, string dir, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var marker = library.Marker;
+        if (!Timeline.FaceLibraryIndex.TryParse(library.GamePath, out _, out _, out var pack) || pack != marker.Pack ||
+            marker.Version != Timeline.FaceLibraryMod.Version || string.IsNullOrWhiteSpace(marker.Name) ||
+            Timeline.FaceLibraryMod.PackName(marker.Pack) != marker.Pack)
+            throw new InvalidDataException($"{library.GamePath} isn't a file of that library.");
+        if (!(library.Created ? ModPaths.IsSafeNewModName(library.ModDirectory) : ModPaths.IsSafeModName(library.ModDirectory)))
+            throw new InvalidDataException("Invalid library name.");
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(library.ModRoot));
+        TextureFiles.EnsureLocalPath(root);
+        if (journal.Files.Select(f => (f.ModDirectory, f.ModRoot)).Append((journal.ModDirectory, journal.ModRoot)).Where(m => m.ModRoot.Length > 0)
+                .Any(m => string.Equals(m.ModDirectory, library.ModDirectory, StringComparison.OrdinalIgnoreCase) ||
+                          PathRules.IsPathWithin(root, m.ModRoot) || PathRules.IsPathWithin(m.ModRoot, root)))
+            throw new InvalidDataException("The faces go into a library of their own, not the saved mod.");
+        if (library.Created)
+        {
+            if (library.Current != null || !string.Equals(Path.GetFileName(root), library.ModDirectory, StringComparison.Ordinal))
+                throw new InvalidDataException("Invalid library name.");
+            if (Directory.Exists(root)) throw new IOException("That library already exists. Choose a new name.");
+        }
+        else
+        {
+            if (!Timeline.FaceLibraryMod.TryRead(root, out var found) || found != marker)
+                throw new IOException("That mod is no longer the expression library it was.");
+            if (library.Current is { } current)
+            {
+                if (!AnimationResources.CanReplace(current) || !ModPaths.SameGamePath(current.GamePath, library.GamePath) ||
+                    !string.Equals(current.ModDirectory, library.ModDirectory, StringComparison.Ordinal) || !PathRules.SamePhysicalPath(current.ModRoot, root))
+                    throw new IOException($"{library.GamePath} has no writable file in the library.");
+                if ((File.GetAttributes(current.ResolvedPath) & FileAttributes.ReadOnly) != 0) throw new IOException($"{current.ResolvedPath} is read-only.");
+            }
+        }
+        var renamedFrom = library.Current?.RelativePath;
+        var relative = AnimationFileRename.NextRelativePath(renamedFrom ?? "files/" + library.GamePath);
+        var target = Path.GetFullPath(Path.Combine(root, relative));
+        TextureFiles.EnsureLocalPath(target);
+        if (!PathRules.IsPathWithin(target, root)) throw new IOException("The output escapes its mod directory.");
+        if (File.Exists(target)) throw new IOException($"{target} already exists.");
+        var staged = Path.Combine(dir, "library.staged");
+        await File.WriteAllBytesAsync(staged, library.Bytes, token);
+        var after = AnimationPap.Hash(library.Bytes);
+        if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
+        var edit = new AnimationLibraryEdit
+        {
+            ModDirectory = library.ModDirectory, ModRoot = root, Created = library.Created, Name = marker.Name, Pack = marker.Pack,
+            FaceSave = library.FaceSave,
+            File = new AnimationFileChange(library.GamePath, target, library.ModDirectory, root, relative, library.Current?.Hash ?? "", after, "",
+                staged, renamedFrom),
+        };
+        ValidateLibrary(journal, edit);
+        return edit;
+    }
+
+    /// <summary>The library entry's rules on top of <see cref="ValidateTarget"/>: its file is the library's PAP for its pack, in its own mod.</summary>
+    internal void ValidateLibrary(AnimationEditJournal journal, AnimationLibraryEdit library)
+    {
+        var file = library.File;
+        if (file is null || file.AddedFor != null || file.AliasOf != null || file.AddedForFile != null ||
+            !string.Equals(file.ModDirectory, library.ModDirectory, StringComparison.Ordinal) || !PathRules.SamePhysicalPath(file.ModRoot, library.ModRoot) ||
+            !Timeline.FaceLibraryIndex.TryParse(file.GamePath, out _, out _, out var pack) || pack != library.Pack ||
+            Timeline.FaceLibraryMod.PackName(library.Pack) != library.Pack || string.IsNullOrWhiteSpace(library.Name) ||
+            (file.BeforeHash.Length > 0) != (file.RenamedFromRelativePath is { Length: > 0 }) ||
+            library.Created && file.BeforeHash.Length > 0)
+            throw new InvalidDataException("Invalid face library target.");
+        ValidateTarget(journal, file);
+    }
+
+    /// <summary>The commit's checks of the library through Penumbra, before any file is written; then <see cref="CheckLibraryBefore"/>.</summary>
+    private async Task CheckLibraryAsync(AnimationEditJournal journal, AnimationLibraryEdit library)
+    {
+        ValidateLibrary(journal, library);
+        if (library.Created)
+        {
+            var root = await animationMods.AnimationModRootAsync();
+            TextureFiles.EnsureLocalPath(root);
+            if (!PathRules.SamePhysicalPath(library.ModRoot, Path.Combine(root, library.ModDirectory)))
+                throw new IOException("A new library goes in Penumbra's mod folder.");
+        }
+        else
+        {
+            await animationMods.CheckAnimationModRootAsync(library.ModDirectory, library.ModRoot);
+            if (library.File.RenamedFromRelativePath is { Length: > 0 })
+            {
+                var mapping = await animationMods.ResolveAnimationPathAsync(journal.Request.Capture.CollectionId, library.File.GamePath);
+                if (!PathRules.SamePhysicalPath(mapping, OldTargetPath(library.File)))
+                    throw new IOException($"The mapping for {library.File.GamePath} changed. Refresh and retry.");
+            }
+        }
+        CheckLibraryBefore(library);
+    }
+
+    /// <summary>
+    /// Before the library file is written: a new library's folder isn't there yet; an existing library is still the same
+    /// one, and its file is still the one the save was built from, or it still maps no file at that game path.
+    /// </summary>
+    internal static void CheckLibraryBefore(AnimationLibraryEdit library)
+    {
+        var file = library.File;
+        if (library.Created)
+        {
+            if (Directory.Exists(library.ModRoot)) throw new IOException("The new library's folder was made by another operation.");
+            return;
+        }
+        if (!Timeline.FaceLibraryMod.TryRead(library.ModRoot, out var marker) || marker.Name != library.Name || marker.Pack != library.Pack)
+            throw new IOException("That mod is no longer the expression library it was.");
+        if (file.RenamedFromRelativePath is { Length: > 0 } old)
+        {
+            if (!ModMetadata.AnimationMappedFiles(library.ModRoot, file.GamePath).Any(mapped => SameModFile(mapped, old)))
+                throw new IOException($"The library no longer maps {file.GamePath} to {old}. Refresh and retry.");
+            RequireHash(OldTargetPath(file), file.BeforeHash);
+        }
+        else if (ModMetadata.ModMapsGamePath(library.ModRoot, file.GamePath))
+            throw new IOException($"The library maps {file.GamePath} already. Refresh and retry.");
+        if (File.Exists(file.Target)) throw new IOException($"Another operation created {file.Target}.");
+    }
+
+    /// <summary>
+    /// Writes the library file, after the save's own files. An existing library's file is backed up, and the journal
+    /// records the backup, before the new file lands at its fresh path and the library maps it there. A new library gets
+    /// its folder, the job's ownership marker, the file, meta.json and last its library marker, so a half-made one is never listed.
+    /// </summary>
+    internal void WriteLibrary(AnimationEditJournal journal, string? author)
+    {
+        var library = journal.Library ?? throw new InvalidDataException("The save writes no library.");
+        ValidateLibrary(journal, library);
+        CheckLibraryBefore(library);
+        var file = library.File;
+        var renamed = file.RenamedFromRelativePath is { Length: > 0 };
+        if (library.Created)
+        {
+            Directory.CreateDirectory(library.ModRoot);
+            AnimationJournalStore.WriteAtomic(Path.Combine(library.ModRoot, ".instant-edit-animation.json"), JsonSerializer.SerializeToUtf8Bytes(new { Id = journal.Id }));
+        }
+        else if (renamed)
+        {
+            var backup = backups.Create(OldTargetPath(file), file.ModDirectory, file.RenamedFromRelativePath!);
+            RequireHash(backup, file.BeforeHash);
+            library.File = file = file with { Backup = backup }; store.Save(journal);
+            RequireHash(OldTargetPath(file), file.BeforeHash);
+        }
+        RequireHash(file.Staged, file.AfterHash);
+        Directory.CreateDirectory(Path.GetDirectoryName(file.Target)!);
+        AnimationJournalStore.WriteAtomic(file.Target, File.ReadAllBytes(file.Staged));
+        if (library.Created)
+        {
+            var meta = ModMetadata.CreateV4ModMetadata(library.Name, ModMetadata.AuthorOrDefault(author), "Expression library made by XIV Instant Edit.",
+                "1.0", new JsonObject
+                {
+                    ["Files"] = new JsonObject { [file.GamePath] = file.RelativePath },
+                    ["FileSwaps"] = new JsonObject(),
+                    ["Manipulations"] = new JsonArray(),
+                });
+            AnimationJournalStore.WriteAtomic(Path.Combine(library.ModRoot, "meta.json"), JsonSerializer.SerializeToUtf8Bytes(meta));
+            AnimationJournalStore.WriteAtomic(Path.Combine(library.ModRoot, Timeline.FaceLibraryMod.MarkerFile), System.Text.Encoding.UTF8.GetBytes(
+                Timeline.FaceLibraryMod.Serialize(new Timeline.FaceLibraryMarker(Timeline.FaceLibraryMod.Version, library.Name, library.Pack))));
+        }
+        else if (renamed)
+        {
+            // The old file stays while another game path maps it; the backup brings it back on undo otherwise.
+            if (!ModMetadata.RenameAnimationFileMapping(file.ModRoot, file.GamePath, file.RenamedFromRelativePath!, file.RelativePath))
+                try { File.Delete(OldTargetPath(file)); } catch (IOException) { }
+        }
+        else ModMetadata.AddDefaultFileMapping(file.ModRoot, file.GamePath, file.RelativePath);
+    }
+
+    /// <summary>
+    /// Before an undo writes anything: what putting the library file back takes. Still what the save wrote, or never
+    /// written: restore the old file and mapping, or disable a library the save made. Changed by a later save since:
+    /// a face saved into the library refuses the undo, and faces copied into it stay (<see cref="LibraryUndo.Leave"/>).
+    /// </summary>
+    internal LibraryUndo CheckLibraryUndo(AnimationEditJournal journal)
+    {
+        var library = journal.Library ?? throw new InvalidDataException("The save wrote no library.");
+        ValidateLibrary(journal, library);
+        var file = library.File;
+        if (library.Created)
+        {
+            if (!Directory.Exists(library.ModRoot)) return LibraryUndo.Nothing;
+            var owner = Path.Combine(library.ModRoot, ".instant-edit-animation.json");
+            if (!File.Exists(owner))
+            {
+                // Stopped right after making the folder: nothing in it to put back, and the save's own files still go back.
+                if (!Directory.EnumerateFileSystemEntries(library.ModRoot).Any()) return LibraryUndo.Nothing;
+                throw new IOException("The created library's ownership marker is missing.");
+            }
+            using (var json = JsonDocument.Parse(File.ReadAllText(owner)))
+                if (json.RootElement.GetProperty("Id").GetGuid() != journal.Id) throw new IOException("The library belongs to another animation job.");
+            // Stopped before its meta.json: never listed by Penumbra, and disabling it changes nothing.
+            if (!File.Exists(Path.Combine(library.ModRoot, "meta.json"))) return LibraryUndo.Disable;
+        }
+        else if (!Timeline.FaceLibraryMod.TryRead(library.ModRoot, out var marker) || marker.Name != library.Name || marker.Pack != library.Pack)
+            return Changed();
+        IReadOnlyList<string> mapped;
+        try { mapped = ModMetadata.AnimationMappedFiles(library.ModRoot, file.GamePath); }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException) { return Changed(); }
+        var renamedFrom = file.RenamedFromRelativePath is { Length: > 0 } from ? from : null;
+        if (mapped.Any(m => SameModFile(m, file.RelativePath)))
+        {
+            // Mapped here but no longer the bytes this save wrote: something rewrote the file since.
+            if (!File.Exists(file.Target) || HashFile(file.Target) != file.AfterHash) return Changed();
+        }
+        else if (renamedFrom != null ? !mapped.Any(m => SameModFile(m, renamedFrom)) : mapped.Count > 0)
+            return Changed();
+        else if (!File.Exists(file.Target))
+            return library.Created ? LibraryUndo.Disable : LibraryUndo.Nothing;   // never written, or put back already
+        else RequireHash(file.Target, file.AfterHash);   // written but not mapped yet
+        if (library.Created) return LibraryUndo.Disable;
+        if (renamedFrom != null)
+        {
+            // Undo writes the backup to the original path; never over a file changed since.
+            var oldTarget = OldTargetPath(file);
+            if (File.Exists(oldTarget) && HashFile(oldTarget) != file.BeforeHash)
+                throw new IOException($"{oldTarget} was changed after this job. Undo will not overwrite it.");
+            if (!File.Exists(oldTarget)) RequireHash(ResolveBackup(file), file.BeforeHash);
+        }
+        return LibraryUndo.Restore;
+
+        LibraryUndo Changed() => library.FaceSave
+            ? throw new IOException("A later save changed the library. Undo that save first.")
+            : LibraryUndo.Leave;
+    }
+
+    /// <summary>
+    /// Puts the library file back as <see cref="CheckLibraryUndo"/> decided: the old file and mapping, then the new file
+    /// goes; a library the save made is only disabled (<paramref name="disable"/>); a changed one is left with a note.
+    /// Running it again after a stop changes nothing more.
+    /// </summary>
+    internal async Task UndoLibraryAsync(AnimationEditJournal journal, LibraryUndo step, Func<Task> disable, Func<Task> reload)
+    {
+        var library = journal.Library ?? throw new InvalidDataException("The save wrote no library.");
+        var file = library.File;
+        switch (step)
+        {
+            case LibraryUndo.Disable:
+                await disable();
+                break;
+            case LibraryUndo.Leave:
+                if (!journal.Message.Contains(LibraryLeftMessage, StringComparison.Ordinal))
+                    journal.Message = journal.Message.Length == 0 ? LibraryLeftMessage : journal.Message + " " + LibraryLeftMessage;
+                store.Save(journal);
+                break;
+            case LibraryUndo.Restore:
+                if (file.RenamedFromRelativePath is { Length: > 0 } old)
+                {
+                    var oldTarget = OldTargetPath(file);
+                    if (!File.Exists(oldTarget) || HashFile(oldTarget) != file.BeforeHash)
+                        AnimationJournalStore.WriteAtomic(oldTarget, File.ReadAllBytes(ResolveBackup(file)));
+                    try { ModMetadata.RenameAnimationFileMapping(file.ModRoot, file.GamePath, file.RelativePath, old); }
+                    catch (InvalidDataException) { /* Already points back at the original path. */ }
+                }
+                else ModMetadata.RemoveAnimationResourceMapping(file.ModRoot, file.GamePath, file.RelativePath);
+                if (File.Exists(file.Target) && HashFile(file.Target) == file.AfterHash) File.Delete(file.Target);
+                await reload();
+                break;
+        }
+    }
+
+    private static bool SameModFile(string left, string right) =>
+        string.Equals(left.Replace('\\', '/').Trim().TrimStart('/'), right.Replace('\\', '/').Trim().TrimStart('/'), StringComparison.OrdinalIgnoreCase);
+
     private string ResolveBackup(AnimationFileChange file)
     {
         // A renamed file's backup was taken from - and is described by - the

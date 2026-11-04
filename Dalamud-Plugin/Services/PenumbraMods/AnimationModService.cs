@@ -125,12 +125,24 @@ internal sealed class AnimationModService
             var add = await _activation.AddNewModAsync(journal.ModDirectory);
             if (add is { Success: false }) throw new IOException(add.Message);
         }
+        // An expression library the save made is a new mod too; its paths are its own, so it needs no priority.
+        if (journal.Library is { Created: true } created)
+        {
+            var add = await _activation.AddNewModAsync(created.ModDirectory);
+            if (add is { Success: false }) throw new IOException(add.Message);
+        }
         await _framework.RunOnFrameworkThread(() =>
         {
-            foreach (var mod in journal.Files.Select(f => f.ModDirectory).Distinct())
+            foreach (var mod in journal.Files.Select(f => f.ModDirectory).Concat(journal.Library is { } library ? new[] { library.ModDirectory } : Array.Empty<string>()).Distinct())
             {
                 var reload = _activation.ReloadModOnFramework(mod);
                 if (reload is { Success: false }) throw new IOException(reload.Message);
+            }
+            if (journal.Library is { Created: true } made)
+            {
+                var enable = _trySetMod.Invoke(journal.Request.Capture.CollectionId, made.ModDirectory, true, made.ModDirectory);
+                if (enable is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
+                    throw new IOException($"Penumbra could not enable the expression library ({enable}).");
             }
             if (journal.Request.Destination == AnimationDestination.NewMod)
             {
@@ -198,13 +210,17 @@ internal sealed class AnimationModService
         }
     }
 
-    internal Task DisableAnimationModAsync(AnimationEditJournal journal, ushort? actor = null) => _framework.RunOnFrameworkThread(() =>
+    internal Task DisableAnimationModAsync(AnimationEditJournal journal, ushort? actor = null) =>
+        DisableAnimationModAsync(journal.ModDirectory, journal.ModRoot, journal.Request.Capture.CollectionId, actor);
+
+    /// <summary>Disables the mod a save made (its own, or an expression library) in <paramref name="collection"/>; nothing when Penumbra doesn't list it.</summary>
+    internal Task DisableAnimationModAsync(string modDirectory, string modRoot, Guid collection, ushort? actor = null) => _framework.RunOnFrameworkThread(() =>
     {
-        if (!_getModList.Invoke().ContainsKey(journal.ModDirectory)) return;
-        var registered = RegisteredAnimationModRootOnFramework(journal.ModDirectory);
-        if (!PathRules.SamePhysicalPath(registered, journal.ModRoot))
+        if (!_getModList.Invoke().ContainsKey(modDirectory)) return;
+        var registered = RegisteredAnimationModRootOnFramework(modDirectory);
+        if (!PathRules.SamePhysicalPath(registered, modRoot))
             throw new IOException("The created mod's registered directory changed. Recovery will not disable a different mod.");
-        var result = _trySetMod.Invoke(journal.Request.Capture.CollectionId, journal.ModDirectory, false, journal.ModDirectory);
+        var result = _trySetMod.Invoke(collection, modDirectory, false, modDirectory);
         if (result is not (PenumbraApiEc.Success or PenumbraApiEc.NothingChanged))
             throw new IOException($"Penumbra could not disable the edited mod ({result}).");
         if (_activation.RedrawPlayerOwnedEntitiesOnFramework(actor) is { } error) throw new IOException(error);

@@ -472,6 +472,25 @@ internal static class ModMetadata
     }
 
     /// <summary>
+    /// Maps <paramref name="gamePath"/> to <paramref name="relativePath"/> in the mod's default data, in one write of
+    /// meta.json: a library's file for a face folder it had none for. Refuses when the mod maps that game path anywhere.
+    /// </summary>
+    internal static void AddDefaultFileMapping(string modRoot, string gamePath, string relativePath)
+    {
+        lock (Studio.Services.Project.ModFiles.Gate)
+        {
+            var meta = LoadV4ModMetadata(modRoot);
+            if (AnimationMappingContainers(meta).Any(files => files.Any(pair => SameGamePath(pair.Key, gamePath))))
+                throw new InvalidDataException($"The mod already maps {gamePath}.");
+            if (meta["DefaultData"] is not JsonObject defaults) meta["DefaultData"] = defaults = new JsonObject();
+            if (defaults["Files"] is not JsonObject files) defaults["Files"] = files = new JsonObject();
+            files[gamePath] = relativePath;
+            TouchV4ModMetadata(meta);
+            WriteJsonAtomic(Path.Combine(modRoot, "meta.json"), meta);
+        }
+    }
+
+    /// <summary>
     /// Adds <paramref name="manipulations"/> (Penumbra JSON) to every DefaultData, group, option and container that
     /// maps <paramref name="ownerGamePath"/>, as <see cref="AddAnimationResourceMapping"/> maps files: one there with
     /// the same identifier (its type and every field but the entry) is replaced in its place. One there with the
