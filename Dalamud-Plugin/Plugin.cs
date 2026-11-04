@@ -307,6 +307,8 @@ public sealed class Plugin : IDalamudPlugin
         _timelineWindow.PhysicsBones = (actor, token) => actor is { } index
             ? Services.Physics.PhysicsDrivenBones.ReadAsync(_penumbra.Ipc, data, framework, log, index, token)
             : Task.FromResult<System.Collections.Immutable.ImmutableHashSet<string>?>(null);
+        // A redraw can load other physics files (a physics mod switched on): the Timeline reads them again.
+        _penumbra.Ipc.ObjectRedrawn += _ => Ui.Timeline.TimelineSession.PhysicsMayHaveChanged();
         _timelineWindow.AttachPoseFolders(_config, SaveConfiguration);
         // Partners: a second GPose actor from a preset, with its Penumbra collection, Glamourer design and Customize+ profile.
         var partnerStore = new PartnerPresetStore(configDirectory, message => log.Warning("{Message}", message));

@@ -56,18 +56,25 @@ internal sealed class TimelineSession
     public Func<ushort?, CancellationToken, Task<ImmutableHashSet<string>?>>? ReadPhysicsBones { get; set; }
 
     /// <summary>
-    /// The bones the game's physics moves on the workspace's actor, read once for the open clip by <see cref="KeepPhysicsBones"/>;
+    /// The bones the game's physics moves on the workspace's actor, read for the open clip, and again after a redraw, by <see cref="KeepPhysicsBones"/>;
     /// null while unknown or when they can't be read, which leaves nothing out.
     /// </summary>
     public ImmutableHashSet<string>? PhysicsBones { get; private set; }
 
-    // What PhysicsBones was read for (the clip and the actor), and the read running.
+    // What PhysicsBones was read for (the clip, the actor and the redraws seen), the clip and actor it belongs to, and the read running.
     private string? physicsKey;
+    private string? physicsPlace;
     private (string Key, Task<ImmutableHashSet<string>?> Task, CancellationTokenSource Cancel)? physicsRead;
+
+    // Counts redraws: one can load other physics files (a physics mod switched on), so the next ask reads them again.
+    private static int physicsRedraws;
+
+    /// <summary>Called, on any thread, when Penumbra redrew a character: every workspace reads its physics bones again.</summary>
+    public static void PhysicsMayHaveChanged() => Interlocked.Increment(ref physicsRedraws);
 
     /// <summary>
     /// Keeps <see cref="PhysicsBones"/> to the open clip and actor: takes a finished read, and starts one, off the draw, the first
-    /// time it is asked for a clip or an actor it wasn't read for. Cheap to call every frame.
+    /// time it is asked for a clip or an actor it wasn't read for, or after a redraw. Cheap to call every frame.
     /// </summary>
     public void KeepPhysicsBones()
     {
@@ -78,12 +85,15 @@ internal sealed class TimelineSession
             // A failure is read here so it isn't reported as unobserved; a read cancelled for another clip runs again on coming back.
             _ = done.Task.Exception;
             physicsKey = done.Task.IsCanceled ? null : done.Key;
-            PhysicsBones = done.Task.IsCompletedSuccessfully ? done.Task.Result : null;
+            // A cancelled read keeps the bones there were: after a redraw they stand until the new read ends.
+            if (!done.Task.IsCanceled)
+                PhysicsBones = done.Task.IsCompletedSuccessfully ? done.Task.Result : null;
         }
         if (Source is not { } source || ReadPhysicsBones is not { } read)
             return;
         var actor = ActorIndex;
-        var key = $"{ClipKey(source)}|{actor}";
+        var place = $"{ClipKey(source)}|{actor}|";
+        var key = place + Volatile.Read(ref physicsRedraws);
         if (physicsRead is { } running)
         {
             if (running.Key != key)
@@ -92,11 +102,28 @@ internal sealed class TimelineSession
         }
         if (physicsKey == key)
             return;
-        PhysicsBones = null;
+        // Another clip or actor starts from nothing; a redraw keeps the old bones until the new ones are read.
+        if (physicsPlace != place)
+            PhysicsBones = null;
+        physicsPlace = place;
         physicsKey = null;
         var cancel = new CancellationTokenSource();
         var token = cancel.Token;
-        physicsRead = (key, Task.Run(() => read(actor, token), token), cancel);
+        physicsRead = (key, Task.Run(() => ReadLoaded(read, actor, token), token), cancel);
+    }
+
+    // Right after a redraw the character's files are still loading and the tree lists no physics file: an empty read is tried
+    // again for a few seconds before it counts.
+    private static async Task<ImmutableHashSet<string>?> ReadLoaded(Func<ushort?, CancellationToken, Task<ImmutableHashSet<string>?>> read,
+        ushort? actor, CancellationToken token)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var bones = await read(actor, token).ConfigureAwait(false);
+            if (bones is not { IsEmpty: true } || attempt == 10)
+                return bones;
+            await Task.Delay(500, token).ConfigureAwait(false);
+        }
     }
 
     /// <summary>The open startup's loop read for Match startup to loop, shared by the Add menus and the layer panel.</summary>

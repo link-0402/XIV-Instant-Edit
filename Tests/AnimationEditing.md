@@ -3269,15 +3269,23 @@ BalanceLayerFixture); these checks are the panel, Live and the save.
 - [ ] 3 A clip with a sound or an effect in the repeated stretch: the sound plays once, where it was, not on each repeat.
 - [ ] 4 With the layer selected the canvas shades From to To. The From and To buttons set them to the playhead; the count
   reads 3 repeats, and on a looping clip a count that isn't whole shows in the warning colour.
-- [ ] 5 Key an arm swinging up and stopping, add a Spring layer after it on the upper arm, forearm and hand: in Live the
+- [x] 5 Key an arm swinging up and stopping, add a Spring layer after it on the upper arm, forearm and hand: in Live the
   forearm and hand trail the upper arm and overshoot where it stops, and the saved clip does too. More Bounce swings back
-  further; more Lag trails further behind.
+  further; more Lag trails further behind. (Bridge 2026-11-04, Idle pose 3, arm to 70° by frame 12: at the defaults the hand
+  reaches half-way at frame 14 (6 without the spring) and overshoots 3.3%, forearm 2.5%, upper arm 1.5%; Bounce 0/30/60% gives
+  none/3.3%/35%, Lag 1.5/4/8 puts the hand's half-way at frame 9/14/23. Live draws the evaluator's numbers within 0.2°; the
+  saved clip is within 0.6° of Live and draws the same peaks in game. Measured, not watched by eye.)
 - [ ] 6 With hair, a skirt or a tail bone selected (bones the outfit's physics moves), Limit to selected is greyed with "The
   game's physics moves these bones."; with a mix selected it adds only the others. A layer saved with such a bone lists it
-  in the warning colour.
-- [ ] 7 A Spring layer over a whole looping clip: no jump where the loop starts over. One ending mid-clip without a fade-out
-  doesn't pop at its end.
-- [ ] 8 The panel shows Lag, Bounce and Strength and no Turn/Move ticks; with no bones it says "Select bones to spring.".
+  in the warning colour. (Bridge 2026-11-04 on the build with the `PhysicsDrivenBones.Source` fix: the unmodded phyb now
+  reads, 33 hair, skirt, bust, ear and tail bones; greyed with that tooltip for hair, skirt and tail; a mix adds only the arm
+  bone; physics bones on the layer list in the warning colour. Still open: the listing after saving and reopening the clip.)
+- [x] 7 A Spring layer over a whole looping clip: no jump where the loop starts over. One ending mid-clip without a fade-out
+  doesn't pop at its end. (Bridge 2026-11-04, measured: seam step 0.00° with the arm still and with it moving through the
+  seam. Ending mid-swing it eases back over its last 4 frames, the hand at about 2.5 times its normal speed there: no
+  one-frame jump, but visible if you look for it.)
+- [x] 8 The panel shows Lag, Bounce and Strength and no Turn/Move ticks; with no bones it says "Select bones to spring.".
+  (Bridge 2026-11-04)
 - [ ] 9 A Still pose with an Offset layer leaning the upper back to one side, then a Balance layer: in Live the hips shift
   over the feet, the feet stay planted, and the saved clip does too. Sideways off keeps the hips' side to side.
 - [ ] 10 Lift one foot with an Offset layer for a stretch: the weight moves onto the other foot there and back after.
