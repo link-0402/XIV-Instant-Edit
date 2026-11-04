@@ -45,6 +45,7 @@ internal static class TimelineWindowViewsFixture
         ChangedFiles(check);
         MotionKeysHint(check, texts);
         PoseLoops(check, texts);
+        SwayTexts(check, texts);
         check(texts.All(text => !text.Contains("...", StringComparison.Ordinal) && !text.Contains('\u2026')),
             "Timeline window texts never use an ellipsis");
     }
@@ -645,6 +646,18 @@ internal static class TimelineWindowViewsFixture
         texts.AddRange(["Above 100% may clip.", "These chances follow the file's own rule. Even chances rewrites them.", "Turns this into a random set.",
             "Replace with audio file", "Match length", "Remove", "Add sound", "Even chances", "Match lengths", "Full volume within", "Silent past", "Channel", "Loop",
             TimelineWindowViews.ChanceFooter(80), TimelineWindowViews.ChanceFooter(120), TimelineWindowViews.EndsEarlyTip(1, 2)]);
+    }
+
+    private static void SwayTexts(Action<bool, string> check, List<string> texts)
+    {
+        var kinds = TimelineWindowViews.LayerKinds;
+        check(kinds.IndexOf(MotionLayerKind.Sway) == kinds.IndexOf(MotionLayerKind.Spring) + 1 && !TimelineWindowViews.FaceLayerKinds.Contains(MotionLayerKind.Sway) &&
+              TimelineWindowViews.LayerColour(MotionLayerKind.Sway) != TimelineWindowViews.LayerColour(MotionLayerKind.Spring),
+            "The layer menu offers Sway right after Spring, not on a face, in its own colour");
+        texts.AddRange([TimelineWindowViews.LayerKindHint(MotionLayerKind.Sway), "Select bones to sway.", "How much of the sway applies. Ctrl+click to type.",
+            "How many times it sways back and forth over the layer.", "0° side to side, 90° front to back.", "How far the top bone swings.",
+            "How firmly the bones keep their shape.", "How freely the bones swing on.", "How much the bones hang.", "This layer sways its bones.",
+            "Add the selected bones to the ones this layer sways."]);
     }
 
     private static void MotionKeysHint(Action<bool, string> check, List<string> texts)

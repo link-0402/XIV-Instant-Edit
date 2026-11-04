@@ -9,7 +9,7 @@ namespace InstantEdit.Ui.Timeline;
 /// <summary>One entry of the layer menu (see <see cref="LayerMenu.Items"/>).</summary>
 internal enum LayerMenuItem : byte
 {
-    Separator, NeutralFace, Pose, Offset, LookAt, HandShape, Pin, MotionKeys, Amplitude, Smooth, Swing, Noise, Spring, Repeat, Idle, Symmetry, Link, Fix, Balance,
+    Separator, NeutralFace, Pose, Offset, LookAt, HandShape, Pin, MotionKeys, Amplitude, Smooth, Swing, Noise, Spring, Repeat, Idle, Symmetry, Link, Fix, Balance, Sway,
 }
 
 /// <summary>
@@ -24,7 +24,7 @@ internal sealed class LayerMenu(TimelineSession session, LivePosePanel livePose,
     [
         LayerMenuItem.Pose, LayerMenuItem.Offset, LayerMenuItem.LookAt, LayerMenuItem.HandShape, LayerMenuItem.Pin, LayerMenuItem.Balance, LayerMenuItem.MotionKeys,
         LayerMenuItem.Separator,
-        LayerMenuItem.Amplitude, LayerMenuItem.Smooth, LayerMenuItem.Swing, LayerMenuItem.Noise, LayerMenuItem.Spring, LayerMenuItem.Repeat,
+        LayerMenuItem.Amplitude, LayerMenuItem.Smooth, LayerMenuItem.Swing, LayerMenuItem.Noise, LayerMenuItem.Spring, LayerMenuItem.Sway, LayerMenuItem.Repeat,
         LayerMenuItem.Idle, LayerMenuItem.Symmetry,
         LayerMenuItem.Separator,
         LayerMenuItem.Link,
@@ -57,6 +57,7 @@ internal sealed class LayerMenu(TimelineSession session, LivePosePanel livePose,
         LayerMenuItem.Swing => MotionLayerKind.Swing,
         LayerMenuItem.Noise => MotionLayerKind.Noise,
         LayerMenuItem.Spring => MotionLayerKind.Spring,
+        LayerMenuItem.Sway => MotionLayerKind.Sway,
         LayerMenuItem.Repeat => MotionLayerKind.Repeat,
         LayerMenuItem.Idle => MotionLayerKind.Idle,
         LayerMenuItem.Symmetry => MotionLayerKind.Symmetry,

@@ -82,10 +82,11 @@ internal static class Theme
     public static readonly Vector4 TrackProp = MaskTexture;
     public static readonly Vector4 TrackOther = OtherTexture;
 
-    /// <summary> Bone layer kinds past the kind palette: a repeat, a spring and a balance. </summary>
+    /// <summary> Bone layer kinds past the kind palette: a repeat, a spring, a balance and a sway. </summary>
     public static readonly Vector4 RepeatLayer = new(.70f, .52f, 1f, 1);
     public static readonly Vector4 SpringLayer = new(.45f, .95f, .80f, 1);
     public static readonly Vector4 BalanceLayer = new(.95f, .70f, .45f, 1);
+    public static readonly Vector4 SwayLayer = new(.92f, .95f, .50f, 1);
 
     /// <summary> The timeline's current frame: its line and the marker on the ruler. </summary>
     public static readonly Vector4 Playhead = Accent;

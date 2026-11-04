@@ -296,7 +296,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
         {
             if (layer.Kind is not (MotionLayerKind.Amplitude or MotionLayerKind.Symmetry or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or
                     MotionLayerKind.Smooth or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Link or MotionLayerKind.Repeat or
-                    MotionLayerKind.Spring or MotionLayerKind.Balance) &&
+                    MotionLayerKind.Spring or MotionLayerKind.Balance or MotionLayerKind.Sway) &&
                 PoseEdits.Keyed(layer, bone, frame))
                 return BoneState.Keyed;
             if (layerBones?.Pinned.Contains(bone) == true)
@@ -328,6 +328,7 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
             MotionLayerKind.Repeat => "This layer repeats its motion.",
             MotionLayerKind.Spring => "This layer springs its bones.",
             MotionLayerKind.Balance => "This layer keeps the weight over the feet.",
+            MotionLayerKind.Sway => "This layer sways its bones.",
             _ => "This layer changes it.",
         },
         BoneState.Animated => "The clip moves it.",
@@ -476,11 +477,11 @@ internal sealed class BonePosing(TimelineSession session, MotionDecode decode)
 
     /// <summary>
     /// Whether any of <paramref name="layers"/> takes the whole clip, which one pose leaves out: an amplitude, a fix, a smooth motion, a
-    /// repeat, a spring, a balance or a planted pin. A link never does: it follows its partner frame by frame, so one pose has it (<see cref="MotionEvaluator.ApplyAt"/>).
+    /// repeat, a spring, a balance, a sway or a planted pin. A link never does: it follows its partner frame by frame, so one pose has it (<see cref="MotionEvaluator.ApplyAt"/>).
     /// </summary>
     public static bool TakesWholeClip(IEnumerable<MotionLayer> layers) => layers.Any(layer => layer.Kind != MotionLayerKind.Link && MotionEvaluator.Active(layer) &&
         (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Smooth or MotionLayerKind.Repeat or MotionLayerKind.Spring or
-             MotionLayerKind.Balance ||
+             MotionLayerKind.Balance or MotionLayerKind.Sway ||
          layer.Kind == MotionLayerKind.Pin && layer.Pins.Any(pin => pin.Planted)));
 
     /// <summary>The bones the decoded clip has tracks for, when it was decoded on <paramref name="skeleton"/>; empty while unknown.</summary>

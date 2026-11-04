@@ -498,10 +498,10 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
         ImGui.TextColored(Theme.Muted, "Bones");
         ImGui.SameLine(0, Theme.Gap);
         ImGui.AlignTextToFramePadding();
-        // A swing, a noise or a spring with none listed moves nothing; the other limited kinds then change every bone.
-        var swing = layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.Spring;
-        // A spring leaves out the bones the game's physics moves, and the root and the body, which would move the whole character.
-        var spring = layer.Kind == MotionLayerKind.Spring;
+        // A swing, a noise, a spring or a sway with none listed moves nothing; the other limited kinds then change every bone.
+        var swing = layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.Spring or MotionLayerKind.Sway;
+        // A spring or a sway leaves out the bones the game's physics moves, and the root and the body, which would move the whole character.
+        var spring = layer.Kind is MotionLayerKind.Spring or MotionLayerKind.Sway;
         if (spring)
             session.KeepPhysicsBones();
         var physics = spring ? session.PhysicsBones : null;
@@ -537,6 +537,7 @@ internal sealed class BoneEditor(TimelineSession session, MotionDecode decode, B
             ImGui.SetTooltip(spring && picked.Length > 0 && physics != null && picked.All(physics.Contains) ? "The game's physics moves these bones." : layer.Kind switch
             {
                 MotionLayerKind.Spring => "Add the selected bones to the ones this layer springs.",
+                MotionLayerKind.Sway => "Add the selected bones to the ones this layer sways.",
                 MotionLayerKind.Fix => "Add the selected bones to the ones this layer fixes. With none listed, it fixes every bone.",
                 MotionLayerKind.Swing => "Add the selected bones to the ones this layer swings.",
                 MotionLayerKind.Noise => "Add the selected bones to the ones this layer wobbles.",

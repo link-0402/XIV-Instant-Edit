@@ -214,6 +214,12 @@ internal static class SpringLayerFixture
         var bones = PhysicsDrivenBones.From([file]);
         check(bones.SetEquals(["j_sk_a", "j_sk_b"]), "physics bones are every bone a chain names, its boneless tip left out");
         check(PhysicsDrivenBones.From([]).IsEmpty && PhysicsDrivenBones.From([new PhybFile(), file, file]).Count == 2, "no file names none, and each bone counts once");
+        const string game = "chara/human/c0801/skeleton/hair/h0001/phy_c0801h0001.phyb";
+        var vanilla = PhysicsDrivenBones.Source(game, game.Replace('/', '\\'));
+        check(vanilla == game && AnimationDependencies.SafeGamePath(vanilla), "a file no mod replaces is read from its game path, whose backslashes Penumbra adds are turned back");
+        check(PhysicsDrivenBones.Source(null, game.Replace('/', '\\')) == game, "without a game path the actual one is read with forward slashes");
+        const string modded = @"C:\Mods\Test\phy_c0801b0001.phyb";
+        check(PhysicsDrivenBones.Source(game, modded) == modded, "a mod's file is read from disk as the tree has it");
     }
 
     private static void Views(Action<bool, string> check)

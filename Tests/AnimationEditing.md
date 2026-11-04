@@ -3293,6 +3293,29 @@ BalanceLayerFixture); these checks are the panel, Live and the save.
   held" lines that update after an edit. A face's Add menu has no Balance; a skeleton without the hips or feet says "This
   skeleton has no hips or feet.".
 
+## Sway (pending)
+
+The sway's maths are covered offline (SwayLayerFixture); these checks are the panel, Live and the save.
+
+- [x] 1 A Miqo'te idle with a still tail, a Sway layer on the tail bones at the defaults: in Live the tail sways side to side,
+  the tip trailing the base, and the saved clip plays the same in game. (Bridge 2026-11-04, Idle pose 3, layer on `n_sippo_a`
+  under a tail physics chain with low Follow: tip swings 34 cm, each segment 60 ms behind the one above; the saved clip draws
+  the same within 0.2 cm. Swaying `n_sippo_b`-`e` too draws only about half of what the layer computes: the physics places them.)
+- [x] 2 Stiffness, Bounce and Hang each change the sway visibly: softer trails further, more Bounce swings on longer, more Hang
+  droops the tail. (Bridge 2026-11-04: all three change it; softer gives a smaller swing, not a later one, as the top bone
+  itself lags the drive: 7.7° of the 15° Angle at Stiffness 10%.)
+- [x] 3 Direction 90 sways front to back; Angle 0 leaves only what the motion under it moves. (Bridge 2026-11-04)
+- [x] 4 A Sway layer over a whole looping idle: no jump where the loop starts over. One ending mid-clip without a fade-out
+  doesn't pop at its end. (Bridge 2026-11-04, measured on the evaluated motion: seam 0.00°, end within 0.11°; not watched by eye.)
+- [x] 5 Tail bones a loaded physics chain moves are greyed in Limit to selected with "The game's physics moves these bones.".
+  (Bridge 2026-11-04: greying works when the physics read succeeds, but `PhysicsDrivenBones.ReadAsync` returns null for the
+  whole set when any phyb in the tree is unmodded: its ActualPath is the game path with backslashes, which `SafeGamePath`
+  refuses. Spring has the same bug. Fixed the same day (`PhysicsDrivenBones.Source` reads the forward-slash game path, an
+  unreadable file only leaves its own bones out). Rechecked on the fixed build: `n_sippo_b`-`e` greyed with that tooltip,
+  `n_sippo_a` isn't a physics bone and is allowed, a mix adds only `n_sippo_a`, Tail C and E list in the warning colour.)
+- [x] 6 The panel shows Swings, Direction, Angle, Stiffness, Bounce, Hang and Strength and no Turn/Move ticks; with no bones it
+  says "Select bones to sway.". A face's Add menu has no Sway. (Bridge 2026-11-04)
+
 ## Free camera (pending)
 
 Free camera on the Timeline's action bar (left of Bones), or /ie cam, flies the game's camera in GPose or out of it: a hook on the

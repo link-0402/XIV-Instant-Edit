@@ -87,6 +87,7 @@ internal static class ChangelogCatalog
             Entry("Spring layer: bones lag behind the motion and overshoot.", 1),
             Entry("Look at can follow a partner's bone.", 1),
             Entry("Balance layer: keeps the body's weight over the feet.", 1),
+            Entry("Sway layer: a tail or other hanging bones sway with weight and follow-through.", 1),
             Entry("Expressions: key face bones with bone layers, from an expression or Edit face on a face event, see them Live, make a face still or moving, start from Neutral face, and save the face as a new mod or in place.", 1),
             Entry("The gizmo's Drag mode pulls a bone where you want it and bends the limb above to follow.", 1),
             Entry("Drag mode on the hips moves them and keeps the feet and hands where they are; the legs, arms and back follow.", 1),

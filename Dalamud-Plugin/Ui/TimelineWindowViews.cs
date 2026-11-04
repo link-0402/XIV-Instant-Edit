@@ -344,6 +344,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Repeat => Theme.RepeatLayer,
         MotionLayerKind.Spring => Theme.SpringLayer,
         MotionLayerKind.Balance => Theme.BalanceLayer,
+        MotionLayerKind.Sway => Theme.SwayLayer,
         _ => Theme.Important,
     };
 
@@ -364,6 +365,7 @@ internal static partial class TimelineWindowViews
         MotionLayerKind.Repeat => "Play a stretch of the motion again and again.",
         MotionLayerKind.Spring => "Make bones lag and overshoot the motion.",
         MotionLayerKind.Balance => "Keep the body's weight over the feet.",
+        MotionLayerKind.Sway => "Sway a tail or other hanging bones.",
         _ => "Blend bones toward poses you key.",
     };
 
@@ -441,7 +443,8 @@ internal static partial class TimelineWindowViews
             }
             // A swing, a noise, a look, a repeat or a spring gives its bones motion, a smooth motion only reshapes what is there. A repeat over
             // every bone only plays motion the clip has, so it names none.
-            if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Repeat or MotionLayerKind.Spring)
+            if (layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.LookAt or MotionLayerKind.Repeat or MotionLayerKind.Spring or
+                MotionLayerKind.Sway)
             {
                 moved.UnionWith(layer.Bones);
                 continue;
@@ -505,19 +508,19 @@ internal static partial class TimelineWindowViews
         if (layer.Fix is { Kind: MotionFixKind.ResetRoot, Axes: var axes })
             return axes == MotionAxes.None ? "Root · no axes" : "Root · " + string.Join(", ", ResetAxes.Where(a => axes.HasFlag(a.Axis)).Select(a => a.Label));
         var limited = layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-            MotionLayerKind.Repeat or MotionLayerKind.Spring;
+            MotionLayerKind.Repeat or MotionLayerKind.Spring or MotionLayerKind.Sway;
         var bones = limited
             ? layer.Bones.Length
             : layer.Keys.SelectMany(key => key.Bones.Keys).Distinct(StringComparer.Ordinal).Count();
-        // A swing, a noise or a spring without bones moves nothing; the other limited kinds then change every bone.
+        // A swing, a noise, a spring or a sway without bones moves nothing; the other limited kinds then change every bone.
         if (limited)
-            return bones == 0 ? layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.Spring ? "No bones" : "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
+            return bones == 0 ? layer.Kind is MotionLayerKind.Swing or MotionLayerKind.Noise or MotionLayerKind.Spring or MotionLayerKind.Sway ? "No bones" : "Every bone" : bones == 1 ? "1 bone" : $"{Whole(bones)} bones";
         var keys = layer.Keys.Length;
         return (keys == 1 ? "1 key" : $"{Whole(keys)} keys") + " · " + (bones == 1 ? "1 bone" : $"{Whole(bones)} bones");
     }
 
     /// <summary>
-    /// Whether a spring layer's bone picker leaves <paramref name="bone"/> out: the root or the body, which would move the whole
+    /// Whether a spring or sway layer's bone picker leaves <paramref name="bone"/> out: the root or the body, which would move the whole
     /// character, or a bone the game's physics moves (<paramref name="physics"/>, null while unknown).
     /// </summary>
     public static bool SpringRefuses(string bone, SkeletonDescription skeleton, IReadOnlyDictionary<string, int> index, IReadOnlySet<string>? physics) =>
@@ -865,7 +868,7 @@ internal static partial class TimelineWindowViews
                     MotionLayerKind.Fix when layer.Fix?.Kind == MotionFixKind.ResetRoot =>
                         editing?.Bones.Where(bone => bone.Parent < 0).Select(bone => bone.Name) ?? Enumerable.Empty<string>(),
                     MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-                        MotionLayerKind.LookAt or MotionLayerKind.Repeat or MotionLayerKind.Spring => layer.Bones.AsEnumerable(),
+                        MotionLayerKind.LookAt or MotionLayerKind.Repeat or MotionLayerKind.Spring or MotionLayerKind.Sway => layer.Bones.AsEnumerable(),
                     MotionLayerKind.Symmetry => CopiedBones(doc, layer, clip, editing),
                     MotionLayerKind.Pin => PinnedBones(layer, editing),
                     MotionLayerKind.Idle => MotionIdles.Moved(layer),

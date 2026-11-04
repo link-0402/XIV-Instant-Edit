@@ -295,8 +295,8 @@ internal static class MotionEditsFixture
               MotionEdits.Find(smooth, smoothKey) is { Name: "Smooth motion 1", Amount: 1, Window: MotionSmoothing.DefaultWindow, Swing: null },
             "a swing starts with the default swing and a smooth motion with a 10-frame window, both at full strength");
         check(TimelineWindowViews.LayerKinds.SequenceEqual([MotionLayerKind.Pose, MotionLayerKind.Offset, MotionLayerKind.LookAt, MotionLayerKind.Pin, MotionLayerKind.Balance,
-                  MotionLayerKind.Amplitude, MotionLayerKind.Smooth, MotionLayerKind.Swing, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Repeat,
-                  MotionLayerKind.Idle, MotionLayerKind.Symmetry, MotionLayerKind.Link]) &&
+                  MotionLayerKind.Amplitude, MotionLayerKind.Smooth, MotionLayerKind.Swing, MotionLayerKind.Noise, MotionLayerKind.Spring, MotionLayerKind.Sway,
+                  MotionLayerKind.Repeat, MotionLayerKind.Idle, MotionLayerKind.Symmetry, MotionLayerKind.Link]) &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Swing) == "Swing bones back and forth over the layer." &&
               TimelineWindowViews.LayerKindHint(MotionLayerKind.Smooth) == "Even out sudden moves." &&
               TimelineUi.LayerIcon(MotionLayerKind.Swing) != TimelineUi.LayerIcon(MotionLayerKind.Idle) &&
@@ -378,6 +378,25 @@ internal static class MotionEditsFixture
         check(faced.Motion.IsEmpty && faceError == "A face takes no balance layer." && !TimelineFace.Allows(MotionLayerKind.Balance, null) &&
               !TimelineLayout.Unfolds(balanced) && TimelineWindowViews.LayerContent(balanced) == "Hips and feet",
             "a face takes no balance, which has no bone rows and works on the hips and feet");
+        var sway = MotionEdits.Add(Empty(), MotionLayerKind.Sway, 0, 100, out var swayKey, out _);
+        var swayed = MotionEdits.Find(sway, swayKey)!;
+        check(swayed is { Name: "Sway 1", Amount: 1, Components: PoseComponents.Rotation, Window: 0, Spring: null, Balance: null } && swayed.Sway == new MotionSway() &&
+              swayed.Bones.IsEmpty && MotionEdits.MaxAmount(MotionLayerKind.Sway) == 1,
+            "a sway starts with the default sway, turning only, at full strength");
+        check(!MotionEdits.Same(swayed, swayed with { Sway = swayed.Sway! with { Hang = .5f } }) &&
+              ReferenceEquals(MotionEdits.SetKey(sway, swayKey, 50, "j_kosi", rest), sway) &&
+              MotionEdits.Find(MotionEdits.SetBones(sway, swayKey, ["n_root", "n_hara", "n_sippo_a"]), swayKey)!.Bones.SequenceEqual(["n_sippo_a"]),
+            "layers differ by a sway's hang, and a sway takes no keys, nor the root or the body");
+        check(MotionEdits.KindName(MotionLayerKind.Sway) == "Sway" &&
+              TimelineWindowViews.LayerKindHint(MotionLayerKind.Sway) == "Sway a tail or other hanging bones." &&
+              TimelineUi.LayerIcons.Distinct().Count() == TimelineUi.LayerIcons.Length && TimelineUi.LayerIcons.Length == Enum.GetValues<MotionLayerKind>().Length &&
+              Enum.GetValues<MotionLayerKind>().Where(kind => kind != MotionLayerKind.Sway).All(kind => TimelineWindowViews.LayerColour(kind) != TimelineWindowViews.LayerColour(MotionLayerKind.Sway)),
+            "the Add menu offers Sway after Spring, with its own hint, icon and colour");
+        var facedSway = MotionEdits.Add(TimelineFace.Open(Empty(), 0, 1, 100), MotionLayerKind.Sway, 0, 2, out _, out var faceSwayError);
+        check(facedSway.Motion.IsEmpty && faceSwayError == "A face takes no sway layer." && !TimelineFace.Allows(MotionLayerKind.Sway, null) &&
+              TimelineWindowViews.LayerContent(swayed) == "No bones" && TimelineWindowViews.LayerContent(swayed with { Bones = ["n_sippo_a"] }) == "1 bone" &&
+              !TimelineLayout.Unfolds(swayed) && LayerPanel.Summary(swayed with { Bones = ["n_sippo_a", "n_sippo_b"] }) == "Sways 2 bones",
+            "a face takes no sway; a sway without bones says so and has no bone rows");
         var full = Empty() with { Motion = [.. Enumerable.Range(0, MotionEvaluator.MaxLayers).Select(i => layer with { Key = "m" + i })] };
         var refused = MotionEdits.Add(full, MotionLayerKind.Offset, 0, 10, out _, out var tooMany);
         check(ReferenceEquals(refused, full) && tooMany != null, "a layer past the most an animation may have is refused with a reason");

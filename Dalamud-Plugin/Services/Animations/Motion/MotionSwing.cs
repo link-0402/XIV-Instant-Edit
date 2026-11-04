@@ -104,16 +104,24 @@ internal static class MotionSwings
     public static float Value(MotionLayer layer, int depth, float frame, float loop, float end = 0)
     {
         var swing = layer.Swing ?? new MotionSwing();
-        var shift = Math.Min(depth * swing.Delay, (layer.End - layer.Start) / 2f);
+        return Value(swing.Count, swing.Shape, Math.Min(depth * swing.Delay, (layer.End - layer.Start) / 2f), layer, frame, loop, end);
+    }
+
+    /// <summary>
+    /// <see cref="Value(MotionLayer, int, float, float, float)"/> for <paramref name="count"/> swings of <paramref name="shape"/> over
+    /// <paramref name="layer"/>'s span, starting <paramref name="shift"/> frames late: what a sway layer's top bones swing by.
+    /// </summary>
+    public static float Value(int count, float shape, float shift, MotionLayer layer, float frame, float loop, float end = 0)
+    {
         if (MotionEvaluator.Wraps(layer, loop))
-            return Wave(swing.Count * (frame - shift) / loop, swing.Shape);
+            return Wave(count * (frame - shift) / loop, shape);
         var start = layer.Start + shift;
         // A layer may end a frame or a fraction past the motion it reaches; its last swing then ends with the motion.
         var stop = MotionEvaluator.ReachesEnd(layer, end) ? Math.Min(layer.End, end) : layer.End;
         var span = stop - start;
         if (frame <= start || span <= 0)
             return 0;
-        return Wave(swing.Count * Math.Min(frame - start, span) / span, swing.Shape);
+        return Wave(count * Math.Min(frame - start, span) / span, shape);
     }
 
     /// <summary>

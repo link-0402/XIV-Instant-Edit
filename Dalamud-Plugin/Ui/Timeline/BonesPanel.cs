@@ -631,7 +631,7 @@ internal sealed class BonesPanel(TimelineSession session, string? animationError
         ImGui.TextColored(Theme.Label, MotionEdits.KindName(layer.Kind));
         ImGui.Spacing();
         if (layer.Kind is MotionLayerKind.Amplitude or MotionLayerKind.Fix or MotionLayerKind.Idle or MotionLayerKind.Swing or MotionLayerKind.Smooth or MotionLayerKind.Noise or
-            MotionLayerKind.Repeat or MotionLayerKind.Spring)
+            MotionLayerKind.Repeat or MotionLayerKind.Spring or MotionLayerKind.Sway)
             boneEditor.DrawLimit(current, layer, skeleton, readOnly);
         // A balance always works on the hips and the feet: nothing to pick or key.
         else if (layer.Kind == MotionLayerKind.Balance)

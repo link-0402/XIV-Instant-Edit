@@ -19,8 +19,8 @@ internal static class PhysicsDrivenBones
 
     /// <summary>
     /// The physics bones of the character at object index <paramref name="actor"/>: the <c>.phyb</c> files Penumbra's resource
-    /// tree lists for it, read as its collection loads them. Null when they can't be known (no Penumbra, no tree, a file that
-    /// can't be read); this never throws but for cancellation. The tree is asked for on the framework thread, the files read off it.
+    /// tree lists for it, read as its collection loads them. Null when they can't be known (no Penumbra, no tree); a file that
+    /// can't be read is left out. This never throws but for cancellation. The tree is asked for on the framework thread, the files read off it.
     /// </summary>
     public static async Task<ImmutableHashSet<string>?> ReadAsync(PenumbraIpc penumbra, IDataManager data, IFramework framework, IPluginLog log,
         ushort actor, CancellationToken token)
@@ -32,17 +32,18 @@ internal static class PhysicsDrivenBones
                 return null;
             var paths = Walk(tree.Nodes)
                 .Where(node => (node.GamePath ?? node.ActualPath)?.EndsWith(".phyb", StringComparison.OrdinalIgnoreCase) == true)
-                .Select(node => (Game: node.GamePath ?? "", Actual: string.IsNullOrEmpty(node.ActualPath) ? node.GamePath ?? "" : node.ActualPath))
+                .Select(node => (Game: node.GamePath ?? "", Actual: Source(node.GamePath, node.ActualPath)))
                 .Where(path => path.Actual.Length > 0).Distinct().ToArray();
             var files = new List<PhybFile>();
             foreach (var (game, actual) in paths)
             {
                 token.ThrowIfCancellationRequested();
                 var bytes = await Task.Run(() => Read(data, actual), token).ConfigureAwait(false);
+                // One unreadable file only leaves its own bones out, so the others are still greyed.
                 if (bytes == null)
                 {
                     log.Debug($"The physics file {game} could not be read for spring layers.");
-                    return null;
+                    continue;
                 }
                 files.Add(PhybFile.Parse(bytes));
             }
@@ -54,6 +55,14 @@ internal static class PhysicsDrivenBones
             return null;
         }
     }
+
+    /// <summary>
+    /// The path to read a tree node's file from: a mod's file on disk as the tree has it, else its game path with forward slashes.
+    /// For a file no mod replaces Penumbra's actual path is the game path with backslashes, which a game path check refuses.
+    /// </summary>
+    public static string Source(string? gamePath, string? actualPath) =>
+        !string.IsNullOrEmpty(actualPath) && Path.IsPathFullyQualified(actualPath) ? actualPath
+            : (string.IsNullOrEmpty(gamePath) ? actualPath ?? "" : gamePath).Replace('\\', '/');
 
     /// <summary>A loaded file's bytes: a mod's file on disk, else the game's own; null when it isn't there or is too large.</summary>
     private static byte[]? Read(IDataManager data, string actual)
