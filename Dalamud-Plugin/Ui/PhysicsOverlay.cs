@@ -6,8 +6,9 @@ namespace InstantEdit.Ui;
 
 /// <summary>
 /// The physics builder's drawing on the character: a window over the whole game screen, kept behind
-/// every other window and taking no input, where the builder draws the area being edited (its tip,
-/// swing cone, spring and collision shapes) while it's open. Like <see cref="BonesOverlay"/>.
+/// every other window and taking no input itself, where the builder draws the area being edited (its
+/// tip, swing cone, spring and collision shapes) while it's open. The builder takes the mouse from the
+/// game only while a part is under it. Like <see cref="BonesOverlay"/>.
 /// </summary>
 internal sealed class PhysicsOverlay : Window
 {

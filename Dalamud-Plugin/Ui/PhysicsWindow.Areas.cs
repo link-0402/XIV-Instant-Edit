@@ -37,6 +37,9 @@ internal sealed partial class PhysicsWindow
             DrawArea(current, selected);
         else
             Widgets.EmptyState(FontAwesomeIcon.HandPointer, "Pick an area", "Or add one your skeleton has bones for.");
+        // A click's jump lands this frame or not at all (its group or row isn't drawn).
+        jumpGroup = EditorGroup.None;
+        jumpShape = null;
     }
 
     private void DrawAreaList(PhysicsDocument current)
@@ -88,7 +91,7 @@ internal sealed partial class PhysicsWindow
             "or one copied from another file.");
         if (target is { } found)
         {
-            foreach (var kind in PhysicsTemplates.Addable(current.File, found.Character.Skeleton))
+            foreach (var kind in PhysicsTemplates.Addable(current.File, found.Character.Skeleton, found.MovedElsewhere))
             {
                 using var id = ImRaii.PushId(kind.Key);
                 var label = kind.Skeleton == "Vanilla" ? kind.Label : $"{kind.Label} ({kind.Skeleton})";
@@ -233,13 +236,19 @@ internal sealed partial class PhysicsWindow
             return;
         SetSliderStart(current, targets);
 
+        // One group per part on the character, in its colour there, so a click on a part lands on its settings.
         ImGui.Spacing();
-        Widgets.SectionHeader("Movement");
-        DrawMovement(current, targets);
-        ImGui.Spacing();
-        Widgets.SectionHeader("Collision");
-        DrawCollision(current, index, targets);
-        ImGui.Spacing();
+        if (GroupHeader(EditorGroup.Bones, "Bones", PhysicsOverlayPart.Chain, Theme.Accent))
+            DrawBones(current, targets);
+        if (GroupHeader(EditorGroup.Tip, "Tip", PhysicsOverlayPart.Tip, Theme.Accent))
+            DrawTip(current, targets);
+        if (GroupHeader(EditorGroup.Swing, "Swing limit", PhysicsOverlayPart.Cone, Theme.Info))
+            KnobSlider(current, targets, PhysicsKnob.Swing, "The furthest it swings from where it rests.", 0, 180, "%.0f°", part: PhysicsOverlayPart.Cone);
+        if (GroupHeader(EditorGroup.Spring, "Spring", PhysicsOverlayPart.Spring, Theme.Warning))
+            DrawSpring(current, targets);
+        if (GroupHeader(EditorGroup.Collision, "Collision with", PhysicsOverlayPart.Shape, Theme.Success,
+                "Shapes these chains stay out of, such as arms and legs. Each shape costs a little performance."))
+            DrawCollision(current, targets);
         if (ImGui.CollapsingHeader("Advanced##advanced"))
             DrawAdvanced(current, index, targets);
     }
@@ -361,11 +370,21 @@ internal sealed partial class PhysicsWindow
         return result;
     }
 
-    // ---- Movement ----
+    // ---- Groups ----
 
     private float LabelWidth => Theme.Scaled(130);
 
-    private void DrawMovement(PhysicsDocument current, List<(int Simulator, int Chain)> targets)
+    private void DrawBones(PhysicsDocument current, List<(int Simulator, int Chain)> targets)
+    {
+        KnobSlider(current, targets, PhysicsKnob.Length, "How far the tip sits from the bone. Longer swings slower and wider.", 0.5f, 50,
+            "%.1f cm", part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Weight, "How hard gravity pulls it.", 0, 2, "%.2f", part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Damping, "How fast the jiggle dies out. Higher stops it sooner.", 0, 1, "%.3f", part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Follow, "How strongly the animation pulls it back. Higher is stiffer.", 0, 1, "%.3f",
+            ImGuiSliderFlags.Logarithmic, part: PhysicsOverlayPart.Chain);
+    }
+
+    private void DrawSpring(PhysicsDocument current, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
         var (s0, c0) = targets[0];
@@ -411,14 +430,6 @@ internal sealed partial class PhysicsWindow
                 Tip("Adds a spring that pulls the tip back to where it rests.");
             }
         }
-
-        KnobSlider(current, targets, PhysicsKnob.Damping, "How fast the jiggle dies out. Higher stops it sooner.", 0, 1, "%.3f", part: PhysicsOverlayPart.Chain);
-        KnobSlider(current, targets, PhysicsKnob.Swing, "The furthest it swings from where it rests.", 0, 180, "%.0f°", part: PhysicsOverlayPart.Cone);
-        KnobSlider(current, targets, PhysicsKnob.Weight, "How hard gravity pulls it.", 0, 2, "%.2f", part: PhysicsOverlayPart.Chain);
-        KnobSlider(current, targets, PhysicsKnob.Follow, "How strongly the animation pulls it back. Higher is stiffer.", 0, 1, "%.3f",
-            ImGuiSliderFlags.Logarithmic, part: PhysicsOverlayPart.Chain);
-        KnobSlider(current, targets, PhysicsKnob.Length, "How far the tip sits from the bone. Longer swings slower and wider.", 0.5f, 50,
-            "%.1f cm", part: PhysicsOverlayPart.Chain);
     }
 
     /// <summary> The tooltip for the spring slider, by what <see cref="PhysicsKnobs.SpringName"/> calls the spring. </summary>
@@ -484,22 +495,15 @@ internal sealed partial class PhysicsWindow
 
     // ---- Collision ----
 
-    private void DrawCollision(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
+    private void DrawCollision(PhysicsDocument current, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
-        KnobSlider(current, targets, PhysicsKnob.Size, "The ball at the tip that bumps into shapes.", 0, 20, "%.1f cm", part: PhysicsOverlayPart.Tip);
-
         var names = file.Collision.Names.Select(name => name.Text).Distinct().ToList();
         if (names.Count == 0)
         {
             Widgets.HintWrapped("The file has no collision shapes. Add some under Collision shapes.");
             return;
         }
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Label, "Collision with");
-        Tip("Shapes these chains stay out of, such as arms and legs. Each shape costs a little performance.");
-        ImGui.SameLine(LabelWidth);
-        using var group = ImRaii.Group();
         foreach (var name in names)
         {
             using var id = ImRaii.PushId(name);
@@ -511,7 +515,16 @@ internal sealed partial class PhysicsWindow
                 PhysicsBumps.Some => 1u,
                 _ => 0u,
             };
-            if (ImGui.CheckboxFlags($"{PhysicsShapeNames.Label(file.Collision, name, target?.Character.Skeleton)}##check", ref bits, 3u))
+            // A click on this shape on the character scrolls here, and the row flashes.
+            if (jumpShape == name)
+            {
+                ImGui.SetScrollHereY(.3f);
+                jumpShape = null;
+            }
+            bool clicked;
+            using (ImRaii.PushColor(ImGuiCol.Text, Theme.Accent, flashShape == name && Flashing))
+                clicked = ImGui.CheckboxFlags($"{PhysicsShapeNames.Label(file.Collision, name, target?.Character.Skeleton)}##check", ref bits, 3u);
+            if (clicked)
             {
                 var on = bits == 3u;
                 // Nothing to change, or a refused tick, leaves no undo step behind.
@@ -714,17 +727,14 @@ internal sealed partial class PhysicsWindow
         }
     }
 
-    /// <summary> The settings whose effect is rarely seen, the points table and the springs, under one header. </summary>
-    private void DrawAdvanced(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
+    /// <summary> The tip: the ball that bumps into shapes, how it slides along them, and where it sits. </summary>
+    private void DrawTip(PhysicsDocument current, List<(int Simulator, int Chain)> targets)
     {
         var file = current.File;
-        var simulator = file.Simulators[index];
         var (s0, c0) = targets[0];
         var first = file.Simulators[s0].Chains[c0];
 
-        KnobSlider(current, targets, PhysicsKnob.MaxSpeed, "The fastest it may move. Rarely reached.", 0.1f, 10, "%.1f m/s", part: PhysicsOverlayPart.Chain);
-        KnobSlider(current, targets, PhysicsKnob.Wind, "How much wind moves it. Needs a wind direction below.", 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic,
-            part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Size, "The ball at the tip that bumps into shapes.", 0, 20, "%.1f cm", part: PhysicsOverlayPart.Tip);
         KnobSlider(current, targets, PhysicsKnob.Friction, "Slows it while it slides along a shape.", 0, 1, "%.3f", part: PhysicsOverlayPart.Tip);
         KnobSlider(current, targets, PhysicsKnob.BumpDamping, "Speed it loses when it hits a shape.", 0, 1, "%.3f", part: PhysicsOverlayPart.Tip);
         KnobSlider(current, targets, PhysicsKnob.PushBack, "How far a shape pushes it out each step. 1 is all the way.", 0, 1, "%.3f", part: PhysicsOverlayPart.Tip);
@@ -772,6 +782,17 @@ internal sealed partial class PhysicsWindow
         Tip("Where the tip sits, in the last bone's space. The other side's tip moves to the mirrored place. " +
             "Chains ending in other bones keep their own. Pick one to change it.");
         Lights(PhysicsOverlayPart.Tip);
+    }
+
+    /// <summary> The settings whose effect is rarely seen, the whole area's, the points table and the springs, under one header. </summary>
+    private void DrawAdvanced(PhysicsDocument current, int index, List<(int Simulator, int Chain)> targets)
+    {
+        var file = current.File;
+        var simulator = file.Simulators[index];
+
+        KnobSlider(current, targets, PhysicsKnob.MaxSpeed, "The fastest it may move. Rarely reached.", 0.1f, 10, "%.1f m/s", part: PhysicsOverlayPart.Chain);
+        KnobSlider(current, targets, PhysicsKnob.Wind, "How much wind moves it. Needs a wind direction below.", 0, 0.2f, "%.4f", ImGuiSliderFlags.Logarithmic,
+            part: PhysicsOverlayPart.Chain);
 
         ImGui.Spacing();
         Widgets.SectionHeader("Whole area");

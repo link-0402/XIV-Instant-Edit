@@ -8,10 +8,11 @@ using InstantEdit.Services.Animations;
 namespace InstantEdit.Services.Physics;
 
 /// <summary>
-/// The local player as the physics builder needs it: name, race, body skeleton with rest poses, every
-/// bone name of its other skeletons, and the body skeleton and physics files the game loaded. The
-/// object index is your own character's, for its collection and redraws (in GPose Penumbra redraws
-/// your posed copy in its place); everything else is read from the character drawn for you.
+/// The local player as the physics builder needs it: name, race, body skeleton with rest poses, the
+/// bones of its other skeletons, the body skeleton and physics files the game loaded, and the physics
+/// files of its face, hair, headgear and top skeletons. The object index is your own character's, for
+/// its collection and redraws (in GPose Penumbra redraws your posed copy in its place); everything else
+/// is read from the character drawn for you.
 /// </summary>
 internal sealed record PhysicsCharacter(
     int ObjectIndex,
@@ -19,7 +20,8 @@ internal sealed record PhysicsCharacter(
     ushort Race,
     PhysicsSkeleton Skeleton,
     string SkeletonFile,
-    string LoadedPhysicsFile);
+    string LoadedPhysicsFile,
+    IReadOnlyList<string> OtherPhysicsFiles);
 
 /// <summary> A body model the character draws: its model slot, its loaded file, and the parts and shapes it turns on. </summary>
 internal sealed record PhysicsDrawnModel(int Slot, string File, uint Attributes, uint Shapes);
@@ -157,9 +159,8 @@ internal static unsafe class PhysicsLiveReader
             return (null, "Your character's skeleton isn't loaded.");
 
         SkeletonDescriptionResult body = default;
-        var others = new List<string>();
-        // The other skeletons' parents, so the builder can draw their bones' swing cones; the first skeleton naming a bone wins.
-        var otherParents = new Dictionary<string, string>(StringComparer.Ordinal);
+        // The other skeletons' bones, so the builder can draw their swing cones and measure chains on them; the first skeleton naming a bone wins.
+        var others = new List<PhysicsBone>();
         for (var p = 0; p < skeleton->PartialSkeletonCount; p++)
         {
             var partial = &skeleton->PartialSkeletons[p];
@@ -180,11 +181,7 @@ internal static unsafe class PhysicsLiveReader
                     body = new SkeletonDescriptionResult(description,
                         partial->SkeletonResourceHandle != null ? partial->SkeletonResourceHandle->FileName.Utf8() : string.Empty);
                 else
-                    foreach (var bone in description.Bones)
-                    {
-                        others.Add(bone.Name);
-                        otherParents.TryAdd(bone.Name, PhysicsSkeleton.ParentName(description, bone.Parent));
-                    }
+                    others.AddRange(PhysicsSkeleton.Bones(description));
             }
             catch (InvalidDataException e)
             {
@@ -195,15 +192,20 @@ internal static unsafe class PhysicsLiveReader
 
         // The body's physics file is the first of the module's five (body, then the face, hair, headgear and top skeletons').
         var physics = string.Empty;
+        var otherPhysics = new List<string>();
         var module = drawObject->BonePhysicsModule;
         if (module != null)
         {
             var handle = module->BonePhysicsResourceHandles[0].Value;
             if (handle != null)
                 physics = handle->FileName.Utf8();
+            // A mod's file by its path on disk, the game's by its game path.
+            for (var slot = 1; slot < 5; slot++)
+                if (module->BonePhysicsResourceHandles[slot].Value is var other && other != null && other->FileName.Utf8() is { Length: > 0 } name)
+                    otherPhysics.Add(name);
         }
-        return (new PhysicsCharacter(local.ObjectIndex, local.Name.TextValue, race, PhysicsSkeleton.From(body.Description!, others, otherParents),
-            body.File, physics), null);
+        return (new PhysicsCharacter(local.ObjectIndex, local.Name.TextValue, race, PhysicsSkeleton.From(body.Description!, others: others),
+            body.File, physics, otherPhysics), null);
     }
 
     private readonly record struct SkeletonDescriptionResult(Models.SkeletonDescription? Description, string File);

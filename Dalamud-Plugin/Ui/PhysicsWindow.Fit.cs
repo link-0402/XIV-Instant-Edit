@@ -221,18 +221,20 @@ internal sealed partial class PhysicsWindow
         }
     }
 
-    /// <summary> The skirt bones to move in Customize+, which physics can't move. </summary>
-    private static void DrawWaist(IReadOnlyList<PhysicsWaistMove> waist)
+    /// <summary> The skirt bones to move in Customize+, which physics can't move, copied as a template to import there. </summary>
+    private void DrawWaist(IReadOnlyList<PhysicsWaistMove> waist)
     {
         ImGui.Spacing();
         ImGui.TextColored(Theme.Label, "Waistband: set in Customize+");
-        Widgets.MutedWrapped("Physics can't move where a skirt starts. Add these to the bones' Position in your Customize+ profile:");
-        foreach (var move in waist)
+        Widgets.MutedWrapped("Physics can't move where a skirt starts. Import this template in Customize+ and add it last to your profile.");
+        if (ImGui.Button("Copy Customize+ template##physics-fit-waist"))
         {
-            var t = move.Translation;
-            ImGui.TextUnformatted(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                $"{move.Bone}: X {t.X:+0.000;-0.000}, Y {t.Y:+0.000;-0.000}, Z {t.Z:+0.000;-0.000} ({move.Distance * 100:0.0} cm out)"));
+            ImGui.SetClipboardText(PhysicsPlusTemplate.Encode(waist, fitMeasure?.Plus));
+            Say(FeedbackSeverity.Success, "Copied. Import it from the clipboard in Customize+'s Templates.");
         }
+        Tip(string.Join("\n", waist.Select(move => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"{move.Bone}: X {move.Translation.X:+0.000;-0.000}, Y {move.Translation.Y:+0.000;-0.000}, Z {move.Translation.Z:+0.000;-0.000} " +
+            $"({move.Distance * 100:0.0} cm out)"))));
     }
 
     /// <summary> Where breast tips go: on the nipple or in the middle of the breast. Changing it measures the tips again. </summary>

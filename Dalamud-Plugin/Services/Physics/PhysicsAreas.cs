@@ -21,7 +21,8 @@ internal enum PhysicsPart
 
 /// <summary>
 /// The starting values of an area added from scratch: a chain per bone from the bone to a tip at
-/// <paramref name="Tip"/> (in the bone's space), and a spring pulling the tip back toward where it rests.
+/// <paramref name="Tip"/> (in the bone's space), and a spring pulling the tip back toward where it rests
+/// (none when <paramref name="Firmness"/> is 0).
 /// </summary>
 internal sealed record PhysicsTemplate(
     Vector3 Tip,
@@ -32,7 +33,28 @@ internal sealed record PhysicsTemplate(
     float Firmness,
     float TipRadius = 0f,
     float MaxSpeed = 4f,
-    float TipWind = 0.001f);
+    float TipWind = 0.001f,
+    float Friction = 0f,
+    float BumpDamping = 0f,
+    float Repulsion = 1f,
+    bool Capsules = false);
+
+/// <summary> One point's starting values: size in metres, follow animation, wind, gravity and swing in degrees. </summary>
+internal sealed record PhysicsNodeTemplate(float Radius, float Follow, float Wind, float Gravity, float SwingDegrees);
+
+/// <summary>
+/// The starting values of an area whose bones hang in chains, such as earring or hair bones: a chain from
+/// each top bone down its child bones, then a tip <paramref name="TipLength"/> past the last bone along its
+/// X axis (0: as far as the bone before it). Swings narrow on chains longer than <paramref name="ReferenceLength"/>.
+/// </summary>
+internal sealed record PhysicsChainTemplate(
+    float Damping,
+    PhysicsNodeTemplate Root,
+    PhysicsNodeTemplate Middle,
+    PhysicsNodeTemplate Tip,
+    float TipLength = 0f,
+    float MaxSpeed = 4f,
+    float ReferenceLength = 0f);
 
 /// <summary>
 /// A body area that skeletons give physics bones to. <paramref name="Body"/> areas are the jiggle the
@@ -47,8 +69,12 @@ internal sealed record PhysicsAreaKind(
     bool Body,
     byte Group,
     PhysicsTemplate? Template = null,
-    string? BonePrefix = null)
+    string? BonePrefix = null,
+    PhysicsChainTemplate? Chains = null)
 {
+    /// <summary> It can be added from scratch. </summary>
+    public bool CanBuild => Template != null || Chains != null;
+
     /// <summary> This area's bone, by exact name or, for bone families like the skirt's, by prefix. </summary>
     public bool Owns(string bone)
         => Bones.Contains(bone, StringComparer.Ordinal) || BonePrefix != null && bone.StartsWith(BonePrefix, StringComparison.Ordinal);
@@ -104,11 +130,24 @@ internal static class PhysicsAreas
             new PhysicsTemplate(new Vector3(0, 0.072f, 0), Damping: 0.05f, SwingDegrees: 25f, TipGravity: 0.1f, FollowAnimation: 0.1f,
                 Firmness: 0.05f)),
         // IVCS names the groin's bones in Japanese; its "_phys" bones are jiggle bones, like the belly's and thighs'.
-        new("penis-ivcs", PhysicsPart.Groin, "Penis", "IVCS", [], true, ChestGroup, BonePrefix: "iv_ochinko_"),
-        new("penis-soft-ivcs", PhysicsPart.Groin, "Penis, flaccid", "IVCS", [], true, ChestGroup, BonePrefix: "iv_funyachin_phy_"),
-        new("testicles-ivcs", PhysicsPart.Groin, "Testicles", "IVCS", ["iv_kougan_l", "iv_kougan_r"], true, ChestGroup),
-        new("testicles-jiggle-ivcs", PhysicsPart.Groin, "Testicles, jiggle", "IVCS", ["iv_kintama_phys_l", "iv_kintama_phys_r"], true, ChestGroup),
-        new("clitoris-ivcs", PhysicsPart.Groin, "Clitoris", "IVCS", ["iv_kuritto"], true, ChestGroup),
+        // Groin values are the medians of the physics mods in a large library (measured 2026-11-04), one chain per
+        // bone as most of them build it; the flaccid penis's four-bone chains had swing limits past 180°.
+        new("penis-ivcs", PhysicsPart.Groin, "Penis", "IVCS", [], true, ChestGroup,
+            new PhysicsTemplate(new Vector3(0.033f, 0, 0), Damping: 0.01f, SwingDegrees: 17.5f, TipGravity: 0.1f, FollowAnimation: 0.05f,
+                Firmness: 0f, TipRadius: 0.01f, TipWind: 0f, Capsules: true), BonePrefix: "iv_ochinko_"),
+        new("penis-soft-ivcs", PhysicsPart.Groin, "Penis, flaccid", "IVCS", [], true, ChestGroup,
+            new PhysicsTemplate(new Vector3(0.0305f, 0, 0), Damping: 0.1f, SwingDegrees: 25f, TipGravity: 0.1f, FollowAnimation: 0.01f,
+                Firmness: 0.001f, TipRadius: 0.04f, MaxSpeed: 10f, TipWind: 0f, Friction: 0.225f, BumpDamping: 0.25f, Repulsion: 0f, Capsules: true),
+            BonePrefix: "iv_funyachin_phy_"),
+        new("testicles-ivcs", PhysicsPart.Groin, "Testicles", "IVCS", ["iv_kougan_l", "iv_kougan_r"], true, ChestGroup,
+            new PhysicsTemplate(new Vector3(0.176f, 0, 0), Damping: 0.025f, SwingDegrees: 30f, TipGravity: 0.5f, FollowAnimation: 0.005f,
+                Firmness: 0.00175f, TipRadius: 0.025f, MaxSpeed: 2f, TipWind: 0f, Friction: 0.15f, BumpDamping: 0.01f, Repulsion: 0f, Capsules: true)),
+        new("testicles-jiggle-ivcs", PhysicsPart.Groin, "Testicles, jiggle", "IVCS", ["iv_kintama_phys_l", "iv_kintama_phys_r"], true, ChestGroup,
+            new PhysicsTemplate(new Vector3(0.044f, 0.016f, 0), Damping: 0f, SwingDegrees: 25f, TipGravity: 0.5f, FollowAnimation: 0f,
+                Firmness: 0f, TipRadius: 0.025f, MaxSpeed: 2f, TipWind: 0f, Friction: 0.15f, BumpDamping: 0.15f, Repulsion: 0f, Capsules: true)),
+        new("clitoris-ivcs", PhysicsPart.Groin, "Clitoris", "IVCS", ["iv_kuritto"], true, ChestGroup,
+            new PhysicsTemplate(new Vector3(0.075f, 0.02f, 0), Damping: 0.1f, SwingDegrees: 180f, TipGravity: 0.5f, FollowAnimation: 0f,
+                Firmness: 0.005f, MaxSpeed: 1f, TipWind: 0f, Repulsion: 0f)),
         new("ears", PhysicsPart.Ears, "Ears", "Vanilla", ["j_mimi_l", "j_mimi_r"], false, EarsGroup,
             new PhysicsTemplate(new Vector3(0.1f, 0, 0), Damping: 0.05f, SwingDegrees: 15f, TipGravity: 0.1f, FollowAnimation: 0.1f,
                 Firmness: 0.05f)),
@@ -117,6 +156,13 @@ internal static class PhysicsAreas
         new("front-hair", PhysicsPart.FrontHair, "Front hair", "Vanilla", ["j_kami_f_l", "j_kami_f_r"], false, 5),
         new("earrings", PhysicsPart.Earrings, "Earrings", "Vanilla", ["n_ear_a_l", "n_ear_a_r", "n_ear_b_l", "n_ear_b_r"], false, 8),
         new("tail", PhysicsPart.Tail, "Tail", "Vanilla", [], false, 14, BonePrefix: "n_sippo_"),
+        // Bones added by a face skeleton (j_ex_earring_a to e, chained) or a hair skeleton made with Instant Edit
+        // (j_ex_hair_NN_a, b, ...). The body physics file can move another skeleton's bones.
+        new("earring-chains", PhysicsPart.Earrings, "Earrings", "Custom", [], false, 8, BonePrefix: "j_ex_earring_",
+            Chains: new PhysicsChainTemplate(0.015f, new(0.005f, 0, 0.05f, 1, 50), new(0.005f, 0, 0.01f, 1, 30), new(0.005f, 0, 0.001f, 1, 180),
+                TipLength: 0.015f)),
+        new("hair-custom", PhysicsPart.Hair, "Hair", "Custom", [], false, 4, BonePrefix: "j_ex_hair_",
+            Chains: PhysicsTemplates.HairChains("back")),
     ];
 
     public static PhysicsAreaKind? Find(string key) => Kinds.FirstOrDefault(kind => kind.Key == key);

@@ -23,6 +23,7 @@ internal static class PhysicsScenarios
         CheckRejections();
         CheckAreas();
         CheckTemplates();
+        CheckLibraryAreas();
         CheckValidation();
         CheckDocument();
         CheckModFiles(testRoot);
@@ -273,6 +274,76 @@ internal static class PhysicsScenarios
         Require(PhysicsTemplates.RestSpring(bare, 3, skeleton, 0.04f) is { Chain: 3, Node: 1, Stiffness: 0.04f } spring &&
                 spring.Bone.Text == "j_kosi" && Vector3.Distance(spring.Offset, new Vector3(0.106f + 0.1f * PhysicsTemplates.SpringReach, 0.062f, 0.066f)) < 1e-5f,
             "physics: a chain without a spring can get one anchored past where its tip rests, as the game's breasts");
+    }
+
+    /// <summary>
+    /// A body with IVCS groin bones, plus earring and hair bones from a face and a hair skeleton (their
+    /// X axes point down their chains, as the tools that make them build them).
+    /// </summary>
+    private static PhysicsSkeleton ChainSkeleton()
+    {
+        var down = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(Vector3.UnitZ, -MathF.PI / 2));
+        return new PhysicsSkeleton(
+        [
+            new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_kosi", "n_root", new Vector3(0, 1, 0), Quaternion.Identity),
+            new PhysicsBone("iv_ochinko_a", "j_kosi", new Vector3(0, -0.1f, 0.05f), Quaternion.Identity),
+            new PhysicsBone("iv_ochinko_b", "iv_ochinko_a", new Vector3(0.03f, 0, 0), Quaternion.Identity),
+            new PhysicsBone("iv_kougan_l", "j_kosi", new Vector3(0.01f, -0.12f, 0.04f), Quaternion.Identity),
+            new PhysicsBone("iv_kougan_r", "j_kosi", new Vector3(-0.01f, -0.12f, 0.04f), Quaternion.Identity),
+            new PhysicsBone("j_kao", "j_kosi", new Vector3(0, 0.5f, 0), Quaternion.Identity),
+        ], others:
+        [
+            new PhysicsBone("j_kao", "", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_ex_earring_a_l", "j_kao", new Vector3(0.07f, -0.02f, 0), down),
+            new PhysicsBone("j_ex_earring_b_l", "j_ex_earring_a_l", new Vector3(0.007f, 0, 0), Quaternion.Identity),
+            new PhysicsBone("j_ex_hair_01_a", "j_kao", new Vector3(0, 0.05f, 0.07f), down),
+            new PhysicsBone("j_ex_hair_01_b", "j_ex_hair_01_a", new Vector3(0.06f, 0, 0), Quaternion.Identity),
+            new PhysicsBone("j_ex_hair_02_a", "j_kao", new Vector3(0.06f, 0, 0), down),
+            new PhysicsBone("j_ex_hair_03_a", "j_kao", new Vector3(0, 0, -0.08f), down),
+        ]);
+    }
+
+    private static void CheckLibraryAreas()
+    {
+        var skeleton = ChainSkeleton();
+        var empty = new PhybFile();
+        var addable = PhysicsTemplates.Addable(empty, skeleton).Select(kind => kind.Key).ToList();
+        Require(addable.SequenceEqual(["penis-ivcs", "testicles-ivcs", "earring-chains", "hair-custom"]),
+            $"physics: groin, earring and hair bones can be given new physics ({string.Join(", ", addable)})");
+
+        var penis = PhysicsTemplates.Build(PhysicsAreas.Find("penis-ivcs")!, skeleton)!;
+        Require(penis.Chains.Count == 2 && penis.Chains.All(c => c.Nodes.Count == 2 && c.Type == 1) && penis.Attracts.Count == 0 &&
+                penis.Chains[0].Nodes[0].Bone.Text == "iv_ochinko_a" && penis.Group == PhysicsAreas.ChestGroup,
+            "physics: a new penis area moves each of its bones on its own, without a spring, as most presets do");
+        var testicles = PhysicsTemplates.Build(PhysicsAreas.Find("testicles-ivcs")!, skeleton)!;
+        Require(testicles.Attracts.Count == 2 && testicles.Attracts[0].Stiffness == 0.00175f && testicles.Chains[0].Friction == 0.15f &&
+                testicles.Chains[0].RepulsionStrength == 0,
+            "physics: a new testicles area takes the presets' springs and bump values");
+
+        var earrings = PhysicsTemplates.Build(PhysicsAreas.Find("earring-chains")!, skeleton)!;
+        var chain = earrings.Chains.Single();
+        // a's X axis points down its parent's -Y, so its swing is measured from straight down.
+        Require(earrings.Group == 8 && chain.Nodes.Select(n => n.Bone.Text).SequenceEqual(["j_ex_earring_a_l", "j_ex_earring_b_l", ""]) &&
+                Vector3.Distance(chain.Nodes[0].ConeAxisOffset, -Vector3.UnitY) < 1e-5f && chain.LastBoneOffset == new Vector3(0.015f, 0, 0) &&
+                MathF.Abs(chain.Nodes[0].ConeMaxAngle - PhysicsTemplates.Radians(50)) < 1e-6f && chain.Nodes[2].ConeMaxAngle == MathF.PI,
+            "physics: a new earring area hangs one chain down each side's bones, measured on the face skeleton's rest pose");
+        Require(!PhysicsTemplates.Addable(empty, skeleton, new HashSet<string> { "j_ex_earring_b_l" }).Any(kind => kind.Key == "earring-chains"),
+            "physics: bones another physics file of the character moves aren't offered");
+
+        var hair = PhysicsTemplates.Build(PhysicsAreas.Find("hair-custom")!, skeleton)!;
+        Require(hair.Group == 4 && hair.Chains.Count == 3 &&
+                hair.Chains[0].Dampening == PhysicsTemplates.HairChains("bangs").Damping &&
+                hair.Chains[1].Dampening == PhysicsTemplates.HairChains("side").Damping &&
+                hair.Chains[2].Dampening == PhysicsTemplates.HairChains("back").Damping &&
+                hair.Chains[0].LastBoneOffset == new Vector3(0.06f, 0, 0),
+            "physics: a new hair area takes the hair skeleton presets of where each chain hangs: front, side or back");
+
+        var file = new PhybFile();
+        file.Simulators.Add(earrings);
+        Require(PhysicsTemplates.Moved(file).Contains("j_ex_earring_b_l") &&
+                !PhysicsTemplates.Addable(file, skeleton).Any(kind => kind.Key == "earring-chains"),
+            "physics: a chain's lower bones count as moved, not just its first");
     }
 
     private static void CheckValidation()

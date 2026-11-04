@@ -18,9 +18,12 @@ internal sealed class PhysicsSkeleton
     private readonly Dictionary<string, PhysicsBone> byName;
     private readonly HashSet<string> allNames;
     private readonly Dictionary<string, string> otherParents;
+    private readonly Dictionary<string, PhysicsBone> otherRest = new(StringComparer.Ordinal);
 
     /// <param name="otherParents"> Parents of the other skeletons' bones, by bone name; their names count as bones too. </param>
-    public PhysicsSkeleton(IReadOnlyList<PhysicsBone> body, IEnumerable<string>? otherBones = null, IReadOnlyDictionary<string, string>? otherParents = null)
+    /// <param name="others"> The other skeletons' bones with their rest places; the first one of a name counts. </param>
+    public PhysicsSkeleton(IReadOnlyList<PhysicsBone> body, IEnumerable<string>? otherBones = null, IReadOnlyDictionary<string, string>? otherParents = null,
+        IEnumerable<PhysicsBone>? others = null)
     {
         Body = body.ToImmutableArray();
         byName = new Dictionary<string, PhysicsBone>(StringComparer.Ordinal);
@@ -31,8 +34,20 @@ internal sealed class PhysicsSkeleton
             allNames.UnionWith(otherBones);
         this.otherParents = otherParents != null ? new Dictionary<string, string>(otherParents, StringComparer.Ordinal) : new(StringComparer.Ordinal);
         allNames.UnionWith(this.otherParents.Keys);
+        foreach (var bone in others ?? [])
+            if (otherRest.TryAdd(bone.Name, bone))
+            {
+                allNames.Add(bone.Name);
+                this.otherParents.TryAdd(bone.Name, bone.Parent);
+            }
         Family = FamilyOf(byName.Keys);
     }
+
+    /// <summary> Every bone name of the character's skeletons. </summary>
+    public IEnumerable<string> Names => allNames;
+
+    /// <summary> A bone of any of the character's skeletons with its rest place, the body's first; null when its rest place isn't known. </summary>
+    public PhysicsBone? Rest(string bone) => byName.GetValueOrDefault(bone) ?? otherRest.GetValueOrDefault(bone);
 
     public ImmutableArray<PhysicsBone> Body { get; }
 
@@ -54,12 +69,17 @@ internal sealed class PhysicsSkeleton
         => byName.TryGetValue(bone, out var known) ? known.Parent : otherParents.GetValueOrDefault(bone) ?? string.Empty;
 
     /// <summary> A body skeleton read from a skeleton file or a live character. </summary>
-    public static PhysicsSkeleton From(SkeletonDescription body, IEnumerable<string>? otherBones = null, IReadOnlyDictionary<string, string>? otherParents = null)
+    public static PhysicsSkeleton From(SkeletonDescription body, IEnumerable<string>? otherBones = null, IReadOnlyDictionary<string, string>? otherParents = null,
+        IEnumerable<PhysicsBone>? others = null)
+        => new(Bones(body), otherBones, otherParents, others);
+
+    /// <summary> A skeleton's bones with their parents' names and rest places. </summary>
+    public static List<PhysicsBone> Bones(SkeletonDescription skeleton)
     {
-        var bones = new List<PhysicsBone>(body.Bones.Length);
-        foreach (var bone in body.Bones)
-            bones.Add(new PhysicsBone(bone.Name, ParentName(body, bone.Parent), bone.Reference.Position, bone.Reference.Rotation));
-        return new PhysicsSkeleton(bones, otherBones, otherParents);
+        var bones = new List<PhysicsBone>(skeleton.Bones.Length);
+        foreach (var bone in skeleton.Bones)
+            bones.Add(new PhysicsBone(bone.Name, ParentName(skeleton, bone.Parent), bone.Reference.Position, bone.Reference.Rotation));
+        return bones;
     }
 
     /// <summary> The name of the bone at <paramref name="parent"/>, or empty for a root. </summary>

@@ -59,8 +59,14 @@ internal sealed partial class PhysicsWindow
     /// <summary> A shape's name and what it is, with a delete button when nothing uses it. Returns true when it was deleted. </summary>
     private bool ShapeHeader(PhysicsDocument current, string name, string detail, Action remove)
     {
+        // A click on this shape on the character scrolls here, and its name flashes.
+        if (jumpShape == name)
+        {
+            ImGui.SetScrollHereY(.2f);
+            jumpShape = null;
+        }
         ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(Theme.Text, PhysicsShapeNames.Label(current.File.Collision, name, target?.Character.Skeleton));
+        ImGui.TextColored(flashShape == name && Flashing ? Theme.Accent : Theme.Text, PhysicsShapeNames.Label(current.File.Collision, name, target?.Character.Skeleton));
         Lights(PhysicsOverlayPart.Shape, name);
         ImGui.SameLine(0, Theme.Gap);
         ImGui.TextColored(Theme.Muted, detail);

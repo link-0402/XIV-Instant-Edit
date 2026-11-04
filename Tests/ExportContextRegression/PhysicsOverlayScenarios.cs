@@ -16,6 +16,109 @@ internal static class PhysicsOverlayScenarios
         CheckShapes();
         CheckMissing();
         CheckFaceBones();
+        CheckOnCharacter();
+        CheckPicker();
+        CheckTooltips();
+    }
+
+    /// <summary> The chest file with a second chest chain (chain 1) and a second area of one chain (area 1). </summary>
+    private static (PhysicsSkeleton Skeleton, PhybFile File, Func<string, PhysicsFrame?> Frame) TwoChainsTwoAreas()
+    {
+        var (skeleton, file, frames) = Chest();
+        var chest = file.Simulators[0];
+        var twin = chest.Chains[0];
+        chest.Chains.Add(new PhybChain { LastBoneOffset = twin.LastBoneOffset, Nodes = [.. twin.Nodes.Select(node => new PhybNode { Bone = node.Bone, Radius = node.Radius, ConeMaxAngle = node.ConeMaxAngle, ConeAxisOffset = node.ConeAxisOffset })] });
+        file.Simulators.Add(new PhybSimulator { Chains = [new PhybChain { LastBoneOffset = new Vector3(0, -0.1f, 0), Nodes = [new PhybNode { Bone = PhybName.From("j_asi_a_l") }, new PhybNode()] }] });
+        return (skeleton, file, bone => frames.TryGetValue(bone, out var frame) ? frame : null);
+    }
+
+    /// <summary> A part under the mouse on the character lights on its own chain; other areas draw faint; the Collision with header lights the used shapes. </summary>
+    private static void CheckOnCharacter()
+    {
+        var (skeleton, file, frame) = TwoChainsTwoAreas();
+        var cone = PhysicsOverlayModel.Build(file, [(0, 0), (0, 1)], false, new PhysicsOverlayHover(PhysicsOverlayPart.Cone, null, (0, 1)), skeleton, frame);
+        var cones = cone.Circles.Where(circle => circle.Part == PhysicsOverlayPart.Cone).ToList();
+        Require(cones.Count == 2 && cones.Single(circle => circle.Chain == 1).Lit && !cones.Single(circle => circle.Chain == 0).Lit &&
+                cone.Segments.Where(segment => segment.Part == PhysicsOverlayPart.Cone).All(segment => segment.Lit == (segment.Chain == 1)),
+            "physics overlay: a cone under the mouse on the character lights on its own chain only");
+        var slider = PhysicsOverlayModel.Build(file, [(0, 0), (0, 1)], false, new PhysicsOverlayHover(PhysicsOverlayPart.Cone), skeleton, frame);
+        Require(slider.Circles.Where(circle => circle.Part == PhysicsOverlayPart.Cone).All(circle => circle.Lit),
+            "physics overlay: the Swing limit slider still lights the cones of every chain it edits");
+        Require(cone.Segments.Where(segment => segment.Part == PhysicsOverlayPart.Chain).All(segment => segment.Simulator == 0 && segment.Chain is 0 or 1) &&
+                cone.Marks.All(mark => mark.Simulator == 0),
+            "physics overlay: each chain's lines and dots say which chain they belong to");
+
+        var others = PhysicsOverlayModel.Build(file, [(0, 0)], false, PhysicsOverlayHover.None, skeleton, frame, PhysicsOverlayShown.All, [(1, 0), (0, 0)]);
+        var faint = others.Segments.Where(segment => segment.Part == PhysicsOverlayPart.OtherArea).ToList();
+        Require(faint.Count == 1 && faint[0] is { Simulator: 1, Chain: 0, Lit: false } && !others.Circles.Any(circle => circle.Simulator == 1),
+            "physics overlay: another area draws its bones only, and the edited chain isn't drawn twice");
+        var otherLit = PhysicsOverlayModel.Build(file, [(0, 0)], false, new PhysicsOverlayHover(PhysicsOverlayPart.OtherArea, null, (1, 0)), skeleton, frame,
+            PhysicsOverlayShown.All, [(1, 0)]);
+        Require(otherLit.Segments.Single(segment => segment.Part == PhysicsOverlayPart.OtherArea).Lit,
+            "physics overlay: another area under the mouse lights");
+        var unticked = PhysicsOverlayModel.Build(file, [(0, 0)], false, PhysicsOverlayHover.None, skeleton, frame, PhysicsOverlayShown.Default, [(1, 0)]);
+        Require(!unticked.Segments.Any(segment => segment.Part == PhysicsOverlayPart.OtherArea),
+            "physics overlay: other areas stay hidden while Other areas is unticked");
+
+        var header = PhysicsOverlayModel.Build(file, [(0, 0)], false, new PhysicsOverlayHover(PhysicsOverlayPart.Shape), skeleton, frame);
+        Require(header.Capsules.Single() is { Part: PhysicsOverlayPart.Shape, Lit: true } && header.Spheres.Single() is { Part: PhysicsOverlayPart.OtherShape, Lit: false },
+            "physics overlay: hovering the Collision with header lights the shapes the chains bump into, not the others");
+        Require(new PhysicsOverlayTarget(PhysicsOverlayPart.OtherShape, Shape: "hand_r").Hover == new PhysicsOverlayHover(PhysicsOverlayPart.Shape, "hand_r") &&
+                new PhysicsOverlayTarget(PhysicsOverlayPart.Tip, 0, 1).Hover == new PhysicsOverlayHover(PhysicsOverlayPart.Tip, null, (0, 1)),
+            "physics overlay: a shape under the mouse lights by name, a chain's part on its chain");
+    }
+
+    /// <summary> In screen pixels: small parts win over big ones within reach, shapes count along their outline only. </summary>
+    private static void CheckPicker()
+    {
+        var tip = new PhysicsOverlayTarget(PhysicsOverlayPart.Tip, 0, 0);
+        var bones = new PhysicsOverlayTarget(PhysicsOverlayPart.Chain, 0, 0);
+        var arm = new PhysicsOverlayTarget(PhysicsOverlayPart.Shape, Shape: "arm_l");
+        var spring = new PhysicsOverlayTarget(PhysicsOverlayPart.Spring, 0, 0);
+        PhysicsOverlayTarget? Pick(Vector2 mouse)
+        {
+            var picker = new PhysicsOverlayPicker(mouse, 8);
+            picker.Ring(new Vector2(100, 100), 60, arm);
+            picker.Segment(new Vector2(100, 40), new Vector2(100, 160), bones);
+            picker.Disc(new Vector2(100, 150), 10, tip);
+            // The spring's dashed line starts at the tip, as the overlay draws it.
+            picker.Segment(new Vector2(100, 150), new Vector2(140, 190), spring);
+            picker.Point(new Vector2(140, 190), spring);
+            return picker.Hit;
+        }
+        Require(Pick(new Vector2(100, 152)) == tip && Pick(new Vector2(104, 154)) == tip,
+            "physics overlay pick: inside the tip ball, the tip wins over the bones and the spring line starting there");
+        Require(Pick(new Vector2(130, 180)) == spring && Pick(new Vector2(141, 191)) == spring, "physics overlay pick: the spring along its line and on its dot");
+        Require(Pick(new Vector2(104, 80)) == bones, "physics overlay pick: near the bones' line, the bones");
+        Require(Pick(new Vector2(161, 100)) == arm && Pick(new Vector2(130, 100)) == null,
+            "physics overlay pick: a shape on its outline, not inside it, where the game keeps the mouse");
+        Require(Pick(new Vector2(300, 300)) == null, "physics overlay pick: nothing out of reach");
+        var near = new PhysicsOverlayPicker(new Vector2(0, 0), 8);
+        near.Point(new Vector2(6, 0), new PhysicsOverlayTarget(PhysicsOverlayPart.Chain, 0, 0));
+        near.Point(new Vector2(2, 0), new PhysicsOverlayTarget(PhysicsOverlayPart.Chain, 0, 1));
+        Require(near.Hit is { Chain: 1 }, "physics overlay pick: the nearest of two of a kind");
+        Require(MathF.Abs(PhysicsOverlayPicker.ToSegment(new Vector2(5, 5), Vector2.Zero, new Vector2(10, 0)) - 5) < 1e-5f &&
+                MathF.Abs(PhysicsOverlayPicker.ToSegment(new Vector2(-3, 4), Vector2.Zero, new Vector2(10, 0)) - 5) < 1e-5f,
+            "physics overlay pick: distance to a segment, past its end to the end");
+    }
+
+    /// <summary> The tooltip names the setting with its value as its slider shows it, then the chain; shapes say whether they collide. </summary>
+    private static void CheckTooltips()
+    {
+        var (skeleton, file, _) = Chest();
+        string Say(PhysicsOverlayPart part, string? shape = null, bool shapesView = false)
+            => PhysicsOverlayText.Describe(file, new PhysicsOverlayTarget(part, 0, 0, shape), skeleton, shapesView);
+        Require(Say(PhysicsOverlayPart.Cone) == "Swing limit 30°\nChain j_mune_l" && Say(PhysicsOverlayPart.Tip) == "Tip size 4.0 cm\nChain j_mune_l" &&
+                Say(PhysicsOverlayPart.Chain) == "Tip length 14.0 cm\nChain j_mune_l",
+            $"physics overlay tooltip: the cone, tip and bones say their setting and value ({Say(PhysicsOverlayPart.Cone)} | {Say(PhysicsOverlayPart.Tip)} | {Say(PhysicsOverlayPart.Chain)})");
+        Require(Say(PhysicsOverlayPart.Spring) == "Firmness 0.0500\nChain j_mune_l",
+            $"physics overlay tooltip: the spring says its own name and strength ({Say(PhysicsOverlayPart.Spring)})");
+        Require(Say(PhysicsOverlayPart.Shape, "thigh_l").EndsWith("\nCollides", StringComparison.Ordinal) &&
+                Say(PhysicsOverlayPart.OtherShape, "hand_r").EndsWith("\nDoesn't collide", StringComparison.Ordinal) &&
+                !Say(PhysicsOverlayPart.Shape, "thigh_l", shapesView: true).Contains('\n'),
+            "physics overlay tooltip: a shape says whether the area collides with it, in the shapes view only its name");
+        Require(Say(PhysicsOverlayPart.OtherArea) == PhysicsAreas.Labels(file)[0] && PhysicsOverlayText.Describe(file, new PhysicsOverlayTarget(PhysicsOverlayPart.Cone, 5, 0), skeleton, false) == "",
+            "physics overlay tooltip: another area says its name; a chain that isn't there says nothing");
     }
 
     /// <summary> A body physics chain on face bones (earrings on j_kao): drawn from the face skeleton's frames and parents. </summary>

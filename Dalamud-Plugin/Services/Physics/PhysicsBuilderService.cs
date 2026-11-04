@@ -25,17 +25,21 @@ public sealed class PhysicsSavedMod
 /// <summary> A finished save: the mod it went into, anything to report and your other builder mods it turned off. </summary>
 internal sealed record PhysicsSaveResult(string Directory, IReadOnlyList<string> Warnings, IReadOnlyList<string> TurnedOff);
 
-/// <summary> The character the builder works for, and the files its collection loads for it. </summary>
+/// <summary>
+/// The character the builder works for, and the files its collection loads for it. <paramref name="MovedElsewhere"/>
+/// are the bones the physics of its face, hair, headgear and top skeletons move, which the body's shouldn't move too.
+/// </summary>
 internal sealed record PhysicsTarget(PhysicsCharacter Character, Guid CollectionId, string CollectionName, PhysicsLoadedFile Physics,
-    PhysicsLoadedFile Skeleton);
+    PhysicsLoadedFile Skeleton, IReadOnlySet<string> MovedElsewhere);
 
 /// <summary>
 /// Your body as the game draws it, standing in the measuring pose, to fit physics to; what to know
 /// about the measuring; and a line saying what shaped it. <see cref="Unshaped"/> is the same body in the
 /// rest pose without Customize+, where physics places its shapes; null without a Customize+ profile.
+/// <see cref="Plus"/> is that profile's bones.
 /// </summary>
 internal sealed record PhysicsBodyMeasure(PhysicsBody Body, PhysicsSkeleton Skeleton, IReadOnlyList<string> Warnings, string Note = "",
-    PhysicsBody? Unshaped = null);
+    PhysicsBody? Unshaped = null, IReadOnlyDictionary<string, PhysicsPlusBone>? Plus = null);
 
 /// <summary>
 /// The physics builder's game side: finds your character, its skeleton and the body physics its
@@ -161,7 +165,30 @@ internal sealed class PhysicsBuilderService : IDisposable
         await FollowModsAsync(lookAgain: false).ConfigureAwait(false);
         return new PhysicsTarget(character, collection.Id, collection.Name,
             await DescribeAsync(physicsPath, resolved[0], PhysicsPaths.BodyPhysics).ConfigureAwait(false),
-            await DescribeAsync(skeletonPath, resolved[1], PhysicsPaths.BodySkeleton).ConfigureAwait(false));
+            await DescribeAsync(skeletonPath, resolved[1], PhysicsPaths.BodySkeleton).ConfigureAwait(false),
+            await MovedElsewhereAsync(character.OtherPhysicsFiles).ConfigureAwait(false));
+    }
+
+    /// <summary> The bones the character's other physics files move; a file that can't be read moves none. </summary>
+    private async Task<IReadOnlySet<string>> MovedElsewhereAsync(IReadOnlyList<string> files)
+    {
+        var moved = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var path in files)
+        {
+            try
+            {
+                var file = Path.IsPathFullyQualified(path)
+                    ? await ReadFileAsync(path).ConfigureAwait(false)
+                    : await Task.Run(() => data.GetFile(PathRules.NormalizeGamePath(path))?.Data).ConfigureAwait(false) is { } bytes ? PhybFile.Parse(bytes) : null;
+                if (file != null)
+                    moved.UnionWith(PhysicsTemplates.Moved(file));
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException)
+            {
+                log.Warning(e, $"The physics file {path} can't be read.");
+            }
+        }
+        return moved;
     }
 
     private async Task<PhysicsLoadedFile> DescribeAsync(string gamePath, string? resolved, Func<ushort, string> racePath)
@@ -418,7 +445,7 @@ internal sealed class PhysicsBuilderService : IDisposable
         var unshaped = plus is null ? null : await Task.Run(() => PhysicsBody.Measure(models, rest, rest), token).ConfigureAwait(false);
         var shaped = plus is null ? "your body mod" : "your body mod and Customize+ profile";
         var note = look.Female ? $"Measured standing still with {shaped}, bust size {look.BustSize}." : $"Measured standing still with {shaped}.";
-        return new PhysicsBodyMeasure(measured, skeleton, warnings, note, unshaped);
+        return new PhysicsBodyMeasure(measured, skeleton, warnings, note, unshaped, plus);
     }
 
     /// <summary>

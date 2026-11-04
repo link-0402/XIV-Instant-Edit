@@ -194,6 +194,42 @@ internal static class PhysicsFitScenarios
         return file;
     }
 
+    /// <summary> The waistband moves as a Customize+ template: read back as Customize+ reads a clipboard import. </summary>
+    private static void CheckWaistTemplate()
+    {
+        var profile = new Dictionary<string, PhysicsPlusBone>(StringComparer.Ordinal)
+        {
+            ["j_sk_f_a_l"] = new(new Vector3(0.01f, 0.02f, 0), new Vector3(5, 0, 0), new Vector3(1.1f, 1, 1), new Vector3(0.9f, 1, 1), true, true, false, true),
+            ["j_kosi"] = new(new Vector3(0, 0.05f, 0), Vector3.Zero, Vector3.One, Vector3.One, false, false, false, false),
+        };
+        PhysicsWaistMove[] moves = [new("j_sk_f_a_l", new Vector3(0.03f, 0, -0.01f), 0.032f), new("j_sk_b_a_r", new Vector3(0, 0.02f, 0.04f), 0.045f)];
+        var base64 = PhysicsPlusTemplate.Encode(moves, profile);
+        using var zip = new System.IO.Compression.GZipStream(new MemoryStream(Convert.FromBase64String(base64)), System.IO.Compression.CompressionMode.Decompress);
+        using var unpacked = new MemoryStream();
+        zip.CopyTo(unpacked);
+        var bytes = unpacked.ToArray();
+        using var json = System.Text.Json.JsonDocument.Parse(bytes.AsMemory(1));
+        var bones = json.RootElement.GetProperty("Bones");
+        Vector3 Read(string bone, string name)
+        {
+            var v = bones.GetProperty(bone).GetProperty(name);
+            return new Vector3(v.GetProperty("X").GetSingle(), v.GetProperty("Y").GetSingle(), v.GetProperty("Z").GetSingle());
+        }
+        bool Flag(string bone, string name) => bones.GetProperty(bone).GetProperty(name).GetBoolean();
+        Require(bytes[0] == PhysicsPlusTemplate.Version && bones.EnumerateObject().Select(bone => bone.Name).SequenceEqual(["j_sk_f_a_l", "j_sk_b_a_r"]),
+            "physics fit: the waistband template is a versioned Customize+ template holding the skirt bones only");
+        Require(Vector3.Distance(Read("j_sk_f_a_l", "Translation"), new Vector3(0.04f, 0.02f, -0.01f)) < 1e-6f &&
+                Read("j_sk_f_a_l", "Rotation") == new Vector3(5, 0, 0) && Read("j_sk_f_a_l", "Scaling") == new Vector3(1.1f, 1, 1) &&
+                Read("j_sk_f_a_l", "ChildScaling") == new Vector3(0.9f, 1, 1) && Flag("j_sk_f_a_l", "ChildScalingIndependent") &&
+                Flag("j_sk_f_a_l", "PropagateTranslation") && !Flag("j_sk_f_a_l", "PropagateRotation") && Flag("j_sk_f_a_l", "PropagateScale"),
+            "physics fit: a skirt bone the profile already has keeps its values, with the move added to its position");
+        Require(Read("j_sk_b_a_r", "Translation") == new Vector3(0, 0.02f, 0.04f) && Read("j_sk_b_a_r", "Rotation") == Vector3.Zero &&
+                Read("j_sk_b_a_r", "Scaling") == Vector3.One && Read("j_sk_b_a_r", "ChildScaling") == Vector3.One &&
+                !Flag("j_sk_b_a_r", "PropagateTranslation") && !Flag("j_sk_b_a_r", "ChildScalingIndependent") &&
+                PhysicsPlusTemplate.Encode(moves, null) is { Length: > 0 },
+            "physics fit: a skirt bone the profile lacks gets just the move, and a template is made without a profile too");
+    }
+
     private static void CheckSkirtButtAndWaist()
     {
         var start = new Vector3(0.1f, 1, 0);
@@ -209,6 +245,7 @@ internal static class PhysicsFitScenarios
             "physics fit: a skirt without butt collision is offered an unticked ball in each butt cheek, on the hips, as big as the cheek less the skirt's size");
         Require(fit.Waist is [{ Bone: "j_sk_f_a_l" } waist] && Vector3.Distance(waist.Translation, new Vector3(0.03f, 0, 0)) < 0.002f,
             "physics fit: the bone a skirt starts from gets a Customize+ move out as far as the hips there grew");
+        CheckWaistTemplate();
 
         PhysicsFit.Apply(file, butts);
         Require(file.Collision.Spheres.Count == 2 && file.Collision.Spheres.All(sphere => sphere.Bone.Text == "j_kosi") &&

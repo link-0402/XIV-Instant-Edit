@@ -18,6 +18,8 @@ internal enum PhysicsOverlayPart
     Shape,
     /// <summary> A collision shape the chains don't bump into, drawn dim. </summary>
     OtherShape,
+    /// <summary> A chain of one of the file's other areas, drawn faint so a click can pick the area. </summary>
+    OtherArea,
 }
 
 /// <summary> Which parts the overlay draws; a hovered part shows whatever this says. </summary>
@@ -31,24 +33,30 @@ internal enum PhysicsOverlayShown
     Spring = 8,
     Shapes = 16,
     OtherShapes = 32,
-    /// <summary> The area and what it bumps into; the file's other shapes stay out of the way. </summary>
+    OtherAreas = 64,
+    /// <summary> The area and what it bumps into; the file's other shapes and areas stay out of the way. </summary>
     Default = Chain | Tip | Cone | Spring | Shapes,
-    All = Default | OtherShapes,
+    All = Default | OtherShapes | OtherAreas,
 }
 
-/// <summary> The control the mouse is over: its part, and the shape's name for a shape row. </summary>
-internal readonly record struct PhysicsOverlayHover(PhysicsOverlayPart? Part, string? Shape = null)
+/// <summary>
+/// What the mouse is over: a control's part, and the shape's name for a shape row (none on the Collision
+/// with header, which lights every shape the chains bump into). A part on the character also names its
+/// chain, so only that chain's part lights, or for another area the whole area.
+/// </summary>
+internal readonly record struct PhysicsOverlayHover(PhysicsOverlayPart? Part, string? Shape = null, (int Simulator, int Chain)? Chain = null)
 {
     public static readonly PhysicsOverlayHover None = new(null);
 }
 
-internal sealed record PhysicsOverlaySegment(Vector3 From, Vector3 To, PhysicsOverlayPart Part, bool Lit, bool Dashed = false);
+/// <summary> A line; a chain's own parts say whose they are, so the overlay can tell which one is under the mouse. </summary>
+internal sealed record PhysicsOverlaySegment(Vector3 From, Vector3 To, PhysicsOverlayPart Part, bool Lit, bool Dashed = false, int Simulator = -1, int Chain = -1);
 
 /// <summary> A circle in model space: around <paramref name="Normal"/>, or facing the camera when it has none. </summary>
-internal sealed record PhysicsOverlayCircle(Vector3 Center, Vector3? Normal, float Radius, PhysicsOverlayPart Part, bool Lit);
+internal sealed record PhysicsOverlayCircle(Vector3 Center, Vector3? Normal, float Radius, PhysicsOverlayPart Part, bool Lit, int Simulator = -1, int Chain = -1);
 
 /// <summary> A dot, with a label shown while its part is lit. </summary>
-internal sealed record PhysicsOverlayMark(Vector3 At, PhysicsOverlayPart Part, bool Lit, string? Label = null);
+internal sealed record PhysicsOverlayMark(Vector3 At, PhysicsOverlayPart Part, bool Lit, string? Label = null, int Simulator = -1, int Chain = -1);
 
 internal sealed record PhysicsOverlayCapsule(string Name, Vector3 A, Vector3 B, float Radius, PhysicsOverlayPart Part, bool Lit);
 
@@ -82,17 +90,22 @@ internal static class PhysicsOverlayModel
     /// The overlay for <paramref name="targets"/>. With <paramref name="allShapes"/> (the shapes view)
     /// every shape counts as used; otherwise the ones the chains bump into are lit shapes and the rest
     /// dim. The hovered control's part is lit, a hovered shape by name, and shows even when
-    /// <paramref name="shown"/> leaves its part out.
+    /// <paramref name="shown"/> leaves its part out. <paramref name="others"/> are other areas' chains,
+    /// drawn as faint bones only.
     /// </summary>
     public static PhysicsOverlayShapes Build(PhybFile file, IReadOnlyList<(int Simulator, int Chain)> targets, bool allShapes,
-        PhysicsOverlayHover hover, PhysicsSkeleton skeleton, Func<string, PhysicsFrame?> frame, PhysicsOverlayShown shown = PhysicsOverlayShown.All)
+        PhysicsOverlayHover hover, PhysicsSkeleton skeleton, Func<string, PhysicsFrame?> frame, PhysicsOverlayShown shown = PhysicsOverlayShown.All,
+        IReadOnlyList<(int Simulator, int Chain)>? others = null)
     {
         var shapes = new PhysicsOverlayShapes();
         // Chains of areas turned off aren't in the file the game gets, so they draw nothing and bump into nothing.
-        var active = targets.Where(target => target.Simulator >= 0 && target.Simulator < file.Simulators.Count && !file.Simulators[target.Simulator].Excluded &&
-                                             target.Chain >= 0 && target.Chain < file.Simulators[target.Simulator].Chains.Count).ToList();
+        bool Active((int Simulator, int Chain) target) => target.Simulator >= 0 && target.Simulator < file.Simulators.Count && !file.Simulators[target.Simulator].Excluded &&
+                                                          target.Chain >= 0 && target.Chain < file.Simulators[target.Simulator].Chains.Count;
+        var active = targets.Where(Active).ToList();
         foreach (var (s, c) in active)
-            Chain(file.Simulators[s], c, hover, skeleton, frame, shapes);
+            Chain(file.Simulators[s], s, c, hover, skeleton, frame, shapes);
+        foreach (var (s, c) in (others ?? []).Where(other => Active(other) && !active.Contains(other)))
+            OtherChain(file.Simulators[s].Chains[c], s, c, hover, frame, shapes);
         Collision(file, active, allShapes, hover, frame, shapes);
         if (shown != PhysicsOverlayShown.All)
         {
@@ -114,41 +127,59 @@ internal static class PhysicsOverlayModel
             PhysicsOverlayPart.Cone => PhysicsOverlayShown.Cone,
             PhysicsOverlayPart.Spring => PhysicsOverlayShown.Spring,
             PhysicsOverlayPart.Shape => PhysicsOverlayShown.Shapes,
+            PhysicsOverlayPart.OtherArea => PhysicsOverlayShown.OtherAreas,
             _ => PhysicsOverlayShown.OtherShapes,
         });
 
-    private static void Chain(PhybSimulator simulator, int index, PhysicsOverlayHover hover, PhysicsSkeleton skeleton, Func<string, PhysicsFrame?> frame,
+    private static void Chain(PhybSimulator simulator, int s, int index, PhysicsOverlayHover hover, PhysicsSkeleton skeleton, Func<string, PhysicsFrame?> frame,
         PhysicsOverlayShapes shapes)
     {
         var chain = simulator.Chains[index];
         var places = Places(chain, frame);
         var tipIndex = PhysicsKnobs.TipIndex(chain);
-        var chainLit = hover.Part == PhysicsOverlayPart.Chain;
-        var tipLit = hover.Part == PhysicsOverlayPart.Tip;
+        // A control lights its part on every chain it edits; a part on the character only on its own chain.
+        bool Lit(PhysicsOverlayPart part) => hover.Part == part && (hover.Chain is not { } only || only == (s, index));
+        var chainLit = Lit(PhysicsOverlayPart.Chain);
+        var tipLit = Lit(PhysicsOverlayPart.Tip);
         for (var n = 0; n < places.Count; n++)
         {
             if (places[n] is not { } at)
                 continue;
             if (n > 0 && places[n - 1] is { } before)
-                shapes.Segments.Add(new PhysicsOverlaySegment(before, at, PhysicsOverlayPart.Chain, chainLit));
+                shapes.Segments.Add(new PhysicsOverlaySegment(before, at, PhysicsOverlayPart.Chain, chainLit, Simulator: s, Chain: index));
             var tip = n == tipIndex;
             shapes.Marks.Add(new PhysicsOverlayMark(at, PhysicsOverlayPart.Chain, chainLit,
-                tip && n > 0 ? Centimetres(Vector3.Distance(places[n - 1] ?? at, at)) : null));
+                tip && n > 0 ? Centimetres(Vector3.Distance(places[n - 1] ?? at, at)) : null, s, index));
             if (n > 0 && chain.Nodes[n].Radius > 1e-5f)
             {
-                shapes.Circles.Add(new PhysicsOverlayCircle(at, null, chain.Nodes[n].Radius, PhysicsOverlayPart.Tip, tipLit));
+                shapes.Circles.Add(new PhysicsOverlayCircle(at, null, chain.Nodes[n].Radius, PhysicsOverlayPart.Tip, tipLit, s, index));
                 if (tip)
-                    shapes.Marks.Add(new PhysicsOverlayMark(at, PhysicsOverlayPart.Tip, tipLit, Centimetres(chain.Nodes[n].Radius)));
+                    shapes.Marks.Add(new PhysicsOverlayMark(at, PhysicsOverlayPart.Tip, tipLit, Centimetres(chain.Nodes[n].Radius), s, index));
             }
         }
         if (places.Count >= 2 && places[0] is { } apex && places[1] is { } next)
-            Cone(chain, apex, next, hover, skeleton, frame, shapes);
+            Cone(chain, s, index, apex, next, Lit(PhysicsOverlayPart.Cone), skeleton, frame, shapes);
         if (PhysicsKnobs.MainSpring(simulator, index) is { } spring && spring.Node >= 0 && spring.Node < places.Count && places[spring.Node] is { } pulled &&
             frame(spring.Bone.Text)?.Place(spring.Offset) is { } anchor)
         {
-            var lit = hover.Part == PhysicsOverlayPart.Spring;
-            shapes.Segments.Add(new PhysicsOverlaySegment(pulled, anchor, PhysicsOverlayPart.Spring, lit, Dashed: true));
-            shapes.Marks.Add(new PhysicsOverlayMark(anchor, PhysicsOverlayPart.Spring, lit, PhysicsKnobs.SpringName(simulator, spring, skeleton)));
+            var lit = Lit(PhysicsOverlayPart.Spring);
+            shapes.Segments.Add(new PhysicsOverlaySegment(pulled, anchor, PhysicsOverlayPart.Spring, lit, Dashed: true, Simulator: s, Chain: index));
+            shapes.Marks.Add(new PhysicsOverlayMark(anchor, PhysicsOverlayPart.Spring, lit, PhysicsKnobs.SpringName(simulator, spring, skeleton), s, index));
+        }
+    }
+
+    /// <summary> Another area's chain: its bones and points only, all of the area lit while one of its chains is under the mouse. </summary>
+    private static void OtherChain(PhybChain chain, int s, int index, PhysicsOverlayHover hover, Func<string, PhysicsFrame?> frame, PhysicsOverlayShapes shapes)
+    {
+        var places = Places(chain, frame);
+        var lit = hover.Part == PhysicsOverlayPart.OtherArea && hover.Chain?.Simulator == s;
+        for (var n = 0; n < places.Count; n++)
+        {
+            if (places[n] is not { } at)
+                continue;
+            if (n > 0 && places[n - 1] is { } before)
+                shapes.Segments.Add(new PhysicsOverlaySegment(before, at, PhysicsOverlayPart.OtherArea, lit, Simulator: s, Chain: index));
+            shapes.Marks.Add(new PhysicsOverlayMark(at, PhysicsOverlayPart.OtherArea, lit, null, s, index));
         }
     }
 
@@ -178,7 +209,7 @@ internal static class PhysicsOverlayModel
     /// parent, as long as the bone's first segment, open as far as the swing limit. The rim is a ring
     /// about the axis, joined to the point by a few lines.
     /// </summary>
-    private static void Cone(PhybChain chain, Vector3 apex, Vector3 next, PhysicsOverlayHover hover, PhysicsSkeleton skeleton, Func<string, PhysicsFrame?> frame,
+    private static void Cone(PhybChain chain, int s, int index, Vector3 apex, Vector3 next, bool lit, PhysicsSkeleton skeleton, Func<string, PhysicsFrame?> frame,
         PhysicsOverlayShapes shapes)
     {
         var bone = chain.Nodes[0];
@@ -193,16 +224,15 @@ internal static class PhysicsOverlayModel
         var angle = Math.Clamp(bone.ConeMaxAngle, 0, MathF.PI);
         var center = apex + axis * length * MathF.Cos(angle);
         var radius = length * MathF.Sin(angle);
-        var lit = hover.Part == PhysicsOverlayPart.Cone;
-        shapes.Circles.Add(new PhysicsOverlayCircle(center, axis, radius, PhysicsOverlayPart.Cone, lit));
+        shapes.Circles.Add(new PhysicsOverlayCircle(center, axis, radius, PhysicsOverlayPart.Cone, lit, s, index));
         var (u, v) = Basis(axis);
         for (var i = 0; i < ConeLines; i++)
         {
             var t = i * MathF.PI * 2 / ConeLines;
             var rim = center + (u * MathF.Cos(t) + v * MathF.Sin(t)) * radius;
-            shapes.Segments.Add(new PhysicsOverlaySegment(apex, rim, PhysicsOverlayPart.Cone, lit));
+            shapes.Segments.Add(new PhysicsOverlaySegment(apex, rim, PhysicsOverlayPart.Cone, lit, Simulator: s, Chain: index));
             if (i == 0)
-                shapes.Marks.Add(new PhysicsOverlayMark(rim, PhysicsOverlayPart.Cone, lit, PhysicsTemplates.Degrees(angle).ToString("0", CultureInfo.InvariantCulture) + "°"));
+                shapes.Marks.Add(new PhysicsOverlayMark(rim, PhysicsOverlayPart.Cone, lit, PhysicsTemplates.Degrees(angle).ToString("0", CultureInfo.InvariantCulture) + "°", s, index));
         }
     }
 
@@ -227,15 +257,14 @@ internal static class PhysicsOverlayModel
 
     /// <summary>
     /// A shape the chains bump into (or any, in the shapes view) is a shape, the rest dim; a hovered one is lit, so an
-    /// unticked shape lights grey, not green.
+    /// unticked shape lights grey, not green. A shape hover without a name lights every shape the chains bump into.
     /// </summary>
     private static (PhysicsOverlayPart Part, bool Lit) ShapeState(PhybFile file, IReadOnlyList<(int Simulator, int Chain)> targets, bool allShapes,
         PhysicsOverlayHover hover, string name)
     {
-        var lit = hover.Part == PhysicsOverlayPart.Shape && hover.Shape == name;
-        if (allShapes || PhysicsCollisions.State(file, targets, name) != PhysicsBumps.None)
-            return (PhysicsOverlayPart.Shape, lit);
-        return (PhysicsOverlayPart.OtherShape, lit);
+        var used = allShapes || PhysicsCollisions.State(file, targets, name) != PhysicsBumps.None;
+        var lit = hover.Part == PhysicsOverlayPart.Shape && (hover.Shape == name || hover.Shape == null && used);
+        return (used ? PhysicsOverlayPart.Shape : PhysicsOverlayPart.OtherShape, lit);
     }
 
     /// <summary> A length in metres as the sliders show it, whatever the system's language: "14.0 cm". </summary>

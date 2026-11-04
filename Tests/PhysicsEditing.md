@@ -71,6 +71,7 @@ Settings:
   Test 22 sees it on the Chest area of the IE Physics mod: the Firmness slider is drawn and there is
   no Add spring button. (Test 22 again, Release 2026-10-30: the slider is drawn, no Add spring. Ticked:
   between 11 and 22 every setting listed is seen.)
+  Changed 2026-11-04: Movement and Collision became groups by part; see "Clicking the overlay and grouped settings".
 - [x] Drag Settle from 0.100 to 0.200 and hover Undo: the tooltip reads "Chest: Settle 0.200 to 0.100" (your values),
   the change Undo makes; Redo's reads the other way.
   Checked (XIV Bridge tests/instant-edit/physics/12, 2026-10-29), with one question left: after
@@ -258,6 +259,10 @@ that uses the game's j_sk bones.
   (XIV Bridge physics/33, Release 2026-10-29: the moves entered in a temporary Customize+ profile
   (the player's own plus them) move each named bone about the fit's distance, away from the hips.
   How the waistband looks: by eye.)
+- [ ] (2026-11-04) The waistband rows are now a "Copy Customize+ template" button; its tooltip lists the bone moves.
+  In Customize+'s Templates, import it from the clipboard and add it last to your profile. Each j_sk bone's Position is
+  the profile's value plus the move, its other values are the profile's, and the rest of the body doesn't change.
+  Fit again: no waistband moves are listed.
 - [ ] Preview, standing in GPose: the skirt hangs off the thighs and butt instead of through them.
   Walk and run: the back of the skirt slides over the butt. Wrong would look like the skirt held
   further off one side of a thigh than before while sinking into the other side: that would mean
@@ -322,6 +327,59 @@ slot count for the areas they move with, and genital tips are placed. Use a test
   eye). (physics/39 checks the penis tip.)
 - [ ] Walk and run: the arms stop at the breasts and the breasts don't knock each other apart (by eye).
 - [ ] Both sides: Tip place on Ashley's chest moves both tips, the other side mirrored (by hand).
+
+## Groin, earring and hair areas (2026-11-04, pending)
+
+Add an area offers the IVCS groin areas, earring bones from a face skeleton (j_ex_earring_a to e) and hair skeletons made
+with Instant Edit (j_ex_hair_NN_x). Groin values are the medians of a large physics library; the builder and the offer
+rules are covered by `Tests/ExportContextRegression` (PhysicsScenarios, CheckLibraryAreas).
+
+1. [ ] On an IVCS skeleton starting from a file without groin physics: "+ Penis (IVCS)", "+ Penis, flaccid (IVCS)",
+   "+ Testicles (IVCS)" and the others your skeleton has bones for are offered; each, added and previewed, swings
+   without flying off or jittering (by eye).
+2. [ ] Miqo'te with an earring bones face skeleton loaded: "+ Earrings (Custom)" is offered and, previewed, the earring
+   chains hang straight down and swing.
+3. [ ] Viera with an earring bones face and its face physics: "+ Earrings (Custom)" is not offered (the face file moves them).
+4. [ ] A hair skeleton made with Instant Edit whose own hair physics moves its bones: "+ Hair (Custom)" is not offered.
+   Without that hair physics it is, and the front, side and back chains swing like the exported hair's.
+
+## Clicking the overlay and grouped settings (2026-11-04, pending)
+
+An area's settings are grouped by the part they show on the character: Bones, Tip, Swing limit, Spring and Collision
+with, each header with a dot in its overlay colour, then Advanced (Max speed, Wind, Whole area, Points, Springs). Tip
+size, Point shape and Tip place moved into Tip. The picking, per-chain lighting, other areas and tooltips are covered by
+`Tests/ExportContextRegression` (PhysicsOverlayScenarios: CheckOnCharacter, CheckPicker, CheckTooltips). Check on the
+chest with the overlay on.
+
+1. [ ] Hover the left chest's swing cone on your character: only that cone lights, the tooltip reads "Swing limit N°" and
+   the chain, and the Swing limit header gets a blue frame. Moving off it gives the mouse back to the game.
+   Partly checked (XIV Bridge physics/40, Release 2026-11-04, real mouse on the chest): the pick is that chain's cone, only
+   its cone lights, the tooltip reads "Swing limit 8°" over the chain. Left: the header's frame and the mouse going back to
+   the game (by eye).
+2. [ ] Click the cone: Swing limit opens if folded, the editor scrolls to it and its header flashes once. Same for the
+   bones (Bones), the tip ball (Tip) and the spring's dot or dashed line (Spring).
+   Partly checked (physics/40, same run): the folded Swing limit reopens and its slider is in view after the click; the
+   spring's dot opens Spring and a bone line Bones, each in view. The tip ball always picked Spring: the spring's line starts
+   inside the ball and the spring ranked first. Fixed: the tip now ranks first (fixture in CheckPicker). Left: retest the
+   tip after a Release build; the flash itself (by eye).
+3. [ ] Click an arm capsule's outline: Collision with opens and its row flashes; the tick doesn't change. Clicking inside
+   a capsule, away from its outline, still turns the camera.
+   Partly checked (physics/40, same run, on x_twist ticked in the open copy): the outline click flashes its row, Collision
+   with is open with the row in view, the tick stays as it was; inside the capsule nothing is picked. Left: the camera
+   turning there (by hand).
+4. [ ] Untick Both sides and click the right tip: Edit picks the right chain and Tip opens. With Both sides on, Edit
+   stays as it is. (physics/40 couldn't click a tip, see item 2; retest after the fix.)
+5. [ ] Eye popup: the ticks read Bones, Tip, Swing limit, Spring, Shapes it collides with, Other shapes and Other areas,
+   each with its colour dot. Tick Other areas: the other areas draw faint grey; hover one for its name, click it to pick
+   it in the list.
+   Partly checked: physics/16 (2026-11-04) finds the seven ticks and each turns its part off and on; physics/40 with Other
+   areas on draws 12 other chains, hovering one reads "Skirt" and a click picks that area. Left: the dots and the grey (by eye).
+6. [ ] Collision shapes view: click a shape on your character: the editor scrolls to it and its name flashes.
+   Partly checked (physics/40: a click on asi_l_a marks it to flash and the shapes view stays picked). Left: the scroll and
+   flash (by eye).
+7. [ ] Hover a group header: all its parts light (Collision with: every shape the area collides with).
+   Partly checked (physics/40: hovering Collision with lights every used shape). Left: the other headers (by eye).
+8. [ ] With the Timeline's bones overlay on at the same time, clicking a bone dot still picks the bone (by hand).
 
 ## Head tracking (2026-11-01, pending)
 
