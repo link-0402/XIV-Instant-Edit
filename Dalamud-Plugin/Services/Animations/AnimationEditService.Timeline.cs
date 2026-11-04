@@ -427,6 +427,9 @@ internal sealed partial class AnimationEditService
         return await resources.ReadAsync(collection, gamePath, token);
     }
 
+    /// <summary>The game path of expression library <paramref name="pack"/> for <paramref name="race"/>'s <paramref name="face"/>.</summary>
+    public static string FacePackPath(string race, string face, string pack) => $"chara/human/{race}/animation/{face}/nonresident/{pack}.pap";
+
     /// <summary>
     /// Where the collection gets a sound's or effect's game path: a mod (by name), the game, or
     /// nowhere, as a music library's sound/lolo.scd is for people without that mod. Nothing in game changes.

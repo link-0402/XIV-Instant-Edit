@@ -6,8 +6,11 @@ namespace InstantEdit.Services.Animations.Timeline;
 /// <summary>A face, blink or lip shape in a PAP: its name, its entry, and its binding's fingerprint.</summary>
 internal sealed record FaceCopyEntry(string Name, int EntryIndex, string Fingerprint, byte[] Pap);
 
-/// <summary>A face to copy into a library: where it comes from, and the name it gets there.</summary>
-internal sealed record FaceCopy(FaceCopyEntry Source, string Name);
+/// <summary>
+/// A face to copy into a library: where it comes from, and the name it gets there. An <paramref name="Edited"/> face is a
+/// face session's bake under a name of its own, not a face the source plays.
+/// </summary>
+internal sealed record FaceCopy(FaceCopyEntry Source, string Name, bool Edited = false);
 
 /// <summary>
 /// What copying faces into a library does. <paramref name="Build"/> is the library's PAP in entry order (its own entries
@@ -30,8 +33,8 @@ internal static class FaceLibraryCopy
     /// The library's PAP after copying <paramref name="copies"/> into its <paramref name="library"/> entries for one face
     /// folder (none when it has no file there yet). A name the library has with the same motion is already there; with
     /// another motion it is asked about, and replaced when <paramref name="replace"/>. Throws with the reason for a face
-    /// the face always has loaded (<paramref name="resident"/>), a name that breaks the rules, or two copies of one name
-    /// with different motions.
+    /// the face always has loaded (<paramref name="resident"/>; an edited face only by its new name), a name that breaks the
+    /// rules, or two copies of one name with different motions.
     /// </summary>
     public static FaceCopyPlan Plan(IReadOnlyList<FaceCopyEntry> library, IReadOnlyList<FaceCopy> copies, IReadOnlySet<string> resident, bool replace)
     {
@@ -40,7 +43,7 @@ internal static class FaceLibraryCopy
         foreach (var copy in copies)
         {
             if (NameProblem(copy.Source.Name, copy.Name) is { } problem) throw new InvalidDataException(problem);
-            if (resident.Contains(copy.Name) || resident.Contains(copy.Source.Name))
+            if (resident.Contains(copy.Name) || !copy.Edited && resident.Contains(copy.Source.Name))
                 throw new InvalidDataException($"{copy.Name} always plays, so it needs no library.");
             if (wanted.FirstOrDefault(w => w.Name == copy.Name) is { } twin)
             {

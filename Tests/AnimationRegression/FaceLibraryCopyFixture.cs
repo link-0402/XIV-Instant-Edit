@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using InstantEdit.Models;
 using InstantEdit.Services.Animations.Timeline;
+using InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// Copying faces into an Instant Edit library: which copies go in, which the library has already, which need a yes to
@@ -49,6 +51,40 @@ internal static class FaceLibraryCopyFixture
         reject(() => FaceLibraryCopy.Plan(library, [new FaceCopy(new FaceCopyEntry("cfxf_blink_r", 0, "blink", SetA), "cfxf_blink_r")], Resident, false),
             "a face the face always has loaded is not copied");
         reject(() => FaceLibraryCopy.Plan(library, [], Resident, false), "a copy needs a face");
+        check(FaceLibraryCopy.Plan(library, [new FaceCopy(new FaceCopyEntry("cfxf_blink_r", 0, "edited blink", SetA), "cfxf_sleepy", true)], Resident, false)
+              is { Added: ["cfxf_sleepy"], Build.Count: 3 },
+            "an edited face from one the face always has loaded goes in under its new name");
+        reject(() => FaceLibraryCopy.Plan(library, [new FaceCopy(new FaceCopyEntry("cfxf_grin", 0, "edited grin", SetA), "cfxf_blink_r", true)], Resident, false),
+            "an edited face can't take the name of one the face always has loaded");
+
+        // The save row's Library choice.
+        check(LibrarySaveRules.Destinations(true) is [AnimationDestination.NewMod, AnimationDestination.InPlace, AnimationDestination.Library] &&
+              LibrarySaveRules.Destinations(false) is [AnimationDestination.NewMod, AnimationDestination.InPlace],
+            "Save to offers Library only for a face");
+        check(LibrarySaveRules.Choice(["mine", "theirs"], null) == "mine" && LibrarySaveRules.Choice(["mine", "theirs"], "theirs") == "theirs" &&
+              LibrarySaveRules.Choice(["mine"], "") == "" && LibrarySaveRules.Choice([], null) == "" && LibrarySaveRules.Choice(["mine"], "gone") == "mine",
+            "the library chosen stays while it is there, else the first, else New library");
+        check(LibrarySaveRules.Stem("cfxf_grin") == "grin" && LibrarySaveRules.Motion("grin") == "cfxf_grin" && LibrarySaveRules.Motion("big_grin2") == "cfxf_big_grin2",
+            "the face name is the motion without cfxf_");
+        check(LibrarySaveRules.Motion("") == null && LibrarySaveRules.Motion("Grin") == null && LibrarySaveRules.Motion("big grin") == null &&
+              LibrarySaveRules.Motion(new string('a', 27)) == null && LibrarySaveRules.Motion(new string('a', 26)) == "cfxf_" + new string('a', 26),
+            "a face name is a-z, 0-9 and _ within 31 bytes with cfxf_");
+        var game = new HashSet<string>(StringComparer.Ordinal) { "cfxf_smile" };
+        check(LibrarySaveRules.FaceNameProblem("smile", "cfxf_smile", false, game) == null && LibrarySaveRules.FaceNameProblem("smile", "cfxf_smile", false, null) == null,
+            "an unedited face copied under its own name may keep a game face's name");
+        check(LibrarySaveRules.FaceNameProblem("smile", "cfxf_grin", false, game) != null && LibrarySaveRules.FaceNameProblem("smile", "cfxf_smile", true, game) != null &&
+              LibrarySaveRules.FaceNameProblem("grin", "cfxf_smile", true, game) == null,
+            "a renamed or edited face can't take a game face's name");
+        check(LibrarySaveRules.FaceNameProblem("grin", "cfxf_smile", true, null) != null && LibrarySaveRules.FaceNameProblem("Grin", "cfxf_grin", false, game) != null,
+            "an edited face waits for the game's faces, and a bad name is refused");
+        check(LibrarySaveRules.Missing(true, true, false, null, null) != null && LibrarySaveRules.Missing(false, false, false, null, null) != null &&
+              LibrarySaveRules.Missing(false, true, true, "bad name", null) == "bad name" && LibrarySaveRules.Missing(false, true, false, "bad name", null) == null &&
+              LibrarySaveRules.Missing(false, true, false, null, "face") == "face" && LibrarySaveRules.Missing(false, true, true, null, null) == null,
+            "Save into a library waits for an unchanged timeline, the libraries, a new library's name and the face's name");
+        var savedTip = LibrarySaveRules.Tooltip(true, "My Faces", false, "cfxf_grin");
+        check(savedTip != LibrarySaveRules.Tooltip(false, "My Faces", false, "cfxf_grin") && savedTip.Contains("My Faces") && savedTip.Contains("cfxf_grin") &&
+              LibrarySaveRules.Tooltip(true, "Evening Faces", true, "cfxf_grin") != LibrarySaveRules.Tooltip(true, "Evening Faces", false, "cfxf_grin"),
+            "Save's tooltip says whether the face is saved or copied, and into which library");
 
         check(FaceLibraryCopy.NameProblem("cfxf_grin", "cfxf_grin") == null && FaceLibraryCopy.NameProblem("cfxf_grin", "cfxf_big_grin2") == null &&
               FaceLibraryCopy.NameProblem("cfxl_lip_a", "cfxl_lip_b") == null,

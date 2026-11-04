@@ -58,6 +58,24 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private bool linksWait;
     // The content of the partner tracks the running save bakes the link layers with, for SavedPrints once it succeeds.
     private ImmutableDictionary<string, string> savePrints = MotionLinks.NoPrints;
+    // Save to Library (face sessions): your libraries once read, the one chosen by mod folder ("" for New library, null
+    // before a choice), a new one's name and the face's name without cfxf_.
+    private ImmutableArray<InstantEditLibrary>? libraries;
+    private Task<ImmutableArray<InstantEditLibrary>>? librariesTask;
+    private string? libraryChoice;
+    private string newLibraryName = string.Empty;
+    private string faceStem = string.Empty;
+    // A new library's name and why it can't be one, for the libraries read: the check looks at every race's face folders.
+    private (string Name, ImmutableArray<InstantEditLibrary> Libraries, string? Problem)? newLibraryCheck;
+    // The game's faces for the character's face, by the catalog they were read from.
+    private (TimelineCatalogData Data, IReadOnlySet<string> Names)? gameFaces;
+    // A save into a library: the running one, and one waiting for a yes to replace a face of the same name.
+    private Task<FaceCopyOutcome>? libraryTask;
+    private FaceLibrarySave? librarySave;
+    private (FaceLibrarySave Save, string Text)? libraryAsk;
+    // The undo running is a library save's, which leaves the open clip as it is.
+    private bool undoLibrary;
+    private const string LibraryAskPopup = "##timeline-library-replace";
 
     /// <summary>Where the next save goes, as the footer's choice says.</summary>
     public AnimationDestination Destination => destination;
@@ -69,7 +87,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// </summary>
     public SkeletonStandard? RepairTarget => session.Rebuild?.Target.Standard;
     /// <summary>A save or an undo runs, waits for a link track to build first, or waits for the service's result.</summary>
-    public bool Working => saveTask != null || pendingSaveId != null || undoPending || linksWait;
+    public bool Working => saveTask != null || pendingSaveId != null || undoPending || linksWait || libraryTask != null || libraryAsk != null;
     /// <summary>The document must not change: a save with its sound check or question, or an undo, runs.</summary>
     public bool Busy => Working || soundSave.Checking || soundSave.Asking;
 
@@ -93,6 +111,9 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             rebuildDecided = null;
             rebuildAutomatic = false;
             rebuildFailed = null;
+            // A face starts with its own name, so a copy matches it where a timeline plays it.
+            faceStem = loaded.Document?.Face != null ? LibrarySaveRules.Stem(loaded.MotionTarget.Clip.Name) : string.Empty;
+            libraryAsk = null;
         }
         if (editAgain && loaded.MotionTarget.BaseMotion != null)
         {
@@ -140,6 +161,9 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     {
         var doc = current.Document;
         var clip = session.Fresh(loaded).Clip;
+        // Only a face goes into a library.
+        if (destination == AnimationDestination.Library && doc.Face == null)
+            destination = AnimationDestination.NewMod;
         ImGui.Separator();
 
         texts.Refresh(doc);
@@ -165,7 +189,9 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             ImGui.TextColored(colour, "⚠ " + warning);
         }
 
-        DrawDestination(loaded);
+        DrawDestination(loaded, doc.Face != null);
+        if (destination == AnimationDestination.Library)
+            DrawLibrary();
         var rightWidth = saveGroupWidth > 0 ? saveGroupWidth
             : ImGui.CalcTextSize("Save").X + ImGui.CalcTextSize("Undo last save").X + ImGui.GetStyle().FramePadding.X * 4 + Theme.Scaled(16);
         var skeletonPart = skeleton ? Theme.Scaled(16) + skeletonWidth : 0;
@@ -206,29 +232,37 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         {
             // The save may start frames later (after the mod's check or the question): it takes the clip as it is then.
             if (ImGui.Button("Save"))
-                soundSave.Begin(current, loaded, destination, () =>
-                {
-                    if (session.Editor is { } editor && session.Source is { Document: not null } source)
-                        StartSave(editor, source);
-                });
+            {
+                if (destination == AnimationDestination.Library)
+                    StartLibrarySave(current, loaded);
+                else
+                    soundSave.Begin(current, loaded, destination, () =>
+                    {
+                        if (session.Editor is { } editor && session.Source is { Document: not null } source)
+                            StartSave(editor, source);
+                    });
+            }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(missing ?? (destination == AnimationDestination.NewMod
+            ImGui.SetTooltip(missing ?? (destination == AnimationDestination.Library ? LibraryTooltip(doc)
+                : destination == AnimationDestination.NewMod
                 ? doc.Face != null ? "Save the face into a new mod." : "Save the timeline into a new mod."
                 : doc.Face != null ? "Save the face into the mod it comes from. Undo last save puts it back."
                 : "Save the timeline into the mod it comes from. Undo last save puts it back."));
         soundSave.Draw();
+        DrawLibraryAsk();
         ImGui.SameLine(0, Theme.Scaled(16));
         DrawUndoLastSave(current);
 
         var service = session.Animations!;
-        if (saveTask != null || pendingSaveId != null || undoPending || linksWait || service.Busy && !timelinePreview.Building)
+        if (saveTask != null || pendingSaveId != null || undoPending || linksWait || libraryTask != null || service.Busy && !timelinePreview.Building)
         {
             ImGui.SameLine(0, Theme.Scaled(16));
             Widgets.Spinner();
             ImGui.SameLine(0, Theme.Gap);
             ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.Muted, linksWait ? "Reading the link" : saveTask != null ? "Ending the preview" : service.Status);
+            ImGui.TextColored(Theme.Muted, linksWait ? "Reading the link"
+                : saveTask != null || libraryTask != null && !service.Busy ? "Ending the preview" : service.Status);
             if (service.CanCancel && saveTask == null && !linksWait)
             {
                 ImGui.SameLine(0, Theme.Gap);
@@ -246,30 +280,227 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     }
 
     /// <summary>
-    /// "Save to" with its choice, New mod or In place; its tooltip says when a new mod takes the loop's startup along, or
-    /// the startup's loop.
+    /// "Save to" with its choice, New mod or In place, and Library for a <paramref name="face"/>; its tooltip says when a new
+    /// mod takes the loop's startup along, or the startup's loop.
     /// </summary>
-    private void DrawDestination(AnimationTimelineSource loaded)
+    private void DrawDestination(AnimationTimelineSource loaded, bool face)
     {
+        var destinations = LibrarySaveRules.Destinations(face);
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Muted, "Save to");
         ImGui.SameLine(0, Theme.Gap);
         ImGui.SetNextItemWidth(Theme.Scaled(100));
-        using (var combo = ImRaii.Combo("##timeline-save-to", DestinationName(destination)))
+        using (var combo = ImRaii.Combo("##timeline-save-to", LibrarySaveRules.Name(destination)))
         {
             if (combo.Success)
             {
-                foreach (var place in Destinations)
-                    if (ImGui.Selectable(DestinationName(place), destination == place))
+                foreach (var place in destinations)
+                    if (ImGui.Selectable(LibrarySaveRules.Name(place), destination == place))
                         destination = place;
             }
             else if (ComboWheel.Steps() is var steps and not 0)
-                destination = ComboWheel.Pick(Destinations, destination, steps);
+                destination = ComboWheel.Pick(destinations, destination, steps);
         }
+        var choices = face ? "Save into a new mod, into the mod it comes from, or into one of your expression libraries."
+            : "Save into a new mod, or into the mod it comes from.";
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(AnimationBakeRules.CompanionClip(loaded.Capture, loaded.Startup, loaded.Resource, destination) != null
-                ? "Save into a new mod, or into the mod it comes from.\n" + AnimationBakeRules.CompanionNote(loaded.Startup)
-                : "Save into a new mod, or into the mod it comes from.");
+                ? choices + "\n" + AnimationBakeRules.CompanionNote(loaded.Startup)
+                : choices);
+    }
+
+    /// <summary>
+    /// Save to Library's own fields: Library (your expression libraries, then New library with a name field) and Face name.
+    /// </summary>
+    private void DrawLibrary()
+    {
+        var list = libraries ?? [];
+        var chosen = LibrarySaveRules.Choice([.. list.Select(l => l.ModDirectory)], libraryChoice);
+        ImGui.SameLine(0, Theme.Scaled(16));
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Library");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(150));
+        using (var combo = ImRaii.Combo("##timeline-library", chosen.Length == 0 ? "New library" : list.First(l => l.ModDirectory == chosen).Marker.Name))
+        {
+            if (combo.Success)
+            {
+                foreach (var library in list)
+                    if (ImGui.Selectable(library.Marker.Name, chosen == library.ModDirectory))
+                        libraryChoice = library.ModDirectory;
+                if (list.Length > 0)
+                    ImGui.Separator();
+                if (ImGui.Selectable("New library", chosen.Length == 0))
+                    libraryChoice = "";
+            }
+            else if (ComboWheel.Steps() is var steps and not 0)
+                libraryChoice = ComboWheel.Pick([.. list.Select(l => l.ModDirectory), ""], chosen, steps);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(libraries == null ? "Reading your libraries." : "One of your expression libraries, or a new one.");
+        if (chosen.Length == 0)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            ImGui.SetNextItemWidth(Theme.Scaled(130));
+            if (ImGui.InputTextWithHint("##timeline-library-name", "Library name", ref newLibraryName, 64))
+                newLibraryName = PathRules.PlainDashes(newLibraryName);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("The new library's name.");
+        }
+        ImGui.SameLine(0, Theme.Scaled(16));
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, "Face name");
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.SetNextItemWidth(Theme.Scaled(110));
+        ImGui.InputTextWithHint("##timeline-face-name", "Name", ref faceStem, 32);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(LibrarySaveRules.Motion(faceStem) is { } motion ? $"The face's name in the library: {motion}." : "The face's name in the library.");
+    }
+
+    /// <summary>The library the next save goes into, or null for a new one; with its name either way.</summary>
+    private (InstantEditLibrary? Library, string Name) ChosenLibrary()
+    {
+        var list = libraries ?? [];
+        var chosen = LibrarySaveRules.Choice([.. list.Select(l => l.ModDirectory)], libraryChoice);
+        if (chosen.Length == 0)
+            return (null, newLibraryName.Trim());
+        var library = list.First(l => l.ModDirectory == chosen);
+        return (library, library.Marker.Name);
+    }
+
+    /// <summary>Save's tooltip for Library: what goes into which library, under which name.</summary>
+    private string LibraryTooltip(TimelineDocument doc)
+    {
+        var (library, name) = ChosenLibrary();
+        return LibrarySaveRules.Tooltip(AnimationEditService.FaceChanged(doc), name, library == null, LibrarySaveRules.Motion(faceStem) ?? faceStem);
+    }
+
+    /// <summary>
+    /// Why Save into a library waits (see <see cref="LibrarySaveRules.Missing"/>), or null. A new library's name is checked
+    /// once per name, as the check looks at every race's face folders.
+    /// </summary>
+    private string? LibraryMissing(TimelineDocument doc, AnimationTimelineSource loaded)
+    {
+        var service = session.Animations!;
+        var (library, name) = ChosenLibrary();
+        string? newProblem = null;
+        if (library == null && libraries is { } read)
+        {
+            if (newLibraryCheck is not { } check || check.Name != name || check.Libraries != read)
+                newLibraryCheck = check = (name, read, service.NewLibraryProblem(name, read));
+            newProblem = check.Problem;
+        }
+        var edited = AnimationEditService.FaceChanged(doc);
+        // A new length is the face's own (baked into its entry); only the expression's events and face set stay behind.
+        var opened = session.Fresh(loaded);
+        var timelineChanged = opened.Face != null && opened.Document is { } before && (doc.Events != before.Events || doc.FacePack != before.FacePack);
+        return LibrarySaveRules.Missing(timelineChanged, libraries != null, library == null, newProblem,
+            LibrarySaveRules.FaceNameProblem(faceStem, loaded.MotionTarget.Clip.Name, edited, GameFaceNames()));
+    }
+
+    /// <summary>The faces the game has for the character's face, as the catalog lists them; null while it is being read.</summary>
+    private IReadOnlySet<string>? GameFaceNames()
+    {
+        var data = session.Catalog.Data;
+        if (data.Expressions.IsDefault || data.LipShapes.IsDefault)
+            return null;
+        if (gameFaces is not { } faces || faces.Data != data)
+            gameFaces = faces = (data, data.Expressions.Concat(data.LipShapes).Select(item => item.Path).ToHashSet(StringComparer.Ordinal));
+        return faces.Names;
+    }
+
+    /// <summary>
+    /// Ends the preview, then saves the face into the chosen library: an edited face under its new name, an unedited one
+    /// copied. The open clip stays as it is; only the library's file is written.
+    /// </summary>
+    private void StartLibrarySave(TimelineEditor current, AnimationTimelineSource loaded)
+    {
+        var (library, name) = ChosenLibrary();
+        if (LibrarySaveRules.Motion(faceStem) is not { } motion)
+            return;
+        // Save waits for the game's faces when they matter (LibrarySaveRules.FaceNameProblem): an unedited face under its own name needs none.
+        var save = new FaceLibrarySave(session.Fresh(loaded), current.Document, new FaceCopyTarget(library, library == null ? name : null), motion,
+            GameFaceNames() ?? new HashSet<string>(StringComparer.Ordinal), false);
+        saveError = null;
+        saveMessage = null;
+        timelinePreview.Stop();
+        var ending = timelinePreview.TakeStopping();
+        var service = session.Animations!;
+        librarySave = save;
+        libraryTask = Task.Run(async () =>
+        {
+            await ending;
+            await session.Preview.StopAsync();
+            Task<FaceCopyOutcome>? started = null;
+            // The edit service starts jobs from the framework thread, where the observer it updates lives.
+            await session.Framework.RunOnFrameworkThread(() =>
+            {
+                session.Playback.Stop();
+                started = service.SaveFaceToLibraryAsync(save);
+            });
+            return await started!;
+        });
+    }
+
+    /// <summary>A save into a library ended: its result, the question to replace a face of the same name, or why it failed.</summary>
+    private void LibraryDone(Task<FaceCopyOutcome> task)
+    {
+        var save = librarySave;
+        librarySave = null;
+        if (task.IsCanceled)
+            return;
+        if (task.IsFaulted)
+        {
+            saveError = TimelineSession.ErrorText(task.Exception);
+            return;
+        }
+        var outcome = task.Result;
+        if (!outcome.Asks.IsEmpty && save != null)
+            libraryAsk = (save, $"{outcome.LibraryName} has another face named {LibrarySaveRules.Stem(outcome.Asks[0])}. Replace it?");
+        else if (outcome.JournalId is { } id)
+        {
+            lastSaveId = id;
+            saveMessage = $"Saved into {outcome.LibraryName}.";
+            // A new library is chosen from now on; the list is read again with it.
+            if (save?.Target.Library == null && save?.Target.NewName is { } created)
+                libraryChoice = created;
+            libraries = null;
+        }
+        else
+            saveMessage = $"{outcome.LibraryName} has this face already.";
+    }
+
+    /// <summary>The question when the library has another face of the save's name: replace it, or leave the library as it is.</summary>
+    private void DrawLibraryAsk()
+    {
+        if (libraryAsk is not { } asking)
+            return;
+        if (!ImGui.IsPopupOpen(LibraryAskPopup))
+            ImGui.OpenPopup(LibraryAskPopup);
+        if (!ImGui.BeginPopupModal(LibraryAskPopup, ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoTitleBar))
+            return;
+        try
+        {
+            ImGui.TextUnformatted(asking.Text);
+            ImGui.Spacing();
+            if (ImGui.Button("Replace"))
+            {
+                libraryAsk = null;
+                ImGui.CloseCurrentPopup();
+                librarySave = asking.Save with { Replace = true };
+                libraryTask = session.Animations!.SaveFaceToLibraryAsync(librarySave);
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel"))
+            {
+                libraryAsk = null;
+                ImGui.CloseCurrentPopup();
+            }
+        }
+        finally
+        {
+            ImGui.EndPopup();
+        }
     }
 
     /// <summary>
@@ -283,12 +514,6 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var name = session.Rebuild?.Model is { } model ? AnimationBones.RebuildName(model, standard) : "Repair onto " + AnimationBones.StandardName(standard);
         return plan.Dropped.Length == 1 ? $"{name} leaves out 1 bone." : $"{name} leaves out {plan.Dropped.Length} bones.";
     }
-
-    /// <summary>The choices of Save to, in its order.</summary>
-    private static readonly AnimationDestination[] Destinations = [AnimationDestination.NewMod, AnimationDestination.InPlace];
-
-    /// <summary>A choice's name under Save to.</summary>
-    private static string DestinationName(AnimationDestination place) => place == AnimationDestination.NewMod ? "New mod" : "In place";
 
     /// <summary>
     /// Why a face's save can't go in place: the face's file, and an expression's timeline when it changes too (<see cref="TimelineChanged"/>), must
@@ -318,9 +543,10 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// <summary> Why Save is unavailable now, shown on the button; null when it can run. </summary>
     private string? SaveMissing(TimelineEditor current, string? problem)
     {
+        var library = destination == AnimationDestination.Library;
         if (problem != null)
             return problem;
-        if (saveTask != null || pendingSaveId != null || linksWait)
+        if (saveTask != null || pendingSaveId != null || linksWait || libraryTask != null || libraryAsk != null)
             return "Saving.";
         if (soundSave.Checking)
             return "Checking the mod.";
@@ -330,7 +556,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             return "Undoing the last save.";
         if (loading())
             return "Reading the timeline.";
-        if (!current.Dirty && !session.LinksUnsaved && RepairTarget == null)
+        // An unedited face can go into a library: it is copied there as it is.
+        if (!library && !current.Dirty && !session.LinksUnsaved && RepairTarget == null)
             return "Nothing changed since the last save.";
         if (current.Gesture != TimelineGesture.None)
             return "Finish the drag first.";
@@ -338,6 +565,9 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             return "Another edit is running. Wait for it to end.";
         if (destination == AnimationDestination.NewMod && !ModPaths.IsSafeNewModName(modName.Trim()))
             return "Choose a valid mod name.";
+        // A library takes the face's motion only, not the timeline's looks or sounds.
+        if (library)
+            return session.Source is { } loaded ? LibraryMissing(current.Document, loaded) : "Reading the timeline.";
         return effectLooks.LookMissing(current.Document) ?? soundFiles.SoundMissing(current.Document) ?? soundFiles.SoundCutMissing(current.Document);
     }
 
@@ -442,6 +672,19 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         soundSave.Poll(error => saveError = error);
         if (session.Animations is not { } service)
             return;
+        // Your libraries are read while a face session can save into one, and again after a save or an undo into one.
+        if (libraries == null && librariesTask == null && session.Editor is { Document.Face: not null })
+            librariesTask = service.InstantEditLibrariesAsync();
+        if (librariesTask is { IsCompleted: true } read)
+        {
+            librariesTask = null;
+            libraries = read.IsCompletedSuccessfully ? read.Result : [];
+        }
+        if (libraryTask is { IsCompleted: true } library)
+        {
+            libraryTask = null;
+            LibraryDone(library);
+        }
         // A save waiting for a link track starts once the track is in, with the clip as it is then.
         if (linksWait && !session.LinksBuilding)
         {
@@ -507,6 +750,10 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (undoPending && !service.Busy)
         {
             undoPending = false;
+            var libraryUndone = undoLibrary;
+            undoLibrary = false;
+            if (libraryUndone)
+                libraries = null;
             if (!sameClip)
                 return;
             if (service.LastFailed)
@@ -515,8 +762,12 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             {
                 saveMessage = "The last save was undone.";
                 // The file is another save's now, whose links aren't known.
-                session.SavedPrints = MotionLinks.NoPrints;
+                if (!libraryUndone)
+                    session.SavedPrints = MotionLinks.NoPrints;
             }
+            // A library's undo leaves the open clip as it is.
+            if (libraryUndone)
+                return;
             // While this window edits layers on a motion of its own, or brings back layers baked onto one, a file that is
             // again what an earlier layered edit saved brings that edit's layers back as the saved state, so it matches the file.
             reload(motionBase?.Clip == TimelineSession.ClipKey(session.Source!) || motionCarry is { Unsaved: true } && bakedOnBase);
@@ -679,27 +930,33 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                     journal = entry.State == "Undone" ? null : entry;
                     break;
                 }
+        // A save into a library wrote only the library: the open clip and its edits stay as they are.
+        var library = journal?.Request.Destination == AnimationDestination.Library;
         var blocked = journal == null ? "There is no save of this timeline to undo."
-            : current.Dirty ? "Save or undo your changes first."
-            : service.Busy || session.ReadOnly ? "Another edit is running. Wait for it to end."
+            : current.Dirty && !library ? "Save or undo your changes first."
+            : service.Busy || session.ReadOnly || libraryTask != null || libraryAsk != null ? "Another edit is running. Wait for it to end."
             : null;
         using (ImRaii.Disabled(blocked != null))
         {
             if (ImGui.Button("Undo last save") && journal != null)
             {
                 jobClip = session.Source is { } shown ? TimelineSession.ClipKey(shown) : null;
-                // The layers stay, as unsaved edits on the motion they apply to; layers keyed in cut or
-                // stretched frames don't fit the file the undo brings back. A save that baked them in keeps them in its journal.
-                if (session.Source != null && AnimationBakeRules.LayersBackAfterUndo(journal.Request) is { IsEmpty: false } baked)
-                    motionCarry = (TimelineSession.ClipKey(session.Source), baked, current.Document.NextMotionKey, true);
-                else if (session.Source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, RepairTarget))
-                    motionCarry = (TimelineSession.ClipKey(session.Source), current.Document.Motion, current.Document.NextMotionKey, true);
-                // Undoing a rebuild brings the borrowed file back: the rebuild is picked for it again.
-                if (journal.Request.RepairModel != null)
-                    rebuildDecided = null;
-                timelinePreview.Stop();
+                if (!library)
+                {
+                    // The layers stay, as unsaved edits on the motion they apply to; layers keyed in cut or
+                    // stretched frames don't fit the file the undo brings back. A save that baked them in keeps them in its journal.
+                    if (session.Source != null && AnimationBakeRules.LayersBackAfterUndo(journal.Request) is { IsEmpty: false } baked)
+                        motionCarry = (TimelineSession.ClipKey(session.Source), baked, current.Document.NextMotionKey, true);
+                    else if (session.Source != null && !current.Document.Motion.IsEmpty && AnimationBakeRules.KeepsLayersOverSave(current.Document, RepairTarget))
+                        motionCarry = (TimelineSession.ClipKey(session.Source), current.Document.Motion, current.Document.NextMotionKey, true);
+                    // Undoing a rebuild brings the borrowed file back: the rebuild is picked for it again.
+                    if (journal.Request.RepairModel != null)
+                        rebuildDecided = null;
+                    timelinePreview.Stop();
+                }
                 service.Undo(journal);
                 undoPending = true;
+                undoLibrary = library;
                 saveError = null;
                 saveMessage = null;
             }
