@@ -54,11 +54,11 @@ internal static class TimelineTemplates
                 if (!IsMotion(request.Path) || !request.Path.StartsWith("cfx", StringComparison.Ordinal) || request.Path.StartsWith("cfxl_", StringComparison.Ordinal))
                     throw new InvalidDataException($"'{request.Path}' is not a facial expression.");
                 if (request.Pack != null && !TmbFile.IsSafePackName(request.Pack)) throw new InvalidDataException($"'{request.Pack}' is not a valid face pack name.");
-                return [Event("C010", request.Start, Length(30), request.Path, new() { [TmbEntrySchema.TimeControlField] = 1 })];
+                return [Event("C010", request.Start, Length(30), request.Path, new() { [TmbEntrySchema.TimeControlField] = 1 }) with { Pack = request.Pack }];
             case TimelineAddKind.LipSync:
                 if (!IsMotion(request.Path) || !request.Path.StartsWith("cfxl_", StringComparison.Ordinal))
                     throw new InvalidDataException($"'{request.Path}' is not a lip motion.");
-                return [Event("C010", request.Start, Length(40), request.Path, new() { [TmbEntrySchema.TimeControlField] = 0 })];
+                return [Event("C010", request.Start, Length(40), request.Path, new() { [TmbEntrySchema.TimeControlField] = 0 }) with { Pack = request.Pack }];
             case TimelineAddKind.Prop:
                 var prop = request.Prop ?? throw new InvalidDataException("A prop needs a model.");
                 if (prop.Model is 0 or > (ushort)short.MaxValue || prop.Body > short.MaxValue)

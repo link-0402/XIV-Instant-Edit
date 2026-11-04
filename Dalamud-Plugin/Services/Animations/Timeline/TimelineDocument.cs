@@ -38,6 +38,7 @@ internal enum TimelineAccess : byte
 /// <param name="Pin">A sound event that always plays one alternative of its random set: that alternative's id (<see cref="TimelineSoundAlternative.Id"/>); null plays any. Saving gives it a copy of the file holding only that one.</param>
 /// <param name="Place">A prop summon's changed place (<see cref="TimelinePropPlaces"/>): saving writes it as an attach override into the mod; null when unchanged.</param>
 /// <param name="Source">A prop from another mod: the snapshot its private weapon body is built from (<see cref="PropCopies"/>); null for any other event.</param>
+/// <param name="Pack">The face set a face or lip event was placed from (<see cref="MixedFaces"/>); null for a resident face or one from the timeline's own <see cref="TimelineDocument.FacePack"/>.</param>
 internal sealed record TimelineEvent(
     string Key,
     string Magic,
@@ -56,7 +57,8 @@ internal sealed record TimelineEvent(
     TimelineEffectEdit? Look = null,
     string? Pin = null,
     TimelinePropPlace? Place = null,
-    TimelinePropSource? Source = null);
+    TimelinePropSource? Source = null,
+    string? Pack = null);
 
 /// <summary>
 /// One timeline being edited. Immutable: every edit makes a new document, so undo keeps

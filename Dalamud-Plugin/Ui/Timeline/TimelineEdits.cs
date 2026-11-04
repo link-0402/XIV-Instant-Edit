@@ -685,7 +685,7 @@ internal static class TimelineEdits
         if (a.Key != b.Key || a.Magic != b.Magic || a.Lane != b.Lane || a.Start != b.Start || a.Duration != b.Duration ||
             a.Resizable != b.Resizable || a.Path != b.Path || a.Access != b.Access || a.LockReason != b.LockReason ||
             a.Conditional != b.Conditional || a.Group != b.Group || a.CloneOf != b.CloneOf || a.Loop != b.Loop || !Equals(a.Look, b.Look) ||
-            a.Pin != b.Pin || !Equals(a.Place, b.Place) || !SameSource(a.Source, b.Source))
+            a.Pin != b.Pin || !Equals(a.Place, b.Place) || !SameSource(a.Source, b.Source) || a.Pack != b.Pack)
             return false;
         if (ReferenceEquals(a.Values, b.Values))
             return true;
