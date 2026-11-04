@@ -3382,3 +3382,30 @@ Offline: TimelineChromeFixture (dock tabs and width, the time pair, Live names, 
   line wraps, and nothing runs past the right edge.
 - [ ] 13 In GPose, after an emote played outside GPose: clicking one animation after another in the list goes straight from
   one to the next, never back to that emote's startup in between. Stop still puts the actor back.
+
+## Sounds from links and other audio files (pending)
+
+yt-dlp and ffmpeg, downloaded on request into the plugin's config folder (`tools/`), bring sounds in from a YouTube link or
+from any audio or video file. Spec: `docs/superpowers/specs/2026-10-16-sound-from-link-design.md` (local only).
+
+- [x] 1 Settings > Editors > Sound tools: Download fetches the tools with progress, then shows "installed, yt-dlp <version>".
+  Cancel mid-download leaves no .part in `tools/` (a yt-dlp.exe already fetched stays; the next Download fetches only ffmpeg).
+  Update says "yt-dlp is up to date."; Remove is greyed out while a download runs. (Bridge 2026-11-04: Download, Cancel during
+  the ffmpeg zip and Update checked; Remove not run.)
+- [x] 2 Add sound picker: From link opens "Sound from a link" (centred on the game window, the picker behind it). A link with
+  `t=1m30s` fills Start; a Spotify link, a non-YouTube link, End before Start and more than 10 minutes each keep Import
+  disabled with a one-line reason. (Bridge 2026-11-04: t=, Spotify and End before Start checked in game; the other two offline.)
+- [ ] 3 A short Creative Commons clip imports from each entry point: the picker's From link (at its Volume), the inspector's
+  Add from link and a row's Replace with link. The sound is named after the video, sits where a picked file would, and
+  Listen plays only the chosen part. (Bridge 2026-11-04: 0:10-0:15 from the picker is 5.0 s and starts at 0:10, 1:00-1:02 from
+  Add from link is 2.0 s at 1:00, named after the video; Replace with link opens the popup but its import wasn't run; Listen
+  not confirmed, check by ear.)
+- [ ] 4 With the tools removed, Import asks to download them first, then goes on to the import. Picking an .mp4 or .mp3
+  in the file dialog asks the same, then imports the file.
+- [x] 5 Cancel during "Downloading": no yt-dlp or ffmpeg process stays in Task Manager and no folder stays in
+  `%TEMP%\InstantEdit\sound-import`. Closing the Timeline window during a download does the same. (Bridge 2026-11-04.)
+- [ ] 6 A private video, an age-restricted one and a running live stream each show their one-line reason in the popup.
+  (Bridge 2026-11-04: a running live stream shows "Live streams can't be used." and the popup stays open; private and
+  age-restricted not run.)
+- [ ] 7 With the tools installed, an .mp3, an .m4a and a video file import from Import file and play in Listen.
+  (Bridge 2026-11-04: all three import as 2.0 s sounds; Listen not confirmed, check by ear.)

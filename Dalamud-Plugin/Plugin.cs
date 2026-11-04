@@ -38,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly Services.Animations.Timeline.TimelineCatalog _timelineCatalog;
     private readonly Services.Animations.Preview.AnimationPreviewService _animationPreview;
     private readonly Services.Audio.GameSoundPlayer _soundPlayer;
+    private readonly Services.Audio.MediaTools _soundTools;
     private readonly Services.Animations.Preview.AnimationPlayback _animationPlayback;
     private readonly Services.Animations.Preview.MotionLiveDisplay? _motionDisplay;
     private readonly Ui.Timeline.WorkspaceServiceFactory _workspaceServices;
@@ -197,6 +198,8 @@ public sealed class Plugin : IDalamudPlugin
         // The Timeline's sound inspector plays sounds through the game, served by a temporary mod.
         _soundPlayer = new Services.Audio.GameSoundPlayer(sigScanner, framework, _penumbra.Ipc, log,
             () => TextureFiles.EnsureCacheRoot(_config.TextureCacheDirectory));
+        // yt-dlp and ffmpeg for sounds from links and other audio or video files, downloaded on request into the config folder.
+        _soundTools = new Services.Audio.MediaTools(Path.Combine(configDirectory, "tools"), log: message => log.Information("{Message}", message));
         // Bone layers shown live on the GPose actor: an edited copy of the clip swapped into its controls.
         _motionDisplay = _animations == null ? null
             : new Services.Animations.Preview.MotionLiveDisplay(framework, objects, clientState, _animations.Native, log);
@@ -207,7 +210,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             if (key.Preset is not { } preset)
                 return new Ui.Timeline.WorkspaceServices(_animations, _timelineCatalog, _animationPreview, _animationPlayback, _motionDisplay, _recorder,
-                    data, framework, textureProvider, log, _soundPlayer, previewFiles, () => "You", playGroup);
+                    data, framework, textureProvider, log, _soundPlayer, previewFiles, () => "You", playGroup, _soundTools);
             // Partner keys come only once the partner service below exists.
             var partners = _partners ?? throw new InvalidOperationException("A partner workspace needs the partner service.");
             var playback = new Services.Animations.Preview.AnimationPlayback(framework, data, objects, clientState, targets, log,
@@ -220,7 +223,7 @@ public sealed class Plugin : IDalamudPlugin
                 sweepStale: false);
             return new Ui.Timeline.WorkspaceServices(_animations, _timelineCatalog, preview, playback, display, _recorder, data, framework, textureProvider, log,
                 _soundPlayer, previewFiles, () => partners.Find(preset)?.Name ?? partners.Store.Presets.FirstOrDefault(p => p.Id == preset)?.Name ?? "Partner",
-                playGroup);
+                playGroup, _soundTools);
         });
         _timelineWindow = new TimelineWindow(_workspaceServices, animationError, framework, textureProvider, keyState, objects, clientState, targets, interop);
         _exportServer = new ExportServer(_config, _penumbra.ModelExports, _penumbra.RaceExports, _penumbra.SizesExports,
@@ -367,6 +370,7 @@ public sealed class Plugin : IDalamudPlugin
             _toolSetup,
             cacheStartupError);
         _settingsWindow.AttachAnimations(_animations, animationError);
+        _settingsWindow.AttachSoundTools(_soundTools);
         // The Mod Browser: Penumbra's mods as a library, a window per open mod, and the modpack builder.
         Studio.StudioServices.Initialize(pi, log, data, textureProvider, dragDrop, framework);
         _config.Studio.AttachSave(SaveConfiguration);
@@ -557,6 +561,8 @@ public sealed class Plugin : IDalamudPlugin
         _motionDisplay?.Dispose();
         _animationPlayback.Dispose();
         _soundPlayer.Dispose();
+        _settingsWindow.StopSoundTools();
+        _soundTools.Dispose();
         _animationPreview.Dispose();
         _timelineCatalog.Dispose();
         _textures.AdditionalCacheCleanup = null;

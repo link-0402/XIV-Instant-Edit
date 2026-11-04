@@ -32,7 +32,8 @@ internal readonly record struct WorkspaceKey(Guid? Preset)
 /// </summary>
 internal sealed record WorkspaceServices(AnimationEditService? Animations, TimelineCatalog Catalog, AnimationPreviewService Preview,
     AnimationPlayback Playback, MotionLiveDisplay? MotionDisplay, AnimationRecorder Recorder, IDataManager Data, IFramework Framework,
-    ITextureProvider Textures, IPluginLog Log, GameSoundPlayer? SoundPlayer, PreviewFiles Files, Func<string> ActorName, TimelinePlayGroup Group);
+    ITextureProvider Textures, IPluginLog Log, GameSoundPlayer? SoundPlayer, PreviewFiles Files, Func<string> ActorName, TimelinePlayGroup Group,
+    MediaTools? SoundTools = null);
 
 /// <summary>
 /// The play bar's controls over every actor's workspace with an editable clip at once: Live, Preview, Play and Pause, From
@@ -242,7 +243,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         effectLooks = new EffectLookEditor(session);
         effectPlace = new EffectPlaceEditor(session, effectLooks);
         soundFiles = new SoundFiles(session);
-        pickers = new TimelinePickers(session, soundFiles);
+        pickers = new TimelinePickers(session, soundFiles, services.SoundTools);
         soundInspector = new SoundInspector(session, soundFiles, pickers, soundPlayer);
         timelinePreview = new TimelinePreview(session, decode, effectLooks, soundFiles);
         playBar = new PlayBar(timelinePreview, host.Transport);
@@ -610,6 +611,8 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         pendingRestore = null;
         autosaver.Closed();
         loader.Reset();
+        // A sound still downloading or converting can't be placed into a closed clip; stop its tools.
+        pickers.CancelLink();
         livePose.ForgetNote();
         if (shared)
         {
@@ -660,6 +663,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         disposed = true;
         if (source != null)
             autosaver.Flush(editor);
+        pickers.CancelLink();
         reader.Dispose();
         decode.Forget();
         poseSources.Drop();

@@ -267,7 +267,17 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
                 if (ImGui.Button("Add sound"))
                     pickers.OpenSoundImport(new TimelineSoundTarget(key, null));
             }
-            TimelineUi.Tip(oneShot ? "Turns this into a random set." : "Adds a .wav, .ogg or .scd file as another sound.");
+            TimelineUi.Tip(oneShot ? "Turns this into a random set." : "Adds an audio or video file as another sound.");
+            if (pickers.LinksAvailable)
+            {
+                ImGui.SameLine();
+                using (ImRaii.Disabled(!random && !oneShot || target.Entries.Count >= byte.MaxValue))
+                {
+                    if (ImGui.Button("Add from link"))
+                        pickers.OpenSoundLink(new TimelineSoundTarget(key, null));
+                }
+                TimelineUi.Tip(oneShot ? "Turns this into a random set." : "Adds the audio from a YouTube link as another sound.");
+            }
             if (random)
             {
                 ImGui.SameLine();
@@ -395,6 +405,8 @@ internal sealed class SoundInspector(TimelineSession session, SoundFiles soundFi
                 continue;
             if (ImGui.MenuItem("Replace with audio file"))
                 pickers.OpenSoundImport(new TimelineSoundTarget(key, alternative.Id));
+            if (pickers.LinksAvailable && ImGui.MenuItem("Replace with link"))
+                pickers.OpenSoundLink(new TimelineSoundTarget(key, alternative.Id));
             if (ImGui.MenuItem("Match length", "", false, entry.Track >= 0))
                 SetSoundEdit(current, key, Changed(edit, alternative with { WaitMs = audioMs }));
             // SetSound unpins the events that always played it, in the same undo step.

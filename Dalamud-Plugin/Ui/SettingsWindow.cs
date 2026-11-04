@@ -41,6 +41,12 @@ public sealed class SettingsWindow : Window
     private int? _pendingListenPort;
     private SettingsTab _tab;
     private readonly FileDialogManager _fileDialog = new();
+    private Services.Audio.MediaTools? _soundTools;
+    private Task? _soundToolsTask;
+    private CancellationTokenSource? _soundToolsCancel;
+    private volatile string? _soundToolsProgress;
+    private string? _soundToolsMessage;
+    private bool _soundToolsFailed;
 
     internal SettingsWindow(Configuration config, Action saveConfig, Action restartExportListener, IPluginLog log,
         Action requestCacheSynchronization, Action openSetup, ToolSetupViews tools, string cacheStartupError = "")
@@ -78,12 +84,20 @@ public sealed class SettingsWindow : Window
         _animationError = error;
     }
 
+    internal void AttachSoundTools(Services.Audio.MediaTools tools) => _soundTools = tools;
+
+    /// <summary> Stops a sound tools download or update started here (the plugin unloads). </summary>
+    internal void StopSoundTools() => _soundToolsCancel?.Cancel();
+
     // Before the library is loaded this session, Settings shows when the saved one was built.
     public override void OnOpen()
     {
         _savedSkeletonLibrary = _animations?.SavedSkeletonLibraryUtc();
         _savedFaceLibraries = _animations?.FaceLibraries.SavedUtc();
         _tools.Refresh();
+        if (_soundTools is { } sound && _soundToolsTask is not { IsCompleted: false })
+            _ = sound.RefreshAsync(CancellationToken.None).ContinueWith(t => _log.Debug(t.Exception!, "Could not read the sound tools' version."),
+                TaskContinuationOptions.OnlyOnFaulted);
     }
 
     public override void Draw()
@@ -171,6 +185,113 @@ public sealed class SettingsWindow : Window
         Divider();
         Widgets.SectionHeader("Substance Painter", "optional");
         _tools.DrawPainter(advanced: true);
+
+        if (_soundTools is not { } sound)
+            return;
+        Divider();
+        Widgets.SectionHeader("Sound tools", "sounds from links");
+        Widgets.MutedWrapped("yt-dlp and ffmpeg turn YouTube links and other audio or video files into game sounds. Downloaded from GitHub into the plugin's folder.");
+        ImGui.Spacing();
+        DrawSoundTools(sound);
+    }
+
+    /// <summary> Whether the sound tools are installed, with Download, Update and Remove, and links to both projects. </summary>
+    private void DrawSoundTools(Services.Audio.MediaTools sound)
+    {
+        if (_soundToolsTask is { IsCompleted: true } done)
+        {
+            _soundToolsTask = null;
+            _soundToolsCancel?.Dispose();
+            _soundToolsCancel = null;
+            _soundToolsFailed = done.IsFaulted;
+            _soundToolsMessage = done.IsCanceled || done.Exception?.InnerException is OperationCanceledException ? null
+                : done.Exception is { } error ? Timeline.TimelineSession.ErrorText(error) : _soundToolsMessage;
+            _ = sound.RefreshAsync(CancellationToken.None).ContinueWith(t => _log.Debug(t.Exception!, "Could not read the sound tools' version."),
+                TaskContinuationOptions.OnlyOnFaulted);
+        }
+        var running = _soundToolsTask != null;
+        var status = sound.Status;
+        if (running)
+            Widgets.StatusDot("Sound tools", Theme.Offline, _soundToolsProgress ?? "working");
+        else if (status.Installed)
+            Widgets.StatusDot("Sound tools", Theme.Online, status.YtDlpVersion is { } version ? $"installed, yt-dlp {version}" : "installed");
+        else
+        {
+            Widgets.StatusDot("Sound tools", Theme.Offline, "not installed");
+            Widgets.HintWrapped("Needed for sounds from links and for audio or video files other than .wav, .ogg and .scd.");
+        }
+
+        if (running)
+        {
+            Widgets.Spinner();
+            ImGui.SameLine(0, Theme.Gap);
+            if (ImGui.Button("Cancel##sound-tools"))
+                _soundToolsCancel?.Cancel();
+        }
+        else if (!status.Installed)
+        {
+            if (ImGui.Button("Download##sound-tools"))
+                StartSoundTools(token => sound.InstallAsync(new SoundToolsProgress(this), token), "Installed.");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("About 230 MB from GitHub.");
+        }
+        else
+        {
+            if (ImGui.Button("Update##sound-tools"))
+                StartSoundTools(sound.UpdateYtDlpAsync, "yt-dlp is up to date.", "Updating yt-dlp");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Gets the newest yt-dlp. It also updates itself once a week.");
+            ImGui.SameLine();
+            using (ImRaii.Disabled(sound.Busy))
+            {
+                if (ImGui.Button("Remove##sound-tools"))
+                {
+                    try
+                    {
+                        sound.Remove();
+                        _soundToolsFailed = false;
+                        _soundToolsMessage = "Removed.";
+                    }
+                    catch (IOException e)
+                    {
+                        _soundToolsFailed = true;
+                        _soundToolsMessage = e.Message;
+                    }
+                }
+            }
+        }
+        if (_soundToolsMessage != null)
+            ImGui.TextColored(_soundToolsFailed ? Theme.Warning : Theme.Muted, _soundToolsMessage);
+
+        ImGui.TextColored(Theme.Hint, "Projects:");
+        ImGui.SameLine(0, Theme.Gap);
+        if (ImGui.SmallButton("yt-dlp##sound-tools-link"))
+            Dalamud.Utility.Util.OpenLink("https://github.com/yt-dlp/yt-dlp");
+        ImGui.SameLine(0, Theme.Gap);
+        if (ImGui.SmallButton("ffmpeg (GPL)##sound-tools-link"))
+            Dalamud.Utility.Util.OpenLink("https://github.com/yt-dlp/FFmpeg-Builds");
+    }
+
+    private void StartSoundTools(Func<CancellationToken, Task> work, string doneMessage, string? phase = null)
+    {
+        _soundToolsMessage = null;
+        _soundToolsFailed = false;
+        _soundToolsProgress = phase;
+        _soundToolsCancel = new CancellationTokenSource();
+        var token = _soundToolsCancel.Token;
+        _soundToolsTask = Task.Run(async () =>
+        {
+            await work(token).ConfigureAwait(false);
+            _soundToolsMessage = doneMessage;
+        }, token);
+    }
+
+    private sealed class SoundToolsProgress(SettingsWindow window) : IProgress<Services.Audio.MediaToolsProgress>
+    {
+        public void Report(Services.Audio.MediaToolsProgress value) =>
+            window._soundToolsProgress = value.Fraction is { } done
+                ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"downloading {value.File} {done * 100:0}%")
+                : $"downloading {value.File}";
     }
 
     // ---- Cache -----------------------------------------------------------------------------

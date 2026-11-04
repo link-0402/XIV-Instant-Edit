@@ -18,7 +18,7 @@ namespace InstantEdit.Ui.Timeline;
 /// A picker either adds at a frame or chooses a new path or model for an existing event. Sound
 /// events take as long as their file plays, so the lengths read for them lay the lanes out again.
 /// </summary>
-internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundFiles)
+internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundFiles, MediaTools? tools = null)
 {
     private const string PickerPopup = "##timeline-picker";
     private const int WeaponAsListed = -1;
@@ -91,6 +91,25 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     private string? importMessage;
     private string? lastImportFolder;
 
+    // Sounds from a link, and picked files that wait for the sound tools: the popup, the job it places, and the
+    // running import's cancel and phase. The phase and the file name are written on the import's task.
+    private sealed class Reporter<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
+    }
+    private readonly SoundLinkPopup linkPopup = new();
+    private ImportJob? linkJob;
+    private float linkVolume = 1f;
+    private string? pendingFile;
+    // Stops the running sound import's download or ffmpeg run (any sound import, not only a link's).
+    private CancellationTokenSource? importCancel;
+    private bool linkActive;
+    private volatile string? linkPhase;
+    private volatile string? linkFileName;
+
+    /// <summary> Whether sounds can come from links (the plugin has its sound tools folder). </summary>
+    public bool LinksAvailable => tools != null;
+
     // Sounds draw as long as their file plays; lengths arrive in the background.
     private readonly HashSet<string> pendingLengths = new(StringComparer.OrdinalIgnoreCase);
 
@@ -105,7 +124,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     public IEnumerable<StatusNote> Notes()
     {
         if (importTask != null && importing is { } work)
-            return [new StatusNote("import", StatusKind.Working, $"Importing {work.Name}")];
+            return [new StatusNote("import", StatusKind.Working, $"Importing {(work.Name.Length > 0 ? work.Name : "the sound from the link")}")];
         if (importError != null)
             return [new StatusNote("import", StatusKind.Error, importError)];
         if (importMessage != null)
@@ -173,7 +192,12 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         }
         using var popup = ImRaii.Popup(PickerPopup);
         if (!popup.Success)
+        {
+            DrawLinkPopup();
             return;
+        }
+        // Over the picker while it is open, so From link keeps it behind the link popup.
+        DrawLinkPopup();
         pickerShownFrame = ImGui.GetFrameCount();
         var width = Theme.Scaled(500);
         using var wrap = ImRaii.TextWrapPos(width);
@@ -294,8 +318,19 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(importTask != null ? "Another file is still importing."
-                : sound ? "Import a .wav, .ogg or .scd file. It is saved with the mod."
+                : sound ? "Import an audio or video file. It is saved with the mod."
                 : "Import an .avfx file. The textures and sounds it needs are found next to it and saved with the mod.");
+        if (sound && LinksAvailable)
+        {
+            ImGui.SameLine(0, Theme.Gap);
+            using (ImRaii.Disabled(importTask != null || readOnly))
+            {
+                if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Link, "From link", null, null, null, null))
+                    OpenLink(PickerJob(TimelineAddKind.Sound), importVolume / 100f);
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(importTask != null ? "Another file is still importing." : "Import the audio from a YouTube link. It is saved with the mod.");
+        }
         if (sound)
         {
             ImGui.SameLine(0, Theme.Scaled(12));
@@ -306,7 +341,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             ImGui.SliderFloat("##timeline-import-volume", ref importVolume, 0, 100, "%.0f%%");
             importVolume = Math.Clamp(importVolume, 0, 100);
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("For .wav and .ogg files. An .scd keeps its own volume.");
+                ImGui.SetTooltip("An .scd keeps its own volume.");
         }
 
         ImGui.SetNextItemWidth(Theme.Scaled(400));
@@ -849,19 +884,39 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         return false;
     }
 
-    private void OpenImportDialog(TimelineAddKind kind)
+    /// <summary> An import placed where the picker adds, or in place of the event it chooses for. </summary>
+    private ImportJob PickerJob(TimelineAddKind kind)
     {
         var target = session.Editor != null ? TimelineEdits.Find(session.Editor.Document, pickerTarget) : null;
-        var job = new ImportJob(kind, pickerFrame, pickerTarget, string.Empty, session.Source is { } current ? TimelineSession.ClipKey(current) : null,
+        return new ImportJob(kind, pickerFrame, pickerTarget, string.Empty, session.Source is { } current ? TimelineSession.ClipKey(current) : null,
             loadGeneration, target?.Path);
+    }
+
+    private void OpenImportDialog(TimelineAddKind kind)
+    {
+        var job = PickerJob(kind);
         var volume = importVolume / 100f;
         var sound = kind == TimelineAddKind.Sound;
         session.FileDialog.OpenFileDialog(sound ? "Choose a sound" : "Choose an effect", sound ? TimelineWindowViews.SoundFilter : TimelineWindowViews.EffectFilter,
             (success, files) =>
             {
                 if (success && files.Count > 0)
-                    StartImport(job with { Name = Path.GetFileName(files[0]) }, files[0], volume);
+                    StartFileImport(job with { Name = Path.GetFileName(files[0]) }, files[0], volume);
             }, 1, lastImportFolder, false);
+    }
+
+    /// <summary> A picked file: one that needs ffmpeg asks for the sound tools first while they are missing. </summary>
+    private void StartFileImport(ImportJob job, string file, float volume)
+    {
+        if (job.Kind == TimelineAddKind.Sound && tools is { Installed: false } && AudioImport.NeedsConverter(Path.GetExtension(file)))
+        {
+            linkJob = job;
+            linkVolume = volume;
+            pendingFile = file;
+            linkPopup.OpenForFile();
+            return;
+        }
+        StartImport(job, file, volume);
     }
 
     /// <summary> Converts and checks the file on a task; the result is placed when the task is polled. </summary>
@@ -876,15 +931,147 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         importMessage = null;
         importing = job;
         lastImportFolder = Path.GetDirectoryName(file);
-        importTask = job.Kind == TimelineAddKind.Sound
-            ? Task.Run(() => TimelineImports.Sound(file, volume, (path, level) => AudioImport.FromFile(path, session.ScdTemplate(), level),
-                bytes => ScdFile.TrySeconds(bytes), bytes =>
-                {
-                    // Throws for tables that don't parse.
-                    if (ScdFile.Info(bytes).SoundCount == 0)
-                        throw new InvalidDataException("This SCD file has no sounds.");
-                }))
-            : Task.Run(() => TimelineImports.Effect(file, session.GameFileExists));
+        if (job.Kind != TimelineAddKind.Sound)
+        {
+            importTask = Task.Run(() => TimelineImports.Effect(file, session.GameFileExists));
+            return;
+        }
+        importCancel?.Dispose();
+        importCancel = new CancellationTokenSource();
+        var token = importCancel.Token;
+        importTask = Task.Run(() => SoundImport(file, volume, token), token);
+    }
+
+    /// <summary> A sound file as a timeline import; types other than .wav, .ogg and .scd go through ffmpeg, which <paramref name="token"/> stops. </summary>
+    private TimelineImport SoundImport(string file, float volume, CancellationToken token) =>
+        TimelineImports.Sound(file, volume, (path, level) => AudioImport.FromFile(path, session.ScdTemplate(), level, tools?.FfmpegPath, token),
+            bytes => ScdFile.TrySeconds(bytes), bytes =>
+            {
+                // Throws for tables that don't parse.
+                if (ScdFile.Info(bytes).SoundCount == 0)
+                    throw new InvalidDataException("This SCD file has no sounds.");
+            });
+
+    /// <summary> Opens the link popup for a sound placed as <paramref name="job"/> says. </summary>
+    private void OpenLink(ImportJob job, float volume)
+    {
+        if (tools == null)
+            return;
+        linkJob = job;
+        linkVolume = volume;
+        pendingFile = null;
+        linkPopup.OpenForLink();
+    }
+
+    /// <summary> Opens the link popup for a sound to add to <paramref name="target"/>'s set, or to put in place of one of its sounds. </summary>
+    public void OpenSoundLink(TimelineSoundTarget target) =>
+        OpenLink(new ImportJob(TimelineAddKind.Sound, 0, null, string.Empty, session.Source is { } current ? TimelineSession.ClipKey(current) : null,
+            loadGeneration, null, target), 1f);
+
+    /// <summary> Stops a running link import or tools download and its processes (the window closed or the plugin unloads). </summary>
+    public void CancelLink() => importCancel?.Cancel();
+
+    private void DrawLinkPopup()
+    {
+        if (tools == null)
+            return;
+        linkPopup.Phase = linkActive && importTask != null ? linkPhase ?? "Getting tools" : null;
+        switch (linkPopup.Draw(tools.Status.Installed, out var request))
+        {
+            case SoundLinkChoice.Import when request != null:
+                StartLinkImport(request);
+                break;
+            case SoundLinkChoice.DownloadForFile:
+                StartToolsThenFile();
+                break;
+            case SoundLinkChoice.Cancel:
+                if (linkActive)
+                    CancelLink();
+                pendingFile = null;
+                break;
+        }
+    }
+
+    private bool BeginLink(ImportJob job)
+    {
+        if (importTask != null)
+        {
+            linkPopup.Error = "Another file is still importing.";
+            return false;
+        }
+        importError = null;
+        importMessage = null;
+        importing = job;
+        linkActive = true;
+        linkPhase = "Getting tools";
+        linkFileName = null;
+        importCancel?.Dispose();
+        importCancel = new CancellationTokenSource();
+        return true;
+    }
+
+    private void InstallProgress(MediaToolsProgress progress) =>
+        linkPhase = progress.Fraction is { } done ? string.Create(CultureInfo.InvariantCulture, $"Getting tools {done * 100:0}%") : "Getting tools";
+
+    /// <summary> Downloads the link's part of the audio (the tools first when missing) and turns it into a sound on a task. </summary>
+    private void StartLinkImport(LinkRequest request)
+    {
+        if (tools is not { } media || linkJob is not { } job || !BeginLink(job with { Name = string.Empty }))
+            return;
+        var volume = linkVolume;
+        var token = importCancel!.Token;
+        importTask = Task.Run(async () =>
+        {
+            if (!media.Installed)
+                await media.InstallAsync(new Reporter<MediaToolsProgress>(InstallProgress), token).ConfigureAwait(false);
+            return await LinkAudioImport.RunAsync(media, request, path =>
+            {
+                linkFileName = Path.GetFileName(path);
+                return SoundImport(path, volume, token);
+            }, new Reporter<LinkImportProgress>(progress => linkPhase = progress.Text), token, message => session.Log.Debug(message)).ConfigureAwait(false);
+        }, token);
+    }
+
+    /// <summary> Downloads the sound tools, then imports the picked file that needed them. </summary>
+    private void StartToolsThenFile()
+    {
+        if (tools is not { } media || linkJob is not { } job || pendingFile is not { } file || !BeginLink(job))
+            return;
+        var volume = linkVolume;
+        var token = importCancel!.Token;
+        lastImportFolder = Path.GetDirectoryName(file);
+        importTask = Task.Run(async () =>
+        {
+            await media.InstallAsync(new Reporter<MediaToolsProgress>(InstallProgress), token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            linkPhase = "Converting";
+            return SoundImport(file, volume, token);
+        }, token);
+    }
+
+    /// <summary>
+    /// A link import or tools download that ended: cancelled leaves nothing, failed shows why in the popup
+    /// (and the status line, in case the popup closed with the picker), done closes it and is placed as a file is.
+    /// Returns the job to place, or null when there is nothing to place.
+    /// </summary>
+    private ImportJob? EndLink(Task<TimelineImport> task, ImportJob? job, bool cancelled)
+    {
+        linkActive = false;
+        if (cancelled)
+        {
+            pendingFile = null;
+            linkPopup.Close();
+            return null;
+        }
+        if (task.IsFaulted)
+        {
+            linkPopup.Error = TimelineSession.ErrorText(task.Exception);
+            importError = $"{(job is { Name.Length: > 0 } named ? named.Name : "The sound from the link")} could not be imported. {linkPopup.Error}";
+            return null;
+        }
+        pendingFile = null;
+        linkPopup.Close();
+        return job is { Name.Length: 0 } && linkFileName is { } file ? job with { Name = file } : job;
     }
 
     public void PollImport()
@@ -895,6 +1082,14 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
         importTask = null;
         var job = importing;
         importing = null;
+        var cancelled = importCancel?.IsCancellationRequested == true || task.IsCanceled || task.Exception?.InnerException is OperationCanceledException;
+        importCancel?.Dispose();
+        importCancel = null;
+        if (linkActive && (job = EndLink(task, job, cancelled)) == null)
+            return;
+        // A sound import stopped with its window (or clip) leaves nothing to say.
+        if (cancelled)
+            return;
         if (task.IsFaulted || task.IsCanceled)
         {
             importError = $"{job?.Name ?? "The file"} could not be imported. {TimelineSession.ErrorText(task.Exception)}";
@@ -999,7 +1194,7 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             (success, files) =>
             {
                 if (success && files.Count > 0)
-                    StartImport(job with { Name = Path.GetFileName(files[0]) }, files[0], 1f);
+                    StartFileImport(job with { Name = Path.GetFileName(files[0]) }, files[0], 1f);
             }, 1, lastImportFolder, false);
     }
 

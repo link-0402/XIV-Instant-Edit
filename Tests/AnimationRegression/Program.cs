@@ -30,6 +30,7 @@ Scenarios.Run(() => AnimationTimelineCommitFixture.Run(Check, Reject));
 Scenarios.Run(() => TmbFileFixture.Run(Check, Reject));
 Scenarios.Run(() => TimelineEditorFixture.Run(Check, Reject));
 Scenarios.Run(() => AudioFixture.Run(Check, Reject));
+await Scenarios.RunAsync(() => SoundImportFixture.Run(Check, Reject));
 Scenarios.Run(() => ScdModelFixture.Run(Check, Reject));
 Scenarios.Run(() => TimelineSoundFixture.Run(Check, Reject));
 Scenarios.Run(() => TimelineWindowViewsFixture.Run(Check, Reject));

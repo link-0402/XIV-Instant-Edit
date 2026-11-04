@@ -58,7 +58,7 @@ internal static class TimelineImports
 
     /// <summary>
     /// A sound for a C063 entry. An .scd is taken as it is (<paramref name="volume"/> does not apply);
-    /// a .wav or .ogg goes through <paramref name="convert"/>, which encodes it at that volume and
+    /// a .wav, .ogg or other audio or video file goes through <paramref name="convert"/>, which encodes it at that volume and
     /// reports its length. <paramref name="seconds"/> reads an .scd's length when one is given.
     /// </summary>
     /// <param name="verify">Checks an .scd taken as it is, throwing <see cref="InvalidDataException"/> for one that doesn't parse.</param>
@@ -76,7 +76,8 @@ internal static class TimelineImports
                 length = seconds?.Invoke(scd) is { } known && float.IsFinite(known) && known >= 0 ? known : 0;
                 break;
             case ".wav" or ".ogg":
-                if (convert == null) throw new InvalidDataException("Converting .wav and .ogg files is not available.");
+            case var other when Audio.AudioImport.NeedsConverter(other):
+                if (convert == null) throw new InvalidDataException("Converting sound files is not available.");
                 if (!float.IsFinite(volume) || volume < 0) throw new InvalidDataException("The volume is invalid.");
                 if (!File.Exists(file)) throw new FileNotFoundException("The sound file is missing.", file);
                 (scd, length) = convert(file, volume);
@@ -84,7 +85,7 @@ internal static class TimelineImports
                 if (scd.Length > MaxFileSize) throw new InvalidDataException("The converted sound is too large.");
                 if (!float.IsFinite(length) || length < 0) length = 0;
                 break;
-            default: throw new InvalidDataException("Pick a .scd, .wav or .ogg file.");
+            default: throw new InvalidDataException("Pick an audio or video file.");
         }
         var gamePath = SoundPath(file, scd);
         RequireSafe(gamePath);

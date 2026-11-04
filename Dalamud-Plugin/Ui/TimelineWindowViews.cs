@@ -19,7 +19,7 @@ namespace InstantEdit.Ui;
 internal static partial class TimelineWindowViews
 {
     /// <summary>The file dialog filter for sound imports.</summary>
-    public const string SoundFilter = "Sounds{.wav,.ogg,.scd}";
+    public static readonly string SoundFilter = "Sounds{" + string.Join(',', Services.Audio.AudioImport.Extensions) + "}";
 
     /// <summary>The file dialog filter for effect imports.</summary>
     public const string EffectFilter = "Effects{.avfx}";
