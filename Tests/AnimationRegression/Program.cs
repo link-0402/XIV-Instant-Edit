@@ -96,6 +96,7 @@ Scenarios.Run(() => AnimationMatchingFixture.Run(Check));
 Scenarios.Run(() => FacePapPathFixture.Run(Check));
 Scenarios.Run(() => FacePapFixture.Run(Check, Reject));
 Scenarios.Run(() => FaceLibraryModFixture.Run(Check));
+Scenarios.Run(() => FaceLibraryCopyFixture.Run(Check, Reject));
 Scenarios.Run(() => PapLoadTableFixture.Run(Check, Reject));
 await Scenarios.RunAsync(() => AnimationActivationFixture.Run(Check, Reject));
 Console.WriteLine("Native/game acceptance must be run inside FFXIV.");

@@ -39,6 +39,7 @@ internal static class FaceLibraryCommitFixture
             Created(commits, mod, parent, check);
             LaterChange(commits, mod, parent, check, reject);
             Refused(commits, mod, parent, check, reject);
+            LibraryOnly(commits, store, mod, parent, check, reject);
         }
         finally
         {
@@ -189,6 +190,35 @@ internal static class FaceLibraryCommitFixture
         File.WriteAllText(Path.Combine(other.Library.ModRoot, ".instant-edit-animation.json"), $"{{\"Id\":\"{other.Id}\"}}");
         check(commits.CheckLibraryUndo(other) == AnimationCommitService.LibraryUndo.Disable && !FaceLibraryMod.TryRead(other.Library.ModRoot, out _),
             "a library stopped before its meta.json is never listed, and its undo only disables");
+    }
+
+    /// <summary>A save whose only file is the library's (faces copied in): nothing of a mod of its own, and it reads back so.</summary>
+    private static void LibraryOnly(AnimationCommitService commits, AnimationJournalStore store, string mod, string parent,
+        Action<bool, string> check, Action<Action, string> reject)
+    {
+        var (save, manifest) = Save(mod);
+        var request = save with { Id = Guid.NewGuid(), Destination = AnimationDestination.Library, Operation = AnimationOperation.CopyFaces, Timeline = null };
+        AnimationEditJournal Prepare(AnimationBakeRequest bake, ImmutableDictionary<string, byte[]> outputs, AnimationCommitService.LibraryFile? library) =>
+            commits.PrepareAsync(bake, manifest, outputs, CancellationToken.None, library: library).GetAwaiter().GetResult();
+
+        var root = Library(parent, "Copied Faces", withFile: true);
+        var journal = Prepare(request, ImmutableDictionary<string, byte[]>.Empty, Existing(root));
+        check(journal.Files.Count == 0 && journal.ModDirectory == "" && journal.Library is { Created: false, File.RenamedFromRelativePath: "files/faces.pap" } &&
+              !AnimationCommitService.NoFilesLeft(journal, false),
+            "a library save journals the library's file alone");
+        check(store.Load().Single(j => j.Id == journal.Id) is { Request: { Destination: AnimationDestination.Library, Operation: AnimationOperation.CopyFaces }, Files.Count: 0 },
+            "a library save's journal reads back with its destination and operation");
+        commits.WriteLibrary(journal, null);
+        var step = commits.CheckLibraryUndo(journal);
+        Undo(commits, journal, step);
+        check(step == AnimationCommitService.LibraryUndo.Restore && File.ReadAllBytes(Path.Combine(root, "files", "faces.pap")).SequenceEqual(OldBytes) &&
+              Mapped(root).SequenceEqual(["files/faces.pap"]),
+            "a library save's undo puts the library's old file back");
+
+        reject(() => Prepare(request with { Id = Guid.NewGuid() }, ImmutableDictionary<string, byte[]>.Empty, null),
+            "a library save without a library file is refused");
+        reject(() => Prepare(request with { Id = Guid.NewGuid() }, ImmutableDictionary<string, byte[]>.Empty.Add(Pap, [1]), Existing(Library(parent, "Other Faces", withFile: true))),
+            "a library save that writes another file is refused");
     }
 
     /// <summary>A later save changed the library since: the undo is refused and the library stays as it is.</summary>

@@ -39,6 +39,7 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
             ? $"skeleton repair onto {AnimationBones.StandardName(target)}"
             : "skeleton repair",
         AnimationOperation.ExcludeBones => "bone exclusion",
+        AnimationOperation.CopyFaces => "faces copied",
         AnimationOperation.EditTimeline when request is { RepairTarget: { } target, RepairModel: { } model } =>
             $"timeline edit, rebuilt for {AnimationBones.RaceName(model)} on {AnimationBones.StandardName(target)}",
         AnimationOperation.EditTimeline => request.RepairTarget is { } repaired
@@ -56,6 +57,8 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
         var request = journal.Request;
         if (request.Destination == AnimationDestination.NewMod && request.ModName.Length > 0)
             return request.ModName;
+        if (request.Destination == AnimationDestination.Library && journal.Library is { Name.Length: > 0 } library)
+            return library.Name;
         var clip = request.Timeline?.Startup == true && request.Capture.Startup is { } startup ? startup : request.Capture.Clip;
         if (request.Capture.Sources.FirstOrDefault(s => s.GamePath == clip.GamePath)?.ModName is { Length: > 0 } name)
             return name;
@@ -63,7 +66,7 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
     }
 
     private static string DestinationLabel(AnimationBakeRequest request) =>
-        request.Destination == AnimationDestination.NewMod ? "new mod" : "in place";
+        request.Destination switch { AnimationDestination.NewMod => "new mod", AnimationDestination.Library => "library", _ => "in place" };
 
     private static (Vector4 Colour, string Label) JournalState(AnimationEditJournal journal) => journal.State switch
     {

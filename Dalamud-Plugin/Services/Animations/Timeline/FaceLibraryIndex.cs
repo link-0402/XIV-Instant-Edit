@@ -173,6 +173,50 @@ internal sealed class FaceLibraryIndex(Func<Task<(string Directory, string Name,
         Interlocked.Increment(ref revision);
     }
 
+    /// <summary>
+    /// After a save wrote or put back an Instant Edit library's file: the list and its saved copy take what
+    /// <paramref name="modRoot"/> maps at <paramref name="gamePath"/> now, as each save writes a fresh path and
+    /// <see cref="Active"/> admits a library only when the collection resolves to that file. No other mod is read. Waits
+    /// for a load or build that is running; changes nothing while no list is loaded (a build reads the library anyway).
+    /// </summary>
+    public async Task UpdateAsync(string modDirectory, string modName, string modRoot, string gamePath)
+    {
+        Task? running;
+        lock (sync) running = work;
+        if (running != null)
+            try { await running.ConfigureAwait(false); }
+            catch (Exception e) when (e is not OutOfMemoryException) { }
+        if (!TryParse(gamePath, out var race, out var face, out var pack)) throw new InvalidDataException($"{gamePath} is not an expression library.");
+        var path = gamePath.Replace('\\', '/').ToLowerInvariant();
+        FaceLibrary? library = null;
+        foreach (var (mapped, file) in Mappings(modRoot, CancellationToken.None))
+            if (string.Equals(mapped.Replace('\\', '/'), path, StringComparison.OrdinalIgnoreCase) && Motions(ReadPap, file) is { IsEmpty: false } motions)
+            {
+                library = new(pack, race, face, path, file, modDirectory, modName.Length > 0 ? modName : modDirectory, motions);
+                break;
+            }
+        ImmutableArray<FaceLibrary> next;
+        lock (sync)
+        {
+            if (status.State != FaceLibraryState.Ready) return;
+            libraries = next = Upserted(libraries, modDirectory, path, library);
+        }
+        Interlocked.Increment(ref revision);
+        var saveError = Save(next, status.BuiltUtc ?? DateTime.UtcNow);
+        status = status with { Libraries = next.Length, Mods = ModCount(next), Error = saveError };
+    }
+
+    /// <summary>
+    /// <paramref name="list"/> with the library <paramref name="modDirectory"/> maps at <paramref name="gamePath"/> replaced by
+    /// <paramref name="library"/>, or taken out when it is null (the mod maps no faces there now).
+    /// </summary>
+    internal static ImmutableArray<FaceLibrary> Upserted(ImmutableArray<FaceLibrary> list, string modDirectory, string gamePath, FaceLibrary? library)
+    {
+        var kept = list.Where(l => !(string.Equals(l.ModDirectory, modDirectory, StringComparison.OrdinalIgnoreCase) &&
+                                     string.Equals(l.GamePath, gamePath, StringComparison.OrdinalIgnoreCase)));
+        return library == null ? [.. kept] : [.. kept, library];
+    }
+
     private static int ModCount(ImmutableArray<FaceLibrary> list) => list.Select(l => l.ModDirectory).Distinct(StringComparer.OrdinalIgnoreCase).Count();
 
     /// <summary>Saves the list to the cache folder. Returns why it could not be saved, or null.</summary>

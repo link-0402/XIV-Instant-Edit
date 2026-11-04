@@ -28,6 +28,8 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             IReadOnlyDictionary<string, AddedCopies>? Copies, IReadOnlyDictionary<string, string>? Aliases)? added = null,
         (string For, IReadOnlyList<Timeline.AtchManipulation> Atch)? manipulations = null, LibraryFile? library = null)
     {
+        if (request.Destination == AnimationDestination.Library && (library == null || !outputs.IsEmpty || added != null || manipulations != null))
+            throw new InvalidDataException("A library save writes only the library's file.");
         var journal = new AnimationEditJournal { Id = request.Id, Request = RecoveryRequest(request) };
         var dir = store.DirectoryFor(request.Id);
         Directory.CreateDirectory(dir);

@@ -8,11 +8,12 @@ namespace InstantEdit.Models;
 
 [Flags]
 internal enum PoseComponents { None = 0, Position = 1, Rotation = 2, Scale = 4, All = 7 }
-internal enum AnimationDestination { NewMod, InPlace }
+// Journals store destinations by number. Library: a save whose only file is an Instant Edit expression library's PAP.
+internal enum AnimationDestination { NewMod, InPlace, Library }
 // Journals store operations by number. BakeOffsets (LivePose bakes) and 2-5 belonged to
 // operations that were removed (startup transitions, slot swaps, facial expressions,
 // retiming) and stay unused so those older journals still load and undo.
-internal enum AnimationOperation { BakeOffsets = 0, RepairSkeleton = 1, ExcludeBones = 6, EditTimeline = 7 }
+internal enum AnimationOperation { BakeOffsets = 0, RepairSkeleton = 1, ExcludeBones = 6, EditTimeline = 7, CopyFaces = 8 }
 internal enum SkeletonResolutionState { Searching, Matched, Ambiguous, Incompatible }
 internal enum SkeletonSourceKind { Collection, Game, Mod }
 // The shared body skeleton layouts, each extending the one before it: the game's own,

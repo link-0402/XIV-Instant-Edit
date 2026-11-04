@@ -335,6 +335,9 @@ internal sealed partial class AnimationEditService : IDisposable
         // Files undo by their hashes alone, so no character is needed.
         CanCancel = false;
         await commits.UndoFilesAsync(journal);
+        // The expression set list follows the library file the undo put back.
+        if (journal.Library is { } library)
+            await FaceLibraries.UpdateAsync(library.ModDirectory, library.Name, library.ModRoot, library.File.GamePath);
         journal.State = "Undone"; journal.Message = "Files recovered."; journals.Save(journal); Status = journal.Message;
     });
     /// <summary>
