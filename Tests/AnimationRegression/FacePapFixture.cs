@@ -13,7 +13,6 @@ internal static class FacePapFixture
         Layout(check);
         Refusals(reject);
         Sources(check, reject);
-        Comparable(check);
     }
 
     /// <summary>
@@ -105,15 +104,6 @@ internal static class FacePapFixture
         var half = Tmlb(AnimationPap.MaxFileSize / 2);
         reject(() => FacePapLayout.Build(801, 0, [new("cfxf_a", 17, 1, half), new("cfxf_b", 17, 1, half)], havok),
             "a library over the PAP size limit is refused");
-    }
-
-    private static void Comparable(Action<bool, string> check)
-    {
-        check(FaceMotionMatch.Comparable(2, 0, 2, 0), "faces of the same length and blend hint are compared");
-        check(!FaceMotionMatch.Comparable(2, 0, 2 + 1 / 30f, 0), "faces a frame apart are not compared");
-        check(!FaceMotionMatch.Comparable(2, 0, 2, 1), "an additive face is never compared with a non-additive one");
-        check(FaceMotionMatch.Comparable(2, 1, 2.004f, 1), "lengths that round to the same frames are compared");
-        check(!FaceMotionMatch.Comparable(float.NaN, 0, float.NaN, 0), "faces of unknown length are not compared");
     }
 
     /// <summary>A whole TMLB of <paramref name="size"/> bytes: magic, size, one entry, then filler that isn't zero.</summary>

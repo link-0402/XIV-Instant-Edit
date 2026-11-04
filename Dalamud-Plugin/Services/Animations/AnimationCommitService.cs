@@ -626,16 +626,13 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     /// A face library PAP a save writes into an expression library mod other than its own: its game path
     /// (chara/human/&lt;race&gt;/animation/&lt;face&gt;/nonresident/&lt;pack&gt;.pap), its bytes, the library's folder name, root and
     /// marker, whether the save makes the library, and for an existing one the file the collection resolves the game path to
-    /// (null when it has none for that face folder yet). <paramref name="FaceSave"/>: the library is what the save changes.
+    /// (null when it has none for that face folder yet).
     /// </summary>
     internal sealed record LibraryFile(string GamePath, byte[] Bytes, string ModDirectory, string ModRoot,
-        Timeline.FaceLibraryMarker Marker, bool Created, AnimationResource? Current, bool FaceSave = false);
+        Timeline.FaceLibraryMarker Marker, bool Created, AnimationResource? Current);
 
     /// <summary>What undoing a save's library file does, decided before anything is written.</summary>
-    internal enum LibraryUndo { Nothing, Restore, Disable, Leave }
-
-    /// <summary>The message of an undo that leaves a library a later save changed.</summary>
-    internal const string LibraryLeftMessage = "The faces it copied stay in the library.";
+    internal enum LibraryUndo { Nothing, Restore, Disable }
 
     /// <summary>Stages the library file in the job folder, at a fresh path in the library (the game keeps an unchanged path's file).</summary>
     private async Task<AnimationLibraryEdit> StageLibraryAsync(AnimationEditJournal journal, LibraryFile library, string dir, CancellationToken token)
@@ -685,7 +682,6 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         var edit = new AnimationLibraryEdit
         {
             ModDirectory = library.ModDirectory, ModRoot = root, Created = library.Created, Name = marker.Name, Pack = marker.Pack,
-            FaceSave = library.FaceSave,
             File = new AnimationFileChange(library.GamePath, target, library.ModDirectory, root, relative, library.Current?.Hash ?? "", after, "",
                 staged, renamedFrom),
         };
@@ -808,7 +804,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     /// <summary>
     /// Before an undo writes anything: what putting the library file back takes. Still what the save wrote, or never
     /// written: restore the old file and mapping, or disable a library the save made. Changed by a later save since:
-    /// a face saved into the library refuses the undo, and faces copied into it stay (<see cref="LibraryUndo.Leave"/>).
+    /// the undo is refused, as that save built on this one's faces.
     /// </summary>
     internal LibraryUndo CheckLibraryUndo(AnimationEditJournal journal)
     {
@@ -857,14 +853,12 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         }
         return LibraryUndo.Restore;
 
-        LibraryUndo Changed() => library.FaceSave
-            ? throw new IOException("A later save changed the library. Undo that save first.")
-            : LibraryUndo.Leave;
+        static LibraryUndo Changed() => throw new IOException("A later save changed the library. Undo that save first.");
     }
 
     /// <summary>
     /// Puts the library file back as <see cref="CheckLibraryUndo"/> decided: the old file and mapping, then the new file
-    /// goes; a library the save made is only disabled (<paramref name="disable"/>); a changed one is left with a note.
+    /// goes; a library the save made is only disabled (<paramref name="disable"/>).
     /// Running it again after a stop changes nothing more.
     /// </summary>
     internal async Task UndoLibraryAsync(AnimationEditJournal journal, LibraryUndo step, Func<Task> disable, Func<Task> reload)
@@ -875,11 +869,6 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         {
             case LibraryUndo.Disable:
                 await disable();
-                break;
-            case LibraryUndo.Leave:
-                if (!journal.Message.Contains(LibraryLeftMessage, StringComparison.Ordinal))
-                    journal.Message = journal.Message.Length == 0 ? LibraryLeftMessage : journal.Message + " " + LibraryLeftMessage;
-                store.Save(journal);
                 break;
             case LibraryUndo.Restore:
                 if (file.RenamedFromRelativePath is { Length: > 0 } old)

@@ -70,6 +70,17 @@ internal static class TimelineAutosaveFixture
             check(back.Imports is [{ GamePath: "instant_edit/step.scd", Rebuild: null } import] && import.Files["instant_edit/step.scd"] is [1, 2, 3] &&
                   back.FileHash == "file" && back.BaseHash == "base" && back.Capture.Clip.GamePath == Pap && back.Startup, "imports and the clip's identity come back");
 
+            // An autosave from a build whose face and lip events kept the set they were placed from (2026-11-04).
+            var withPacks = JsonNode.Parse(written)!;
+            foreach (var name in new[] { "Document", "Restored" })
+                if (withPacks[name]?["Events"] is JsonArray events)
+                    foreach (var ev in events)
+                        if (ev is JsonObject item)
+                            item["Pack"] = "set/b";
+            File.WriteAllText(file, withPacks.ToJsonString());
+            check(store.LoadAutosave() is { } packed && packed.Restored.Events.Length == 3 && packed.Restored.Events[0].Values["SoundIndex"] == 1,
+                "an autosave whose events name a face set still loads");
+
             store.ClearAutosave();
             check(store.LoadAutosave() == null && !File.Exists(file), "forgetting the kept edits removes them");
 

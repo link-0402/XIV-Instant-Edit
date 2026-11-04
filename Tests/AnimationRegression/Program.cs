@@ -63,7 +63,6 @@ Scenarios.Run(() => CompanionClipFixture.Run(Check, Reject));
 Scenarios.Run(() => PoseFileFixture.Run(Check, Reject));
 Scenarios.Run(() => EditAgainFixture.Run(Check));
 Scenarios.Run(() => TimelineAutosaveFixture.Run(Check));
-Scenarios.Run(() => MixedSetsFixture.Run(Check));
 Scenarios.Run(() => JournalCleanupFixture.Run(Check));
 Scenarios.Run(() => TimelineToolsFixture.Run(Check, Reject));
 Scenarios.Run(() => MotionCutFixture.Run(Check, Reject));

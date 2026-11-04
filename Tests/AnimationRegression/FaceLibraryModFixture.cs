@@ -36,22 +36,6 @@ internal static class FaceLibraryModFixture
               FaceLibraryMod.FaceNameProblem("smile", folder, false) != null,
             "a face name that breaks the rules is refused");
 
-        var at31 = "cfxf_" + stem26;
-        check(FaceLibraryMod.FreeName("cfxf_smile", new HashSet<string>()) == "cfxf_smile" &&
-              FaceLibraryMod.FreeName("cfxf_smile", new HashSet<string> { "cfxf_smile" }) == "cfxf_smile_2" &&
-              FaceLibraryMod.FreeName("cfxf_smile", new HashSet<string> { "cfxf_smile", "cfxf_smile_2", "cfxf_smile_3" }) == "cfxf_smile_4",
-            "a taken face name gets the first free _2, _3 suffix");
-        check(FaceLibraryMod.FreeName(at31, new HashSet<string> { at31 }) == "cfxf_" + new string('s', 24) + "_2" &&
-              FaceLibraryMod.FreeName(at31, new HashSet<string> { at31, "cfxf_" + new string('s', 24) + "_2" }) == "cfxf_" + new string('s', 24) + "_3",
-            "a free name at the byte limit shortens the stem to fit its suffix");
-        var taken = new HashSet<string> { at31 };
-        for (var n = 2; n < 10; n++) taken.Add("cfxf_" + new string('s', 24) + "_" + n);
-        check(FaceLibraryMod.FreeName(at31, taken) == "cfxf_" + new string('s', 23) + "_10", "a longer suffix shortens the stem again");
-        var wide = "cfxf_" + new string('é', 13);
-        check(FaceLibraryMod.FreeName(wide, new HashSet<string> { wide }) is var free && free == "cfxf_" + new string('é', 12) + "_2" &&
-              Encoding.UTF8.GetByteCount(free) <= 31,
-            "free names count bytes, not characters");
-
         var temp = Path.Combine(Path.GetTempPath(), "ie-face-library-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temp);
         try

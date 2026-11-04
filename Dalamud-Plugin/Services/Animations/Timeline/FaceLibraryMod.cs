@@ -74,25 +74,6 @@ internal static class FaceLibraryMod
         return null;
     }
 
-    /// <summary>
-    /// <paramref name="motion"/> when it isn't taken, otherwise the first free name_2, name_3, and so on, with the
-    /// name shortened (never its cfxf_ or cfxl_ prefix) so it stays within 31 bytes.
-    /// </summary>
-    public static string FreeName(string motion, IReadOnlySet<string> taken)
-    {
-        if (!taken.Contains(motion)) return motion;
-        var prefix = motion.StartsWith("cfxf_", StringComparison.Ordinal) || motion.StartsWith("cfxl_", StringComparison.Ordinal) ? motion[..5] : "";
-        for (var n = 2; ; n++)
-        {
-            var suffix = "_" + n;
-            var stem = motion[prefix.Length..];
-            while (stem.Length > 0 && Encoding.UTF8.GetByteCount(prefix + stem + suffix) > MaxMotionBytes)
-                stem = stem[..(char.IsLowSurrogate(stem[^1]) && stem.Length > 1 ? ^2 : ^1)];
-            var name = prefix + stem + suffix;
-            if (!taken.Contains(name)) return name;
-        }
-    }
-
     // Lowercase a-z, 0-9 and _; every other run of characters becomes one _, and none are left at the ends.
     private static string Clean(string text)
     {

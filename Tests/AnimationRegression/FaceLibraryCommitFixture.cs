@@ -85,12 +85,11 @@ internal static class FaceLibraryCommitFixture
         return root;
     }
 
-    private static AnimationCommitService.LibraryFile Existing(string root, bool faceSave = false, string gamePath = LibraryPath)
+    private static AnimationCommitService.LibraryFile Existing(string root, string gamePath = LibraryPath)
     {
         var current = Path.Combine(root, "files", "faces.pap");
         return new(gamePath, NewBytes, Path.GetFileName(root), root, Marker, false,
-            File.Exists(current) ? new AnimationResource(LibraryPath, current, AnimationPap.Hash(File.ReadAllBytes(current)), Path.GetFileName(root), root, "files/faces.pap") : null,
-            faceSave);
+            File.Exists(current) ? new AnimationResource(LibraryPath, current, AnimationPap.Hash(File.ReadAllBytes(current)), Path.GetFileName(root), root, "files/faces.pap") : null);
     }
 
     private static IReadOnlyList<string> Mapped(string root) => ModMetadata.AnimationMappedFiles(root, LibraryPath);
@@ -192,32 +191,21 @@ internal static class FaceLibraryCommitFixture
             "a library stopped before its meta.json is never listed, and its undo only disables");
     }
 
-    /// <summary>A later save changed the library since: copied faces stay, a face saved into it refuses the undo.</summary>
+    /// <summary>A later save changed the library since: the undo is refused and the library stays as it is.</summary>
     private static void LaterChange(AnimationCommitService commits, string mod, string parent, Action<bool, string> check, Action<Action, string> reject)
     {
-        foreach (var faceSave in new[] { false, true })
-        {
-            var root = Library(parent, faceSave ? "Saved Faces" : "Copied Faces", withFile: true);
-            var journal = Prepare(commits, mod, Existing(root, faceSave));
-            commits.WriteLibrary(journal, null);
-            journal.State = "Activated";
-            // As a later save does: its own fresh path, mapped in place of this one, and this one's file gone.
-            var file = journal.Library!.File;
-            var later = AnimationFileRename.NextRelativePath(file.RelativePath);
-            File.WriteAllBytes(Path.Combine(root, later), [7]);
-            ModMetadata.RenameAnimationFileMapping(root, LibraryPath, file.RelativePath, later);
-            File.Delete(file.Target);
-            if (!faceSave)
-            {
-                var step = commits.CheckLibraryUndo(journal);
-                var (disabled, reloaded) = Undo(commits, journal, step);
-                check(step == AnimationCommitService.LibraryUndo.Leave && disabled + reloaded == 0 && Mapped(root).SequenceEqual([later]) &&
-                      journal.Message == AnimationCommitService.LibraryLeftMessage,
-                    "undo of copied faces leaves a library a later save changed, and says so");
-            }
-            else
-                reject(() => commits.CheckLibraryUndo(journal), "undo of a face saved into a library a later save changed is refused");
-        }
+        var root = Library(parent, "Saved Faces", withFile: true);
+        var journal = Prepare(commits, mod, Existing(root));
+        commits.WriteLibrary(journal, null);
+        journal.State = "Activated";
+        // As a later save does: its own fresh path, mapped in place of this one, and this one's file gone.
+        var file = journal.Library!.File;
+        var later = AnimationFileRename.NextRelativePath(file.RelativePath);
+        File.WriteAllBytes(Path.Combine(root, later), [7]);
+        ModMetadata.RenameAnimationFileMapping(root, LibraryPath, file.RelativePath, later);
+        File.Delete(file.Target);
+        reject(() => commits.CheckLibraryUndo(journal), "undo of a save into a library a later save changed is refused");
+        check(Mapped(root).SequenceEqual([later]), "a refused library undo leaves the later save's file mapped");
     }
 
     private static void Refused(AnimationCommitService commits, string mod, string parent, Action<bool, string> check, Action<Action, string> reject)
