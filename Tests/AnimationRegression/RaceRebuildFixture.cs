@@ -362,5 +362,25 @@ internal static class RaceRebuildFixture
         check(AnimationSkeletonIndex.ActorStandards(null, "c0101", [game], [], null).Model == null, "no single base skeleton: no race");
         check(AnimationSkeletonIndex.ActorStandards(c0801, "c0101", [yas], [yas], null) is { Model: "c0801", Standards.IsEmpty: true },
             "without the race's game skeleton the race is known but has no standards");
+
+        // Any race's standards, for a save that writes a copy for every race.
+        var c1101 = AnimationSkeletonIndex.BaseSkeletonPath(1101);
+        check(c1101 == "chara/human/c1101/skeleton/base/b0001/skl_c1101b0001.sklb", "a race's base skeleton path");
+        SkeletonCandidate Read(SkeletonSourceKind kind, SkeletonDescription rig, string path, string file) => new(new(kind, new(path, file, "")), rig, 0, "");
+        AnimationSkeletonIndex.SessionSkeleton Library(SkeletonDescription rig, string path, string file) =>
+            new(rig, [new(SkeletonSourceKind.Mod, new(path, file, ""))]);
+        var lalaGame = Read(SkeletonSourceKind.Game, AnimationBonesFixture.Rigs.Game, c1101, c1101);
+        check(AnimationSkeletonIndex.StandardsFrom(c1101, [lalaGame], []).Single() is { Standard: SkeletonStandard.Vanilla, Origin: "Game data" },
+            "a race with no skeleton mods has the game's own standard");
+        var lalaAll = AnimationSkeletonIndex.StandardsFrom(c1101, [lalaGame, Read(SkeletonSourceKind.Collection, AnimationBonesFixture.Rigs.Yas, c1101, "yas.sklb")],
+            [Library(AnimationBonesFixture.Rigs.Ivcs, c1101, "ivcs.sklb")]);
+        check(lalaAll.Select(s => s.Standard).SequenceEqual([SkeletonStandard.Vanilla, SkeletonStandard.Ivcs, SkeletonStandard.IvcsYas]),
+            "the standards come from the collection and the skeleton library for that race, though the character is another");
+        check(AnimationSkeletonIndex.StandardsFrom(c1101, [lalaGame], [Library(AnimationBonesFixture.Rigs.Ivcs, c0801, "ivcs.sklb")]).Single().Standard == SkeletonStandard.Vanilla,
+            "another race's library skeleton is no standard for this race");
+        check(AnimationSkeletonIndex.StandardsFrom(c1101, [lalaGame], [Library(AnimationBonesFixture.Rigs.Yas, c1101, @"A mod\Posing\skl.sklb")]).Single().Standard == SkeletonStandard.Vanilla,
+            "a Posing skeleton is never a standard");
+        check(AnimationSkeletonIndex.StandardsFrom(c1101, [game], [Library(AnimationBonesFixture.Rigs.Ivcs, c1101, "ivcs.sklb")]).IsEmpty,
+            "another race's game skeleton doesn't stand in: no game skeleton, no standards");
     }
 }

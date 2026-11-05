@@ -172,7 +172,7 @@ internal static class AnimationBones
         return now == rebuild.Target ? rebuild : rebuild with { Target = now };
     }
 
-    private static string[] Kept(AnimationClip clip, IReadOnlyCollection<string> excluded)
+    internal static string[] Kept(AnimationClip clip, IReadOnlyCollection<string> excluded)
     {
         var set = excluded.ToHashSet(StringComparer.Ordinal);
         return [.. Animated(clip).Where(name => !set.Contains(name))];

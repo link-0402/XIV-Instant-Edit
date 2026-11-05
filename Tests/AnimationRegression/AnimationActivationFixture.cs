@@ -36,5 +36,16 @@ internal static class AnimationActivationFixture
             _ => throw new IOException("Output changed after activation"), Redraw).GetAwaiter().GetResult(),
             "changed animation output fails activation verification");
         check(!events.Contains("redraw"), "a changed output file cannot trigger an unverified character rebuild");
+        events.Clear();
+        var copy = other with { AddedFor = path, RaceCopy = true };
+        await AnimationCommitService.VerifyActivationAsync([file, copy], p => p == path ? Resolve(p) : Task.FromResult(@"D:\Mods\Other\animation.pap"), Validate, Redraw);
+        check(events.SequenceEqual(["resolve:" + path, "validate:" + path, "validate:chara/animation.pap", "redraw"]),
+            "a race copy another mod outranks doesn't fail the save, and its file is still checked");
+        reject(() => AnimationCommitService.VerifyActivationAsync([file, copy], Resolve,
+            change => { if (change.RaceCopy) throw new IOException("Output changed after activation"); }, Redraw).GetAwaiter().GetResult(),
+            "a race copy whose file changed fails activation");
+        reject(() => AnimationCommitService.VerifyActivationAsync([file with { GamePath = "chara/animation.pap" }],
+            _ => Task.FromResult(@"D:\Mods\Other\animation.pap"), Validate, Redraw).GetAwaiter().GetResult(),
+            "the edited file outranked still fails activation");
     }
 }

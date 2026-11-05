@@ -152,6 +152,12 @@ internal sealed record AnimationTimelineEdit(bool Startup, int EntryIndex, float
     /// tells by them whether the partner changed since. Null without links, and in journals written before links.
     /// </summary>
     public ImmutableDictionary<string, string>? LinkPrints { get; init; }
+
+    /// <summary>
+    /// The game paths an All races save writes a copy of the edit to, each built for the race in its path (see <see cref="Services.Animations.RaceCopies"/>);
+    /// empty for every other save, and in journals written before it. Edit again turns the switch back on by it.
+    /// </summary>
+    public ImmutableArray<string> RaceCopies { get; init; } = [];
 }
 /// <summary>
 /// The face a face session saved: its file, its entry and motion name, where it starts on the timeline and its length
@@ -271,4 +277,7 @@ internal sealed record AnimationFileChange(string GamePath, string Target, strin
     // version folders): the game path of that file, whose Target, RelativePath and Staged
     // this entry carries. Nothing is staged or written for it; commit maps it with its
     // file and undo removes that mapping, never the file. Null for every other entry.
-    string? AliasOf = null);
+    string? AliasOf = null,
+    // Set for an added copy of an All races save: a mod that outranks it at its game path is
+    // Penumbra's decision, so activation checks its file, not what the path resolves to.
+    bool RaceCopy = false);

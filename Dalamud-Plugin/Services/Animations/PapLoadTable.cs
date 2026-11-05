@@ -111,6 +111,20 @@ internal sealed class PapLoadTable
         return [.. races.Where(race => string.Equals(Resolve($"chara/human/c{race:D4}/{parts[3]}"), path, StringComparison.Ordinal))];
     }
 
+    /// <summary>
+    /// The files <paramref name="races"/> load when each requests <paramref name="path"/>'s file under its own race code,
+    /// with the races that load each, in the order given; none for a path outside the human layout. Exact in
+    /// <c>bt_common</c>: elsewhere a request can move to another folder (see the vault's PAP Load Table).
+    /// </summary>
+    public ImmutableArray<(string Path, ImmutableArray<ushort> PlayedBy)> Files(string path, IEnumerable<ushort> races)
+    {
+        var parts = path.Split('/', 4);
+        if (parts.Length != 4 || parts[0] != "chara" || parts[1] != "human" || !Code(parts[2], 'c', out _))
+            return [];
+        return [.. races.GroupBy(race => Resolve($"chara/human/c{race:D4}/{parts[3]}"), StringComparer.Ordinal)
+            .Select(file => (file.Key, file.ToImmutableArray()))];
+    }
+
     private static bool Code(string text, char prefix, out ushort value)
     {
         value = 0;

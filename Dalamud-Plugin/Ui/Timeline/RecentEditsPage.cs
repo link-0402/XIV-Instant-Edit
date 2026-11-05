@@ -40,6 +40,7 @@ internal sealed class RecentEditsPage(TimelineSession session, SaveFooter saveFo
             : "skeleton repair",
         AnimationOperation.ExcludeBones => "bone exclusion",
         AnimationOperation.CopyFaces => "faces copied",
+        AnimationOperation.EditTimeline when request.Timeline is { RaceCopies.IsEmpty: false } => "timeline edit, for every race",
         AnimationOperation.EditTimeline when request is { RepairTarget: { } target, RepairModel: { } model } =>
             $"timeline edit, rebuilt for {AnimationBones.RaceName(model)} on {AnimationBones.StandardName(target)}",
         AnimationOperation.EditTimeline => request.RepairTarget is { } repaired

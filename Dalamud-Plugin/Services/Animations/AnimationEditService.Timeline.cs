@@ -427,6 +427,35 @@ internal sealed partial class AnimationEditService
         return await resources.ReadAsync(collection, gamePath, token);
     }
 
+    /// <summary>
+    /// The own lengths in frames of the faces, blinks and lip shapes in expression library <paramref name="pack"/> of
+    /// <paramref name="race"/>'s <paramref name="face"/> (chara/human/c0801/animation/f0002/nonresident/{pack}.pap), as
+    /// <paramref name="collection"/> resolves it, by motion name; empty when it can't be read. Nothing in game changes.
+    /// </summary>
+    public async Task<ImmutableDictionary<string, int>> FacePackFramesAsync(Guid collection, string race, string face, string pack,
+        CancellationToken token)
+    {
+        if (!TmbFile.IsSafePackName(pack))
+            return ImmutableDictionary<string, int>.Empty;
+        try
+        {
+            var (_, bytes) = await resources.ReadAsync(collection, FacePackPath(race, face, pack), token);
+            var entries = new AnimationPap(bytes).Entries;
+            // Havok reads run on the framework thread.
+            var seconds = await framework.RunOnTick(() =>
+            {
+                token.ThrowIfCancellationRequested();
+                return AnimationRuntime.InspectPapDurations(bytes);
+            }, cancellationToken: token);
+            return FaceLibraryIndex.Frames(entries, seconds);
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            log.Debug(e, $"Could not read the face lengths of {pack}.");
+            return ImmutableDictionary<string, int>.Empty;
+        }
+    }
+
     /// <summary>The game path of expression library <paramref name="pack"/> for <paramref name="race"/>'s <paramref name="face"/>.</summary>
     public static string FacePackPath(string race, string face, string pack) => $"chara/human/{race}/animation/{face}/nonresident/{pack}.pap";
 
@@ -616,6 +645,7 @@ internal sealed partial class AnimationEditService
     /// <paramref name="added"/> file (alias to that file's game path: a prop material's other version folders, see
     /// <see cref="Timeline.PropCopy.Aliases"/>); they are mapped to that one file and go with it.
     /// <paramref name="links"/> are the partner tracks of the document's link layers, taken on the framework thread; null leaves the links out.
+    /// With <paramref name="allRaces"/> the save writes a copy for every file the races load, each built for the race in its path (see <see cref="RaceCopies"/>).
     /// </summary>
     /// <returns>The job's id, which <see cref="LastResult"/> carries once it ends; null when another job is running.</returns>
     public Guid? EditTimeline(AnimationTimelineSource source, TimelineDocument document, AnimationDestination destination,
@@ -623,7 +653,8 @@ internal sealed partial class AnimationEditService
         IReadOnlyDictionary<string, int>? motionFrames = null, SkeletonStandard? repair = null,
         IReadOnlyDictionary<string, Func<byte[], byte[]>>? rebuild = null,
         IReadOnlyDictionary<string, TimelineSoundReplacement>? replaced = null, IReadOnlyDictionary<string, string>? copied = null,
-        IReadOnlyDictionary<string, string>? cutSounds = null, IReadOnlyDictionary<string, string>? aliases = null, MotionLinkSet? links = null)
+        IReadOnlyDictionary<string, string>? cutSounds = null, IReadOnlyDictionary<string, string>? aliases = null, MotionLinkSet? links = null,
+        bool allRaces = false)
     {
         if (Busy) return null;
         var request = TimelineRequest(source, document, destination, modName.Trim(), repair, cutSounds, links);
@@ -647,9 +678,33 @@ internal sealed partial class AnimationEditService
             var candidate = AnimationBakeRules.CompanionCandidate(capture, source.Startup, source.Resource, destination);
             var companion = candidate == null ? null
                 : AnimationBakeRules.CompanionFrom(candidate, (await resources.ReadAsync(capture.CollectionId, candidate, token)).Resource, source.Resource);
+            // All races: worked out again here, as the collection may have changed since the footer showed it.
+            RaceCopyPlan? racePlan = null, halfPlan = null;
+            RaceCopyBuilds? halfBuilds = null;
+            // The copies start from the edit as made, with every layer: the edited file below may keep only those its race's standard holds.
+            var copyRequest = request;
+            var copyDocument = document;
+            if (allRaces && !source.Standalone && document.Face == null && destination != AnimationDestination.Library)
+            {
+                var chosenRepair = request.RepairModel == null ? request.RepairTarget : null;
+                racePlan = await RaceCopyPlanAsync(source, request.ExcludedBones, document.Motion, chosenRepair, token);
+                // The edited file is built for the race in its path too, whichever race the character is.
+                if (RaceCopies.EditedRebuilds(racePlan.Files[0], chosenRepair, source.FileModel, AnimationSkeletonIndex.ModelFromPath(source.Clip.SkeletonPath)))
+                {
+                    request = RaceCopies.CopyRequest(request, racePlan.Files[0]);
+                    if (document.MotionChanged)
+                        document = document with { Motion = request.Timeline!.Motion };
+                }
+                (halfPlan, halfBuilds) = await OtherHalfCopiesAsync(request, source, token);
+                request = request with
+                {
+                    Timeline = request.Timeline! with { RaceCopies = [.. RaceCopies.CopyPaths(racePlan), .. halfPlan == null ? [] : RaceCopies.CopyPaths(halfPlan)] },
+                };
+            }
+            string[] raceReads = [.. racePlan == null ? [] : RaceCopies.ManifestPaths(racePlan, destination), .. halfPlan == null ? [] : RaceCopies.ManifestPaths(halfPlan, destination)];
             var manifest = await resources.ManifestAsync(capture,
                 [edited, .. faceFile == null ? Array.Empty<string>() : [faceFile], .. companion == null ? Array.Empty<string>() : [companion],
-                 .. replaced?.Keys ?? []], destination, token);
+                 .. replaced?.Keys ?? [], .. raceReads], destination, token);
             if (manifest.Resources.First(r => string.Equals(r.GamePath, edited, StringComparison.OrdinalIgnoreCase)).Hash != source.Resource.Hash)
                 throw new IOException("The animation file changed while saving. Open the timeline again.");
             if (faceFile != null && manifest.Resources.First(r => string.Equals(r.GamePath, faceFile, StringComparison.OrdinalIgnoreCase)).Hash != source.Face!.Resource.Hash)
@@ -676,6 +731,14 @@ internal sealed partial class AnimationEditService
             // The mod's own sounds the edit changes are written over like the animation, at a fresh path.
             if (replaced is { Count: > 0 })
                 outputs = TimelineSoundUsage.ReplacedOutputs(outputs, manifest.Resources, source.Resource, replaced);
+            var attachOverrides = built.Manipulations;
+            if (racePlan != null)
+            {
+                var raceBuilds = await BuildRaceCopiesAsync(copyRequest, source, copyDocument, motionFrames, racePlan, manifest, manifest.Files[edited], token);
+                outputs = outputs.SetItems(raceBuilds.Outputs).SetItems(halfBuilds?.Outputs ?? ImmutableDictionary<string, byte[]>.Empty);
+                files = files.Concat(raceBuilds.Added).Concat(halfBuilds?.Added ?? ImmutableDictionary<string, byte[]>.Empty).ToDictionary(StringComparer.Ordinal);
+                attachOverrides = [.. attachOverrides.Concat(raceBuilds.Manipulations).Distinct()];
+            }
             // The motion the layers were baked onto goes with the journal, so the edit can be opened again.
             var motionFile = manifest.Files[source.MotionTarget.Resource.GamePath];
             var motionBase = MotionBase(source, document, motionFile, request.RepairTarget)
@@ -689,7 +752,7 @@ internal sealed partial class AnimationEditService
             var journaled = request with { Timeline = timelineEdit with { Links = null } };
             var journal = await commits.PrepareAsync(journaled, manifest, outputs, token,
                 files.Count > 0 ? (edited, files, owners, copies, kept) : null,
-                built.Manipulations.IsEmpty ? null : (built.GamePath, built.Manipulations));
+                attachOverrides.IsEmpty ? null : (built.GamePath, attachOverrides));
             if (motionBase != null)
                 KeepMotionBase(journal.Id, motionBase);
             if (reused.Count > 0)
@@ -722,6 +785,7 @@ internal sealed partial class AnimationEditService
             }
             journal.State = "Completed";
             journal.Message = tooSmall ? SavedSkeletonTooSmall
+                : racePlan != null ? SavedForEveryRace
                 : FaceChanged(document) ? source.Face != null && timelineChanged ? "Expression saved." : "Face saved."
                 : document.Face == null && AnimationBakeRules.NewMotion(document, request.RepairTarget) ? "Animation saved." : "Timeline saved.";
             journals.Save(journal); Status = journal.Message;
@@ -887,6 +951,8 @@ internal sealed partial class AnimationEditService
               face.AfterFingerprint.Length > 0 && target.FileFingerprint == face.AfterFingerprint
                 ? null : "The face was changed after this edit."
         : journal.Request.Timeline is not { } edit || loaded.Standalone || loaded.EntryIndex != edit.EntryIndex ||
+        // A copy an All races save wrote is another race's: the kept motion and layers are the edited file's.
+        edit.RaceCopies.Contains(loaded.Resource.GamePath, StringComparer.OrdinalIgnoreCase) ||
         !journal.Files.Any(f => f.AddedFor == null && f.GamePath == loaded.Resource.GamePath && f.AfterHash == loaded.Resource.Hash)
             ? "The animation was changed after this edit."
             : null;
@@ -918,7 +984,7 @@ internal sealed partial class AnimationEditService
     /// </summary>
     private async Task<AnimationTimelineBuild> BuildTimelineAsync(AnimationBakeRequest request, AnimationTimelineSource source,
         byte[] pap, TimelineDocument document, IReadOnlyDictionary<string, int>? motionFrames, string workDirectory, CancellationToken token,
-        bool placeProps = false, byte[]? facePap = null)
+        bool placeProps = false, byte[]? facePap = null, Action<string>? status = null)
     {
         if (source.Document == null) throw new InvalidOperationException(source.ReadOnlyReason ?? "This timeline can't be edited.");
         var clip = source.Clip;
@@ -934,7 +1000,7 @@ internal sealed partial class AnimationEditService
         // An expression's face session: its kept face loops at the face's edited length, its header stays as loaded.
         var timeline = source.Standalone && document.Face != null && source.Face is { } played
             ? ExpressionTimeline(source.Tmb, document, motionFrames, played.Clip.Name)
-            : TimelineConvert.Apply(source.Tmb, document, motionFrames);
+            : TimelineConvert.Apply(source.Tmb, document, motionFrames, clipMotion: source.Standalone || !clip.IsLoop ? null : clip.Name);
         if (source.Standalone && document.Face != null && source.Face is { } faceSource)
         {
             // An expression's timeline and the face it plays: the face's file goes beside it when the face changed.
@@ -977,7 +1043,7 @@ internal sealed partial class AnimationEditService
             var skeleton = (await resources.ReadSkeletonAsync(request.Capture.CollectionId, selected.Source, token)).Bytes;
             Directory.CreateDirectory(workDirectory);
             motion = await baker.BakeAsync(source.BaseMotion ?? pap, skeleton, source.MotionClip, request,
-                workDirectory, message => Status = message, token, () => CheckIdentityOnFramework(request.Capture, true));
+                workDirectory, status ?? (message => Status = message), token, () => CheckIdentityOnFramework(request.Capture, true));
         }
         var result = new AnimationPap(motion).WithTimeline(source.EntryIndex, timeline);
         // A replacement motion may have been written for another race (an instant startup's), and then names it in its header.

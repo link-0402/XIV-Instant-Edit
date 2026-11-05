@@ -47,6 +47,16 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private string? rebuildFailed;
     // The rebuild's line naming the other races that play the file, for the clip path and race it was made for.
     private (string Path, string Model, string? Note)? borrowNote;
+    // All races: whether the next save writes a copy for every file the races load, and why it can't, for the clip it was asked for.
+    private bool allRaces;
+    private (string Key, string? Why)? allRacesWhy;
+    // What that save would do with each file, read off the framework thread for the key it was asked for.
+    private RaceCopyPlan? racePlan;
+    private string? racePlanKey;
+    private string? racePlanError;
+    private Task<RaceCopyPlan>? racePlanTask;
+    // A clip just opened: whether an earlier All races save left copies of it, so it goes on saving for every race.
+    private (string Clip, Task<bool> Task)? raceCopiesCheck;
     // Whether the edit can be written over in place (see CanReplace).
     private bool canReplace;
     // The widths last frame of Skeleton with its choice and of Save with what follows it, to fit the mod name; 0 before drawn.
@@ -111,6 +121,13 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             rebuildDecided = null;
             rebuildAutomatic = false;
             rebuildFailed = null;
+            allRaces = false;
+            racePlan = null;
+            racePlanKey = null;
+            racePlanError = null;
+            racePlanTask = null;
+            raceCopiesCheck = loaded is { Standalone: false, Document.Face: null } && session.Animations is { } animations
+                ? (TimelineSession.ClipKey(loaded), animations.HasRaceCopiesAsync(loaded.Resource)) : null;
             // A face starts with its own name, so a copy matches it where a timeline plays it.
             faceStem = loaded.Document?.Face != null ? LibrarySaveRules.Stem(loaded.MotionTarget.Clip.Name) : string.Empty;
             libraryAsk = null;
@@ -194,7 +211,9 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             DrawLibrary();
         var rightWidth = saveGroupWidth > 0 ? saveGroupWidth
             : ImGui.CalcTextSize("Save").X + ImGui.CalcTextSize("Undo last save").X + ImGui.GetStyle().FramePadding.X * 4 + Theme.Scaled(16);
-        var skeletonPart = skeleton ? Theme.Scaled(16) + skeletonWidth : 0;
+        // Only a save to a library has no All races: the skeleton's part of the row holds it, for a face greyed.
+        var raceSwitch = destination != AnimationDestination.Library;
+        var skeletonPart = skeleton || raceSwitch ? Theme.Scaled(16) + skeletonWidth : 0;
         var newMod = destination == AnimationDestination.NewMod;
         // Save and what follows keep to the right, on a line of their own when the row has no room for them with the mod
         // name at its narrowest; some room to spare before they come back up, so a status a few letters longer doesn't
@@ -212,12 +231,19 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip("The new mod's name.");
         }
-        if (skeleton)
+        if (skeleton || raceSwitch)
         {
             ImGui.SameLine(0, Theme.Scaled(16));
             var start = ImGui.GetCursorScreenPos().X;
             // A rebuild for another race keeps the edits open (AnimationBakeRules.RebuildKeepsEdits): only a repair bakes them in.
-            DrawRepairChoice(loaded, AnimationBakeRules.BakeInNote(doc, session.Rebuild?.Model != null ? null : RepairTarget));
+            if (skeleton)
+                DrawRepairChoice(loaded, AnimationBakeRules.BakeInNote(doc, session.Rebuild?.Model != null ? null : RepairTarget));
+            if (raceSwitch)
+            {
+                if (skeleton)
+                    ImGui.SameLine(0, Theme.Scaled(16));
+                DrawAllRaces(loaded, doc);
+            }
             skeletonWidth = ImGui.GetItemRectMax().X - start;
         }
 
@@ -591,6 +617,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         var place = destination;
         var name = modName.Trim();
         var repair = target.Standalone || document.Face != null ? null : RepairTarget;
+        var races = allRaces;
         // Effect looks are saved as copies of their effects, packaged like imports. Sound changes and
         // pins go into copies too, or over the mod's own sound files where BeginSave allowed it.
         TimelineDocument saved;
@@ -629,7 +656,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         saveMessage = null;
         savePrints = MotionLinks.Prints(document.Motion, links);
         jobClip = TimelineSession.ClipKey(loaded);
-        KeepMotionForSave(target, document, repair);
+        // An All races save builds a file whose header names another race for its path's: it reads back as another race's, as any rebuild does.
+        KeepMotionForSave(target, document, repair, races && document.Face == null && RaceCopies.HeaderDiffers(target.Resource.GamePath, target.FileModel));
         timelinePreview.Stop();
         var ending = timelinePreview.TakeStopping();
         Func<string, byte[]?> game = path => session.Data.GetFile(path)?.Data;
@@ -654,7 +682,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             {
                 session.Playback.Stop();
                 return service.EditTimeline(target, saved, place, name, files, beside, motionFrames, repair, rebuild,
-                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds, aliases.IsEmpty ? null : aliases, links);
+                    replaced.IsEmpty ? null : replaced, copied.IsEmpty ? null : copied, cutSounds, aliases.IsEmpty ? null : aliases, links, races);
             }), null);
         });
     }
@@ -672,6 +700,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         soundSave.Poll(error => saveError = error);
         if (session.Animations is not { } service)
             return;
+        PollRaceCopies();
         // Your libraries are read while a face session can save into one, and again after a save or an undo into one.
         if (libraries == null && librariesTask == null && session.Editor is { Document.Face: not null })
             librariesTask = service.InstantEditLibrariesAsync();
@@ -736,7 +765,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                 // repaired again when it reads back as a smaller skeleton (see PickRebuild).
                 session.Rebuild = null;
                 rebuildAutomatic = false;
-                saveMessage = result.Message == AnimationEditService.SavedSkeletonTooSmall ? result.Message
+                saveMessage = result.Message is AnimationEditService.SavedSkeletonTooSmall or AnimationEditService.SavedForEveryRace ? result.Message
                     : destination == AnimationDestination.NewMod ? "Saved into a new mod." : "Saved.";
                 // A sound saved in place is another file now; read it again.
                 reload(false);
@@ -791,7 +820,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         if (rebuildDecided != key && fresh.Clip.Resolution is { State: SkeletonResolutionState.Matched } resolution)
         {
             rebuildDecided = key;
-            if (AnimationBones.AutomaticRebuild(fresh.Clip, loaded.FileModel, session.Editor?.Document.ExcludedBones ?? [], loaded.HoldsOthers) is { } rebuild)
+            // All races builds each file for the race in its path, so the character's race gets no rebuild of its own.
+            if (!allRaces && AnimationBones.AutomaticRebuild(fresh.Clip, loaded.FileModel, session.Editor?.Document.ExcludedBones ?? [], loaded.HoldsOthers) is { } rebuild)
             {
                 session.Rebuild = rebuild;
                 rebuildAutomatic = true;
@@ -815,10 +845,10 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     /// new length, bones left out or a repair read the saved file back as it is instead (see
     /// <see cref="AnimationBakeRules.KeepsLayersOverSave"/>); Edit again brings cuts and layers back.
     /// </summary>
-    private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair)
+    private void KeepMotionForSave(AnimationTimelineSource loaded, TimelineDocument document, SkeletonStandard? repair, bool rebuilt)
     {
         var clip = TimelineSession.ClipKey(loaded);
-        if (DropsLayers(document, repair))
+        if (rebuilt || DropsLayers(document, repair))
         {
             // An undo of a bake onto an earlier edit's base reads that edit back, so its layers come back with these.
             bakedOnBase = loaded.MotionTarget.BaseMotion != null && document.Replacement == null;
@@ -904,7 +934,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
             return [];
         var notes = new List<StatusNote>();
         // Only body clips have the skeleton choice (see Draw).
-        if (!current.Standalone && current.Document != null && session.Editor is { Document.Face: null } editor && session.Rebuild?.Model == null)
+        if (!allRaces && !current.Standalone && current.Document != null && session.Editor is { Document.Face: null } editor && session.Rebuild?.Model == null)
         {
             if (session.Rebuild == null && rebuildFailed != null)
                 notes.Add(new StatusNote("rebuild-failed", StatusKind.Warning, rebuildFailed));
@@ -974,7 +1004,8 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
     private void DrawRepairChoice(AnimationTimelineSource loaded, string? bakeIn)
     {
         var clip = session.Fresh(loaded).Clip;
-        var race = AnimationBones.RebuildRace(clip, loaded.FileModel, loaded.HoldsOthers);
+        // All races builds each file for the race in its path: no rebuild for the character's alone.
+        var race = allRaces ? null : AnimationBones.RebuildRace(clip, loaded.FileModel, loaded.HoldsOthers);
         // The match can change under the choice: a skeleton chosen in the Bones window, another character.
         if (session.Rebuild is { } rebuild)
             session.Rebuild = AnimationBones.CurrentRebuild(clip, loaded.FileModel, rebuild, loaded.HoldsOthers);
@@ -1046,7 +1077,7 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
                              string.Join(", ", plan.Dropped.Take(8).Select(AnimationPresentation.BoneName)) +
                              (plan.Dropped.Length > 8 ? $" and {plan.Dropped.Length - 8} more." : ".");
         }
-        if (((session.Rebuild == null ? rebuildFailed : null) ?? AnimationBones.RebuildNote(clip, loaded.FileModel, excluded, session.Rebuild?.Model != null, loaded.HoldsOthers)) is { } note)
+        if (!allRaces && ((session.Rebuild == null ? rebuildFailed : null) ?? AnimationBones.RebuildNote(clip, loaded.FileModel, excluded, session.Rebuild?.Model != null, loaded.HoldsOthers)) is { } note)
             yield return note;
         if (session.Rebuild is { Model: { } rebuilding })
         {
@@ -1061,6 +1092,103 @@ internal sealed class SaveFooter(TimelineSession session, TimelinePreview timeli
         }
         if (bakeIn != null)
             yield return bakeIn;
+    }
+
+    /// <summary>
+    /// The All races switch, greyed with its reason when the clip can't be saved for every race, and once it's on how many files the
+    /// races load, listed in its tooltip.
+    /// </summary>
+    private void DrawAllRaces(AnimationTimelineSource loaded, TimelineDocument doc)
+    {
+        var why = AllRacesWhy(loaded, doc);
+        if (why != null && allRaces)
+            SetAllRaces(false);
+        var on = allRaces;
+        ImGui.AlignTextToFramePadding();
+        using (ImRaii.Disabled(why != null || session.ReadOnly))
+        {
+            if (ImGui.Checkbox("All races", ref on))
+                SetAllRaces(on);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(why ?? AllRacesTooltip());
+        if (!allRaces)
+            return;
+        AskRacePlan(loaded, doc);
+        if (racePlan == null)
+            return;
+        ImGui.SameLine(0, Theme.Gap);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.Muted, RaceCopies.CountLabel(racePlan));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(AllRacesTooltip());
+    }
+
+    private string AllRacesTooltip() =>
+        string.Join("\n", RaceCopies.TooltipLines(racePlan).Concat(racePlanError == null ? [] : [racePlanError]));
+
+    /// <summary>Why this clip can't be saved for every race, asked again only when one of its inputs changes: the answer walks the load table.</summary>
+    private string? AllRacesWhy(AnimationTimelineSource loaded, TimelineDocument doc)
+    {
+        var face = loaded.Standalone || doc.Face != null;
+        var newMotion = doc.Replacement != null;
+        var key = $"{loaded.Resource.GamePath}|{face}|{loaded.HoldsOthers}|{newMotion}|{session.Animations?.PapTable != null}";
+        if (allRacesWhy is { } known && known.Key == key)
+            return known.Why;
+        var why = session.Animations?.RaceCopiesUnavailable(loaded.Resource, face, loaded.HoldsOthers, newMotion);
+        allRacesWhy = (key, why);
+        return why;
+    }
+
+    /// <summary>
+    /// Takes All races on or off. On, each file is built for the race in its path, so a rebuild for the character's race goes, read
+    /// again on the clip's own skeleton; off, that rebuild is picked again.
+    /// </summary>
+    private void SetAllRaces(bool on)
+    {
+        allRaces = on;
+        rebuildAutomatic = false;
+        rebuildFailed = null;
+        if (on && session.Rebuild is { Model: not null })
+            session.Rebuild = null;
+        // A repair chosen meanwhile stays; with none, the rebuild is picked again.
+        if (!on && session.Rebuild == null)
+            rebuildDecided = null;
+    }
+
+    /// <summary>Asks for the plan when what it depends on changed: the file, the match, the bones left out, the repair or the destination's mod.</summary>
+    private void AskRacePlan(AnimationTimelineSource loaded, TimelineDocument doc)
+    {
+        var fresh = session.Fresh(loaded);
+        if (fresh.Clip.Resolution is not { State: SkeletonResolutionState.Matched } resolution || session.Animations is not { } service || Working || service.Busy)
+            return;
+        var repair = RepairTarget;
+        var excluded = doc.ExcludedBones;
+        var layers = doc.Motion;
+        var key = $"{TimelineSession.ClipKey(loaded)}|{loaded.Resource.Hash}|{resolution.Selected?.Skeleton.Fingerprint}|{repair}|{string.Join(',', excluded)}|" +
+                  string.Join(',', RaceCopies.MovedBones([], layers, []));
+        if (key == racePlanKey)
+            return;
+        racePlanKey = key;
+        racePlanError = null;
+        racePlanTask = Task.Run(() => service.RaceCopyPlanAsync(fresh, excluded, layers, repair, CancellationToken.None));
+    }
+
+    /// <summary>Every frame: takes in the plan asked for, and turns All races on for a clip an earlier All races save left copies of.</summary>
+    private void PollRaceCopies()
+    {
+        if (racePlanTask is { IsCompleted: true } plan)
+        {
+            racePlanTask = null;
+            racePlan = plan.IsCompletedSuccessfully ? plan.Result : null;
+            racePlanError = plan.IsCompletedSuccessfully ? null : TimelineSession.ErrorText(plan.Exception);
+        }
+        if (raceCopiesCheck is { Task.IsCompleted: true } check)
+        {
+            raceCopiesCheck = null;
+            if (check.Task.IsCompletedSuccessfully && check.Task.Result && session.Source is { } shown && TimelineSession.ClipKey(shown) == check.Clip)
+                SetAllRaces(true);
+        }
     }
 
     /// <summary>One entry of the skeleton choice: keep (no standard), repair onto a standard, or with a race's model rebuild onto its standard.</summary>

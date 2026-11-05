@@ -77,7 +77,8 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 if (renamesOutput)
                 {
                     renamedFrom = source.RelativePath!;
-                    relative = AnimationFileRename.NextRelativePath(renamedFrom);
+                    // A copy of an All races save moves to the copies' folder, so a shared file's other path gets a file of its own.
+                    relative = IsRaceCopy(request, gamePath) ? RaceCopyRelative(gamePath) : AnimationFileRename.NextRelativePath(renamedFrom);
                     target = Path.GetFullPath(Path.Combine(root, relative));
                     if (File.Exists(target)) throw new IOException($"{target} already exists.");
                 }
@@ -106,21 +107,26 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 token.ThrowIfCancellationRequested();
                 if (!AddedGamePath(gamePath, request) || files.ContainsKey(gamePath))
                     throw new InvalidDataException($"{gamePath} can't be added to the mod.");
-                string mod, root, relative;
+                string mod, root;
+                var relative = AddedRelative(request, gamePath);
                 if (request.Destination == AnimationDestination.NewMod)
                 {
-                    mod = journal.ModDirectory; root = journal.ModRoot; relative = "files/" + gamePath;
+                    mod = journal.ModDirectory; root = journal.ModRoot;
                 }
                 else
                 {
                     var source = manifest.Resources.Single(r => r.GamePath == extra.For);
-                    mod = source.ModDirectory!; root = source.ModRoot!; relative = AddedFolder + gamePath;
+                    mod = source.ModDirectory!; root = source.ModRoot!;
                 }
                 var owner = extra.Owners?.GetValueOrDefault(gamePath) ?? extra.For;
                 if (!AnimationDependencies.SafeGamePath(owner) || (files.ContainsKey(owner) && owner != extra.For) || extra.Files.ContainsKey(owner))
                     throw new InvalidDataException($"{gamePath} can't be mapped beside {owner}.");
                 var copies = request.Destination == AnimationDestination.InPlace ? extra.Copies?.GetValueOrDefault(gamePath) : null;
-                await StageAddedAsync(gamePath, bytes, mod, root, relative, owner, copies?.From);
+                // A race copy plays where the edited file does now: that file's rename is committed first, and the mappings follow it.
+                var raceCopy = IsRaceCopy(request, gamePath);
+                var ownerFile = raceCopy ? journal.Files.FirstOrDefault(file => file.AddedFor == null && file.GamePath == owner)?.RelativePath
+                    ?? throw new InvalidDataException($"{gamePath} can't be mapped beside {owner}.") : copies?.From;
+                await StageAddedAsync(gamePath, bytes, mod, root, relative, owner, ownerFile, raceCopy);
                 // The copies made from the original's other files share its game path, each in a file of its own.
                 var number = 1;
                 foreach (var (from, copy) in copies?.Others ?? ImmutableDictionary<string, byte[]>.Empty)
@@ -158,7 +164,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
         return journal;
 
         // Stages a file the edit adds, mapped beside its owner: only where the owner is ownerFile, when there is one.
-        async Task StageAddedAsync(string gamePath, byte[] bytes, string mod, string root, string relative, string owner, string? ownerFile)
+        async Task StageAddedAsync(string gamePath, byte[] bytes, string mod, string root, string relative, string owner, string? ownerFile, bool raceCopy = false)
         {
             var target = Path.GetFullPath(Path.Combine(root, relative));
             TextureFiles.EnsureLocalPath(target);
@@ -169,7 +175,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             var after = AnimationPap.Hash(bytes);
             if (AnimationPap.Hash(await File.ReadAllBytesAsync(staged, token)) != after) throw new IOException("Staged output validation failed.");
             journal.Files.Add(new AnimationFileChange(gamePath, target, mod, root, relative, "", after, "", staged,
-                AddedFor: owner, AddedForFile: ownerFile));
+                AddedFor: owner, AddedForFile: ownerFile, RaceCopy: raceCopy));
         }
     }
 
@@ -182,17 +188,31 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
     /// <summary>Where an in-place edit puts the files it adds, inside the edited animation's mod.</summary>
     internal const string AddedFolder = "instant_edit/";
 
+    /// <summary>Whether <paramref name="gamePath"/> is a copy <paramref name="request"/>'s All races save writes.</summary>
+    internal static bool IsRaceCopy(AnimationBakeRequest? request, string gamePath) =>
+        request is { Operation: AnimationOperation.EditTimeline, Timeline: { } edit } && edit.RaceCopies.Contains(gamePath, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A race copy's file in its mod, under a fresh name each save: the game keeps a cached file by its physical path.</summary>
+    internal static string RaceCopyRelative(string gamePath) => AnimationFileRename.NextRelativePath(RaceCopies.Folder + gamePath);
+
+    /// <summary>Where a file <paramref name="request"/> adds goes in its mod.</summary>
+    internal static string AddedRelative(AnimationBakeRequest request, string gamePath) =>
+        IsRaceCopy(request, gamePath) ? RaceCopyRelative(gamePath)
+        : request.Destination == AnimationDestination.NewMod ? "files/" + gamePath : AddedFolder + gamePath;
+
     /// <summary>
     /// The kinds of file an edit may add: sounds, effects and what effects use, a prop's private copy (the model,
-    /// materials and textures of a weapon body in b9000..b9999, which the game doesn't ship), and for a timeline edit of
-    /// <paramref name="request"/>'s startup that startup's own animation (an instant startup beside its loop).
+    /// materials and textures of a weapon body in b9000..b9999, which the game doesn't ship), for a timeline edit of
+    /// <paramref name="request"/>'s startup that startup's own animation (an instant startup beside its loop), and
+    /// the copies its All races save lists.
     /// </summary>
     internal static bool AddedGamePath(string gamePath, AnimationBakeRequest? request = null) => AnimationDependencies.SafeGamePath(gamePath) &&
         (Path.GetExtension(gamePath).ToLowerInvariant() is ".scd" or ".avfx" or ".atex" or ".tmb" ||
          Path.GetExtension(gamePath).ToLowerInvariant() is ".mdl" or ".mtrl" or ".tex" && PrivatePropBody.IsMatch(gamePath) ||
          request is { Operation: AnimationOperation.EditTimeline, Timeline.Startup: true, Capture.Startup: { } startup } &&
          string.Equals(gamePath, startup.GamePath, StringComparison.OrdinalIgnoreCase) &&
-         gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase));
+         gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase) ||
+         IsRaceCopy(request, gamePath) && gamePath.EndsWith(".pap", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>A weapon body in b9000..b9999, which the game doesn't ship: where a prop's private copy goes (the Preview's rule too).</summary>
     internal static readonly System.Text.RegularExpressions.Regex PrivatePropBody = new(@"^chara/weapon/w\d{4}/obj/body/b9\d{3}/",
@@ -371,16 +391,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                     RequireHash(file.Staged, file.AfterHash);
                     Directory.CreateDirectory(Path.GetDirectoryName(file.Target)!);
                     AnimationJournalStore.WriteAtomic(file.Target, File.ReadAllBytes(file.Staged));
-                    if (renamed)
-                    {
-                        // Repoint the owning mod's own Files mapping at the new path so
-                        // Penumbra resolves here from now on; ActivateAnimationAsync reloads
-                        // the mod afterward to pick this up.
-                        var stillReferenced = ModMetadata.RenameAnimationFileMapping(
-                            file.ModRoot, file.GamePath, file.RenamedFromRelativePath!, file.RelativePath);
-                        if (!stillReferenced)
-                            try { File.Delete(preEditTarget); } catch (IOException) { }
-                    }
+                    if (renamed) FinishRename(file);
                 }
                 // Attach overrides play wherever the animation does; the journal learns what each option held first.
                 if (journal.Manipulations is { } atch && atch.Added.Count + atch.Removed.Count > 0 &&
@@ -458,7 +469,8 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
             }
             // Copies of one added file made from each of its original's files share its game path, which resolves
             // to the first: the one made from the file the collection resolves now. The others only need to be intact.
-            if (file.AddedForFile == null || checkedPaths.Add(file.GamePath))
+            // A race copy another mod outranks is Penumbra's decision, not a failed save: only its file is checked.
+            if (!file.RaceCopy && (file.AddedForFile == null || checkedPaths.Add(file.GamePath)))
             {
                 var resolved = await resolve(file.GamePath);
                 if (!PathRules.SamePhysicalPath(resolved, file.Target))
@@ -498,6 +510,29 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 ["FileSwaps"] = new JsonObject(),
                 ["Manipulations"] = manipulations,
             });
+    }
+
+    /// <summary>
+    /// After a renamed output is written: repoints the owning mod's own Files mapping at the new path so Penumbra resolves here
+    /// from now on (ActivateAnimationAsync reloads the mod afterward to pick this up), and deletes the old file once no path maps it.
+    /// </summary>
+    internal static void FinishRename(AnimationFileChange file)
+    {
+        var stillReferenced = ModMetadata.RenameAnimationFileMapping(file.ModRoot, file.GamePath, file.RenamedFromRelativePath!, file.RelativePath);
+        if (!stillReferenced)
+            try { File.Delete(OldTargetPath(file)); } catch (IOException) { }
+    }
+
+    /// <summary>Undoes a renamed output: the old file back from <paramref name="backup"/> when it isn't there as it was, the mapping back, the new file gone.</summary>
+    internal static void UndoRename(AnimationFileChange file, Func<string> backup)
+    {
+        if (!File.Exists(file.Target)) return;
+        var oldTarget = OldTargetPath(file);
+        if (!File.Exists(oldTarget) || HashFile(oldTarget) != file.BeforeHash)
+            AnimationJournalStore.WriteAtomic(oldTarget, File.ReadAllBytes(backup()));
+        try { ModMetadata.RenameAnimationFileMapping(file.ModRoot, file.GamePath, file.RelativePath, file.RenamedFromRelativePath!); }
+        catch (InvalidDataException) { /* Already points back at the original path. */ }
+        try { File.Delete(file.Target); } catch (IOException) { }
     }
 
     public Task UndoFilesAsync(AnimationEditJournal journal) => animationMods.AnimationExportAsync(() => UndoFilesCoreAsync(journal), CancellationToken.None);
@@ -607,13 +642,7 @@ internal sealed class AnimationCommitService(AnimationModService animationMods, 
                 }
                 if (file.RenamedFromRelativePath is { Length: > 0 })
                 {
-                    if (!File.Exists(file.Target)) continue;
-                    var oldTarget = OldTargetPath(file);
-                    if (!File.Exists(oldTarget) || HashFile(oldTarget) != file.BeforeHash)
-                        AnimationJournalStore.WriteAtomic(oldTarget, File.ReadAllBytes(ResolveBackup(file)));
-                    try { ModMetadata.RenameAnimationFileMapping(file.ModRoot, file.GamePath, file.RelativePath, file.RenamedFromRelativePath!); }
-                    catch (InvalidDataException) { /* Already points back at the original path. */ }
-                    try { File.Delete(file.Target); } catch (IOException) { }
+                    UndoRename(file, () => ResolveBackup(file));
                     continue;
                 }
                 if (HashFile(file.Target) == file.BeforeHash) continue;

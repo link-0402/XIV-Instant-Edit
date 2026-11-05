@@ -746,20 +746,14 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
             expected = $"chara/human/{race}/skeleton/{(face ? "face" : "base")}/{variant}/skl_{race}{variant}.sklb";
             relevant = relevant.Append(expected).Distinct(StringComparer.Ordinal).ToArray();
         }
-        var sources = relevant.SelectMany(p => new[]
-        {
-            new SkeletonSource(SkeletonSourceKind.Game, new(p, p, ""), [], ModelFromPath(p), ""),
-            new SkeletonSource(SkeletonSourceKind.Collection, new(p, p, ""), [], ModelFromPath(p), ""),
-        }).ToArray();
+        var sources = relevant.SelectMany(SourcesOf).ToArray();
         var candidates = await ReadCandidatesAsync(sources, source => Describe(collection, source, pathMap, token),
             (source, error) => log.Debug($"Skeleton candidate {source.Resource.ResolvedPath}: {error.Message}"), token);
         ImmutableArray<SessionSkeleton> library;
         lock (libraryLock) library = sessionLibrary;
         candidates.AddRange(library.Select(entry => entry.CandidateFor(expected, sourceIdentity)));
         var baseline = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && c.Source.Resource.GamePath == expected)?.Skeleton;
-        // Repair targets: the live path's own skeleton files, and every library file mapped to it.
-        var mapped = candidates.Where(c => c.Source.Kind == SkeletonSourceKind.Collection).Concat(library.SelectMany(entry =>
-            entry.Sources.Select(s => new SkeletonCandidate(s, entry.Skeleton, 0, "")))).ToArray();
+        var mapped = Mapped(candidates, library);
         // Every file of a library skeleton, not only the one a candidate names, can show it is a posing variant.
         var posing = PosingSkeletons(mapped.Concat(candidates));
         // Only body clips are rebuilt for the character's race; face and hair clips keep theirs.
@@ -772,6 +766,45 @@ internal sealed class AnimationSkeletonIndex(AnimationModService animationMods, 
             TrackBones = channels.Bones, Standards = Standards(baseline, mapped, expected, posing),
             ActorModel = actorModel, ActorStandards = actorStandards,
         };
+    }
+
+    /// <summary>A skeleton path's two sources: the game's own file and what the collection gives there.</summary>
+    private static SkeletonSource[] SourcesOf(string path) =>
+    [
+        new(SkeletonSourceKind.Game, new(path, path, ""), [], ModelFromPath(path), ""),
+        new(SkeletonSourceKind.Collection, new(path, path, ""), [], ModelFromPath(path), ""),
+    ];
+
+    /// <summary>Repair targets: the paths' own skeleton files in the collection, and every library file mapped to a path.</summary>
+    private static SkeletonCandidate[] Mapped(IEnumerable<SkeletonCandidate> candidates, ImmutableArray<SessionSkeleton> library) =>
+        [.. candidates.Where(c => c.Source.Kind == SkeletonSourceKind.Collection).Concat(library.SelectMany(entry =>
+            entry.Sources.Select(s => new SkeletonCandidate(s, entry.Skeleton, 0, ""))))];
+
+    /// <summary>A playable race's base skeleton path.</summary>
+    internal static string BaseSkeletonPath(ushort race) => $"chara/human/c{race:D4}/skeleton/base/b0001/skl_c{race:D4}b0001.sklb";
+
+    /// <summary>
+    /// The standard skeletons of <paramref name="race"/>, whichever race the character or the clip is: for a save that writes
+    /// a copy for every race. None without the game's own skeleton for it.
+    /// </summary>
+    public async Task<ImmutableArray<StandardSkeleton>> StandardsForAsync(Guid collection, ushort race, CancellationToken token)
+    {
+        if (loadedRevision != Revision) { files.Clear(); loadedRevision = Revision; }
+        await GetSessionLibraryBuild(CancellationToken.None).WaitAsync(token);
+        var path = BaseSkeletonPath(race);
+        var candidates = await ReadCandidatesAsync(SourcesOf(path), source => Describe(collection, source, null, token),
+            (source, error) => log.Debug($"Skeleton candidate {source.Resource.ResolvedPath}: {error.Message}"), token);
+        ImmutableArray<SessionSkeleton> library;
+        lock (libraryLock) library = sessionLibrary;
+        return StandardsFrom(path, candidates, library);
+    }
+
+    /// <summary>The standards at <paramref name="path"/> from what was read there and the skeleton library, as a clip's own are picked.</summary>
+    internal static ImmutableArray<StandardSkeleton> StandardsFrom(string path, IReadOnlyCollection<SkeletonCandidate> candidates, ImmutableArray<SessionSkeleton> library)
+    {
+        var game = candidates.FirstOrDefault(c => c.Source.Kind == SkeletonSourceKind.Game && SameGamePath(c.Source.Resource.GamePath, path))?.Skeleton;
+        var mapped = Mapped(candidates, library);
+        return Standards(game, mapped, path, PosingSkeletons(mapped.Concat(candidates)));
     }
 
     /// <summary>

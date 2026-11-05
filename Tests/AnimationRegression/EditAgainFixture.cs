@@ -218,6 +218,10 @@ internal static class EditAgainFixture
         check(AnimationEditService.EditAgainFileProblem(journal, Loaded("newer")) != null &&
               AnimationEditService.EditAgainFileProblem(journal, Loaded("saved", 1)) != null,
             "a file changed since, or another entry of it, doesn't");
+        var forRaces = Journal(capture, afterHash: "saved");
+        forRaces.Request = forRaces.Request with { Timeline = forRaces.Request.Timeline! with { RaceCopies = [Pap] } };
+        check(AnimationEditService.EditAgainFileProblem(forRaces, Loaded("saved")) != null,
+            "a copy an All races save wrote for another race doesn't take the edited file's layers back");
         var edit = journal.Request.Timeline!;
         var again = AnimationEditService.WithSavedEdit(Loaded("saved"), edit, [4, 5], "print");
         check(again.Document!.Motion.SequenceEqual(edit.Motion) && again.Document.Events.IsEmpty && again.BaseMotion is [4, 5] &&

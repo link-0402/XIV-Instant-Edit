@@ -2596,6 +2596,18 @@ first entry is a damage flinch (cbna_add_dmg_f), so the idle (cbnm_id0) is read 
   Not checked (XIV Bridge 403, 2026-10-29, skipped again): the TikTok copy's loop has no startup ("This animation has no
   startup."). Needs a modded loop that has one.
 
+## Modded idles in the idle layer (pending)
+
+The idle-motion layer's Motion from list no longer lists the animations seen playing. Above "From the game" it
+lists each standing idle loop (idle.pap as Loop 0, poseNN_loop as Loop NN) that the character's collection takes
+from a mod right now, as "Loop 3 - Mod name", read again each time the list opens. Startups are never listed.
+Picking one decodes the mod's file, not the game's, on the collection's skeleton (so an IVCS idle reads too).
+
+- [ ] 1 With an idle mod on in the test collection, open the list: its loops show as "Loop N - its name", unmodded
+  loops and startups don't. Pick one: the layer reads it and Live shows its breathing, not the game's idle.
+- [ ] 2 Turn the mod off (or give another idle mod a higher priority), close and open the list: it follows.
+- [ ] 3 With no idle mod on, the list says "No modded idles" and From the game still works.
+
 ## Motion key markers (pending)
 
 The clip band's key poses and the Motion keys layer: a bone edit keys the bone and fades out over the motion's own
@@ -3322,13 +3334,15 @@ Free camera on the Timeline's action bar (left of Bones), or /ie cam, flies the 
 camera's update moves it after the game's own update. Plan: tasks/freecam.md (local only).
 
 - [ ] 1 In GPose and out of it, on: the view stays where it was, no jump. In first person outside GPose, /ie cam says why it won't.
-- [ ] 2 Right after the click, W/S fly where the camera looks, A/D slide, Space/Ctrl rise and sink, Shift is faster; the character
-  doesn't move, the game's camera doesn't react to these keys and no Timeline shortcut fires. Shortcuts with Shift or Ctrl still
-  reach the game: a macro on Shift+X running /ie cam turns it back off.
-- [ ] 3 Right-drag over the game turns the view; drag over a window doesn't. Looking straight up and down stops just short. Turned
-  away from where it started and looking up or down, the horizon stays level (no roll).
-- [ ] 4 The wheel over the game changes the speed (the tooltip shows it) and never turns the view, even many notches in or out;
-  over a window it scrolls that window.
+- [ ] 2 Right after the click, W/S fly where the camera looks, A/D slide, E or Space rise and Q sinks, Shift is faster; the
+  character doesn't move, the game's camera doesn't react to these keys and no Timeline shortcut fires. Shortcuts with Shift still
+  reach the game: a macro on Shift+X running /ie cam turns it back off. Holding Ctrl or Alt stops the camera, and Ctrl+Z, Ctrl+S
+  and Ctrl+A in GPose reach the game and Brio or Ktisis without moving it.
+- [ ] 3 Right-drag over the game turns the view; drag over a window doesn't. Looking straight up and down stops just short, and a
+  long drag up or down keeps the same pace all the way there. Turned away from where it started and looking up or down, the
+  horizon stays level (no roll).
+- [ ] 4 The wheel over the game changes the speed (the tooltip shows it), up faster, and never turns or zooms the view, even many
+  notches in or out; over one of our windows or a game window (the chat log) it scrolls that window and the speed stays.
 - [ ] 5 Typing in a Timeline field or the game's chat doesn't move the camera; neither do keys typed into another program.
 - [ ] 6 Off, closing the Timeline, or leaving GPose: the game's camera is back where it was before, zoom included. /ie cam again
   turns it off; entering or leaving GPose while it flies turns it off. Outside GPose, Escape turns it off without opening the
@@ -3440,3 +3454,28 @@ from any audio or video file. Spec: `docs/superpowers/specs/2026-10-16-sound-fro
   age-restricted not run.)
 - [ ] 7 With the tools installed, an .mp3, an .m4a and a video file import from Import file and play in Listen.
   (Bridge 2026-11-04: all three import as 2.0 s sounds; Listen not confirmed, check by ear.)
+
+## All races (pending)
+
+The save row's All races switch writes a copy of the edit for every file the races load, each built for the race in
+its path. Only for `bt_common` animations. Nothing here has run in game yet.
+
+- [ ] 1 Open an emote with 16 to 18 files and tick All races: the count and the tooltip's rows show. Save into a new mod: the
+  status names each race as it builds, and Cancel during it leaves nothing behind. Note how long a full save takes.
+- [ ] 2 The tooltip's rows match what each race's path resolves to: one row per file, each with the races that share it.
+- [ ] 3 Each saved file's PAP header names the race in its path. A second race's character plays the animation at its own bone
+  lengths. Compare it with the game's converted playback of the same clip on that race: the pelvis and legs can turn up to
+  7.2 degrees, the open Rebuild vs Keep question.
+- [ ] 4 A character playing another race's file (a Miqo'te (Female) on a Midlander (Male) emote): ticking All races takes away
+  the automatic rebuild, the Skeleton choice loses its Rebuild for entries, and after saving the character plays the file
+  converted, with no double conversion (neck and hips at vanilla lengths). Unticking brings the rebuild back.
+- [ ] 5 In place on a mod with its own different file at another race's path: that row says the mod's own file is kept, and the
+  file and its mapping are untouched. In an option that maps another file for the edited path, nothing is added.
+- [ ] 6 Save in place again: the earlier copies are rebuilt, not kept. Reopening the clip starts with All races on. Undo last save
+  twice: the mod's files and meta.json are back as they were.
+- [ ] 7 A loop and a startup in separate files: a second race plays the mod's startup, then its loop.
+- [ ] 8 A race's skeleton lacks a bone the clip moves: its row counts the bones left out and the save still works. A layer on
+  that bone is left out of that race's copy only.
+- [ ] 9 Greyed with its reason: a weapon-folder clip, a face, a file holding other animations, a motion from Blender.
+  Hidden for Save to Library.
+- [ ] 10 A copy another mod outranks at its path doesn't fail the save.

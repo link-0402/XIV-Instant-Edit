@@ -99,6 +99,8 @@ Scenarios.Run(() => FacePapFixture.Run(Check, Reject));
 Scenarios.Run(() => FaceLibraryModFixture.Run(Check));
 Scenarios.Run(() => FaceLibraryCopyFixture.Run(Check, Reject));
 Scenarios.Run(() => PapLoadTableFixture.Run(Check, Reject));
+Scenarios.Run(() => RaceCopiesFixture.Run(Check, Reject));
+Scenarios.Run(() => RaceCopyCommitFixture.Run(Check, Reject));
 await Scenarios.RunAsync(() => AnimationActivationFixture.Run(Check, Reject));
 Console.WriteLine("Native/game acceptance must be run inside FFXIV.");
 return Scenarios.Finish("Animation regressions");
