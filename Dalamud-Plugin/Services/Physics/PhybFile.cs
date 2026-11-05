@@ -464,6 +464,10 @@ internal sealed class PhybFile
         var basis = at + 4;
         Need(data, basis, (int)count * SimulatorHeaderSize);
         var simulators = new List<PhybSimulator>((int)count);
+        // Lists may only be read once each: a file whose simulators or chains all point at the same
+        // list would otherwise make a few kilobytes expand into millions of nodes. The game's files
+        // never share lists, so everything read fits in the file; twice its size is the limit.
+        long budget = 2L * data.Length;
         for (var s = 0; s < count; s++)
         {
             var h = basis + s * SimulatorHeaderSize;
@@ -475,16 +479,16 @@ internal sealed class PhybFile
                 Flags = (PhybSimulatorFlags)data[h + 36], Group = data[h + 37], Padding = U16(data, h + 38),
             };
 
-            var p = ListStart(data, basis, h, counts, 0, CollisionRefSize);
+            var p = ListStart(data, basis, h, counts, ref budget, 0, CollisionRefSize);
             for (var i = 0; i < counts[0]; i++, p += CollisionRefSize)
                 simulator.Collisions.Add(CollisionRef(data, p));
-            p = ListStart(data, basis, h, counts, 1, CollisionRefSize);
+            p = ListStart(data, basis, h, counts, ref budget, 1, CollisionRefSize);
             for (var i = 0; i < counts[1]; i++, p += CollisionRefSize)
                 simulator.CollisionConnectors.Add(CollisionRef(data, p));
-            p = ListStart(data, basis, h, counts, 2, ChainHeaderSize);
+            p = ListStart(data, basis, h, counts, ref budget, 2, ChainHeaderSize);
             for (var i = 0; i < counts[2]; i++, p += ChainHeaderSize)
-                simulator.Chains.Add(ReadChain(data, p, basis));
-            p = ListStart(data, basis, h, counts, 3, ConnectorSize);
+                simulator.Chains.Add(ReadChain(data, p, basis, ref budget));
+            p = ListStart(data, basis, h, counts, ref budget, 3, ConnectorSize);
             for (var i = 0; i < counts[3]; i++, p += ConnectorSize)
                 simulator.Connectors.Add(new PhybConnector
                 {
@@ -492,23 +496,23 @@ internal sealed class PhybFile
                     CollisionRadius = F32(data, p + 8), Friction = F32(data, p + 12), Dampening = F32(data, p + 16), Repulsion = F32(data, p + 20),
                     CollisionFlags = U32(data, p + 24), ContinuousCollisionFlags = U32(data, p + 28),
                 });
-            p = ListStart(data, basis, h, counts, 4, AttractSize);
+            p = ListStart(data, basis, h, counts, ref budget, 4, AttractSize);
             for (var i = 0; i < counts[4]; i++, p += AttractSize)
                 simulator.Attracts.Add(new PhybAttract
                 {
                     Bone = Name(data, p), Offset = V3(data, p + 32), Chain = I16(data, p + 44), Node = I16(data, p + 46), Stiffness = F32(data, p + 48),
                 });
-            p = ListStart(data, basis, h, counts, 5, PinSize);
+            p = ListStart(data, basis, h, counts, ref budget, 5, PinSize);
             for (var i = 0; i < counts[5]; i++, p += PinSize)
                 simulator.Pins.Add(new PhybPin { Bone = Name(data, p), Offset = V3(data, p + 32), Chain = I16(data, p + 44), Node = I16(data, p + 46) });
-            p = ListStart(data, basis, h, counts, 6, SpringSize);
+            p = ListStart(data, basis, h, counts, ref budget, 6, SpringSize);
             for (var i = 0; i < counts[6]; i++, p += SpringSize)
                 simulator.Springs.Add(new PhybSpring
                 {
                     Chain1 = I16(data, p), Chain2 = I16(data, p + 2), Node1 = I16(data, p + 4), Node2 = I16(data, p + 6),
                     StretchStiffness = F32(data, p + 8), CompressStiffness = F32(data, p + 12),
                 });
-            p = ListStart(data, basis, h, counts, 7, PostAlignmentSize);
+            p = ListStart(data, basis, h, counts, ref budget, 7, PostAlignmentSize);
             for (var i = 0; i < counts[7]; i++, p += PostAlignmentSize)
                 simulator.PostAlignments.Add(new PhybPostAlignment { CollisionName = Name(data, p), Chain = I16(data, p + 32), Node = I16(data, p + 34) });
             simulators.Add(simulator);
@@ -517,10 +521,11 @@ internal sealed class PhybFile
     }
 
     /// <summary> Where a simulator's list of <paramref name="index"/> starts, or -1 when it is empty. </summary>
-    private static int ListStart(ReadOnlySpan<byte> data, int basis, int header, byte[] counts, int index, int size)
+    private static int ListStart(ReadOnlySpan<byte> data, int basis, int header, byte[] counts, ref long budget, int index, int size)
     {
         if (counts[index] == 0)
             return -1;
+        Spend(ref budget, (long)counts[index] * size);
         var offset = U32(data, header + 40 + index * 4);
         if (offset == EmptyPostAlignments)
             throw new InvalidDataException("A simulator list has entries but no place in the physics file.");
@@ -530,7 +535,15 @@ internal sealed class PhybFile
         return (int)position;
     }
 
-    private static PhybChain ReadChain(ReadOnlySpan<byte> data, int p, int basis)
+    /// <summary> Counts a list's bytes against what the file can hold; see <see cref="ReadSimulators"/>. </summary>
+    private static void Spend(ref long budget, long bytes)
+    {
+        budget -= bytes;
+        if (budget < 0)
+            throw new InvalidDataException("The physics file's lists repeat each other.");
+    }
+
+    private static PhybChain ReadChain(ReadOnlySpan<byte> data, int p, int basis, ref long budget)
     {
         var collisions = U16(data, p);
         var nodes = U16(data, p + 2);
@@ -542,6 +555,7 @@ internal sealed class PhybFile
         };
         if (collisions > 255 || nodes > 255)
             throw new InvalidDataException("A chain in the physics file is too long.");
+        Spend(ref budget, (long)collisions * CollisionRefSize + (long)nodes * NodeSize);
         var at = basis + (long)U32(data, p + 40);
         if (collisions > 0 && (at < basis || at + collisions * CollisionRefSize > data.Length))
             throw new InvalidDataException("A chain's collision list lies outside the physics file.");

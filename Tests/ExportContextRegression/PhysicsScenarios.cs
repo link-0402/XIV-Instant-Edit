@@ -191,6 +191,43 @@ internal static class PhysicsScenarios
         var tooMany = new PhybFile();
         tooMany.Simulators.Add(new PhybSimulator { Chains = Enumerable.Range(0, 256).Select(_ => new PhybChain()).ToList() });
         Reject(() => tooMany.ToBytes(), "physics: more than 255 chains in a simulator can't be written");
+        Reject(() => PhybFile.Parse(SharedLists(40, 255, 255)),
+            "physics: simulators and chains that all point at the same lists are refused before they expand into millions of nodes");
+        Require(PhybFile.Parse(SharedLists(1, 2, 3)).Simulators.Single().Chains.Sum(c => c.Nodes.Count) == 6,
+            "physics: a small file with its lists read once still parses");
+    }
+
+    /// <summary>
+    /// A forged file of <paramref name="simulators"/> simulators whose <paramref name="chains"/> chains all
+    /// share one chain list, each chain pointing at the same list of <paramref name="nodes"/> nodes.
+    /// </summary>
+    internal static byte[] SharedLists(int simulators, int chains, int nodes)
+    {
+        const int at = 16;
+        var basis = at + 4;
+        var chainList = basis + simulators * 72;
+        var nodeList = chainList + chains * 48;
+        var data = new byte[nodeList + nodes * 84];
+        BinaryPrimitives.WriteUInt32LittleEndian(data, PhybFile.CurrentVersion);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(8), at);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(12), at);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(at), (uint)simulators);
+        for (var s = 0; s < simulators; s++)
+        {
+            var header = basis + s * 72;
+            data[header + 2] = (byte)chains;
+            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(header + 40 + 2 * 4), (uint)(chainList - basis));
+            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(header + 40 + 7 * 4), 0xCCCCCCCC);
+        }
+        for (var c = 0; c < chains; c++)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(chainList + c * 48 + 2), (ushort)nodes);
+            BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(chainList + c * 48 + 44), (uint)(nodeList - basis));
+        }
+        for (var n = 0; n < nodes; n++)
+            "j_kami_a"u8.CopyTo(data.AsSpan(nodeList + n * 84));
+        return data;
     }
 
     private static void CheckAreas()
