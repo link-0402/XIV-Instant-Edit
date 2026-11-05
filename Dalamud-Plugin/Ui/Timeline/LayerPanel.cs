@@ -1001,7 +1001,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     }
 
     /// <summary>
-    /// An idle-motion layer's motion: the animation it is borrowed from (a seen one, read on a task), then each body
+    /// An idle-motion layer's motion: the idle it is borrowed from (a modded or the game's, read on a task), then each body
     /// part's share of it, and Pin feet while the weight shift moves the body over them.
     /// </summary>
     private void DrawIdle(TimelineEditor current, MotionLayer layer, AnimationTimelineSource loaded, SkeletonDescription skeleton, bool readOnly)
@@ -1016,20 +1016,20 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
         {
             if (combo.Success)
             {
-                var any = false;
-                foreach (var (capture, startup) in PoseSourcePanel.SeenClips(session))
-                {
-                    any = true;
-                    var name = AnimationPresentation.AnimationName(capture, startup);
-                    if (ImGui.Selectable($"{name}##{capture.Id}-{startup}"))
-                        ReadIdle(loaded, layer.Key, name, async (service, token) =>
-                            await service.DecodeMotionAsync(await service.LoadTimelineAsync(capture, startup, token).ConfigureAwait(false), _ => { }, token)
-                                .ConfigureAwait(false));
-                }
-                if (!any)
+                // Read again each time the list opens, so it follows the mods' current settings.
+                if (ImGui.IsWindowAppearing())
+                    moddedIdles = session.Animations?.ModdedIdlesAsync(loaded, CancellationToken.None);
+                if (moddedIdles is not { IsCompletedSuccessfully: true } modded || modded.Result.IsEmpty)
                 {
                     using (ImRaii.Disabled())
-                        ImGui.Selectable("No animations seen yet");
+                        ImGui.Selectable(moddedIdles is null or { IsCompletedSuccessfully: true } ? "No modded idles" :
+                            moddedIdles.IsFaulted ? "Couldn't read your mods' idles" : "Reading your mods' idles");
+                }
+                else
+                {
+                    foreach (var mod in modded.Result)
+                        if (ImGui.Selectable($"{mod.Name}##mod-{mod.GamePath}"))
+                            ReadIdle(loaded, layer.Key, mod.Name, (service, token) => service.DecodeModdedIdleAsync(loaded, mod, _ => { }, token));
                 }
                 ImGui.Separator();
                 ImGui.TextColored(Theme.Muted, "From the game");
@@ -1048,7 +1048,7 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
             }
         }
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("The animation whose motion is borrowed: one played since you started, or one of the game's idles for your race.");
+            ImGui.SetTooltip("The idle whose motion is borrowed: one your mods replace, or one of the game's for your race.");
         if (idleError is { } error)
             Widgets.HintWrapped(error);
         if (idle == null)
@@ -1099,6 +1099,8 @@ internal sealed class LayerPanel(TimelineSession session, MotionDecode decode, B
     private Task<MotionIdle>? idleReading;
     private CancellationTokenSource? idleCancel;
     private string? idleLayer, idleClip, idleError;
+    // The idle loops the character's collection takes from mods, read when the list opens.
+    private Task<ImmutableArray<ModdedIdle>>? moddedIdles;
     // The game's idles for the race they were listed for; null while the race has none.
     private Task<ImmutableArray<GameIdle>>? gameIdles;
     private string? gameIdlesRace;

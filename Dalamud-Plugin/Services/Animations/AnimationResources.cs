@@ -135,6 +135,17 @@ internal sealed class AnimationResources(PenumbraIpc penumbra, AnimationModServi
         return result;
     }
 
+    /// <summary>
+    /// The mod each of <paramref name="gamePaths"/> loads from in <paramref name="collection"/>, the one Penumbra picks by
+    /// priority; null for the game's own file, a file swap, a file outside the mod folder or a path Penumbra couldn't resolve.
+    /// </summary>
+    public async Task<string?[]> ModNamesAsync(Guid collection, IReadOnlyList<string> gamePaths)
+    {
+        var resolved = await penumbra.ResolveCollectionPathsAsync(collection, gamePaths);
+        return await framework.RunOnFrameworkThread(() =>
+            resolved.Select(path => path != null && Path.IsPathRooted(path) ? sources.AttributionFor(path).ModName : null).ToArray());
+    }
+
     /// <summary>The game's own file at <paramref name="gamePath"/>, whatever mods replace it; null when the game has none.</summary>
     public async Task<byte[]?> ReadGameAsync(string gamePath, CancellationToken token)
     {

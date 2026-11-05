@@ -204,6 +204,10 @@ internal static class InstantStartupFixture
               idles[2].GamePath == "chara/human/c0801/animation/a0001/bt_common/emote/pose02_loop.pap" &&
               idles[0].GamePath == "chara/human/c0201/animation/a0001/bt_common/resident/idle.pap",
             "the idle layer lists the race's standing idle and each /changepose idle the game has, at the copy the race loads");
+        var modded = AnimationEditService.ModdedIdles([(idles[3], "Idle Mod B"), (idles[0], "Idle Mod A"), (idles[1], null), (idles[2], " "),
+            (new GameIdle("Start", "chara/human/c0201/animation/a0001/bt_common/emote/pose01_start.pap"), "Idle Mod C")]);
+        check(modded.Select(i => i.Name).SequenceEqual(["Loop 0 - Idle Mod A", "Loop 3 - Idle Mod B"]) && modded[1].GamePath == idles[3].GamePath,
+            "the idle layer lists each loop a mod replaces by its slot and mod, in slot order, and leaves out the game's own loops and startups");
         AnimationPap.Entry[] standing = [new("cbna_add_dmg_f", 0, 0, 0), new("cbnm_id0", 0, 1, 0)];
         check(AnimationEditService.DonorEntry(standing, AnimationEditService.StandingIdleEntry)?.Name == "cbnm_id0" &&
               AnimationEditService.DonorEntry(standing, null)?.Name == "cbnm_id0" &&

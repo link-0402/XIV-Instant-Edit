@@ -8,6 +8,9 @@ namespace InstantEdit.Services.Animations;
 /// <summary>One of the game's own idles: its name as /changepose numbers it and the PAP the race loads for it.</summary>
 internal sealed record GameIdle(string Name, string GamePath);
 
+/// <summary>A standing idle loop a mod replaces in the character's collection: "Loop 2 - Mod name", and the game path it replaces.</summary>
+internal sealed record ModdedIdle(string Name, string GamePath);
+
 internal sealed partial class AnimationEditService
 {
     // /changepose idles so far go up to pose07; a few spare numbers let a new one appear by itself.
@@ -56,6 +59,44 @@ internal sealed partial class AnimationEditService
         DecodeGameFileAsync(idle.GamePath, null, source.Capture, status, token);
 
     /// <summary>
+    /// The loops of <paramref name="winners"/> a mod replaces, each named by its slot and that mod (resident/idle is
+    /// Loop 0, emote/pose03_loop Loop 3, as <see cref="AnimationSlots"/> numbers them), in slot order. Startups are left out.
+    /// </summary>
+    internal static ImmutableArray<ModdedIdle> ModdedIdles(IEnumerable<(GameIdle Idle, string? Mod)> winners)
+    {
+        var idles = new List<(int Slot, ModdedIdle Idle)>();
+        foreach (var (idle, mod) in winners)
+            if (!string.IsNullOrWhiteSpace(mod) && AnimationSlots.Describe(idle.GamePath) is { Startup: false } slot)
+                idles.Add((slot.Index, new ModdedIdle($"Loop {slot.Index.ToString(CultureInfo.InvariantCulture)} - {mod}", idle.GamePath)));
+        return [.. idles.OrderBy(i => i.Slot).Select(i => i.Idle)];
+    }
+
+    /// <summary>
+    /// The standing idle loops the collection of the character playing <paramref name="source"/> takes from a mod right
+    /// now (see <see cref="ModdedIdles"/>), at the path the game loads for its race; none without a race or collection.
+    /// </summary>
+    public async Task<ImmutableArray<ModdedIdle>> ModdedIdlesAsync(AnimationTimelineSource source, CancellationToken token)
+    {
+        if (CharacterRace(source) is not { } race || source.Capture.CollectionId == Guid.Empty)
+            return [];
+        var idles = await GameIdlesAsync(race, token).ConfigureAwait(false);
+        var mods = await resources.ModNamesAsync(source.Capture.CollectionId, [.. idles.Select(idle => idle.GamePath)]).ConfigureAwait(false);
+        return ModdedIdles(idles.Zip(mods));
+    }
+
+    /// <summary>
+    /// Decodes <paramref name="idle"/> as the character's collection loads it now, on that collection's skeleton of the race
+    /// it was made for, so an idle made for a skeleton mod reads too. Nothing in game changes.
+    /// </summary>
+    public async Task<MotionClip> DecodeModdedIdleAsync(AnimationTimelineSource source, ModdedIdle idle, Action<string> status, CancellationToken token)
+    {
+        var collection = source.Capture.CollectionId;
+        var (_, pap) = await resources.ReadAsync(collection, idle.GamePath, token).ConfigureAwait(false);
+        return await DecodePapAsync(pap, idle.GamePath, null, source.Capture, async path => (await resources.ReadAsync(collection, path, token)).Bytes,
+            status, token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// The standing idle's entry in resident/idle.pap. Every race's file lists an additive damage flinch
     /// (cbna_add_dmg_f) before it.
     /// </summary>
@@ -79,11 +120,21 @@ internal sealed partial class AnimationEditService
     {
         var pap = await resources.ReadGameAsync(papPath, token)
             ?? throw new FileNotFoundException($"The game has no {Path.GetFileNameWithoutExtension(papPath)} animation for this race.");
+        return await DecodePapAsync(pap, papPath, entryName, capture, path => resources.ReadGameAsync(path, token), status, token);
+    }
+
+    /// <summary>
+    /// Decodes <paramref name="pap"/>, the file at <paramref name="papPath"/>, on the body skeleton of the race its header
+    /// names (else its path's), as <paramref name="readSkeleton"/> reads it: the entry <see cref="DonorEntry"/> picks.
+    /// </summary>
+    private async Task<MotionClip> DecodePapAsync(byte[] pap, string papPath, string? entryName, AnimationCapture capture,
+        Func<string, Task<byte[]?>> readSkeleton, Action<string> status, CancellationToken token)
+    {
         var file = new AnimationPap(pap);
         var race = (file.ModelType == 0 ? AnimationSkeletonIndex.ModelCode(file.ModelId) : null) ?? AnimationSkeletonIndex.ModelFromPath(papPath)
             ?? throw new InvalidOperationException("The animation isn't made for a playable race.");
         var skeletonPath = VanillaIdlePaths(race).Skeleton;
-        var skeleton = await resources.ReadGameAsync(skeletonPath, token)
+        var skeleton = await readSkeleton(skeletonPath)
             ?? throw new FileNotFoundException($"The game has no skeleton for {AnimationBones.RaceName(race)}.");
         var entry = DonorEntry(file.Entries, entryName)
             ?? throw new InvalidDataException("The game's animation holds no body motion.");
