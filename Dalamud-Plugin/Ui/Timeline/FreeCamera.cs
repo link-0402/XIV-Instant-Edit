@@ -6,18 +6,19 @@ using Dalamud.Hooking;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
+using FFXIVClientStructs.FFXIV.Client.UI;
 
 namespace InstantEdit.Ui.Timeline;
 
 /// <summary>
 /// The free camera: flies the game's camera away from the character, in GPose or out of it (/ie cam). The game places its camera
 /// around its target every frame, so a hook on the camera's update (enabled only while the free camera is on) moves it to the free
-/// camera's spot right after. The game's own turn of its camera that frame (mouse drag, keys, with the game's own settings) turns the
-/// free camera; its angles and zoom go back each frame, and its own view goes back before its next update, so the game never works
-/// from the free camera's view, never reaches its limits and never zooms into first person. The moving keys are read on the
-/// framework update, before the game reads them, and taken from the game while it has the keyboard, all but Shift and Ctrl; the
-/// wheel over the game sets the speed. Turning it off, Escape outside GPose, or entering or leaving GPose gives the game its camera
-/// back as it was.
+/// camera's spot right after. The game turns its own camera as ever (mouse drag, keys, with the game's own settings), its pitch limits
+/// widened to the free camera's, and each frame's turn turns the free camera. Its zoom goes back each frame and its own view before its
+/// next update, so the game never works from the free camera's view and never zooms into first person. The moving keys are read on the
+/// framework update, before the game reads them, and taken from the game while it has the keyboard; while Ctrl or Alt is held it
+/// doesn't fly and takes none, so their shortcuts reach the game. The wheel over the game sets the speed, read from the game's input.
+/// Turning it off, Escape outside GPose, or entering or leaving GPose gives the game its camera back as it was.
 /// </summary>
 internal sealed unsafe partial class FreeCamera : IDisposable
 {
@@ -29,8 +30,9 @@ internal sealed unsafe partial class FreeCamera : IDisposable
 
     private delegate void UpdateDelegate(CameraBase* camera);
 
-    // The keys taken from the game while flying. Shift and Ctrl stay the game's too, so its own and macro shortcuts with them still work.
-    private static readonly VirtualKey[] MoveKeys = [VirtualKey.W, VirtualKey.A, VirtualKey.S, VirtualKey.D, VirtualKey.SPACE];
+    // The keys taken from the game while flying. Shift stays the game's too, so its own and macro shortcuts with it still work.
+    private static readonly VirtualKey[] MoveKeys =
+        [VirtualKey.W, VirtualKey.A, VirtualKey.S, VirtualKey.D, VirtualKey.SPACE, VirtualKey.Q, VirtualKey.E];
 
     private readonly IGameInteropProvider interop;
     private readonly IFramework framework;
@@ -41,8 +43,8 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     private readonly Dictionary<nint, Hook<UpdateDelegate>> hooks = [];
     private Hook<UpdateDelegate>? hook;
     private FreeCameraPose pose;
-    // The camera flown, whether in GPose, and its zoom mode, angles and zoom when the free camera came on: the angles and zoom go
-    // back every frame, and all of it at the end unless the game switched the mode meanwhile.
+    // The camera flown, whether in GPose, and its zoom mode, angles, pitch limits and zoom when the free camera came on: the zoom goes
+    // back every frame, the limits at the end, and the angles and zoom at the end unless the game switched the mode meanwhile.
     private nint camera;
     private bool gposing;
     private CameraZoomMode zoomMode;
@@ -51,6 +53,11 @@ internal sealed unsafe partial class FreeCamera : IDisposable
     private float interpDistance;
     private float dirH;
     private float dirV;
+    private float dirVMin;
+    private float dirVMax;
+    // The game's angles after its last update: the next update's change is that frame's turn.
+    private float lastDirH;
+    private float lastDirV;
     // The zoom the game's camera keeps while flying.
     private float held;
     // The game's own view from its last update, put back before its next one.
@@ -127,8 +134,10 @@ internal sealed unsafe partial class FreeCamera : IDisposable
         modeSwitched = false;
         distance = active->Distance;
         interpDistance = active->InterpDistance;
-        dirH = active->DirH;
-        dirV = active->DirV;
+        dirH = lastDirH = active->DirH;
+        dirV = lastDirV = active->DirV;
+        dirVMin = active->DirVMin;
+        dirVMax = active->DirVMax;
         held = Math.Min(Math.Max(distance, active->MinDistance + ZoomRoom), Math.Max(active->MaxDistance, active->MinDistance));
         gameViewSaved = false;
         pose = FreeCameraMotion.From(active->CameraBase.SceneCamera.Position, active->CameraBase.SceneCamera.LookAtVector);
@@ -144,6 +153,13 @@ internal sealed unsafe partial class FreeCamera : IDisposable
         On = false;
         hook?.Disable();
         hook = null;
+        // The game's own pitch limits come back on the camera flown, while the game still has it.
+        var manager = CameraManager.Instance();
+        if (manager != null && ((nint)manager->GetActiveCamera() == camera || (nint)manager->Camera == camera))
+        {
+            ((Camera*)camera)->DirVMin = dirVMin;
+            ((Camera*)camera)->DirVMax = dirVMax;
+        }
         // Zoomed or turned behind the free camera: the game's camera goes back to where it was, in the same mode and camera.
         var active = Active();
         if (!modeSwitched && clientState.IsGPosing == gposing && active != null && (nint)active == camera)
@@ -197,6 +213,9 @@ internal sealed unsafe partial class FreeCamera : IDisposable
             SetView(flown, gamePosition, gameLookAt, gameUp);
         flown->Distance = held;
         flown->InterpDistance = held;
+        // The game turns as far as the free camera looks, so its turn and the free camera's never part at a limit.
+        flown->DirVMin = -FreeCameraMotion.MaxPitch;
+        flown->DirVMax = FreeCameraMotion.MaxPitch;
         self.Original(updated);
         ref var scene = ref flown->CameraBase.SceneCamera;
         gamePosition = scene.Position;
@@ -205,16 +224,14 @@ internal sealed unsafe partial class FreeCamera : IDisposable
         gameViewSaved = true;
         if (flown->ZoomMode != zoomMode)
         {
-            // The game switched between first and third person, which flips its angles: they are the new rest, not a turn.
+            // The game switched between first and third person, which flips its angles: not a turn.
             zoomMode = flown->ZoomMode;
             modeSwitched = true;
-            dirH = flown->DirH;
-            dirV = flown->DirV;
         }
         else
-            pose = FreeCameraMotion.Turn(pose, flown->DirH - dirH, flown->DirV - dirV);
-        flown->DirH = dirH;
-        flown->DirV = dirV;
+            pose = FreeCameraMotion.Turn(pose, flown->DirH - lastDirH, flown->DirV - lastDirV);
+        lastDirH = flown->DirH;
+        lastDirV = flown->DirV;
         flown->Distance = held;
         flown->InterpDistance = held;
         // Up from the free camera's own view too: the game's leans with its own pitch and would roll the view.
@@ -247,24 +264,27 @@ internal sealed unsafe partial class FreeCamera : IDisposable
             Off();
             return;
         }
-        if (!io.WantCaptureMouse)
-            Speed = FreeCameraMotion.Speed(Speed, io.MouseWheel);
+        // Dalamud gives ImGui the wheel only over its windows, so the wheel over the game is the game's own: the copy without the
+        // wheel over the game's windows. One notch a frame at most, whatever its unit.
+        var input = UIInputData.Instance();
+        if (input != null && !io.WantCaptureMouse)
+            Speed = FreeCameraMotion.Speed(Speed, Math.Sign(input->UIFilteredCursorInputs.MouseWheel));
         var seconds = (float)Math.Min(update.UpdateDelta.TotalSeconds, 0.1);
         pose = FreeCameraMotion.Step(pose, Input(io), Speed, seconds);
     }
 
     /// <summary>
-    /// The moving keys held now, all but Shift and Ctrl taken from the game so it doesn't act on them too; none while a window or a
-    /// text field has the keyboard, or another program does.
+    /// The moving keys held now, all but Shift taken from the game so it doesn't act on them too; none while a window or a text
+    /// field has the keyboard, another program does, or Ctrl or Alt is held for a shortcut.
     /// </summary>
     private FreeCameraInput Input(ImGuiIOPtr io)
     {
-        if (!GameHasKeyboard(io))
+        if (!GameHasKeyboard(io) || ShortcutKeys.Down(VirtualKey.CONTROL) || ShortcutKeys.Down(VirtualKey.MENU))
             return default;
         foreach (var key in MoveKeys)
             Take(key);
-        return new FreeCameraInput(Axis(VirtualKey.W, VirtualKey.S), Axis(VirtualKey.D, VirtualKey.A), Axis(VirtualKey.SPACE, VirtualKey.CONTROL),
-            ShortcutKeys.Down(VirtualKey.SHIFT));
+        var up = (ShortcutKeys.Down(VirtualKey.SPACE) || ShortcutKeys.Down(VirtualKey.E) ? 1 : 0) - (ShortcutKeys.Down(VirtualKey.Q) ? 1 : 0);
+        return new FreeCameraInput(Axis(VirtualKey.W, VirtualKey.S), Axis(VirtualKey.D, VirtualKey.A), up, ShortcutKeys.Down(VirtualKey.SHIFT));
     }
 
     // The game's window has the keyboard: no window or text field of ours or the game's, and no other program.

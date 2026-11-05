@@ -99,7 +99,7 @@ internal static class ChangelogCatalog
             Entry("View > Paths draws where the selected bones go over the frames around the playhead, with a bigger dot at each key.", 1),
             Entry("Pick bones on a body map or on your character in GPose, and turn them with a ball or a gizmo. Mirror gives the other side the same edits.", 1),
             Entry("The Bones window has Undo and Redo.", 1),
-            Entry("Free camera on the Timeline, or /ie cam anywhere, flies the camera with WASD, Space and Ctrl.", 1),
+            Entry("Free camera on the Timeline, or /ie cam anywhere, flies the camera with WASD, E or Space and Q.", 1),
             Entry("The Bones window has a layer strip with its keys, a View menu and grouped posing buttons.", 1),
             Entry("The body map shows only the bones your character uses or the animation moves, like skirt bones while you wear a skirt. View > Every bone shows them all.", 1),
             Entry("Copy pose takes the selected bones at the playhead. Paste it at another frame or in another animation, or paste it mirrored onto the other side.", 1),

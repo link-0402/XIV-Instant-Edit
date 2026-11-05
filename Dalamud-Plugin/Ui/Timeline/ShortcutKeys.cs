@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Keys;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 
 namespace InstantEdit.Ui.Timeline;
@@ -106,6 +107,10 @@ internal sealed partial class ShortcutKeys : IDisposable
 
     /// <summary> Whether the key is held down now, wherever the keyboard is. </summary>
     internal static bool Down(VirtualKey key) => (GetAsyncKeyState((int)key) & 0x8000) != 0;
+
+    /// <summary> In GPose, no window is focused and no game text field has the keyboard. Game thread only. </summary>
+    internal static bool GameHasKeyboardInGPose() =>
+        GameMain.IsInGPose() && !ImGui.IsWindowFocused(ImGuiFocusedFlags.AnyWindow) && !GameTyping();
 
     /// <summary> A game text field (chat, a search box) has the keyboard. Game thread only. </summary>
     internal static unsafe bool GameTyping()

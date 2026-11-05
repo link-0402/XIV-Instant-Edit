@@ -1041,11 +1041,17 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
     /// <summary>
     /// Shortcuts, only while this window is focused, no text is being typed, no control is active
     /// and no menu is open. Space calls <paramref name="togglePlay"/>; taken from the game, it doesn't jump.
+    /// In GPose with no window focused (a click on the character), the Ctrl shortcuts work too.
     /// </summary>
     public void HandleKeys(TimelineEditor current, Action togglePlay)
     {
         if (!ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows))
+        {
+            // Plain keys stay the game's there: the GPose and free camera use them.
+            if (ShortcutKeys.GameHasKeyboardInGPose() && !ImGui.IsAnyItemActive() && keys.Ctrl)
+                CtrlKey(current);
             return;
+        }
         var io = ImGui.GetIO();
         if (io.WantTextInput)
             return;
@@ -1060,31 +1066,9 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
         var ctrl = keys.Ctrl;
         var shift = keys.Shift;
         var alt = keys.Alt;
-        if (ctrl && keys.Pressed(ImGuiKey.Z, VirtualKey.Z, ctrl: true))
-        {
-            if (!readOnly)
-                current.Key(shift ? TimelineKey.Redo : TimelineKey.Undo);
-        }
-        else if (ctrl && keys.Pressed(ImGuiKey.Y, VirtualKey.Y, ctrl: true))
-        {
-            if (!readOnly)
-                current.Key(TimelineKey.Redo);
-        }
-        else if (ctrl && keys.Pressed(ImGuiKey.D, VirtualKey.D, ctrl: true))
-        {
-            if (!readOnly)
-                current.Key(TimelineKey.Duplicate);
-        }
-        else if (ctrl && keys.Pressed(ImGuiKey.C, VirtualKey.C, ctrl: true))
-            current.Key(TimelineKey.Copy);
-        else if (ctrl && keys.Pressed(ImGuiKey.V, VirtualKey.V, ctrl: true))
-        {
-            if (!readOnly)
-                current.Key(TimelineKey.Paste);
-        }
-        else if (ctrl && keys.Pressed(ImGuiKey.A, VirtualKey.A, ctrl: true))
-            current.Key(TimelineKey.SelectAll);
-        else if (!ctrl && (keys.Pressed(ImGuiKey.Delete, VirtualKey.DELETE, ctrl: false) || keys.Pressed(ImGuiKey.Backspace, VirtualKey.BACK, ctrl: false)))
+        if (ctrl && CtrlKey(current))
+            return;
+        if (!ctrl && (keys.Pressed(ImGuiKey.Delete, VirtualKey.DELETE, ctrl: false) || keys.Pressed(ImGuiKey.Backspace, VirtualKey.BACK, ctrl: false)))
         {
             if (!readOnly)
                 current.Key(TimelineKey.Delete);
@@ -1118,5 +1102,38 @@ internal sealed class TimelineCanvas(TimelineSession session, BonePosing posing,
             if (!readOnly)
                 current.Key(TimelineKey.Blend);
         }
+    }
+
+    /// <summary> The Ctrl shortcuts, with Ctrl held; whether one was pressed. </summary>
+    private bool CtrlKey(TimelineEditor current)
+    {
+        var readOnly = session.ReadOnly;
+        if (keys.Pressed(ImGuiKey.Z, VirtualKey.Z, ctrl: true))
+        {
+            if (!readOnly)
+                current.Key(keys.Shift ? TimelineKey.Redo : TimelineKey.Undo);
+        }
+        else if (keys.Pressed(ImGuiKey.Y, VirtualKey.Y, ctrl: true))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.Redo);
+        }
+        else if (keys.Pressed(ImGuiKey.D, VirtualKey.D, ctrl: true))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.Duplicate);
+        }
+        else if (keys.Pressed(ImGuiKey.C, VirtualKey.C, ctrl: true))
+            current.Key(TimelineKey.Copy);
+        else if (keys.Pressed(ImGuiKey.V, VirtualKey.V, ctrl: true))
+        {
+            if (!readOnly)
+                current.Key(TimelineKey.Paste);
+        }
+        else if (keys.Pressed(ImGuiKey.A, VirtualKey.A, ctrl: true))
+            current.Key(TimelineKey.SelectAll);
+        else
+            return false;
+        return true;
     }
 }

@@ -66,7 +66,7 @@ internal static class TimelineChromeFixture
         var ahead = FreeCameraMotion.Step(pose, new FreeCameraInput(1, 0, 0, false), 2, 1);
         check(Near(ahead.Position, at + look * 2), "Free camera: W flies where it looks");
         check(Near(FreeCameraMotion.Step(pose, new FreeCameraInput(1, 0, 0, true), 2, 1).Position, at + look * 2 * FreeCameraMotion.FastFactor), "Free camera: Shift goes faster");
-        check(Near(FreeCameraMotion.Step(pose, new FreeCameraInput(0, 0, -1, false), 2, 0.5f).Position, at - Vector3.UnitY), "Free camera: Ctrl goes straight down");
+        check(Near(FreeCameraMotion.Step(pose, new FreeCameraInput(0, 0, -1, false), 2, 0.5f).Position, at - Vector3.UnitY), "Free camera: Q goes straight down");
         var slant = FreeCameraMotion.Step(pose, new FreeCameraInput(1, 1, 1, false), 2, 1);
         check(MathF.Abs(Vector3.Distance(slant.Position, at) - 2) < 1e-4f, "Free camera: a slant isn't faster");
         check(FreeCameraMotion.Step(pose, new FreeCameraInput(1, 0, 0, false), 2, -1) == pose, "Free camera: no time, no move");

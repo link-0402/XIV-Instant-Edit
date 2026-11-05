@@ -26,7 +26,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
 
     /// <summary> The free camera's tooltip: its keys and its speed now, in metres a second. </summary>
     internal static string FreeCameraTip(float speed) =>
-        $"Fly the camera with WASD, Space and Ctrl.\nDrag to look. The wheel sets the speed ({speed:0.#} m/s), Shift goes faster.";
+        $"Fly the camera with WASD, E or Space and Q.\nDrag to look. The wheel sets the speed ({speed:0.#} m/s), Shift goes faster.";
 
     /// <summary>
     /// Draws the bar for <paramref name="current"/>. Curves, Free camera and Bones keep to
@@ -119,7 +119,7 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
 
     /// <summary>
     /// The status line's notes from the editor and the panels: an edit the editor refused or noted, a header length the
-    /// motion disagrees with, a pose that plays its events once, an import, the loader, effects that stop, Blender, saved
+    /// motion disagrees with, an import, the loader, effects that stop, Blender, saved
     /// layers and the .livepose note. Each kind keeps the order the status line shows it in.
     /// </summary>
     public IEnumerable<StatusNote> Notes(TimelineEditor current)
@@ -133,8 +133,6 @@ internal sealed class TimelineToolbar(TimelineSession session, TimelinePickers p
             notes.Add(new StatusNote("removal", StatusKind.Notice, removed));
         if (texts.HeaderNote != null)
             notes.Add(new StatusNote("header", StatusKind.Notice, texts.HeaderNote));
-        if (texts.PoseLoopNote != null)
-            notes.Add(new StatusNote("pose-loop", StatusKind.Notice, texts.PoseLoopNote));
         notes.AddRange(pickers.Notes());
         notes.AddRange(loader.Notes());
         if (EffectProblems(current) is { } effects)

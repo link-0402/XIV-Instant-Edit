@@ -10,7 +10,7 @@ internal readonly record struct FreeCameraInput(float Forward, float Right, floa
 
 /// <summary>
 /// The free camera's motion, without the game: yaw 0 looks along +Z, Y is up and the screen's right is forward × up, as the game's
-/// camera has it. W and S fly where the camera looks, A and D slide sideways, Space and Ctrl straight up and down.
+/// camera has it. W and S fly where the camera looks, A and D slide sideways, E or Space and Q straight up and down.
 /// </summary>
 internal static class FreeCameraMotion
 {
@@ -20,8 +20,8 @@ internal static class FreeCameraMotion
     // Shift's speed-up and a wheel notch's step.
     public const float FastFactor = 4f;
     public const float WheelStep = 1.25f;
-    // Short of straight up or down, where the look-at would line up with the up vector.
-    public static readonly float MaxPitch = 85 * MathF.PI / 180;
+    // Short of straight up or down, where the look-at would line up with the up vector; the game's camera turns this far too.
+    public static readonly float MaxPitch = 89 * MathF.PI / 180;
 
     /// <summary> The pose of a camera at <paramref name="position"/> looking at <paramref name="lookAt"/>; level along +Z when they meet. </summary>
     public static FreeCameraPose From(Vector3 position, Vector3 lookAt)
