@@ -19,6 +19,23 @@ internal static class PhysicsOverlayScenarios
         CheckOnCharacter();
         CheckPicker();
         CheckTooltips();
+        CheckDrag();
+    }
+
+    /// <summary> Dragging the spring's dot: the dot moves with the mouse in the camera's plane, whichever way the camera looks. </summary>
+    private static void CheckDrag()
+    {
+        // Seen from the front: 100 pixels per metre, screen y down.
+        Vector2? Front(Vector3 point) => new Vector2(point.X * 100, -point.Y * 100);
+        var front = PhysicsOverlayDrag.Move(new Vector3(0.1f, 1.2f, 0.05f), new Vector2(10, -20), Front, Vector3.UnitX, Vector3.UnitY);
+        // From the side, closer: 400 pixels per metre, the camera's right is the character's forward.
+        Vector2? Side(Vector3 point) => new Vector2(point.Z * 400, -point.Y * 400);
+        var side = PhysicsOverlayDrag.Move(new Vector3(0.1f, 1.2f, 0.05f), new Vector2(20, 0), Side, Vector3.UnitZ, Vector3.UnitY);
+        Require(front is { } a && Vector3.Distance(a, new Vector3(0.1f, 0.2f, 0)) < 1e-5f && side is { } b && Vector3.Distance(b, new Vector3(0, 0, 0.05f)) < 1e-5f,
+            $"physics overlay: a dragged dot follows the mouse in the camera's plane ({front}, {side})");
+        Require(PhysicsOverlayDrag.Move(Vector3.Zero, new Vector2(5, 5), _ => null, Vector3.UnitX, Vector3.UnitY) is null &&
+                PhysicsOverlayDrag.Move(Vector3.Zero, new Vector2(5, 5), Front, Vector3.UnitZ, Vector3.UnitY) is null,
+            "physics overlay: a dot behind the camera or dragged edge on doesn't move");
     }
 
     /// <summary> The chest file with a second chest chain (chain 1) and a second area of one chain (area 1). </summary>
@@ -90,6 +107,16 @@ internal static class PhysicsOverlayScenarios
             "physics overlay pick: inside the tip ball, the tip wins over the bones and the spring line starting there");
         Require(Pick(new Vector2(130, 180)) == spring && Pick(new Vector2(141, 191)) == spring, "physics overlay pick: the spring along its line and on its dot");
         Require(Pick(new Vector2(104, 80)) == bones, "physics overlay pick: near the bones' line, the bones");
+        // Seen from the front, the spring's dot sits inside the tip ball: the dot can still be grabbed, the line can't.
+        var handle = spring with { Handle = true };
+        var front = new PhysicsOverlayPicker(Vector2.Zero, 8);
+        front.Disc(Vector2.Zero, 30, tip);
+        front.Point(new Vector2(3, 0), handle);
+        var line = new PhysicsOverlayPicker(Vector2.Zero, 8);
+        line.Disc(Vector2.Zero, 30, tip);
+        line.Segment(new Vector2(3, 0), new Vector2(20, 0), spring);
+        Require(front.Hit == handle && line.Hit == tip,
+            "physics overlay pick: the spring's dot wins inside the tip ball, so it can be dragged, while the spring's line there leaves the tip");
         Require(Pick(new Vector2(161, 100)) == arm && Pick(new Vector2(130, 100)) == null,
             "physics overlay pick: a shape on its outline, not inside it, where the game keeps the mouse");
         Require(Pick(new Vector2(300, 300)) == null, "physics overlay pick: nothing out of reach");

@@ -3,8 +3,11 @@ using System.Numerics;
 
 namespace InstantEdit.Services.Physics;
 
-/// <summary> What the mouse is over on the character: a part of one chain, a shape by name, or a chain of another area. </summary>
-internal readonly record struct PhysicsOverlayTarget(PhysicsOverlayPart Part, int Simulator = -1, int Chain = -1, string? Shape = null)
+/// <summary>
+/// What the mouse is over on the character: a part of one chain, a shape by name, or a chain of another area.
+/// <paramref name="Handle"/>: a dot that can be dragged, like the spring's.
+/// </summary>
+internal readonly record struct PhysicsOverlayTarget(PhysicsOverlayPart Part, int Simulator = -1, int Chain = -1, string? Shape = null, bool Handle = false)
 {
     /// <summary> The hover that lights it: this chain's part, this shape, or the whole other area. </summary>
     public PhysicsOverlayHover Hover => Part is PhysicsOverlayPart.Shape or PhysicsOverlayPart.OtherShape
@@ -14,9 +17,9 @@ internal readonly record struct PhysicsOverlayTarget(PhysicsOverlayPart Part, in
 
 /// <summary>
 /// Finds the overlay element under the mouse, in screen pixels: each element is offered as it's drawn,
-/// and within reach a small part wins over a big one (tip, spring, bones, cone, another area, then
-/// shapes), the nearest among equals. The tip comes first because the spring's line and the bones
-/// both start or end inside its ball. Shapes count only along their outline, so the rest of the body
+/// and within reach a dot that can be dragged wins, then a small part over a big one (tip, spring,
+/// bones, cone, another area, then shapes), the nearest among equals. The tip comes before the spring
+/// because the spring's line and the bones both start or end inside its ball. Shapes count only along their outline, so the rest of the body
 /// stays the game's to click and drag.
 /// </summary>
 internal sealed class PhysicsOverlayPicker(Vector2 mouse, float reach)
@@ -40,7 +43,8 @@ internal sealed class PhysicsOverlayPicker(Vector2 mouse, float reach)
     {
         if (distance > reach)
             return;
-        var rank = Rank(target.Part);
+        // A dot that can be dragged wins over everything, the tip ball it sits in when seen end on included.
+        var rank = target.Handle ? -1 : Rank(target.Part);
         if (rank > bestRank || rank == bestRank && distance >= bestDistance)
             return;
         (bestRank, bestDistance, Hit) = (rank, distance, target);
@@ -64,6 +68,31 @@ internal sealed class PhysicsOverlayPicker(Vector2 mouse, float reach)
         var length = along.LengthSquared();
         var t = length < 1e-6f ? 0 : Math.Clamp(Vector2.Dot(point - a, along) / length, 0, 1);
         return Vector2.Distance(point, a + along * t);
+    }
+}
+
+/// <summary> A drag on the character: the move in model space that carries a point along with the mouse, in the camera's plane at the point. </summary>
+internal static class PhysicsOverlayDrag
+{
+    /// <summary>
+    /// The move that puts <paramref name="at"/> <paramref name="mouse"/> pixels further on the screen, along
+    /// the camera's <paramref name="right"/> and <paramref name="up"/> (model space). <paramref name="project"/>
+    /// gives a model point's place on the screen. Null when the point is behind the camera or seen edge on.
+    /// </summary>
+    public static Vector3? Move(Vector3 at, Vector2 mouse, Func<Vector3, Vector2?> project, Vector3 right, Vector3 up)
+    {
+        const float step = 0.01f;
+        if (project(at) is not { } origin || project(at + right * step) is not { } alongRight || project(at + up * step) is not { } alongUp)
+            return null;
+        // The screen move of one step along each axis, then the steps that add up to the mouse's move.
+        var r = alongRight - origin;
+        var u = alongUp - origin;
+        var det = r.X * u.Y - r.Y * u.X;
+        if (MathF.Abs(det) < 1e-6f)
+            return null;
+        var a = (mouse.X * u.Y - mouse.Y * u.X) / det;
+        var b = (r.X * mouse.Y - r.Y * mouse.X) / det;
+        return (right * a + up * b) * step;
     }
 }
 

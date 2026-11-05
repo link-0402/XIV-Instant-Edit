@@ -38,12 +38,12 @@ internal static class PhysicsKnobs
         PhysicsKnob.Weight => ("Weight", 2, ""),
         PhysicsKnob.Follow => ("Follow pose", 3, ""),
         PhysicsKnob.Length => ("Tip length", 1, " cm"),
-        PhysicsKnob.MaxSpeed => ("Max speed", 1, " m/s"),
+        PhysicsKnob.MaxSpeed => ("Speed limit", 1, " m/s"),
         PhysicsKnob.Wind => ("Wind", 4, ""),
         PhysicsKnob.Size => ("Tip size", 1, " cm"),
-        PhysicsKnob.Friction => ("Friction", 3, ""),
-        PhysicsKnob.BumpDamping => ("Bump damping", 3, ""),
-        _ => ("Push back", 3, ""),
+        PhysicsKnob.Friction => ("Slide", 3, ""),
+        PhysicsKnob.BumpDamping => ("Bounce loss", 3, ""),
+        _ => ("Push out", 3, ""),
     };
 
     public static string Label(PhysicsKnob knob) => Describe(knob).Name;
@@ -208,15 +208,7 @@ internal static class PhysicsKnobs
         var chain = simulator.Chains[spring.Chain];
         if (spring.Node < 1 || spring.Node >= chain.Nodes.Count || chain.Nodes.Count < 2)
             return null;
-        var tip = TipIndex(chain);
-        Vector3? Rest(int node)
-        {
-            if (node != tip || !chain.Nodes[node].Bone.IsEmpty)
-                return RestFrame(skeleton, chain.Nodes[node].Bone.Text)?.Position;
-            // The tip sits at the chain's last offset from the bone before it.
-            return RestFrame(skeleton, chain.Nodes[node - 1].Bone.Text)?.Place(chain.LastBoneOffset);
-        }
-        if (Rest(spring.Node - 1) is not { } pivot || Rest(spring.Node) is not { } point ||
+        if (PointRest(chain, spring.Node - 1, skeleton) is not { } pivot || PointRest(chain, spring.Node, skeleton) is not { } point ||
             RestFrame(skeleton, spring.Bone.Text)?.Place(spring.Offset) is not { } anchor)
             return null;
         var rest = point - pivot;
@@ -224,6 +216,79 @@ internal static class PhysicsKnobs
         if (rest.LengthSquared() < 1e-10f || pull.LengthSquared() < 1e-10f)
             return null;
         return (rest, spring.Stiffness < 0 ? -pull : pull, point);
+    }
+
+    /// <summary> Where a chain's point rests in model space: on its bone, or the boneless tip at the chain's last offset from the bone before it. </summary>
+    private static Vector3? PointRest(PhybChain chain, int node, PhysicsSkeleton skeleton)
+    {
+        if (node < 0 || node >= chain.Nodes.Count)
+            return null;
+        if (!chain.Nodes[node].Bone.IsEmpty)
+            return RestFrame(skeleton, chain.Nodes[node].Bone.Text)?.Position;
+        return node == TipIndex(chain) && node > 0 ? RestFrame(skeleton, chain.Nodes[node - 1].Bone.Text)?.Place(chain.LastBoneOffset) : null;
+    }
+
+    /// <summary> Model space to the spring place's axes and back: X flipped on the body's right, so out is away from the middle on both sides. </summary>
+    private static Vector3 OutUpForward(Vector3 model, Vector3 point) => point.X < -0.005f ? model with { X = -model.X } : model;
+
+    /// <summary>
+    /// Where a spring pulls its point (or, when negative, pushes it away from), in metres from where the
+    /// point rests, in the skeleton's rest pose: out from the body's middle, up and forward. A spring aimed
+    /// at rest reads a place along the bone past the point. The same place on both sides is the mirror.
+    /// Null when a bone is missing.
+    /// </summary>
+    public static Vector3? SpringPlace(PhybSimulator simulator, PhybAttract spring, PhysicsSkeleton skeleton)
+    {
+        if (spring.Chain < 0 || spring.Chain >= simulator.Chains.Count ||
+            PointRest(simulator.Chains[spring.Chain], spring.Node, skeleton) is not { } point ||
+            RestFrame(skeleton, spring.Bone.Text)?.Place(spring.Offset) is not { } anchor)
+            return null;
+        return OutUpForward(anchor - point, point);
+    }
+
+    /// <summary> Moves a spring's point to <paramref name="place"/>, read as <see cref="SpringPlace"/> gives it. False when a bone is missing. </summary>
+    public static bool SetSpringPlace(PhybSimulator simulator, PhybAttract spring, PhysicsSkeleton skeleton, Vector3 place)
+    {
+        if (spring.Chain < 0 || spring.Chain >= simulator.Chains.Count ||
+            PointRest(simulator.Chains[spring.Chain], spring.Node, skeleton) is not { } point ||
+            RestFrame(skeleton, spring.Bone.Text) is not { } frame)
+            return false;
+        spring.Offset = frame.ToLocal(point + OutUpForward(place, point));
+        return true;
+    }
+
+    /// <summary>
+    /// How far, in degrees, the bone's swing cone is tilted off the line from the bone to the next point,
+    /// in the rest pose. Null when a bone is missing or the cone has no direction.
+    /// </summary>
+    public static float? ConeTilt(PhybChain chain, PhysicsSkeleton skeleton)
+    {
+        if (ConeLine(chain, skeleton) is not { } line)
+            return null;
+        var axis = Vector3.Transform(chain.Nodes[0].ConeAxisOffset, line.Parent);
+        if (axis.LengthSquared() < 1e-12f)
+            return null;
+        return PhysicsTemplates.Degrees(MathF.Acos(Math.Clamp(Vector3.Dot(Vector3.Normalize(axis), line.Along), -1, 1)));
+    }
+
+    /// <summary> Points the bone's swing cone along the line to the next point, as the builder makes new areas. False when a bone is missing. </summary>
+    public static bool StraightenCone(PhybChain chain, PhysicsSkeleton skeleton)
+    {
+        if (ConeLine(chain, skeleton) is not { } line)
+            return false;
+        var length = chain.Nodes[0].ConeAxisOffset.Length();
+        chain.Nodes[0].ConeAxisOffset = Vector3.Transform(line.Along, Quaternion.Inverse(line.Parent)) * (length > 1e-6f ? length : 0.1f);
+        return true;
+    }
+
+    /// <summary> The rest direction from a chain's bone to its next point, and the turn of the bone's parent, which the cone's axis is in. </summary>
+    private static (Vector3 Along, Quaternion Parent)? ConeLine(PhybChain chain, PhysicsSkeleton skeleton)
+    {
+        if (chain.Nodes.Count < 2 || chain.Nodes[0].Bone.IsEmpty || skeleton.ParentOf(chain.Nodes[0].Bone.Text) is not { Length: > 0 } parentName ||
+            RestFrame(skeleton, parentName) is not { } parent || PointRest(chain, 0, skeleton) is not { } from || PointRest(chain, 1, skeleton) is not { } to)
+            return null;
+        var along = to - from;
+        return along.LengthSquared() < 1e-10f ? null : (Vector3.Normalize(along), Quaternion.Normalize(parent.Rotation));
     }
 
     /// <summary> A body bone's rest place in model space, from its parents' rest places. </summary>

@@ -31,6 +31,7 @@ internal sealed partial class PhysicsWindow
         Swing,
         Spring,
         Collision,
+        Wind,
     }
 
     private readonly PhysicsOverlay overlayWindow;
@@ -46,6 +47,9 @@ internal sealed partial class PhysicsWindow
     private EditorGroup flashGroup;
     private string? flashShape;
     private long flashUntil;
+    // A spring's dot being dragged on the character: its chain, where the mouse and the dot were when the drag began,
+    // and whether it has moved yet (the undo step is taken then, so a click alone leaves none).
+    private (int Simulator, int Chain, Vector2 Mouse, Vector3 Anchor, bool Moved)? springDrag;
 
     internal PhysicsOverlay Overlay => overlayWindow;
 
@@ -136,7 +140,7 @@ internal sealed partial class PhysicsWindow
     /// A group's header: a dot in its part's colour, framed while that part is under the mouse on the character,
     /// flashing after a click there opened it. Hovered, it lights all its parts. Returns whether it's open.
     /// </summary>
-    private bool GroupHeader(EditorGroup group, string label, PhysicsOverlayPart part, Vector4 colour, string? tip = null)
+    private bool GroupHeader(EditorGroup group, string label, PhysicsOverlayPart? part, Vector4 colour, string? tip = null)
     {
         if (jumpGroup == group)
             ImGui.SetNextItemOpen(true);
@@ -353,9 +357,39 @@ internal sealed partial class PhysicsWindow
             var radius = Theme.Scaled(mark.Lit ? 4 : 3);
             drawList.AddCircleFilled(at, radius + Theme.Scaled(1.5f), shadow);
             drawList.AddCircleFilled(at, radius, colour);
-            picker.Point(at, new PhysicsOverlayTarget(mark.Part, mark.Simulator, mark.Chain));
+            // The spring's dot is where it pulls: it can be dragged.
+            picker.Point(at, new PhysicsOverlayTarget(mark.Part, mark.Simulator, mark.Chain, Handle: mark.Part == PhysicsOverlayPart.Spring && !shapesView));
             if (mark.Lit && mark.Label is { } text)
                 Label(at, text, colour);
+        }
+
+        // A spring's dot being dragged keeps the mouse until it's let go; the camera doesn't turn meanwhile.
+        if (springDrag is { } drag)
+        {
+            ImGui.SetNextFrameWantCaptureMouse(true);
+            overlayPick = new PhysicsOverlayTarget(PhysicsOverlayPart.Spring, drag.Simulator, drag.Chain, Handle: true);
+            if (!ImGui.IsMouseDown(ImGuiMouseButton.Left) || shapesView)
+            {
+                springDrag = null;
+                if (drag.Moved)
+                    Edited(current);
+                return;
+            }
+            var turn = Quaternion.Inverse(Quaternion.Normalize(overlayPose.Rotation));
+            var up = Vector3.Normalize(new Vector3(camera.View.M12, camera.View.M22, camera.View.M32));
+            if (PhysicsOverlayDrag.Move(drag.Anchor, ImGui.GetMousePos() - drag.Mouse, point => Project(point, out var screen) ? screen : null,
+                    Vector3.Transform(right, turn), Vector3.Transform(up, turn)) is { } move && (drag.Moved || move.LengthSquared() > 1e-10f))
+            {
+                if (!drag.Moved)
+                {
+                    current.Checkpoint("Move the spring");
+                    springDrag = drag with { Moved = true };
+                }
+                MoveSpring(current, drag.Simulator, drag.Chain, drag.Anchor + move, found.Character.Skeleton);
+            }
+            if (PhysicsOverlayText.Describe(current.File, overlayPick.Value, found.Character.Skeleton, false) is { Length: > 0 } dragging)
+                ImGui.SetTooltip(dragging);
+            return;
         }
 
         // The part under the mouse takes it from the game: its name and value in a tooltip, and a click edits it.
@@ -366,7 +400,12 @@ internal sealed partial class PhysicsWindow
         if (PhysicsOverlayText.Describe(current.File, hit, found.Character.Skeleton, shapesView) is { Length: > 0 } tooltip)
             ImGui.SetTooltip(tooltip);
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
             Pick(hit);
+            if (hit.Handle && PhysicsKnobs.MainSpring(current.File.Simulators[hit.Simulator], hit.Chain) is { } spring &&
+                Frame(spring.Bone.Text)?.Place(spring.Offset) is { } anchor)
+                springDrag = (hit.Simulator, hit.Chain, ImGui.GetMousePos(), anchor, false);
+        }
 
         void Label(Vector2 at, string text, uint colour)
         {
@@ -374,6 +413,23 @@ internal sealed partial class PhysicsWindow
             drawList.AddText(at + offset + new Vector2(1, 1), shadow, text);
             drawList.AddText(at + offset, colour, text);
         }
+    }
+
+    /// <summary>
+    /// Puts a chain's spring where it's dragged to (model space, as drawn now), and the other chains the
+    /// spring group edits at the same place from their own tips, so the other side's follows mirrored.
+    /// </summary>
+    private void MoveSpring(PhysicsDocument current, int s, int c, Vector3 anchor, PhysicsSkeleton skeleton)
+    {
+        var file = current.File;
+        if (s < 0 || s >= file.Simulators.Count || PhysicsKnobs.MainSpring(file.Simulators[s], c) is not { } spring || Frame(spring.Bone.Text) is not { } frame)
+            return;
+        spring.Offset = frame.ToLocal(anchor);
+        if (s == selected && PhysicsKnobs.SpringPlace(file.Simulators[s], spring, skeleton) is { } place)
+            foreach (var (os, oc) in Targets(file, s))
+                if ((os, oc) != (s, c) && PhysicsKnobs.MainSpring(file.Simulators[os], oc) is { } other)
+                    PhysicsKnobs.SetSpringPlace(file.Simulators[os], other, skeleton, place);
+        current.Changed();
     }
 
     /// <summary> Every chain in the file, for the shapes view, where the shapes matter and the chains are only context. </summary>

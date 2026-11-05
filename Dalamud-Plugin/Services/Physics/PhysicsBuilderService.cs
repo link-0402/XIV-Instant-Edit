@@ -523,26 +523,6 @@ internal sealed class PhysicsBuilderService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Turns every mod the builder saved for your character's race off in your collection, so your other physics mods apply
-    /// again, and redraws your character. Stops the preview first, which sits above every mod and
-    /// would still show. Returns the folders turned off and a warning, or null.
-    /// </summary>
-    public async Task<(IReadOnlyList<string> TurnedOff, string? Warning)> TurnOffModsAsync(PhysicsTarget target)
-    {
-        await FollowModsAsync(lookAgain: true).ConfigureAwait(false);
-        string? stopProblem = null;
-        try { await Preview.StopAsync(redrawObject: null).ConfigureAwait(false); }
-        catch (Exception e) when (e is IOException or InvalidOperationException) { stopProblem = e.Message; }
-        var turnedOff = await physicsMods.TurnOffPhysicsModsAsync(ModDirectories, target.Character.ObjectIndex,
-            PhysicsPaths.BodyPhysics(target.Character.Race)).ConfigureAwait(false);
-        var redraw = await penumbra.RedrawObjectAsync(target.Character.ObjectIndex).ConfigureAwait(false);
-        if (stopProblem is null)
-            return (turnedOff, redraw);
-        var still = $"The preview is still on: {stopProblem}";
-        return (turnedOff, redraw is null ? still : $"{still} {redraw}");
-    }
-
     // The mods a look for their renamed folder last found nothing for.
     private readonly HashSet<(string Directory, Guid Identifier)> lostMods = [];
 

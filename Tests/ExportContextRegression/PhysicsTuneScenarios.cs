@@ -218,6 +218,52 @@ internal static class PhysicsTuneScenarios
         var lift = new PhybAttract { Bone = PhybName.From("n_root"), Offset = new Vector3(0, 1, 0), Chain = 0, Node = 1, Stiffness = -0.001f };
         Require(PhysicsKnobs.AimAtRest(chest, lift, skeleton) && lift.Stiffness == -0.001f && PhysicsKnobs.SpringAim(chest, lift, skeleton) is < 0.05f,
             "physics aim at rest: a negative spring keeps its sign and pushes toward the rest place");
+        CheckSpringPlace();
+    }
+
+    /// <summary> The Spring group's place: from where the tip rests, out, up and forward, the same numbers on both sides being the mirror. </summary>
+    private static void CheckSpringPlace()
+    {
+        // Both breasts in the game's model space (+X the character's left, +Y up, +Z forward), bones pointing forward, springs on a turned back bone.
+        var forward = Quaternion.CreateFromAxisAngle(Vector3.UnitY, -MathF.PI / 2);
+        var body = new PhysicsSkeleton(
+        [
+            new PhysicsBone("n_root", "", Vector3.Zero, Quaternion.Identity),
+            new PhysicsBone("j_sebo_b", "n_root", new Vector3(0, 1.05f, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2)),
+            new PhysicsBone("j_mune_l", "n_root", new Vector3(0.05f, 1.18f, 0.03f), forward),
+            new PhysicsBone("j_mune_r", "n_root", new Vector3(-0.05f, 1.18f, 0.03f), forward),
+        ]);
+        var chest = new PhybSimulator { Chains = [Chain("j_mune_l", 0.145f), Chain("j_mune_r", 0.145f)] };
+        var left = new PhybAttract { Bone = PhybName.From("j_sebo_b"), Chain = 0, Node = 1, Stiffness = 0.01f };
+        var right = new PhybAttract { Bone = PhybName.From("j_sebo_b"), Chain = 1, Node = 1, Stiffness = 0.01f };
+        chest.Attracts.AddRange([left, right]);
+        var place = new Vector3(0.02f, -0.04f, 0.03f);
+        Require(PhysicsKnobs.SetSpringPlace(chest, left, body, place) && PhysicsKnobs.SetSpringPlace(chest, right, body, place),
+            "physics spring place: a spring takes a place");
+        // In model space: the left tip rests at (0.05, 1.18, 0.175), the right at (-0.05, 1.18, 0.175).
+        var sebo = PhysicsFrame.Rest(new Vector3(0, 1.05f, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2));
+        Require(Vector3.Distance(sebo.Place(left.Offset), new Vector3(0.07f, 1.14f, 0.205f)) < 1e-5f &&
+                Vector3.Distance(sebo.Place(right.Offset), new Vector3(-0.07f, 1.14f, 0.205f)) < 1e-5f,
+            $"physics spring place: out is away from the middle on each side, so the same place on both is the mirror ({sebo.Place(left.Offset)}, {sebo.Place(right.Offset)})");
+        Require(PhysicsKnobs.SpringPlace(chest, left, body) is { } read && Vector3.Distance(read, place) < 1e-5f &&
+                PhysicsKnobs.SpringPlace(chest, right, body) is { } mirrored && Vector3.Distance(mirrored, place) < 1e-5f,
+            "physics spring place: it reads back as it was set");
+        PhysicsKnobs.AimAtRest(chest, left, body);
+        Require(PhysicsKnobs.SpringPlace(chest, left, body) is { } aimed && MathF.Abs(aimed.X) < 1e-4f && MathF.Abs(aimed.Y) < 1e-4f && aimed.Z > 0,
+            $"physics spring place: a spring aimed at rest reads a place along the bone past the tip ({PhysicsKnobs.SpringPlace(chest, left, body)})");
+        var lost = new PhybAttract { Bone = PhybName.From("missing"), Chain = 0, Node = 1 };
+        Require(PhysicsKnobs.SpringPlace(chest, lost, body) is null && !PhysicsKnobs.SetSpringPlace(chest, lost, body, place) &&
+                PhysicsKnobs.SpringPlace(chest, new PhybAttract { Bone = left.Bone, Chain = 5, Node = 1 }, body) is null,
+            "physics spring place: a spring on a bone or chain that isn't there has no place");
+
+        // The cone: Chain() aims it along +X of n_root (the character's left) while the bone points forward, so it's tilted 90°.
+        var cone = chest.Chains[0];
+        Require(PhysicsKnobs.ConeTilt(cone, body) is > 89.9f and < 90.1f, $"physics cone: a cone off the bone reads its tilt ({PhysicsKnobs.ConeTilt(cone, body)})");
+        Require(PhysicsKnobs.StraightenCone(cone, body) && PhysicsKnobs.ConeTilt(cone, body) is < 0.01f &&
+                MathF.Abs(cone.Nodes[0].ConeAxisOffset.Length() - 0.1f) < 1e-6f,
+            "physics cone: Straighten points it along the bone and keeps its length");
+        Require(PhysicsKnobs.ConeTilt(Chain("missing"), body) is null && !PhysicsKnobs.StraightenCone(Chain("missing"), body),
+            "physics cone: a bone the skeleton lacks has no tilt");
     }
 
     private static void CheckBust()

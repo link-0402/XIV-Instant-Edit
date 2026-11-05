@@ -72,6 +72,7 @@ Settings:
   no Add spring button. (Test 22 again, Release 2026-10-30: the slider is drawn, no Add spring. Ticked:
   between 11 and 22 every setting listed is seen.)
   Changed 2026-11-04: Movement and Collision became groups by part; see "Clicking the overlay and grouped settings".
+  Changed 2026-11-05: Advanced is gone; see "Every setting in its group".
 - [x] Drag Settle from 0.100 to 0.200 and hover Undo: the tooltip reads "Chest: Settle 0.200 to 0.100" (your values),
   the change Undo makes; Redo's reads the other way.
   Checked (XIV Bridge tests/instant-edit/physics/12, 2026-10-29), with one question left: after
@@ -161,6 +162,8 @@ Overlay:
   side's to the mirrored place (its third number flips sign on your skeleton). Drag a point's
   Axis in the Points table: the other side's axis mirrors too. With "Both sides" off, only the
   chosen chain moves.
+  Moved 2026-11-05: Tip place is in Tip, the Axis is Swing limit > Cone centre > Tilt (bone only); tests 18 and 27
+  follow the new places and pass (Release 2026-11-05).
   Partly checked (XIV Bridge tests/instant-edit/physics/18, 2026-10-29): a real drag of Tip place
   with Both sides on moved j_mune_l and j_mune_r to mirrored places (third number flipped, within
   1 mm); with it off only j_mune_l moved. The Points table's Axis isn't checked: test 27 fails
@@ -232,6 +235,7 @@ The "My physics mod" starting point is gone; "Loaded now" opens whichever saved 
 - [x] Turn mine off: every mod you saved is off and the message names the ones that were on.
   (XIV Bridge tests/instant-edit/physics/20, 2026-10-15: both saved mods off; "XIVBridgeTest IE
   Physics is off. Your other physics mods apply again." names only the one that was on.)
+  Removed 2026-11-05 at the user's request: turn saved mods off in Penumbra.
 
 ## Skirt fit to Customize+ (2026-10-23, pending)
 
@@ -346,7 +350,8 @@ rules are covered by `Tests/ExportContextRegression` (PhysicsScenarios, CheckLib
 ## Clicking the overlay and grouped settings (2026-11-04, pending)
 
 An area's settings are grouped by the part they show on the character: Bones, Tip, Swing limit, Spring and Collision
-with, each header with a dot in its overlay colour, then Advanced (Max speed, Wind, Whole area, Points, Springs). Tip
+with, each header with a dot in its overlay colour, then Advanced (Max speed, Wind, Whole area, Points, Springs; gone
+since 2026-11-05, see "Every setting in its group"). Tip
 size, Point shape and Tip place moved into Tip. The picking, per-chain lighting, other areas and tooltips are covered by
 `Tests/ExportContextRegression` (PhysicsOverlayScenarios: CheckOnCharacter, CheckPicker, CheckTooltips). Check on the
 chest with the overlay on.
@@ -362,13 +367,18 @@ chest with the overlay on.
    spring's dot opens Spring and a bone line Bones, each in view. The tip ball always picked Spring: the spring's line starts
    inside the ball and the spring ranked first. Fixed: the tip now ranks first (fixture in CheckPicker). Left: retest the
    tip after a Release build; the flash itself (by eye).
+   Tip retested (physics/40, Release 2026-11-05, all checks pass): a click on the tip ball opens Tip, in view. Left: the
+   flash (by eye).
 3. [ ] Click an arm capsule's outline: Collision with opens and its row flashes; the tick doesn't change. Clicking inside
    a capsule, away from its outline, still turns the camera.
    Partly checked (physics/40, same run, on x_twist ticked in the open copy): the outline click flashes its row, Collision
    with is open with the row in view, the tick stays as it was; inside the capsule nothing is picked. Left: the camera
    turning there (by hand).
-4. [ ] Untick Both sides and click the right tip: Edit picks the right chain and Tip opens. With Both sides on, Edit
+4. [x] Untick Both sides and click the right tip: Edit picks the right chain and Tip opens. With Both sides on, Edit
    stays as it is. (physics/40 couldn't click a tip, see item 2; retest after the fix.)
+   (physics/40, Release 2026-11-05: with Both sides on the click opens Tip and Edit stays All chains; with it off, clicking
+   the other side's tip makes it the chain. The earlier failures were the test's: it only counted frames with the mouse
+   within 1.5 px of a swaying tip.)
 5. [ ] Eye popup: the ticks read Bones, Tip, Swing limit, Spring, Shapes it collides with, Other shapes and Other areas,
    each with its colour dot. Tick Other areas: the other areas draw faint grey; hover one for its name, click it to pick
    it in the list.
@@ -380,6 +390,29 @@ chest with the overlay on.
 7. [ ] Hover a group header: all its parts light (Collision with: every shape the area collides with).
    Partly checked (physics/40: hovering Collision with lights every used shape). Left: the other headers (by eye).
 8. [ ] With the Timeline's bones overlay on at the same time, clicking a bone dot still picks the bone (by hand).
+
+## Every setting in its group (2026-11-05, pending)
+
+Advanced is gone. Bones: Tip length, Weight, Settle, Follow pose, Speed limit, and "Along the chain" (Weight, Follow pose,
+Swing limit per point) on chains with more than one moving point. Tip: Tip size, Tip place, "Sizes along the chain".
+Swing limit: the limit and Cone centre (Along the bone or Tilted N°, Straighten, Tilt). Spring: the strength slider, Pulls
+toward (cm out, up, forward from where the tip rests), Aim at rest, Other springs. Collision with: the shapes, Slide,
+Bounce loss, Push out, Point shape, Collide, Catch fast hits, Stay above floor, Accuracy. Wind and gravity: Wind, Wind from,
+Gravity. Turn mine off is gone. The spring place, its mirror, the cone tilt and the drag math are covered by
+`Tests/ExportContextRegression` (PhysicsTuneScenarios CheckSpringPlace, PhysicsOverlayScenarios CheckDrag).
+
+1. [x] On the chest with Both sides on, drag the spring's dot on your character: it stays under the mouse, the camera
+   doesn't turn, the other side's dot moves mirrored, and Pulls toward shows the new numbers. One Undo puts both back.
+   (XIV Bridge physics/41, Release 2026-11-05: a real drag of the dot by (-35, 30) px ended 4.95 px from the mouse; both
+   springs moved from (2.60, 0.90, 4.74) to (-0.10, -1.41, 4.95) cm; one undo step "Move the spring"; the camera's
+   matrices unchanged; a click on the dot without moving added no undo step; Undo put both back. Typing in Pulls toward
+   moved both springs alike. Physics/11, 18, 20 and 27 pass on the new layout.)
+2. [ ] On the chest, lower Pulls toward's middle number (up) by 4: the dots move 4 cm down and the slider is renamed
+   Pull down. Aim at rest brings it back to Firmness.
+3. [ ] On a skirt: Along the chain lists each point; changing one point's Weight changes only that point (and its twin with
+   Both sides on). Sizes along the chain does the same for sizes.
+4. [ ] Cone centre on a preset whose cones are tilted: it reads Tilted N°; Straighten turns the drawn cone along the bone.
+5. [ ] Wind and gravity: Wind from and Gravity's Change field change the preview (by eye).
 
 ## Head tracking (2026-11-01, pending)
 

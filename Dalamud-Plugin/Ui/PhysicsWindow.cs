@@ -534,16 +534,6 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             }
         }
         Tip("Saves into a mod above your other mods. Give each version its own name to keep several.");
-        if (service.HasMod)
-        {
-            ImGui.SameLine();
-            using (ImRaii.Disabled(target == null || Busy))
-            {
-                if (ImGui.Button("Turn mine off"))
-                    TurnOff();
-            }
-            Tip("Stops the preview and turns off the physics mods you saved here. Your other physics mods apply again.");
-        }
         if (working != null || service.Preview.Busy)
         {
             ImGui.SameLine();
@@ -625,21 +615,6 @@ internal sealed partial class PhysicsWindow : Window, IDisposable
             var off = result is { TurnedOff.Count: > 0 } ? $" {string.Join(", ", result.TurnedOff)} {(result.TurnedOff.Count == 1 ? "is" : "are")} off." : "";
             return (warning ?? $"Saved into {into}. Your character uses it now.") + off;
         });
-    }
-
-    private void TurnOff()
-    {
-        if (target is not { } found)
-            return;
-        var previewing = service.Preview.Active;
-        IReadOnlyList<string> turnedOff = [];
-        Run(async () =>
-        {
-            (turnedOff, var warning) = await service.TurnOffModsAsync(found).ConfigureAwait(false);
-            return warning;
-        }, warning => warning ?? (turnedOff.Count == 0
-            ? previewing ? "Preview off. None of your saved physics mods was on." : "None of your saved physics mods was on."
-            : $"{(previewing ? "Preview off. " : "")}{string.Join(", ", turnedOff)} {(turnedOff.Count == 1 ? "is" : "are")} off. Your other physics mods apply again."));
     }
 
     // ---- Shared helpers ----
