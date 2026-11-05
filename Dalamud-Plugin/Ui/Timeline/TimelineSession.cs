@@ -126,6 +126,71 @@ internal sealed class TimelineSession
         }
     }
 
+    // The faces' own lengths by expression library for the open clip's collection, race and face (packFramesKey), the
+    // libraries asked for and not read yet, and the one read running.
+    private readonly Dictionary<string, ImmutableDictionary<string, int>> packFrames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> packsAsked = [];
+    private (string Pack, Task<ImmutableDictionary<string, int>> Task)? packRead;
+    private (Guid Collection, string Race, string Face, string Clip)? packFramesKey;
+
+    /// <summary>Moves on whenever <see cref="PackFrames"/> learns a library's lengths or starts over.</summary>
+    public int PackFramesVersion { get; private set; }
+
+    /// <summary>
+    /// The own lengths of the faces in expression library <paramref name="pack"/> as the open clip's collection resolves it, by
+    /// motion name: a mod's library may hold moving faces, which only their file knows the length of. Null while unknown, and for
+    /// libraries the game has itself (the catalog lists those). Asking for one reads it soon (<see cref="KeepPackFrames"/>).
+    /// </summary>
+    public ImmutableDictionary<string, int>? PackFrames(string? pack)
+    {
+        if (pack == null || packFramesKey is not { } key)
+            return null;
+        if (packFrames.TryGetValue(pack, out var known))
+            return known;
+        if (!string.Equals(packRead?.Pack, pack, StringComparison.OrdinalIgnoreCase) && !packsAsked.Contains(pack, StringComparer.OrdinalIgnoreCase))
+        {
+            // Read once whether the game has it: a library it has needs no reading.
+            if (GameFileExists(AnimationEditService.FacePackPath(key.Race, key.Face, pack)))
+                packFrames[pack] = ImmutableDictionary<string, int>.Empty;
+            else
+                packsAsked.Add(pack);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Every frame: takes a finished library read and starts the next one asked for, one at a time so many libraries don't
+    /// load at once. Starts over for another clip, collection, race or face; a library changed while the clip is open is
+    /// read again only when it opens again.
+    /// </summary>
+    public void KeepPackFrames()
+    {
+        (Guid, string, string, string)? key = Source is { } source && CatalogKey is { } catalog
+            ? (source.Capture.CollectionId, catalog.RaceCode, catalog.Face, ClipKey(source))
+            : null;
+        if (key != packFramesKey)
+        {
+            packFramesKey = key;
+            packFrames.Clear();
+            packsAsked.Clear();
+            packRead = null;
+            PackFramesVersion++;
+        }
+        if (packRead is { Task.IsCompleted: true } done)
+        {
+            packRead = null;
+            if (done.Task.Exception is { } error)
+                Log.Debug(error, $"Could not read the face lengths of {done.Pack}.");
+            packFrames[done.Pack] = done.Task.IsCompletedSuccessfully ? done.Task.Result : ImmutableDictionary<string, int>.Empty;
+            PackFramesVersion++;
+        }
+        if (packRead != null || packsAsked.Count == 0 || packFramesKey is not { } wanted || Animations is not { } service)
+            return;
+        var pack = packsAsked[0];
+        packsAsked.RemoveAt(0);
+        packRead = (pack, Task.Run(() => service.FacePackFramesAsync(wanted.Collection, wanted.Race, wanted.Face, pack, CancellationToken.None)));
+    }
+
     /// <summary>The open startup's loop read for Match startup to loop, shared by the Add menus and the layer panel.</summary>
     public LoopPoseReader LoopPose { get; }
 

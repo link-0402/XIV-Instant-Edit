@@ -79,6 +79,9 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     private (Guid Collection, string Race, string Face, int Revision)? installedKey;
     private ImmutableArray<TimelineCatalogItem> installedFaces = [];
     private ImmutableArray<TimelineCatalogItem> installedLips = [];
+    private ImmutableArray<FaceLibrary> installedActive = [];
+    // The face lengths the rows were made with (TimelineSession.PackFramesVersion).
+    private int installedFrames = -1;
     private int installedVersion;
 
     private readonly List<ImportedItem> importedItems = [];
@@ -159,19 +162,25 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     /// <summary>
     /// Keeps the installed expression libraries' faces for the open clip's race up to date: asks again
     /// when the clip, the collection or the list of libraries changed, and takes the answer once it is in.
+    /// The rows get their faces' lengths as each library is read.
     /// </summary>
     private void PollInstalled()
     {
         if (installedTask is { IsCompleted: true } done)
         {
-            var active = done.IsCompletedSuccessfully ? done.Result : [];
+            installedActive = done.IsCompletedSuccessfully ? done.Result : [];
             if (done.Exception is { } error)
                 session.Log.Debug(error, "Could not tell which expression sets the collection plays.");
-            var resident = session.Catalog.Data.ResidentMotions;
-            installedFaces = FaceLibraryIndex.Items(active, false, resident);
-            installedLips = FaceLibraryIndex.Items(active, true, resident);
-            installedVersion++;
+            installedFrames = -1;
             installedTask = null;
+        }
+        if (installedFrames != session.PackFramesVersion)
+        {
+            var resident = session.Catalog.Data.ResidentMotions;
+            installedFaces = FaceLibraryIndex.Items(installedActive, false, resident, session.PackFrames);
+            installedLips = FaceLibraryIndex.Items(installedActive, true, resident, session.PackFrames);
+            installedFrames = session.PackFramesVersion;
+            installedVersion++;
         }
         if (installedTask != null || session.Animations is not { } service || session.Source is not { } source || session.CatalogKey is not { } key)
             return;
@@ -784,7 +793,8 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
     /// <paramref name="target"/> a new path or prop model. Sets <see cref="pickerError"/> when refused.
     /// A face comes from one of the expression libraries that hold it (<paramref name="packs"/>), switching
     /// the timeline's when another holds all its faces (<see cref="TimelineEditor.ChoosePack"/>).
-    /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known. A prop ignores
+    /// Lip sync plays at its own speed, so it gets the motion's own <paramref name="frames"/> when known; so does a moving face, up to
+    /// the clip's end. A prop ignores
     /// <paramref name="frame"/>: it lasts from <see cref="TimelineTemplates.PropStart"/> to the clip's end. It goes on
     /// summon slot <paramref name="summon"/>, or without one the first slot free over the span it lands on
     /// (<see cref="TimelineEdits.LandedSummon"/>); one from a mod stays still and takes Summon 0, moving a vanilla one there to
@@ -810,7 +820,11 @@ internal sealed class TimelinePickers(TimelineSession session, SoundFiles soundF
             return Replace(current, kind, target, path, choice, prop);
         if (kind == TimelineAddKind.Prop && prop is { Source: null })
             prop = prop with { WeaponTimeline = WeaponChoice(prop) };
-        var length = kind == TimelineAddKind.LipSync ? frames : 0;
+        // A moving face plays whole over its length, so it starts at its own, short of the clip's end: an idle replays its
+        // events each time its timeline reaches the last one's end.
+        var room = current.Document.Length - frame;
+        var length = kind == TimelineAddKind.LipSync ? frames
+            : kind == TimelineAddKind.Expression && frames > TimelineDocument.PoseFrames && room > 0 ? Math.Min(frames, room) : 0;
         if (kind == TimelineAddKind.Prop)
         {
             // A prop shows for the whole clip, so it stays when the clip loops.

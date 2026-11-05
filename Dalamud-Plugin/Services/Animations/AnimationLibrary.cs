@@ -223,9 +223,10 @@ internal static class AnimationLibrary
 
     /// <summary>
     /// Whether the clip at <paramref name="gamePath"/> is a numbered idle, ground, chair or bed pose
-    /// (emote/pose03_loop and the like). The game plays such a pose's timeline once and holds it at its
-    /// end while the motion loops on its own (seen in game 2026-10-29: Idle pose 3's timeline stayed at
-    /// frame 70 while its motion looped), so its events play only on the first loop.
+    /// (emote/pose03_loop and the like). The game runs such a pose's timeline to its last entry's end and holds it
+    /// there while the motion loops on its own (seen in game 2026-10-29: Idle pose 3's timeline stayed at frame 70);
+    /// its faces still play again each time that much time passes (seen 2026-11-04), so they keep step with the motion
+    /// only when that end is the motion's length.
     /// </summary>
     public static bool IsPoseLoop(string gamePath)
     {

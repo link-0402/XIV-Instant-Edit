@@ -442,6 +442,13 @@ internal static class TimelineCatalogFixture
               faces[0].Label == TimelineCatalogBuilder.Readable("cfxf_mine_grin") && faces[0].Packs.SequenceEqual(["mine/faces"]) &&
               lips.Single().Path == "cfxl_mine_lip",
             "a set's faces and lip shapes are offered from it, named after its mod, without the always loaded ones");
+        var lengths = FaceLibraryIndex.Frames([new("cfxf_mine_grin", 17, 0, 0), new("cfxl_mine_lip", 19, 1, 0), new("cbem_body", 0, 2, 0),
+            new("cfxf_unread", 17, 3, 0), new("cfxf_mine_grin", 17, 4, 0)], new Dictionary<int, float> { [0] = 4f, [1] = 1 / 3f, [2] = 2f, [4] = 9f });
+        check(lengths.Count == 2 && lengths["cfxf_mine_grin"] == 120 && lengths["cfxl_mine_lip"] == 10,
+            "a set's face lengths are its faces' and lip shapes' own, the first of a name, without unread clips or other motions");
+        check(FaceLibraryIndex.Items([found[0]], false, resident, pack => pack == "mine/faces" ? lengths : null).Single().Frames == 120 &&
+              FaceLibraryIndex.Items([found[0]], true, resident, _ => null).Single().Frames == null && faces[0].Frames == null,
+            "a set's rows carry their own length once the set is read, and none before");
 
         // The picker starts the list every frame: a failed build waits before it is tried again.
         var builds = 0;

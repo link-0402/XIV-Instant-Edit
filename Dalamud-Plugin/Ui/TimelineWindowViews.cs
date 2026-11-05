@@ -909,17 +909,6 @@ internal static partial class TimelineWindowViews
         };
     }
 
-    /// <summary>
-    /// The note for a pose whose events the game plays once (<see cref="AnimationLibrary.IsPoseLoop"/>), shown while
-    /// it has an event that would play again on later loops of another clip: not the motion, a looping effect (C173,
-    /// which its own loop/wait repeats) or a face that stays. Null for any other clip.
-    /// </summary>
-    public static string? PoseLoopNote(TimelineDocument doc, string clipGamePath) =>
-        AnimationLibrary.IsPoseLoop(clipGamePath) && !doc.Events.IsDefault &&
-        doc.Events.Any(e => e.Lane != TimelineLane.Motion && e.Magic != "C173" && !TimelineDocument.Kept(e) && !TimelineDocument.Holds(e))
-            ? "This pose plays its events once. Later loops repeat only the motion."
-            : null;
-
     /// <summary>The warning about effects that stop although the animation goes on, or null when none do.</summary>
     public static string? EffectLoopWarning(ImmutableArray<TimelineEffectCheck.Problem> problems)
     {

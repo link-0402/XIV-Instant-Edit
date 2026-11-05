@@ -317,6 +317,15 @@ internal sealed class FaceLibraryIndex(Func<Task<(string Directory, string Name,
     }
 
     /// <summary>
+    /// The own length in whole frames of each face, blink and lip shape in a library's <paramref name="entries"/>, by motion
+    /// name, from <paramref name="seconds"/> by binding index (the game's Havok reads them); one without a known length is left out.
+    /// </summary>
+    internal static ImmutableDictionary<string, int> Frames(IEnumerable<AnimationPap.Entry> entries, IReadOnlyDictionary<int, float> seconds) =>
+        entries.Where(e => e.Type is 17 or 18 or 19 && e.Name.Length > 0).DistinctBy(e => e.Name, StringComparer.Ordinal)
+            .Select(e => (e.Name, Frames: seconds.TryGetValue(e.Binding, out var length) ? TimelineDocument.MotionFrames(length) : null))
+            .Where(e => e.Frames != null).ToImmutableDictionary(e => e.Name, e => e.Frames!.Value, StringComparer.Ordinal);
+
+    /// <summary>
     /// The PAP game paths a mod maps to files inside it: Files in meta.json, default_mod.json and
     /// group_*.json, at any depth (options, containers). Read only.
     /// </summary>
@@ -435,11 +444,17 @@ internal sealed class FaceLibraryIndex(Func<Task<(string Directory, string Name,
     /// <summary>
     /// The picker rows for the faces (or lip shapes, <paramref name="lips"/>) of <paramref name="active"/>
     /// libraries, each from its own library and named after its mod; motions the face always has
-    /// loaded (<paramref name="resident"/>) need no library, so they are left out.
+    /// loaded (<paramref name="resident"/>) need no library, so they are left out. Each row has its own length when
+    /// <paramref name="frames"/> knows its library's lengths (null while unknown).
     /// </summary>
-    internal static ImmutableArray<TimelineCatalogItem> Items(IEnumerable<FaceLibrary> active, bool lips, IReadOnlySet<string>? resident) =>
-        [.. active.SelectMany(library => library.Motions
-            .Where(motion => motion.Lip == lips && resident?.Contains(motion.Name) != true)
-            .Select(motion => new TimelineCatalogItem(TimelineCatalogBuilder.Readable(motion.Name), motion.Name, TimelineCatalogOrigin.Installed,
-                library.ModName, library.Pack)))];
+    internal static ImmutableArray<TimelineCatalogItem> Items(IEnumerable<FaceLibrary> active, bool lips, IReadOnlySet<string>? resident,
+        Func<string, IReadOnlyDictionary<string, int>?>? frames = null) =>
+        [.. active.SelectMany(library =>
+        {
+            var lengths = frames?.Invoke(library.Pack);
+            return library.Motions
+                .Where(motion => motion.Lip == lips && resident?.Contains(motion.Name) != true)
+                .Select(motion => new TimelineCatalogItem(TimelineCatalogBuilder.Readable(motion.Name), motion.Name, TimelineCatalogOrigin.Installed,
+                    library.ModName, library.Pack, Frames: lengths != null && lengths.TryGetValue(motion.Name, out var length) ? length : null));
+        })];
 }

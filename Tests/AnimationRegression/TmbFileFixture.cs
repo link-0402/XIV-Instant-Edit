@@ -957,6 +957,35 @@ internal static partial class TmbFileFixture
               TmbFile.Parse(TimelineConvert.Apply(counted, countedDoc with { Length = 910 })) is { Length: 910 } stretched &&
               stretched.Find(4)!.Int32(12) == 910,
             "a motion entry one frame longer than its motion still lasts the whole clip");
+
+        // A 195-frame idle under a 70-frame vanilla timeline whose header an earlier save fixed: its motion entry still
+        // says 70, so the pose's face came back every 157 frames (its end) while the motion looped every 195.
+        var idle = new Tmb().Head(195, null, 2).Actor(2, 3, 4).Track(3, 5).Track(4, 6).Motion(5, 70).Face(6, 32, 125, 1, 1, "cfxf_test").Build();
+        var idleDoc = TimelineConvert.Read(TmbFile.Parse(idle), 195);
+        var idleMoved = idleDoc with { Events = [.. idleDoc.Events.Select(e => e.Key == "t6" ? e with { Start = 40 } : e)] };
+        check(idleDoc is { Length: 195, HeaderLength: 195 } &&
+              TmbFile.Parse(TimelineConvert.Apply(idle, idleMoved, clipMotion: "cbem_test")) is { Length: 195 } idleSaved &&
+              idleSaved.Find(5)!.Int32(12) == 195 && idleSaved.Find(6) is { Time: 40 } idleFace && idleFace.Int32(12) == 125 &&
+              TimelineConvert.Read(idleSaved).Events.Single(e => e.Key == "t5").Duration == 195,
+            "a save writes the clip's own motion entry at the clip's length when the header already agrees");
+        var vanillaIdle = new Tmb().Head(70, null, 2).Actor(2, 3).Track(3, 4).Motion(4, 70).Build();
+        check(TmbFile.Parse(TimelineConvert.Apply(vanillaIdle, TimelineConvert.Read(TmbFile.Parse(vanillaIdle), 195), clipMotion: "cbem_test"))
+                  is { Length: 195 } swapped && swapped.Find(4)!.Int32(12) == 195,
+            "a save fixes the header and the clip's own motion entry together");
+        check(TmbFile.Parse(TimelineConvert.Apply(idle, idleMoved)).Find(5)!.Int32(12) == 70 &&
+              TmbFile.Parse(TimelineConvert.Apply(idle, idleMoved, clipMotion: "cbem_other")).Find(5)!.Int32(12) == 70 &&
+              TmbFile.Parse(TimelineConvert.Apply(counted, countedDoc, clipMotion: "cbem_test")).Find(4)!.Int32(12) == 456,
+            "another clip's motion entry, or one a frame off the clip's length, stays as loaded");
+        // Its face, from a mod's library whose length an earlier save didn't know, was stored with a pose's range.
+        static (float From, float To, int Duration) Range(byte[] bytes) =>
+            TmbFile.Parse(bytes).Find(6) is { } face ? (face.Single(24), face.Single(28), face.Int32(12)) : default;
+        var faceFrames = new Dictionary<string, int> { ["cfxf_test"] = 120 };
+        check(Range(TimelineConvert.Apply(idle, idleMoved, faceFrames)) == (0, 120, 125) && Range(TimelineConvert.Apply(idle, idleMoved)) == (0, 1, 125) &&
+              Range(TimelineConvert.Apply(idle, idleMoved, new Dictionary<string, int> { ["cfxf_test"] = 2 })) == (0, 1, 125),
+            "a save plays a clip's moving face whole over its length where a pose's range was stored, once its length is known");
+        check(Range(TimelineConvert.Apply(idle, idleMoved with { Expression = true }, faceFrames)) == (0, 1, 125) &&
+              Range(TimelineConvert.Apply(idle, TimelineEdits.Keep(idleDoc, "t6", true, faceFrames), faceFrames)) == (0, 1, -1),
+            "an expression's own timeline and a kept face keep the range they have");
         reject(() => TimelineConvert.Apply(dance, doc with { HeaderLength = 455 }), "a document whose header length isn't the file's is refused");
     }
 

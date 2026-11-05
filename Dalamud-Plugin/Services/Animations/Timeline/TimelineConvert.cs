@@ -174,10 +174,12 @@ internal static class TimelineConvert
     /// "n" events are added from <see cref="TimelineTemplates"/>. Only Editable events change path,
     /// values or (on their own) length; Movable ones move; Locked ones keep their place unless the
     /// timeline's length changed, when the editor scales every start and length.
-    /// Automatic follow-ups: a C009 that lasted the whole clip keeps lasting it; a C010 without
+    /// Automatic follow-ups: a C009 that lasted the whole clip keeps lasting it, and a loop's own motion
+    /// (<paramref name="clipMotion"/>, by motion name) is written at the timeline's length on any save; a C010 without
     /// time control whose end frame was its duration keeps ending at its duration; a motion at its
     /// own speed given time control gets a range that plays it whole (its own length from
-    /// <paramref name="motionFrames"/>, by motion name); a curve (TMFC) stretches
+    /// <paramref name="motionFrames"/>, by motion name), and a clip's moving face stored with a pose's range gets that range
+    /// too; a curve (TMFC) stretches
     /// with the entry that uses it. The header's length (TMDH) becomes the timeline's length when it
     /// disagrees with it (see <see cref="TimelineDocument.SavedHeaderLength"/>).
     /// A kept face has the endless length; a looping one is written as its plays back to back
@@ -188,7 +190,7 @@ internal static class TimelineConvert
     /// does not read back as the edit.
     /// </summary>
     public static byte[] Apply(byte[] originalTmb, TimelineDocument edited, IReadOnlyDictionary<string, int>? motionFrames = null,
-        IReadOnlySet<string>? retimed = null)
+        IReadOnlySet<string>? retimed = null, string? clipMotion = null)
     {
         // A look lives in a copy of its effect; one still on an event would be lost.
         if (!edited.Events.IsDefault && edited.Events.Any(e => e.Look is { IsEmpty: false }))
@@ -265,6 +267,11 @@ internal static class TimelineConvert
             // Back at the loaded length, what only length scaling moves is where it was loaded.
             if (!scaled && old.Access == TimelineAccess.Locked) target = target with { Start = old.Start, Duration = old.Duration };
             else if (!scaled && old.Access == TimelineAccess.Movable) target = target with { Duration = old.Duration };
+            // A mod may keep another clip's shorter motion entry. A pose plays its events again each time its timeline
+            // reaches the last entry's end (seen in game 2026-11-04), so a short one puts them out of step with the motion.
+            var whole = clipMotion != null && old.Magic == "C009" && old.Lane == TimelineLane.Motion &&
+                        string.Equals(old.Path, clipMotion, StringComparison.Ordinal) && !edited.LastsWhole(target.Duration);
+            if (whole) target = target with { Duration = edited.Length };
             // A loop the edit changed is written again; one it left alone keeps its copies, unless its face's length changed.
             var chained = chains.TryGetValue(id, out var copies);
             var retime = TimelineDocument.Loops(target) && retimed?.Contains(target.Path) == true;
@@ -275,7 +282,9 @@ internal static class TimelineConvert
                 // The first play stores its own length; the document has the loop's endless one.
                 if (!TimelineDocument.Loops(target)) file.SetInt32(id, 12, old.Duration);
             }
-            Update(file, id, old, target, scaled);
+            // The editor can't change a locked length; this one is the file's own fix.
+            Update(file, id, old, whole ? target with { Duration = old.Duration } : target, scaled);
+            if (whole) file.SetInt32(id, 12, target.Duration);
             expected.Add((target with { Conditional = old.Conditional }, id));
             // A face of a new length plays whole at it, not over the range it was loaded with.
             if (TimelineDocument.Loops(target) && (!chained || changed)) loops.Add((target, id, retime ? null : PlayOf(id)));
@@ -298,6 +307,15 @@ internal static class TimelineConvert
         foreach (var (curve, factor) in curves) file.ScaleCurve(curve, factor);
         foreach (var id in keeps) Keep(file, id);
         foreach (var (e, id, loaded) in loops) Loop(file, id, e, loaded, motionFrames);
+        // A clip's moving face stored with a pose's range (0 to 1), as saves wrote a mod library's face whose length they didn't
+        // know, showed its first frame all along. Its length known, it plays whole over its length, as an added one does. An
+        // expression's own timeline stays as it is: a vanilla one holds its face's first frame, however a mod made the face.
+        if (!edited.Expression)
+            foreach (var (e, id) in expected)
+                if (e.Magic == "C010" && e.Lane == TimelineLane.Expression && e.Path.StartsWith("cfxf_", StringComparison.Ordinal) && e.Duration > 0 &&
+                    TimelineDocument.Moves(e, motionFrames) is { } own && file.Find(id) is { } entry && (entry.Int32(20) & 1) != 0 &&
+                    entry.Single(24) == 0 && entry.Single(28) == 1)
+                    file.SetSingle(id, 28, own);
         foreach (var e in removed)
         {
             file.RemoveEntry(Id(e.Key));

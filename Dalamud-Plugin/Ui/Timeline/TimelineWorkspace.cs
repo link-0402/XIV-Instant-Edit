@@ -220,6 +220,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     private bool disposed;
     // The catalog's face lengths with an expression's own face, kept while neither changes.
     private IReadOnlyDictionary<string, int>? framesKnown;
+    private IReadOnlyDictionary<string, int>? framesPack;
     private AnimationTimelineSource? framesSource;
     private IReadOnlyDictionary<string, int>? framesMerged;
     private int? framesFace;
@@ -821,21 +822,26 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
     }
 
     /// <summary>
-    /// Facial motions' own lengths: the catalog's, read from the game's face files, with the face an
+    /// Facial motions' own lengths: the catalog's, read from the game's face files, with those of the expression library
+    /// the timeline loads when a mod adds it (<see cref="TimelineSession.PackFrames"/>), the face an
     /// expression plays as the collection resolves it, which a mod may have made a moving one, and a face session's face
     /// at its edited length. The same instance until any of them changes, so the layout is rebuilt only then.
     /// </summary>
     private IReadOnlyDictionary<string, int> MotionFrames(AnimationTimelineSource current, TimelineDocument document)
     {
         var known = session.Catalog.Data.MotionFrames;
-        if (!current.Standalone)
+        var pack = session.PackFrames(document.FacePack);
+        if (!current.Standalone && pack is not { Count: > 0 })
             return known;
-        if (!ReferenceEquals(known, framesKnown) || !ReferenceEquals(current, framesSource) || document.Face?.Frames != framesFace || framesMerged == null)
+        if (!ReferenceEquals(known, framesKnown) || !ReferenceEquals(pack, framesPack) || !ReferenceEquals(current, framesSource) ||
+            document.Face?.Frames != framesFace || framesMerged == null)
         {
             framesKnown = known;
+            framesPack = pack;
             framesSource = current;
             framesFace = document.Face?.Frames;
-            framesMerged = known.SetItems(current.EditedFrames(document));
+            var merged = pack is { Count: > 0 } ? known.SetItems(pack) : known;
+            framesMerged = current.Standalone ? merged.SetItems(current.EditedFrames(document)) : merged;
         }
         return framesMerged;
     }
@@ -873,6 +879,7 @@ internal sealed partial class TimelineWorkspace : IBonesOverlay, IDisposable
         session.LoopPose.Poll(editor);
         if (session.CatalogKey != null)
             session.Catalog.Request(session.CatalogKey);
+        session.KeepPackFrames();
         editor.MotionFrames = MotionFrames(source, editor.Document);
         editor.FaceMotion = source.Face?.Clip.Name;
         editor.ResidentMotions = session.Catalog.Data.ResidentMotions;
